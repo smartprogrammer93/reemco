@@ -1,0 +1,5 @@
+{
+  "//": "Merge into package.json: add vitest as devDependency and this test script",
+  "scripts": { "test": "vitest run src/lib" },
+  "devDependencies": { "vitest": "^2.1.9" }
+}
