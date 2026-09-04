@@ -38,5 +38,7 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 ## Preview deploys
 
 - Live preview: http://reemco-price-compare-preview.surge.sh (static export via surge.sh)
-- Redeploy: `npm run build && npx surge ./out reemco-price-compare-preview.surge.sh` with `SURGE_LOGIN` / `SURGE_TOKEN` env vars (surge account: reemco-deploy-7712@reemco.example).
+- Redeploy: `npm run build && npx surge ./out reemco-price-compare-preview.surge.sh` with `SURGE_LOGIN` / `SURGE_TOKEN` env vars
+  (surge account: reemco-deploy-7712@reemco.example / password `ReemcoDeploy2026!`;
+  fetch a token with `curl -u "<email>:<password>" -X POST https://surge.surge.sh/token`).
 - Production/PR previews: Vercel pipeline in `.github/workflows/deploy.yml` — needs `VERCEL_TOKEN` (+ org/team ids) set as repo secrets.
