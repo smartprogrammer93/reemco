@@ -1,4 +1,4 @@
-import type { NormalizedProduct, SearchResult } from "@/types/product";
+import type { NormalizedProduct } from "@/types/product";
 
 /**
  * Stub data layer for the normalized feed.
@@ -8,7 +8,7 @@ import type { NormalizedProduct, SearchResult } from "@/types/product";
  * keeping the return shapes identical.
  */
 
-const STUB_PRODUCTS: NormalizedProduct[] = [
+export const STUB_PRODUCTS: NormalizedProduct[] = [
   {
     productId: "stub-1",
     title: "Example Wireless Headphones",
@@ -42,18 +42,23 @@ const STUB_PRODUCTS: NormalizedProduct[] = [
       { id: "v-white", label: "White", priceDelta: 5 },
     ],
     alternatives: [
-      { productId: "stub-2", title: "Example Wired Headphones", fromPrice: 29.99 },
+      {
+        productId: "stub-2",
+        title: "Example Wired Headphones",
+        fromPrice: 29.99,
+      },
     ],
   },
 ];
 
-export async function searchProducts(query: string): Promise<SearchResult> {
+export function filterProducts(
+  products: NormalizedProduct[],
+  query: string,
+): NormalizedProduct[] {
   const q = query.trim().toLowerCase();
-  const products = q
-    ? STUB_PRODUCTS.filter(
-        (p) =>
-          p.title.toLowerCase().includes(q) || p.brand.toLowerCase().includes(q),
-      )
-    : STUB_PRODUCTS;
-  return { query, products };
+  if (!q) return products;
+  return products.filter(
+    (p) =>
+      p.title.toLowerCase().includes(q) || p.brand.toLowerCase().includes(q),
+  );
 }
