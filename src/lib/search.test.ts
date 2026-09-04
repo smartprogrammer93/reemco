@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import { searchProducts, suggestProducts } from "@/lib/search";
 import { PRODUCTS } from "@/lib/feed";
