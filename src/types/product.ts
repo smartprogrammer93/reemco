@@ -10,6 +10,7 @@ export interface PriceOffer {
   currency: string; // ISO 4217, e.g. "USD"
   url: string;
   inStock: boolean;
+  wasPrice?: number; // optional was-price for the F2 savings pill
 }
 
 export interface Coupon {
