@@ -34,3 +34,9 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Preview deploys
+
+- Live preview: http://reemco-price-compare-preview.surge.sh (static export via surge.sh)
+- Redeploy: `npm run build && npx surge ./out reemco-price-compare-preview.surge.sh` with `SURGE_LOGIN` / `SURGE_TOKEN` env vars (surge account: reemco-deploy-7712@reemco.example).
+- Production/PR previews: Vercel pipeline in `.github/workflows/deploy.yml` — needs `VERCEL_TOKEN` (+ org/team ids) set as repo secrets.
