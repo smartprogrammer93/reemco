@@ -34,7 +34,7 @@ export function buildCsp(nonce: string, mode: string = CSP_MODE): string {
     : `${policy}; report-uri /api/csp-report`;
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const nonce = crypto.randomUUID().replace(/-/g, "");
   const csp = buildCsp(nonce);
   const enforce = CSP_MODE === "enforce";
