@@ -4,7 +4,9 @@ import { Component, Suspense, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import ProductResultCard from "@/components/ProductResultCard";
-import { STUB_PRODUCTS, filterProducts } from "@/lib/feed";
+import { searchProducts, suggestProducts } from "@/lib/search";
+import { PRODUCTS } from "@/lib/feed";
+import type { NormalizedProduct } from "@/types/product";
 
 /* F8 loading state: skeleton cards, 1.2s pulse */
 function SkeletonCard() {
@@ -65,8 +67,15 @@ class ResultsErrorBoundary extends Component<
   }
 }
 
-/* F8 empty state: 48px icon in green-tint circle, title, body, primary blue button */
-function EmptyState({ query }: { query: string }) {
+/* F8 empty state: 48px icon in green-tint circle, title, body, primary blue button.
+   Shows nearest-match suggestions so an unmatched query is never a dead end. */
+function EmptyState({
+  query,
+  suggestions,
+}: {
+  query: string;
+  suggestions: NormalizedProduct[];
+}) {
   return (
     <div className="result-card flex flex-col items-center py-12 text-center">
       <span
@@ -80,8 +89,26 @@ function EmptyState({ query }: { query: string }) {
         No results for &ldquo;{query}&rdquo;
       </h2>
       <p className="mt-2 text-sm" style={{ color: "var(--brand-slate-600)" }}>
-        Try a different product name or brand.
+        {suggestions.length > 0
+          ? "Did you mean one of these?"
+          : "Try a different product name or brand."}
       </p>
+      {suggestions.length > 0 && (
+        <ul className="mt-4 w-full max-w-md space-y-2 text-left">
+          {suggestions.map((p) => (
+            <li key={p.productId} className="result-card px-4 py-3">
+              <Link href={`/results?q=${encodeURIComponent(p.title)}`} className="text-sm font-medium hover:underline" style={{ color: "var(--brand-blue)" }}>
+                {p.title}
+              </Link>
+              <p className="text-xs" style={{ color: "var(--brand-slate-600)" }}>
+                {p.brand} · from{" "}
+                {Math.min(...p.offers.map((o) => o.price)).toFixed(2)}{" "}
+                {p.offers[0]?.currency ?? "KWD"}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
       <Link
         href="/search"
         className="mt-6 flex h-8 items-center rounded px-4 text-sm font-medium text-white"
@@ -96,12 +123,14 @@ function EmptyState({ query }: { query: string }) {
 function Results() {
   const searchParams = useSearchParams();
   const query = searchParams.get("q") ?? "";
-  const products = query ? filterProducts(STUB_PRODUCTS, query) : STUB_PRODUCTS;
+  const matches = query ? searchProducts(query, PRODUCTS) : [];
 
-  if (products.length === 0) {
-    return <EmptyState query={query} />;
+  if (query && matches.length === 0) {
+    const suggestions = suggestProducts(query, PRODUCTS).map((m) => m.product);
+    return <EmptyState query={query} suggestions={suggestions} />;
   }
 
+  const products = matches.length > 0 ? matches.map((m) => m.product) : PRODUCTS;
   return (
     <div className="space-y-4">
       {products.map((p) => (

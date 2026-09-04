@@ -2,7 +2,8 @@
 
 import { useMemo, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { STUB_PRODUCTS, filterProducts } from "@/lib/feed";
+import { PRODUCTS } from "@/lib/feed";
+import { searchProducts } from "@/lib/search";
 
 export default function SearchClient() {
   const [value, setValue] = useState("");
@@ -10,7 +11,7 @@ export default function SearchClient() {
   const router = useRouter();
 
   const products = useMemo(
-    () => (submitted ? filterProducts(STUB_PRODUCTS, submitted) : null),
+    () => (submitted ? searchProducts(submitted, PRODUCTS).map((m) => m.product) : null),
     [submitted],
   );
 
