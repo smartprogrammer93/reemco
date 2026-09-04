@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import ProductResultCard from "@/components/ProductResultCard";
 import { searchProducts, suggestProducts } from "@/lib/search";
+import { sanitizePage, sanitizeSearchQuery } from "@/lib/search-params";
 import { PRODUCTS } from "@/lib/feed";
 import type { NormalizedProduct } from "@/types/product";
 
@@ -122,7 +123,9 @@ function EmptyState({
 
 function Results() {
   const searchParams = useSearchParams();
-  const query = searchParams.get("q") ?? "";
+  // AC-U4 (REEA-13): malformed/oversized params degrade safely before use.
+  const query = sanitizeSearchQuery(searchParams.get("q")) ?? "";
+  const page = sanitizePage(searchParams.get("page"));
   const matches = query ? searchProducts(query, PRODUCTS) : [];
 
   if (query && matches.length === 0) {
@@ -130,7 +133,10 @@ function Results() {
     return <EmptyState query={query} suggestions={suggestions} />;
   }
 
-  const products = matches.length > 0 ? matches.map((m) => m.product) : PRODUCTS;
+  const allProducts = matches.length > 0 ? matches.map((m) => m.product) : PRODUCTS;
+  // Page pagination is bounded by sanitizePage (MAX_PAGE); slice defensively.
+  const PAGE_SIZE = 20;
+  const products = allProducts.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   return (
     <div className="space-y-4">
       {products.map((p) => (

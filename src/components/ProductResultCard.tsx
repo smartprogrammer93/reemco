@@ -1,6 +1,7 @@
 import type { NormalizedProduct, PriceOffer } from "@/types/product";
 import { formatExpiry, formatPrice, sortOffers } from "@/lib/format";
 import CouponBadge from "@/components/CouponBadge";
+import { resolveOfferUrl } from "@/lib/links";
 
 function AvailabilityDot({ offer }: { offer: PriceOffer }) {
   if (offer.inStock) {
@@ -81,13 +82,19 @@ export default function ProductResultCard({
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <CouponBadge coupon={primaryCoupon} />
           {extraCoupons > 0 && (
-            <a
-              href="#coupons"
-              className="text-[13px] underline underline-offset-2"
-              style={{ color: "var(--brand-blue)" }}
+            /* REEA-25: the old href="#coupons" had no matching target — show
+               the extra coupon codes inline instead of a dead in-page anchor. */
+            <span
+              className="text-[13px]"
+              style={{ color: "var(--brand-slate-600)" }}
+              title={product.coupons
+                .slice(1)
+                .map((c) => c.code)
+                .filter(Boolean)
+                .join(", ")}
             >
               +{extraCoupons} more
-            </a>
+            </span>
           )}
           {formatExpiry(primaryCoupon.expiresAt) && (
             <span className="text-[13px]" style={{ color: "var(--brand-slate-600)" }}>
@@ -125,15 +132,23 @@ export default function ProductResultCard({
                   >
                     {formatPrice(o.price, o.currency)}
                   </span>
-                  <a
-                    href={o.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex h-8 items-center rounded px-2 text-[13px] underline underline-offset-2"
-                    style={{ color: "var(--brand-blue)" }}
-                  >
-                    Visit
-                  </a>
+                  {/* REEA-13: render scraped hrefs only through validation;
+                      REEA-25: stale scraped URLs fall back to a working
+                      merchant search URL (resolveOfferUrl), or hide the link. */}
+                  {(() => {
+                    const href = resolveOfferUrl(o, product.title);
+                    return href ? (
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex h-8 items-center rounded px-2 text-[13px] underline underline-offset-2"
+                        style={{ color: "var(--brand-blue)" }}
+                      >
+                        Visit
+                      </a>
+                    ) : null;
+                  })()}
                 </span>
               </li>
             ))}
