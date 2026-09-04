@@ -1,11 +1,13 @@
 "use client";
 
 import { useMemo, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import { STUB_PRODUCTS, filterProducts } from "@/lib/feed";
 
 export default function SearchClient() {
   const [value, setValue] = useState("");
   const [submitted, setSubmitted] = useState("");
+  const router = useRouter();
 
   const products = useMemo(
     () => (submitted ? filterProducts(STUB_PRODUCTS, submitted) : null),
@@ -14,7 +16,9 @@ export default function SearchClient() {
 
   function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    setSubmitted(value.trim());
+    const q = value.trim();
+    setSubmitted(q);
+    if (q) router.push(`/results?q=${encodeURIComponent(q)}`);
   }
 
   return (
@@ -31,56 +35,16 @@ export default function SearchClient() {
         />
         <button
           type="submit"
-          className="rounded-full bg-foreground text-background px-5 py-2 text-sm font-medium hover:opacity-90"
+          className="rounded-full bg-foreground px-5 py-2 text-sm font-medium text-background hover:opacity-90"
         >
           Search
         </button>
       </form>
 
-      {products === null ? (
-        <p className="mt-10 text-sm text-zinc-500">
-          Enter a product to compare prices. Results render price, availability,
-          coupons, variations, and alternatives once the normalized data feed is
-          wired in.
-        </p>
-      ) : products.length === 0 ? (
+      {products !== null && products.length === 0 && (
         <p className="mt-10 text-sm text-zinc-500">
           No results for &ldquo;{submitted}&rdquo;.
         </p>
-      ) : (
-        <ul className="mt-10 space-y-4">
-          {products.map((p) => {
-            const best = p.offers.reduce(
-              (a, b) => (b.price < a.price ? b : a),
-              p.offers[0],
-            );
-            return (
-              <li key={p.productId} className="rounded-xl border p-4">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <span className="font-medium">{p.title}</span>
-                  <span className="tabular-nums">
-                    from ${best.price.toFixed(2)} ({best.merchant}
-                    {best.inStock ? "" : ", out of stock"})
-                  </span>
-                </div>
-                <div className="mt-1 flex flex-wrap gap-3 text-xs text-zinc-600 dark:text-zinc-400">
-                  {p.coupons.length > 0 && (
-                    <span className="text-emerald-700">
-                      Coupon: {p.coupons[0].discount} —{" "}
-                      {p.coupons[0].description}
-                    </span>
-                  )}
-                  <span>
-                    {p.variations.length} variation
-                    {p.variations.length === 1 ? "" : "s"},{" "}
-                    {p.alternatives.length} alternative
-                    {p.alternatives.length === 1 ? "" : "s"}
-                  </span>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
       )}
     </div>
   );
