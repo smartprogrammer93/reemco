@@ -1,0 +1,30 @@
+name: Deploy preview
+
+# Every push gets a Vercel preview URL; merges to main deploy to production.
+# Required secrets (set once in repo settings):
+#   VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_TEAM_ID (org), and project ids in vercel.json are optional.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  deploy-preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Deploy to Vercel (preview / production)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            npx vercel deploy --prod --yes --token "$VERCEL_TOKEN"
+          else
+            npx vercel deploy --yes --token "$VERCEL_TOKEN"
+          fi
