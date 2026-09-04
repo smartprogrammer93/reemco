@@ -15,6 +15,10 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Reemco Price Compare",
   description: "Compare prices across merchants",
+  // Static-export host (surge) cannot emit a Referrer-Policy response header;
+  // the <meta name="referrer"> equivalent is honored by browsers. The canonical
+  // header is set by src/proxy.ts when served from a server host (Vercel).
+  other: { referrer: "strict-origin-when-cross-origin" },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
