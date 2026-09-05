@@ -36,9 +36,28 @@ export async function POST(
 
   const { job, deduped, servedFromCache } = startCollection(product, { force });
 
+  // ?wait=1 — synchronous mode (REEA-85 Vercel finding): on Vercel each API
+  // route is a separate serverless function, so the polling GET frequently
+  // lands on an instance that cannot see the job created by the POST function
+  // (no shared memory or /tmp across functions). The client falls back to this
+  // mode when polling misses; the run happens inside this invocation and the
+  // terminal snapshot — with real per-retailer subtask states (AC2) — is
+  // returned directly. The 25s overall budget keeps this inside maxDuration.
+  const wait = new URL(request.url).searchParams.get("wait") === "1";
+
+  if (wait && !servedFromCache && !deduped) {
+    const final = await runCollection(job, product);
+    return Response.json(final, { headers: { "Cache-Control": "no-store" } });
+  }
+
   if (!servedFromCache && !deduped) {
     // Run the fan-out after the response — POST returns immediately (<300 ms).
     after(() => runCollection(job, product));
+  }
+
+  if (wait) {
+    // Cache/dedupe hit in wait mode: return the full snapshot synchronously.
+    return Response.json(job, { headers: { "Cache-Control": "no-store" } });
   }
 
   return Response.json(

@@ -93,6 +93,27 @@ describe("useCollection", () => {
     ]);
   });
 
+  it("falls back to synchronous ?wait=1 when polling misses across functions", async () => {
+    routes.push(
+      { match: "start", jobId: "j1" },
+      { match: "404" }, // poll: cross-function miss
+      { match: "start", jobId: "j1" }, // restart
+      { match: "404" }, // poll miss again — restart budget exhausted
+      { match: "job", status: "complete" }, // POST ?wait=1 terminal snapshot
+    );
+    const { result } = renderHook(() => useCollection("p1"));
+    await act(async () => {
+      await result.current.start();
+    });
+    await waitFor(() =>
+      expect(result.current.state).toEqual({
+        kind: "terminal",
+        job: expect.objectContaining({ status: "complete" }),
+      }),
+    );
+    expect(calls.at(-1)).toBe("POST /api/products/p1/collect?wait=1");
+  });
+
   it("surfaces a product-level error when the restart also 404s", async () => {
     routes.push(
       { match: "start", jobId: "j1" },
