@@ -22,6 +22,7 @@
   --color-deal: #0e7c4a; /* best effective price, in stock, coupon text */
   --color-deal-bg: #e7f4ee; /* coupon/badge tint background */
   --color-warn: #b4530a; /* low stock, stale-price, price-drop accent */
+  --color-warn-text: #a34606; /* warn-colored TEXT on tint backgrounds (spec r2: AA on warn-bg) */
   --color-warn-bg: #fbeee4; /* low-stock tint background */
   --color-error: #b42318; /* out of stock, destructive */
   --color-error-bg: #fbeae9; /* error tint background */
@@ -134,6 +135,17 @@ a:focus-visible {
   font: var(--text-label);
   letter-spacing: 0.02em;
   text-transform: uppercase;
+}
+
+/* §3.3 sponsored chip: warn text on warn tint via the r2 AA-safe token */
+.sponsored-chip {
+  font: var(--text-label);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  background: var(--color-warn-bg);
+  color: var(--color-warn-text);
+  border-radius: var(--radius-control);
+  padding: 2px 8px;
 }
 
 /* Primary action (Search / Go to store / Retry) */
