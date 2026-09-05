@@ -18,29 +18,5 @@ jobs:
       - name: Measure results-page load+render timing (smoke step-4 semantics, no badge assertion)
         env:
           SMOKE_BASE_URL: https://reemco-price-compare-preview.surge.sh
-        run: |
-          cat > /tmp/probe.mjs <<'PROBE'
-          import { existsSync, writeFileSync, readFileSync } from "node:fs";
-          import { brotliDecompressSync } from "node:zlib";
-          import { execSync } from "node:child_process";
-          import { chromium as pw } from "playwright-core";
-          import chromium from "@sparticuz/chromium";
-          const BASE = process.env.SMOKE_BASE_URL.replace(/\/$/, "");
-          const LIB_DIR = "/tmp/al2023/lib";
-          if (!existsSync(LIB_DIR)) {
-            const tarPath = "/tmp/al2023.tar";
-            writeFileSync(tarPath, brotliDecompressSync(readFileSync(new URL("./node_modules/@sparticuz/chromium/bin/al2023.tar.br", import.meta.url))));
-            execSync(`mkdir -p /tmp/al2023 && tar -xf ${tarPath} -C /tmp/al2023`);
-          }
-          process.env.LD_LIBRARY_PATH = existsSync(LIB_DIR) ? `${LIB_DIR}:${process.env.LD_LIBRARY_PATH || ""}` : process.env.LD_LIBRARY_PATH;
-          const browser = await pw.launch({ executablePath: await chromium.executablePath(), args: chromium.args, headless: true });
-          const t0 = Date.now();
-          const page = await browser.newPage();
-          page.setDefaultTimeout(30000);
-          await page.goto(`${BASE}/results?q=sony`, { waitUntil: "load" });
-          await page.waitForSelector(".result-card", { timeout: 25000 });
-          console.log(`TIMING results load (incl. hydration): ${Date.now() - t0}ms`);
-          await browser.close();
-          PROBE
-          node /tmp/probe.mjs
+        run: node scripts/reea81-probe.mjs
           curl -s "$SMOKE_BASE_URL/__commit.txt" | sed 's/^/PROBED artifact: /'
