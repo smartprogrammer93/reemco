@@ -17,8 +17,12 @@ const SERVER_ONLY_ROUTES = ["src/app/api/events/route.ts",
   "src/app/api/events/report/route.ts",
   "src/app/api/csp-report/route.ts"]; // REEA-74
 
+// Test files that import a server-only route module: `next build` typechecks
+// them, so they must be renamed out together with the route (REEA-77).
+const TEST_FILES_IMPORTING_SERVER_ROUTES = ["src/proxy.test.ts"];
+
 const renamed = [];
-for (const rel of SERVER_ONLY_ROUTES) {
+for (const rel of [...SERVER_ONLY_ROUTES, ...TEST_FILES_IMPORTING_SERVER_ROUTES]) {
   const abs = path.join(root, rel);
   if (existsSync(abs)) {
     renameSync(abs, `${abs}.server-only`);
