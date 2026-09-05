@@ -10,12 +10,15 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 
-const CSP_MODE = (process.env.CSP_MODE ?? "report-only").toLowerCase(); // "report-only" | "enforce"
+const CSP_MODE = (process.env.CSP_MODE ?? "enforce").toLowerCase(); // "enforce" | "report-only"
 
 export function buildCsp(nonce: string, mode: string = CSP_MODE): string {
   const directives = [
     `default-src 'self'`,
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' https: http:`,
+    // Stage 1 (REEA-74): no `https: http:` host fallback — those wildcards
+    // widen script-src to any HTTPS origin. 'self' + per-request nonce +
+    // 'strict-dynamic' covers the app; legacy browsers fall back to 'self'.
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
     // 'unsafe-inline' is ignored by modern browsers when nonces are present;
     // kept as a fallback for legacy browsers only.
     `style-src 'self' 'unsafe-inline'`,
@@ -28,10 +31,10 @@ export function buildCsp(nonce: string, mode: string = CSP_MODE): string {
     `object-src 'none'`,
     `upgrade-insecure-requests`,
   ];
-  const policy = directives.join("; ");
-  return mode === "enforce"
-    ? policy
-    : `${policy}; report-uri /api/csp-report`;
+  // Stage 1 keeps violation reporting in enforce mode so the sink at
+  // /api/csp-report (REEA-74) feeds the Stage-2 monitoring window.
+  const policy = `${directives.join("; ")}; report-uri /api/csp-report`;
+  return policy;
 }
 
 export function proxy(request: NextRequest) {
