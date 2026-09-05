@@ -22,6 +22,13 @@ on:
         description: "Commit SHA to redeploy (rollback). Empty = default branch."
         required: false
         default: ""
+      smoke_fixture_query:
+        description: "Override the smoke-check fixture query (deliberately bad query = demonstrates a failed smoke check)."
+        required: false
+        default: ""
+
+permissions:
+  issues: write
 
 jobs:
   build-and-deploy:
@@ -45,7 +52,9 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test
-      - run: npm run build
+      # Static export (./out) is the production artifact for Surge; the plain
+      # server build leaves no ./out and the Surge step fails on it.
+      - run: npm run build:static
 
       - name: Deploy static export to Surge (production)
         env:
@@ -59,7 +68,7 @@ jobs:
           npx surge ./out reemco-price-compare-preview.surge.sh --token "$SURGE_TOKEN"
 
       # Post-deploy smoke check: live artifact must serve the commit we built.
-      - name: Post-deploy smoke check
+      - name: Post-deploy artifact check
         run: |
           sleep 5
           SERVED=$(curl -fsS https://reemco-price-compare-preview.surge.sh/__commit.txt 2>/dev/null | tr -d '[:space:]')
@@ -67,6 +76,40 @@ jobs:
           if [ "$SERVED" != "${{ inputs.rollback_sha || github.sha }}" ]; then
             echo "::error::Deployed artifact does not match built commit ($SERVED != ${{ inputs.rollback_sha || github.sha }})"
             exit 1
+          fi
+
+      # REEA-44 post-deploy funnel smoke check (CEO P0: nothing new ships until
+      # the deployed site is proven working after every deploy).
+      # Verifies: (1) home loads, (2) fixture query returns result cards,
+      # (3) a card has a working click-out link. Deterministic: the fixture
+      # query hits the seeded catalog shipped in the bundle, never fresh data.
+      # Exit 1 names the failed step; the alert step below opens an issue.
+      - name: Post-deploy funnel smoke check (home → search → click-out)
+        env:
+          SMOKE_BASE_URL: https://reemco-price-compare-preview.surge.sh
+          SMOKE_FIXTURE_QUERY: ${{ inputs.smoke_fixture_query }}
+        run: npm run smoke
+
+      # Failure signal: open a deduped issue naming the failed step so the
+      # deploy failure surfaces immediately in the notification stream.
+      - name: Alert on deploy/smoke failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FAILED_STEPS=$(gh run view ${{ github.run_id }} --json jobs \
+            --jq '.jobs[].steps[] | select(.conclusion=="failure") | .name' | paste -sd '; ' -)
+          BODY="Deploy pipeline failed at $(date -u +%FT%TZ).
+          Failed step(s): ${FAILED_STEPS:-unknown}.
+          Commit: ${{ inputs.rollback_sha || github.sha }}. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          If the failed step is the funnel smoke check, the deployed site did NOT pass home → search → click-out and the deploy must be treated as failed (rollback: rerun this workflow with rollback_sha set to the last green commit)."
+          if gh issue list --label deploy-alert --state open --json url -q '.[0].url' | grep -q .; then
+            gh issue comment "$(gh issue list --label deploy-alert --state open --json number -q '.[0].number')" \
+              --body "$BODY"
+          else
+            gh issue create --title "DEPLOY ALERT: post-deploy check failed — $FAILED_STEPS" \
+              --label deploy-alert --body "$BODY"
           fi
 
   # Optional server-render deploy (unblocks F2 response headers once VERCEL_TOKEN exists).
