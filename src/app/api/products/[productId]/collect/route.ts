@@ -1,0 +1,54 @@
+/**
+ * REEA-84 W1 T1 — POST /api/products/:id/collect
+ *
+ * Creates (or dedupes to) a collection job and returns its id in <300 ms
+ * (AC1/AC8). The scrape fan-out runs after the response via `after()` so the
+ * job proceeds while the client polls GET /api/collect-jobs/:jobId (T3).
+ * When a fresh (<=10 min) completed collection exists it is served directly
+ * with mode "cache" — no scrape is triggered (AC5).
+ */
+import { after } from "next/server";
+import { PRODUCTS } from "@/lib/feed";
+import { runCollection, startCollection } from "@/lib/collect/runner";
+
+export const dynamic = "force-dynamic";
+// Headroom only — the 25 s overall budget in the runner enforces the 30 s
+// user-visible contract (AC7) regardless of platform limits.
+export const maxDuration = 60;
+
+export async function POST(
+  request: Request,
+  ctx: RouteContext<"/api/products/[productId]/collect">,
+) {
+  const { productId } = await ctx.params;
+  const product = PRODUCTS.find((p) => p.productId === productId);
+  if (!product) {
+    return Response.json({ error: "Unknown product" }, { status: 404 });
+  }
+
+  let force = false;
+  try {
+    const body = (await request.json()) as { force?: boolean } | null;
+    force = body?.force === true;
+  } catch {
+    /* empty body is fine */
+  }
+
+  const { job, deduped, servedFromCache } = startCollection(product, { force });
+
+  if (!servedFromCache && !deduped) {
+    // Run the fan-out after the response — POST returns immediately (<300 ms).
+    after(() => runCollection(job, product));
+  }
+
+  return Response.json(
+    {
+      jobId: job.jobId,
+      status: job.status,
+      mode: servedFromCache ? "cache" : job.mode,
+      deduped,
+      servedFromCache,
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
+}

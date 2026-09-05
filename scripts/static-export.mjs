@@ -15,7 +15,10 @@ import process from "node:process";
 const root = path.resolve(import.meta.dirname, "..");
 const SERVER_ONLY_ROUTES = ["src/app/api/events/route.ts",
   "src/app/api/events/report/route.ts",
-  "src/app/api/csp-report/route.ts"]; // REEA-74
+  "src/app/api/csp-report/route.ts", // REEA-74
+  "src/app/api/products/[productId]/collect/route.ts", // REEA-84 W1
+  "src/app/api/collect-jobs/[jobId]/route.ts", // REEA-84 W1
+  "src/app/api/collect-jobs/[jobId]/retry/route.ts"]; // REEA-84 W1
 
 // Test files that import a server-only route module: `next build` typechecks
 // them, so they must be renamed out together with the route (REEA-77).

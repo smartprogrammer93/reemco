@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import ProductResultCard from "@/components/ProductResultCard";
+import CollectionPanel from "@/components/CollectionPanel";
 import { PRODUCTS } from "@/lib/feed";
 
 export const metadata = {
@@ -26,6 +27,13 @@ export default async function ProductPage({
     >
       {/* Theme v1 §3.4: product hero uses the detail variant (28px price, variations, alternatives). */}
       <ProductResultCard product={product} isBest variant="detail" />
+      {/* REEA-84 W1: live per-product collection with progress UX (T4/T5/T6).
+          Client-only — degrades to the catalog card above when the API is
+          unavailable, e.g. on the static preview host (AC10). */}
+      <CollectionPanel
+        productId={product.productId}
+        currency={product.offers[0]?.currency ?? "KWD"}
+      />
       <p style={{ marginTop: "var(--space-4)" }}>
         <Link
           href={`/results?q=${encodeURIComponent(product.title)}`}

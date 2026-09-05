@@ -1,0 +1,135 @@
+/**
+ * REEA-84 W1 — per-retailer scrape adapters (T2).
+ *
+ * One adapter invocation per retailer offer URL: fetch the live product page
+ * with a hard timeout, extract structured price data (JSON-LD, then meta
+ * tags), and return a LiveOffer with provenance. No raw HTML is persisted —
+ * the page body is discarded after parsing (AC9).
+ *
+ * Real retailer pages vary widely; any parse failure surfaces as a per-retailer
+ * `failed` subtask (AC6) rather than a product-level error, and the fetch is
+ * injectable for deterministic tests.
+ */
+import type { LiveOffer, RetailerSubtask } from "@/lib/collect/types";
+import { PER_RETAILER_TIMEOUT_MS } from "@/lib/collect/types";
+
+export function domainOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "unknown";
+  }
+}
+
+export interface ScrapeOutcome {
+  offers: LiveOffer[];
+  error?: string;
+  timedOut?: boolean;
+}
+
+/** Extract a unit price from JSON-LD blocks, then meta tags. */
+export function extractPrice(html: string): number | null {
+  // JSON-LD: "price": 12.34 (offers schema.org/Offer or Product.offers)
+  const jsonLd = html.match(/"price"\s*:\s*"?([0-9]+(?:[.,][0-9]{1,2})?)"?/i);
+  if (jsonLd) {
+    const v = Number.parseFloat(jsonLd[1].replace(",", "."));
+    if (Number.isFinite(v) && v > 0) return v;
+  }
+  const meta =
+    html.match(
+      /<meta[^>]+property=["'](?:product:price:amount|og:price:amount)["'][^>]+content=["']([0-9]+(?:\.[0-9]{1,2})?)["']/i,
+    ) ??
+    html.match(
+      /<meta[^>]+content=["']([0-9]+(?:\.[0-9]{1,2})?)["'][^>]+property=["'](?:product:price:amount|og:price:amount)["']/i,
+    );
+  if (meta) {
+    const v = Number.parseFloat(meta[1]);
+    if (Number.isFinite(v) && v > 0) return v;
+  }
+  return null;
+}
+
+export function extractInStock(html: string): boolean {
+  if (/availability[^>]*(instock|in_stock|limitedavailability)/i.test(html)) return true;
+  if (/availability[^>]*outofstock/i.test(html)) return false;
+  return true; // unknown — assume listed means purchasable
+}
+
+async function fetchWithTimeout(
+  url: string,
+  timeoutMs: number,
+  fetchImpl: typeof fetch,
+): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetchImpl(url, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        "User-Agent": "ReemcoBot/1.0 (+https://reemco.vercel.app; price comparison)",
+        Accept: "text/html,application/xhtml+xml",
+      },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Scrape one retailer offer URL. Enforces the per-retailer timeout server-side
+ * (AC7); a timeout is reported distinctly so the UI can show "timed out".
+ */
+export async function scrapeOffer(
+  offer: { merchant: string; url: string; currency: string; wasPrice?: number },
+  opts: { timeoutMs?: number; fetchImpl?: typeof fetch; now?: number } = {},
+): Promise<ScrapeOutcome> {
+  const timeoutMs = opts.timeoutMs ?? PER_RETAILER_TIMEOUT_MS;
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const domain = domainOf(offer.url);
+  let html: string;
+  try {
+    html = await fetchWithTimeout(offer.url, timeoutMs, fetchImpl);
+  } catch (err) {
+    const aborted = err instanceof Error && err.name === "AbortError";
+    return {
+      offers: [],
+      timedOut: aborted,
+      error: aborted ? `Timed out after ${Math.round(timeoutMs / 1000)}s` : String(err instanceof Error ? err.message : err),
+    };
+  }
+  const price = extractPrice(html);
+  if (price == null) {
+    return { offers: [], error: "Could not parse price from retailer page" };
+  }
+  return {
+    offers: [
+      {
+        merchant: offer.merchant,
+        domain,
+        price,
+        currency: offer.currency,
+        url: offer.url,
+        inStock: extractInStock(html),
+        wasPrice: offer.wasPrice,
+        collectedAt: new Date(opts.now ?? Date.now()).toISOString(),
+        method: "live",
+      },
+    ],
+  };
+}
+
+/** Build the initial subtask row for an offer's retailer. */
+export function subtaskFor(offer: {
+  merchant: string;
+  url: string;
+}): RetailerSubtask {
+  return {
+    retailer: offer.merchant,
+    domain: domainOf(offer.url),
+    status: "pending",
+    offersFound: 0,
+  };
+}
