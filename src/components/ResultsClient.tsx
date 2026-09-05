@@ -169,7 +169,8 @@ function Results() {
     <>
       {/* Theme v1 §4: display-scale H1, tabular count */}
       <h1 style={{ font: "var(--text-display)", color: "var(--color-ink)" }}>
-        <span className="tabular">{products.length}</span> results for &ldquo;{query || "all products"}&rdquo;
+        <span className="tabular">{products.length}</span>{" "}
+        {products.length === 1 ? "result" : "results"} for &ldquo;{query || "all products"}&rdquo;
       </h1>
       <div className="space-y-4" style={{ marginTop: "var(--space-8)" }}>
         {products.map((p, i) => (

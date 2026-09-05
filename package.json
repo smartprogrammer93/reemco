@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "build:static": "STATIC_EXPORT=1 next build",
+    "build:static": "node scripts/static-export.mjs",
     "smoke": "node scripts/smoke-check.mjs",
     "deploy:prod": "npm run build:static && npx surge ./out reemco-price-compare-preview.surge.sh && npm run smoke",
     "report": "node --experimental-strip-types scripts/weekly-report.ts"
