@@ -23,8 +23,12 @@ describe("REEA-74 Stage-1 enforce CSP policy", () => {
     const scriptSrc = csp.split(";").find((d) => d.trim().startsWith("script-src"));
     expect(scriptSrc).toBeDefined();
     expect(scriptSrc).toContain("'self'");
-    expect(scriptSrc).toContain("'strict-dynamic'");
-    expect(scriptSrc).toMatch(/'nonce-[a-f0-9]+'/);
+    // REEA-82: pages are statically prerendered, so a nonce/'strict-dynamic'
+    // policy blocked every script and hydration never ran. The shipped policy
+    // must allow the build-time scripts ('self' + inline bootstrap).
+    expect(scriptSrc).toContain("'unsafe-inline'");
+    expect(scriptSrc).not.toContain("'strict-dynamic'");
+    expect(scriptSrc).not.toContain("'nonce-");
     expect(scriptSrc).not.toMatch(/(^|\s)https:(\s|$)/);
     expect(scriptSrc).not.toMatch(/(^|\s)http:(\s|$)/);
   });

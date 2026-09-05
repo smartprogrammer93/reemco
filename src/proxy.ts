@@ -15,12 +15,15 @@ const CSP_MODE = (process.env.CSP_MODE ?? "enforce").toLowerCase(); // "enforce"
 export function buildCsp(nonce: string, mode: string = CSP_MODE): string {
   const directives = [
     `default-src 'self'`,
-    // Stage 1 (REEA-74): no `https: http:` host fallback — those wildcards
-    // widen script-src to any HTTPS origin. 'self' + per-request nonce +
-    // 'strict-dynamic' covers the app; legacy browsers fall back to 'self'.
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
-    // 'unsafe-inline' is ignored by modern browsers when nonces are present;
-    // kept as a fallback for legacy browsers only.
+    // REEA-82: every page is statically prerendered, so Next.js cannot inject
+    // per-request nonces into its bootstrap scripts (nonces only work on
+    // dynamically rendered pages), and `'strict-dynamic'` makes browsers
+    // ignore the `'self'` host source. The previous nonce policy therefore
+    // blocked every script and hydration never ran — /results stayed on the
+    // loading skeletons forever. Ship the policy the static bundles actually
+    // satisfy (same as the layout's static-host meta fallback) until pages
+    // move to dynamic rendering with full nonce propagation.
+    `script-src 'self' 'unsafe-inline'`,
     `style-src 'self' 'unsafe-inline'`,
     `img-src 'self' data: https:`,
     `font-src 'self' data:`,
