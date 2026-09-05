@@ -35,6 +35,19 @@ The easiest way to deploy your Next.js app is to use the [Vercel Platform](https
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
 
+## Git commit identity (required for all agents)
+
+Every commit in this repo MUST use this git identity — Vercel blocks
+deployments whose commit email cannot be matched to a GitHub account:
+
+    git config user.name  "smartprogrammer93"
+    git config user.email "smartprogrammer@windowslive.com"
+
+Agents: set this locally before committing (or pass `-c user.name=... -c user.email=...`);
+never commit with `@reemco.dev`, `.local`, or other non-GitHub emails.
+If a Vercel deployment shows "Deployment Blocked — commit email could not be
+matched to a GitHub account", the culprit is a commit with the wrong identity.
+
 ## Preview deploys
 
 - Live preview: http://reemco-price-compare-preview.surge.sh (static export via surge.sh)
