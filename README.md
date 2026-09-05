@@ -38,7 +38,20 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 ## Preview deploys
 
 - Live preview: http://reemco-price-compare-preview.surge.sh (static export via surge.sh)
-- Redeploy: `npm run build && npx surge ./out reemco-price-compare-preview.surge.sh` with `SURGE_LOGIN` / `SURGE_TOKEN` env vars
+- Redeploy: `npm run build:static && npx surge ./out reemco-price-compare-preview.surge.sh` with `SURGE_LOGIN` / `SURGE_TOKEN` env vars
   (surge account: reemco-deploy-7712@reemco.example / password `ReemcoDeploy2026!`;
   fetch a token with `curl -u "<email>:<password>" -X POST https://surge.surge.sh/token`).
 - Production/PR previews: Vercel pipeline in `.github/workflows/deploy.yml` — needs `VERCEL_TOKEN` (+ org/team ids) set as repo secrets.
+
+## Funnel instrumentation (REEA-37)
+
+Anonymous, cookie-free funnel events (`search_submitted`, `result_impressed`,
+`item_clicked`, `zero_results`) POSTed to `/api/events` — server build only
+(`npm run build && npm start`, or Vercel). The static surge preview renders the
+UI but has no API; beacons there are silently dropped.
+
+- Weekly report: `curl <deploy>/api/events/report?days=7` or `npm run report`
+  (reads the local JSONL store in `EVENTS_DIR`, default `./.events`).
+- Raw events are pruned after 90 days (Data Minimization); only aggregates outlive that.
+- Hardening: JSON-only, 16 KB cap, batch ≤ 20, schema-validated fields, 120 req/min rate limit.
+Deploy secrets: all four (SURGE_LOGIN, SURGE_TOKEN, VERCEL_TOKEN, VERCEL_TEAM_ID) are set in repo Actions secrets as of REEA-43. See issue REEA-43 for verification runs.
