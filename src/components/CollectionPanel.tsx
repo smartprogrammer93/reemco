@@ -192,25 +192,29 @@ export default function CollectionPanel({
   // fetch it and render labeled cached data instead of a silent empty state.
   useEffect(() => {
     const job = state.kind === "terminal" ? state.job : null;
-    if (job?.status === "failed" && job.previousJobId) {
-      let cancelled = false;
-      void (async () => {
-        try {
-          const res = await fetch(`/api/collect-jobs/${job.previousJobId}`, {
-            cache: "no-store",
-          });
-          if (res.ok && !cancelled) {
-            setStaleFallback((await res.json()) as CollectJob);
-          }
-        } catch {
-          /* no fallback available — error state stands */
+    const previousId = job?.status === "failed" ? job.previousJobId : undefined;
+    let cancelled = false;
+    void (async () => {
+      await Promise.resolve(); // keep setState out of the synchronous effect body
+      if (cancelled) return;
+      if (!previousId) {
+        setStaleFallback(null);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/collect-jobs/${previousId}`, {
+          cache: "no-store",
+        });
+        if (res.ok && !cancelled) {
+          setStaleFallback((await res.json()) as CollectJob);
         }
-      })();
-      return () => {
-        cancelled = true;
-      };
-    }
-    setStaleFallback(null);
+      } catch {
+        /* no fallback available — error state stands */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [state]);
 
   const phase = state as CollectionPhase;

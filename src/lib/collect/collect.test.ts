@@ -3,7 +3,7 @@
  *
  * Uses a temp cache dir and an injectable fetch so no network is touched.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -167,7 +167,6 @@ describe("runCollection", () => {
     expect(done.status).toBe("failed");
     expect(done.error).toBeTruthy();
     expect(done.offers).toHaveLength(0);
-    const { findLastCompleted } = await import("@/lib/collect/store");
     expect(findLastCompleted(done.productId)).toBeUndefined();
   });
 

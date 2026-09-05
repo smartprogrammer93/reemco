@@ -78,7 +78,6 @@ export async function runCollection(
   opts: { fetchImpl?: FetchImpl; overallBudgetMs?: number; now?: number } = {},
 ): Promise<CollectJob> {
   const budgetMs = opts.overallBudgetMs ?? OVERALL_BUDGET_MS;
-  const startedAt = opts.now ?? Date.now();
   const retailers = product.offers.map((o) => ({
     merchant: o.merchant,
     url: o.url,
