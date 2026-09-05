@@ -16,7 +16,7 @@
 import type { CollectJob, LiveOffer, RetailerSubtask } from "@/lib/collect/types";
 import { OVERALL_BUDGET_MS } from "@/lib/collect/types";
 import type { NormalizedProduct } from "@/types/product";
-import { scrapeOffer, subtaskFor } from "@/lib/collect/scraper";
+import { scrapeOffer, subtaskFor, type FetchImpl } from "@/lib/collect/scraper";
 import {
   createJob,
   findFreshCompleted,
@@ -75,7 +75,7 @@ export function startCollection(
 export async function runCollection(
   job: CollectJob,
   product: NormalizedProduct,
-  opts: { fetchImpl?: typeof fetch; overallBudgetMs?: number; now?: number } = {},
+  opts: { fetchImpl?: FetchImpl; overallBudgetMs?: number; now?: number } = {},
 ): Promise<CollectJob> {
   const budgetMs = opts.overallBudgetMs ?? OVERALL_BUDGET_MS;
   const startedAt = opts.now ?? Date.now();
@@ -87,7 +87,7 @@ export async function runCollection(
   }));
 
   const scrape = async (retailer: (typeof retailers)[number], sub: RetailerSubtask) => {
-    if (job.status !== "collecting") return { offers: [] as LiveOffer[], error: "Job already settled" };
+    if (job.status !== "collecting") return [] as LiveOffer[];
     sub.status = "collecting";
     sub.startedAt = new Date().toISOString();
     const outcome = await scrapeOffer(retailer, {
@@ -194,7 +194,7 @@ export async function retryRetailer(
   job: CollectJob,
   product: NormalizedProduct,
   retailer: string,
-  opts: { fetchImpl?: typeof fetch; now?: number } = {},
+  opts: { fetchImpl?: FetchImpl; now?: number } = {},
 ): Promise<CollectJob | undefined> {
   if (job.status === "collecting") return undefined; // only terminal jobs retry
   const index = product.offers.findIndex((o) => o.merchant === retailer);

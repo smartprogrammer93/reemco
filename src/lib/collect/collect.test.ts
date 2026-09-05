@@ -77,14 +77,16 @@ describe("startCollection", () => {
   });
 
   it("dedupes an in-flight job for the same product (AC8)", () => {
-    const first = startCollection(product());
-    const second = startCollection(product());
+    const p = product();
+    const first = startCollection(p);
+    const second = startCollection(p);
     expect(second.deduped).toBe(true);
     expect(second.job.jobId).toBe(first.job.jobId);
   });
 
   it("serves a fresh completed job as cached (AC5)", () => {
-    const { job } = startCollection(product());
+    const p = product();
+    const { job } = startCollection(p);
     job.status = "complete";
     job.offers = [
       {
@@ -100,31 +102,31 @@ describe("startCollection", () => {
     ];
     // Simulate runner completion (persists + releases in-flight slot).
     
-    finishJob(job);
-    const again = startCollection(product());
+    finishJob(job, cacheDir);
+    const again = startCollection(p);
     expect(again.servedFromCache).toBe(true);
     expect(again.job.mode).toBe("cache");
     expect(again.job.jobId).toBe(job.jobId);
   });
 
   it("does not serve a stale (>10 min) job as cached and starts a live run", () => {
-    const { job } = startCollection(product());
+    const p = product();
+    const { job } = startCollection(p);
     job.status = "complete";
     finishJob(job, cacheDir, Date.now() - CACHE_TTL_MS - 1000);
-    
-    finishJob(job);
-    const again = startCollection(product());
+    const again = startCollection(p);
     expect(again.servedFromCache).toBe(false);
     expect(again.job.mode).toBe("live");
     expect(again.job.jobId).not.toBe(job.jobId);
   });
 
   it("force bypasses the cache", () => {
-    const { job } = startCollection(product());
+    const p = product();
+    const { job } = startCollection(p);
     job.status = "complete";
     
-    finishJob(job);
-    const forced = startCollection(product(), { force: true });
+    finishJob(job, cacheDir);
+    const forced = startCollection(p, { force: true });
     expect(forced.servedFromCache).toBe(false);
   });
 });
@@ -242,11 +244,12 @@ describe("misc", () => {
   });
 
   it("findFreshCompleted reads through the persisted cache", () => {
-    const { job } = startCollection(product(), { force: true });
+    const p = product();
+    const { job } = startCollection(p, { force: true });
     job.status = "complete";
     
     finishJob(job);
-    const fresh = findFreshCompleted(product().productId);
+    const fresh = findFreshCompleted(p.productId);
     expect(fresh?.jobId).toBe(job.jobId);
     expect(getJob(job.jobId)).toBeTruthy();
   });

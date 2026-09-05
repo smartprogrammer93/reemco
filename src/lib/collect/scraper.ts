@@ -21,6 +21,9 @@ export function domainOf(url: string): string {
   }
 }
 
+/** Injectable fetch for tests — string URLs only (we never pass a Request). */
+export type FetchImpl = (url: string, init?: RequestInit) => Promise<Response>;
+
 export interface ScrapeOutcome {
   offers: LiveOffer[];
   error?: string;
@@ -58,7 +61,7 @@ export function extractInStock(html: string): boolean {
 async function fetchWithTimeout(
   url: string,
   timeoutMs: number,
-  fetchImpl: typeof fetch,
+  fetchImpl: FetchImpl,
 ): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -84,10 +87,10 @@ async function fetchWithTimeout(
  */
 export async function scrapeOffer(
   offer: { merchant: string; url: string; currency: string; wasPrice?: number },
-  opts: { timeoutMs?: number; fetchImpl?: typeof fetch; now?: number } = {},
+  opts: { timeoutMs?: number; fetchImpl?: FetchImpl; now?: number } = {},
 ): Promise<ScrapeOutcome> {
   const timeoutMs = opts.timeoutMs ?? PER_RETAILER_TIMEOUT_MS;
-  const fetchImpl = opts.fetchImpl ?? fetch;
+  const fetchImpl: FetchImpl = opts.fetchImpl ?? ((url, init) => fetch(url, init));
   const domain = domainOf(offer.url);
   let html: string;
   try {
