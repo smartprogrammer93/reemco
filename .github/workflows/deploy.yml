@@ -130,9 +130,19 @@ jobs:
       - name: Deploy to Vercel (production, server render)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+          CI: "1"
         run: |
           if [ -z "$VERCEL_TOKEN" ]; then
             echo "::notice::VERCEL_TOKEN not set - skipping server-render deploy. F2 headers remain gated on this secret. Owner: CEO/repo admin."
             exit 0
           fi
-          npx vercel deploy --prod --yes --token "$VERCEL_TOKEN"
+          # --scope avoids the interactive team picker (hangs CI when the token
+          # has multiple scopes); VERCEL_TEAM_ID is the team id/slug.
+          SCOPE_ARGS=""
+          if [ -n "$VERCEL_TEAM_ID" ]; then SCOPE_ARGS="--scope $VERCEL_TEAM_ID"; fi
+          npx -y vercel@latest deploy --prod --yes --cwd "$GITHUB_WORKSPACE" \
+            --token "$VERCEL_TOKEN" $SCOPE_ARGS 2>&1 | tee /tmp/vercel-deploy.log
+          URL=$(grep -oE 'https://[a-z0-9.-]+\.vercel\.app' /tmp/vercel-deploy.log | tail -1)
+          echo "VERCEL_DEPLOY_URL=$URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "Vercel production URL: $URL"
