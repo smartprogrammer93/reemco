@@ -1,16 +1,79 @@
-name: Deploy preview
+name: Deploy site
 
-# Every push gets a Vercel preview URL; merges to main deploy to production.
-# Required secrets (set once in repo settings):
-#   VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_TEAM_ID (org), and project ids in vercel.json are optional.
+# Source of truth: this pipeline builds from a pinned checkout of the ref that
+# triggered it (main push = production). No session-workspace deploys.
+#
+# Required repo secrets (Settings > Secrets > Actions):
+#   SURGE_LOGIN / SURGE_TOKEN  - static production deploy (reemco-price-compare-preview.surge.sh)
+#   VERCEL_TOKEN (+ VERCEL_ORG_ID / VERCEL_TEAM_ID) - optional server-render path
+#     (needed for F2 response headers: CSP, nosniff, Referrer-Policy; Surge
+#     static hosting cannot emit custom headers).
+#
+# Rollback: run this workflow manually (Actions > Deploy site > Run workflow)
+# with `rollback_sha` set to the previous known-good commit; it rebuilds from
+# that exact SHA and republishes. Rollback = redeploy of the prior artifact.
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      rollback_sha:
+        description: "Commit SHA to redeploy (rollback). Empty = default branch."
+        required: false
+        default: ""
 
 jobs:
-  deploy-preview:
+  build-and-deploy:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.rollback_sha || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Stamp the artifact with its source commit so the deployed build is
+      # self-identifying: https://<host>/__commit.txt
+      - name: Stamp commit into build
+        run: echo "${{ inputs.rollback_sha || github.sha }}" > public/__commit.txt
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+      - name: Deploy static export to Surge (production)
+        env:
+          SURGE_LOGIN: ${{ secrets.SURGE_LOGIN }}
+          SURGE_TOKEN: ${{ secrets.SURGE_TOKEN }}
+        run: |
+          if [ -z "$SURGE_LOGIN" ] || [ -z "$SURGE_TOKEN" ]; then
+            echo "::error::Repo secrets SURGE_LOGIN/SURGE_TOKEN are not set - cannot deploy. Unblock owner: repo admin (CEO)."
+            exit 1
+          fi
+          npx surge ./out reemco-price-compare-preview.surge.sh --token "$SURGE_TOKEN"
+
+      # Post-deploy smoke check: live artifact must serve the commit we built.
+      - name: Post-deploy smoke check
+        run: |
+          sleep 5
+          SERVED=$(curl -fsS https://reemco-price-compare-preview.surge.sh/__commit.txt 2>/dev/null | tr -d '[:space:]')
+          echo "live artifact commit: $SERVED"
+          if [ "$SERVED" != "${{ inputs.rollback_sha || github.sha }}" ]; then
+            echo "::error::Deployed artifact does not match built commit ($SERVED != ${{ inputs.rollback_sha || github.sha }})"
+            exit 1
+          fi
+
+  # Optional server-render deploy (unblocks F2 response headers once VERCEL_TOKEN exists).
+  vercel-server:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: build-and-deploy
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -18,13 +81,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run build
-      - name: Deploy to Vercel (preview / production)
+      - name: Deploy to Vercel (production, server render)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            npx vercel deploy --prod --yes --token "$VERCEL_TOKEN"
-          else
-            npx vercel deploy --yes --token "$VERCEL_TOKEN"
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::notice::VERCEL_TOKEN not set - skipping server-render deploy. F2 headers remain gated on this secret. Owner: CEO/repo admin."
+            exit 0
           fi
+          npx vercel deploy --prod --yes --token "$VERCEL_TOKEN"

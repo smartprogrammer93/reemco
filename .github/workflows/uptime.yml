@@ -1,0 +1,43 @@
+name: Uptime check
+
+# Basic availability monitoring for the public site (REEA-27 item 3).
+# Runs every 5 minutes; any failure opens a GitHub issue labeled `uptime-alert`
+# (deduped) so downtime surfaces in the repo notification stream immediately.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe public URL
+        id: probe
+        run: |
+          BASE="https://reemco-price-compare-preview.surge.sh"
+          FAIL=""
+          for CHECK in "/" "/search" "/results?q=iPhone%2017%20Pro"; do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$BASE$CHECK" || echo 000)
+            echo "$CHECK -> $CODE"
+            case "$CODE" in 200|301|302) ;; *) FAIL="$FAIL $CHECK($CODE)";; esac
+          done
+          echo "failed=$FAIL" >> "$GITHUB_OUTPUT"
+          [ -z "$FAIL" ] || exit 1
+
+      - name: Open deduped downtime issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh issue list --label uptime-alert --state open --json url -q '.[0].url' | grep -q .; then
+            echo "open uptime-alert issue already exists - appending"
+          else
+            gh issue create \
+              --title "UP ALERT: public site failing uptime probe" \
+              --label uptime-alert \
+              --body "Uptime probe failed at $(date -u +%FT%TZ) for: ${{ steps.probe.outputs.failed }}. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
