@@ -203,3 +203,249 @@ a:focus-visible {
     height: auto;
   }
 }
+
+/*
+ * ============================================================================
+ * Theme v2 — "Reemco Pulse" (REEA-84 plan §2.2, REEA-90 C7)
+ * Second token layer alongside theme v1; v1 pages are untouched until they
+ * adopt v2 components. Every value below is a token — components reference
+ * vars only, zero hex literals outside this file.
+ * ============================================================================
+ */
+:root {
+  /* Color — brand & semantics (plan §2.2) */
+  --r2-primary: #4f46e5; /* electric indigo: actions, focus, links */
+  --r2-primary-hover: #4338ca;
+  --r2-deal: #16a34a; /* best price / savings */
+  --r2-deal-bg: #dcfce7; /* savings badge tint */
+  --r2-warn: #d97706; /* stale / cached signal */
+  --r2-warn-bg: #fef3c7;
+  --r2-error: #dc2626; /* retailer failed */
+  --r2-error-bg: #fee2e2;
+  --r2-ink: #0f172a; /* headings */
+  --r2-body: #334155; /* body text */
+  --r2-muted: #64748b; /* metadata, provenance */
+  --r2-border: #e2e8f0;
+  --r2-canvas: #f8fafc; /* page background */
+  --r2-surface: #ffffff; /* cards */
+
+  /* Typography — Space Grotesk display + Inter body, tabular prices */
+  --r2-font-display: var(--font-space-grotesk), var(--font-inter), sans-serif;
+  --r2-font-body: var(--font-inter), sans-serif;
+  /* Type scale 12/14/16/20/24/32; 1.2 display, 1.5 body line-height */
+  --r2-text-12: 500 12px/16px var(--r2-font-body);
+  --r2-text-14: 400 14px/21px var(--r2-font-body);
+  --r2-text-16: 400 16px/24px var(--r2-font-body);
+  --r2-text-20: 600 20px/24px var(--r2-font-body);
+  --r2-text-24: 600 24px/29px var(--r2-font-display);
+  --r2-text-32: 700 32px/38px var(--r2-font-display);
+  --r2-text-price: 600 28px/34px var(--r2-font-body); /* offer-card price hero */
+
+  /* Shape & elevation — 4px grid spacing reused from v1 (--space-*) */
+  --r2-radius-control: 8px;
+  --r2-radius-card: 14px;
+  --r2-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --r2-shadow-md: 0 4px 12px rgba(15, 23, 42, 0.1);
+  --r2-ring: 0 0 0 2px var(--r2-surface), 0 0 0 4px var(--r2-primary); /* 2px brand ring */
+  --r2-ring-focus: 0 0 0 3px rgba(79, 70, 229, 0.35);
+
+  /* Motion — 150ms standard, 300ms progress moments, 40ms card stagger */
+  --r2-motion-fast: 150ms;
+  --r2-motion-slow: 300ms;
+  --r2-motion-ease: ease-out;
+  --r2-stagger: 40ms;
+
+  /* Dark-mode token map — DEFINED NOW, activated in v2.1 (plan §2.2).
+     Not applied: no selector below attaches it to the document. */
+  --r2-dark-canvas: #0b1120;
+  --r2-dark-surface: #111827;
+  --r2-dark-border: #1f2937;
+  --r2-dark-ink: #f1f5f9;
+  --r2-dark-body: #cbd5e1;
+  --r2-dark-muted: #94a3b8;
+}
+
+/* §2.6 signature moment: header progress bar with moving pulse sheen. */
+.pulse-bar {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--r2-border);
+  overflow: hidden;
+}
+
+.pulse-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  background: var(--r2-primary);
+  transition: width var(--r2-motion-slow) var(--r2-motion-ease);
+}
+
+.pulse-bar-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.45),
+    transparent
+  );
+  animation: pulse-sheen 1.4s ease-in-out infinite;
+}
+
+/* Completion: the bar snaps green (§2.6). */
+.pulse-bar-fill.is-done {
+  background: var(--r2-deal);
+}
+
+.pulse-bar-fill.is-done::after {
+  animation: none;
+  content: none;
+}
+
+@keyframes pulse-sheen {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Per-retailer row states: skeleton → spinner → check / red chip (§2.6). */
+.pulse-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid var(--r2-border);
+  border-top-color: var(--r2-primary);
+  animation: pulse-spin 0.8s linear infinite;
+}
+
+@keyframes pulse-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Offer-card cascade on completion: staggered 40ms, 300ms total (§2.6). */
+.pulse-cascade {
+  animation: pulse-rise var(--r2-motion-slow) var(--r2-motion-ease) both;
+  animation-delay: calc(var(--cascade-index, 0) * var(--r2-stagger));
+}
+
+@keyframes pulse-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Freshness live dot — green pulse <2min (§2.4), same pulse language. */
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--r2-deal);
+  animation: live-pulse 2s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.4);
+  }
+}
+
+/* Micro-interactions (§2.5): hover lift + brand ring, press scale. */
+.r2-card {
+  background: var(--r2-surface);
+  border: 1px solid var(--r2-border);
+  border-radius: var(--r2-radius-card);
+  box-shadow: var(--r2-shadow-sm);
+  transition:
+    transform var(--r2-motion-fast) var(--r2-motion-ease),
+    box-shadow var(--r2-motion-fast) var(--r2-motion-ease),
+    border-color var(--r2-motion-fast) var(--r2-motion-ease);
+}
+
+.r2-card.is-best {
+  border-color: var(--r2-deal);
+}
+
+.r2-card:hover,
+.r2-card:focus-within {
+  transform: translateY(-2px);
+  box-shadow: var(--r2-shadow-md), var(--r2-ring);
+}
+
+.r2-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r2-radius-control);
+  background: var(--r2-primary);
+  color: var(--r2-surface);
+  font: var(--r2-text-14);
+  font-weight: 600;
+  transition:
+    transform var(--r2-motion-fast) var(--r2-motion-ease),
+    background var(--r2-motion-fast) var(--r2-motion-ease);
+}
+
+.r2-btn:hover {
+  background: var(--r2-primary-hover);
+}
+
+.r2-btn:active {
+  transform: scale(0.98);
+}
+
+.r2-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--r2-ring-focus);
+}
+
+/* Skeletons match the final offer-card layout exactly (§2.5). */
+.r2-skeleton {
+  background: var(--r2-border);
+  border-radius: var(--r2-radius-control);
+  animation: skeleton-pulse 1.2s ease-in-out infinite;
+}
+
+/* Reduced motion: kill sheen, spin, cascade, live pulse, lifts (D-AC4). */
+@media (prefers-reduced-motion: reduce) {
+  .pulse-bar-fill,
+  .pulse-bar-fill::after,
+  .r2-card,
+  .r2-btn {
+    transition: none;
+    animation: none;
+  }
+
+  .pulse-bar-fill::after {
+    content: none;
+  }
+
+  .pulse-cascade,
+  .live-dot,
+  .pulse-spinner,
+  .r2-skeleton {
+    animation: none;
+  }
+
+  .r2-card:hover,
+  .r2-card:focus-within,
+  .r2-btn:active {
+    transform: none;
+  }
+}

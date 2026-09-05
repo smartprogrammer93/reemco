@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Inter, Space_Grotesk } from "next/font/google";
 import Link from "next/link";
 import HeaderSearch from "@/components/HeaderSearch";
 import "./globals.css";
@@ -9,6 +9,14 @@ const inter = Inter({
   variable: "--font-inter",
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
+  display: "swap",
+});
+
+/* Theme v2 (REEA-90 C7, plan §2.2): Space Grotesk 600/700 for display/headers. */
+const spaceGrotesk = Space_Grotesk({
+  variable: "--font-space-grotesk",
+  subsets: ["latin"],
+  weight: ["600", "700"],
   display: "swap",
 });
 
@@ -31,7 +39,10 @@ export function Wordmark({ size = 20 }: { size?: number }) {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${inter.variable} h-full antialiased`}>
+    <html
+      lang="en"
+      className={`${inter.variable} ${spaceGrotesk.variable} h-full antialiased`}
+    >
       <body className="flex min-h-full flex-col">
         {/* REEA-42 interim F2 control for the static-export host (Surge): Surge
             cannot emit response headers, so the header CSP from src/proxy.ts
