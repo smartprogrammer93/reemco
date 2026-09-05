@@ -127,6 +127,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # REEA-77: stamp the server-render artifact with its source commit too —
+      # the stamp step only existed in build-and-deploy, so reemco.vercel.app
+      # had no /__commit.txt and its build could not be self-identified.
+      - name: Stamp commit into build
+        run: echo "${{ github.sha }}" > public/__commit.txt
       - name: Deploy to Vercel (production, server render)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -152,3 +157,19 @@ jobs:
           URL=$(grep -oE 'https://[a-z0-9.-]+\.vercel\.app' /tmp/vercel-deploy.log | tail -1)
           echo "VERCEL_DEPLOY_URL=$URL" >> "$GITHUB_STEP_SUMMARY"
           echo "Vercel production URL: $URL"
+          # REEA-77 post-deploy verification (Observability-before-Launch):
+          # the production alias must serve this exact build and the F2
+          # headers before the job is allowed to go green. The raw deployment
+          # URL may sit behind Vercel SSO protection, so verify via the alias.
+          sleep 5
+          SERVED=$(curl -fsS https://reemco.vercel.app/__commit.txt 2>/dev/null | tr -d '[:space:]')
+          echo "live artifact commit: $SERVED"
+          if [ "$SERVED" != "${{ github.sha }}" ]; then
+            echo "::error::reemco.vercel.app does not serve this build's commit ($SERVED != ${{ github.sha }}) — treating deploy as failed. Rollback: rerun this workflow from the previous known-good commit."
+            exit 1
+          fi
+          for H in "content-security-policy" "x-content-type-options" "referrer-policy" "strict-transport-security"; do
+            curl -fsSI https://reemco.vercel.app/ | grep -iq "^$H:" || {
+              echo "::error::F2 response header missing on reemco.vercel.app: $H"; exit 1; }
+          done
+          echo "F2 headers verified on reemco.vercel.app"
