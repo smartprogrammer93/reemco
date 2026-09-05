@@ -1,6 +1,7 @@
 import type { Coupon, NormalizedProduct, PriceOffer } from "@/types/product";
 import { effectivePrice, formatPrice, sortOffers } from "@/lib/format";
 import CouponBadge from "@/components/CouponBadge";
+import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import { resolveOfferUrl } from "@/lib/links";
 
 /**
@@ -113,11 +114,16 @@ export default function ProductResultCard({
   product,
   isBest = false,
   variant = "card",
+  query = "",
+  rank = -1,
 }: {
   product: NormalizedProduct;
   /** True when this offer carries the best effective price on the page (§3.3 Von Restorff). */
   isBest?: boolean;
   variant?: "card" | "detail";
+  /** REEA-37 funnel context for item_clicked events (-1 = product detail page). */
+  query?: string;
+  rank?: number;
 }) {
   const detail = variant === "detail";
   const offers = sortOffers(product.offers);
@@ -208,14 +214,15 @@ export default function ProductResultCard({
                         REEA-25: stale scraped URLs fall back to a working
                         merchant search URL (resolveOfferUrl), or hide the link. */}
                     {o.inStock && href ? (
-                      <a
+                      <TrackedOutboundLink
                         href={href}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                        query={query}
+                        rank={rank}
+                        itemId={product.productId}
                         className="btn-primary focusable h-10 px-4"
                       >
                         Go to store
-                      </a>
+                      </TrackedOutboundLink>
                     ) : null}
                   </span>
                 </li>
