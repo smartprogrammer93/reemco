@@ -173,3 +173,29 @@ jobs:
               echo "::error::F2 response header missing on reemco.vercel.app: $H"; exit 1; }
           done
           echo "F2 headers verified on reemco.vercel.app"
+
+      # REEA-77 diagnostics: when the remote build never completes (exit 124),
+      # the CLI poll gives us nothing — pull the builder-side state and build
+      # events straight from the Vercel API instead (VERCEL_TOKEN has read
+      # access; only deployment metadata/build logs are printed, never the
+      # token). This is our dashboard-build-log substitute until/unless the
+      # CEO grants project access.
+      - name: Capture Vercel remote-build diagnostics
+        if: failure()
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+        run: |
+          [ -z "$VERCEL_TOKEN" ] && exit 0
+          TEAM_Q=""; [ -n "$VERCEL_TEAM_ID" ] && TEAM_Q="&teamId=$VERCEL_TEAM_ID"
+          echo "## Latest production deployments" >> "$GITHUB_STEP_SUMMARY"
+          curl -fsS -H "Authorization: Bearer $VERCEL_TOKEN" \
+            "https://api.vercel.com/v6/deployments?project=reemco&target=production&limit=3$TEAM_Q" \
+            | jq -r '.deployments[] | "\(.uid) \(.state) \(.readyState) created=\(.createdAt) \(.meta.githubCommitSha // "n/a" | .[0:7])"' | tee -a "$GITHUB_STEP_SUMMARY"
+          DEP_ID=$(curl -fsS -H "Authorization: Bearer $VERCEL_TOKEN" \
+            "https://api.vercel.com/v6/deployments?project=reemco&target=production&limit=1$TEAM_Q" | jq -r '.deployments[0].uid')
+          echo "## Build events for $DEP_ID" >> "$GITHUB_STEP_SUMMARY"
+          curl -fsS -H "Authorization: Bearer $VERCEL_TOKEN" \
+            "https://api.vercel.com/v2/deployments/$DEP_ID/events?limit=200&builds=1$TEAM_Q" \
+            | jq -r '.[] | "\(.createdDateTime // .date) [\(.payload.info.name // .payload.text // "event")] \(.payload.text // "") \(.payload.info // "" | tostring | .[0:300])"' \
+            | tail -80 | tee -a "$GITHUB_STEP_SUMMARY"
