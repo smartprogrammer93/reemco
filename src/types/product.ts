@@ -42,6 +42,12 @@ export interface NormalizedProduct {
   coupons: Coupon[];
   variations: ProductVariation[];
   alternatives: ProductAlternative[];
+  /**
+   * ISO 8601 timestamp of the scrape that produced this record (REEA-65 §4.1).
+   * Mapped 1:1 from the feed's existing `scraped_at` metadata — no new data is
+   * collected. Missing/undefined renders "Verification date unknown".
+   */
+  scrapedAt?: string;
 }
 
 export interface SearchResult {

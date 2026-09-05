@@ -33,5 +33,5 @@ export function freshness(scrapedAt: string | undefined, now: number = Date.now(
   if (ageMs < HOUR) return { label: "minutes ago", stale: false };
   if (ageMs < DAY) return { label: `${Math.floor(ageMs / HOUR)}h ago`, stale: false };
   const days = Math.floor(ageMs / DAY);
-  return { label: `${days}d ago`, stale: days > STALE_AFTER_DAYS };
+  return { label: `${days}d ago`, stale: ageMs > STALE_AFTER_DAYS * DAY };
 }

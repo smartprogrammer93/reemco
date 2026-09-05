@@ -101,6 +101,63 @@ await step(3, "result card has a working click-out link", async () => {
   return `offer link ${await offerHref.getAttribute("href")} present on card`;
 });
 
+// REEA-65 AC-1/AC-4: every result card renders honest last-verified freshness
+// ("Verified …", "… may be outdated", or "Verification date unknown"); render
+// timing is logged against the 200ms server-render regression budget (AC-4).
+await step(4, "results surface last-verified freshness (REEA-65)", async () => {
+  const t0 = Date.now();
+  await page.goto(`${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`, { waitUntil: "load" });
+  await page.waitForSelector(".result-card", { timeout: 25000 });
+  const html = await page.content();
+  const fresh = (html.match(/Verified \d+[hd] ago|Verified minutes ago/g) || []).length;
+  const stale = (html.match(/may be outdated/g) || []).length;
+  const unknown = (html.match(/Verification date unknown/g) || []).length;
+  if (fresh + stale + unknown === 0) {
+    throw new Error("no freshness badge on any result card (expected 'Verified …' / 'may be outdated' / 'Verification date unknown')");
+  }
+  console.log(`  INFO results load (incl. hydration): ${Date.now() - t0}ms — review vs 200ms server-render budget`);
+  return `${fresh} fresh / ${stale} stale-flagged / ${unknown} unknown freshness badge(s)`;
+});
+
+// REEA-75: mobile (375px) viewport pass. Guard against horizontal-overflow
+// regressions on every funnel page and assert the primary CTAs (header Search
+// button, offer 'Go to store' links) sit fully inside the viewport.
+await step(5, "375px mobile pass: no horizontal overflow, CTAs in viewport (REEA-75)", async () => {
+  const mobile = await browser.newPage({ viewport: { width: 375, height: 667 } });
+  mobile.setDefaultTimeout(30000);
+  const violations = [];
+  const pages = ["/", `/results?q=${encodeURIComponent(FIXTURE_QUERY)}`];
+  // Include one real product detail page when step 3 found its href.
+  try {
+    const detailHref = await mobile.goto(`${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`, { waitUntil: "load" }).then(() =>
+      mobile.$eval(".result-card a[href^='/product/']", (a) => a.getAttribute("href")),
+    );
+    if (detailHref) pages.push(detailHref);
+  } catch {
+    // detail page optional for this guard; steps 2-3 already cover it on desktop
+  }
+  for (const path of pages) {
+    await mobile.goto(`${BASE}${path}`, { waitUntil: "load" });
+    await mobile.waitForTimeout(500); // allow hydration to settle before measuring
+    const { scrollWidth, clipped } = await mobile.evaluate(() => {
+      const vw = document.documentElement.clientWidth;
+      const clipped = [];
+      for (const el of document.querySelectorAll("button, a")) {
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && (r.right > vw + 1 || r.left < -1)) {
+          clipped.push(`<${el.tagName.toLowerCase()}> "${(el.textContent || "").trim().slice(0, 30)}" right=${Math.round(r.right)}`);
+        }
+      }
+      return { scrollWidth: document.documentElement.scrollWidth, clipped };
+    });
+    if (scrollWidth > 375) violations.push(`${path}: scrollWidth ${scrollWidth} > 375`);
+    if (clipped.length) violations.push(`${path}: offscreen CTAs — ${clipped.join("; ")}`);
+  }
+  await mobile.close();
+  if (violations.length) throw new Error(violations.join(" | "));
+  return `${pages.length} page(s) clean at 375px (scrollWidth<=375, all CTAs visible)`;
+});
+
 await browser.close();
 console.log(results.join("\n"));
-console.log(`SMOKE PASSED — ${BASE} funnel (home → search → click-out) is healthy.`);
+console.log(`SMOKE PASSED — ${BASE} funnel (home → search → click-out → freshness) is healthy.`);

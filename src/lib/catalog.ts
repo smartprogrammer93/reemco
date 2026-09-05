@@ -368,3 +368,34 @@ export const CATALOG: NormalizedProduct[] = [
     ],
   },
 ];
+
+/**
+ * REEA-65 §4.1 seed freshness fixture: last-verified timestamps (hours before
+ * build time) so the deployed catalog exercises every freshness bucket —
+ * fresh (<24h), stale (>7d, "may be outdated"), and one metadata-less product
+ * ("Verification date unknown"). The real feed replaces this with per-record
+ * `scraped_at` from the scraping pipeline; the mapping is this one place.
+ */
+const BUILD_TIME = Date.now();
+const hoursBeforeBuild = (h: number): string =>
+  new Date(BUILD_TIME - h * 60 * 60 * 1000).toISOString();
+
+const FRESHNESS_FIXTURE_HOURS: Record<string, number | undefined> = {
+  "asus-rog-strix-scope-ii": 3,
+  "asus-rog-keris-ii-aimpoint": 9,
+  "logitech-gpro-superlight-2": 30,
+  "razer-huntsman-v3-pro": 52,
+  "logitech-pro-x-tkl": 74,
+  "sony-wh-1000xm6": 8,
+  "bose-qc-ultra": 24 * 9, // stale: >7d
+  "iphone-17-pro": 5,
+  "galaxy-s26-ultra": 27,
+  "ps5-slim-bundle": 24 * 12, // stale: >7d
+  "xbox-series-s": 2,
+  // keychron-v3-max: deliberately omitted — renders "Verification date unknown".
+};
+
+for (const product of CATALOG) {
+  const hours = FRESHNESS_FIXTURE_HOURS[product.productId];
+  if (hours != null) product.scrapedAt = hoursBeforeBuild(hours);
+}

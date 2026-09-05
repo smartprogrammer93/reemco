@@ -37,8 +37,7 @@ export default function FreshnessBadge({
       style={
         f.stale
           ? {
-              color: "var(--color-warn)",
-              background: "var(--color-warn-bg, var(--color-surface-muted))",
+              color: "var(--color-warn-text)",
               border: "1px solid var(--color-warn)",
             }
           : {
