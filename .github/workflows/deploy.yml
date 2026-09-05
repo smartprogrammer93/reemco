@@ -28,7 +28,8 @@ on:
         default: ""
 
 permissions:
-  issues: write
+  contents: read # checkout needs this; specifying any workflow-level permissions revokes the defaults
+  issues: write # deploy/smoke failure alerts
 
 jobs:
   build-and-deploy:
@@ -97,6 +98,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          gh label create deploy-alert --color D93F0B --description "Post-deploy deploy/smoke check failure" --force || true
           FAILED_STEPS=$(gh run view ${{ github.run_id }} --json jobs \
             --jq '.jobs[].steps[] | select(.conclusion=="failure") | .name' | paste -sd '; ' -)
           BODY="Deploy pipeline failed at $(date -u +%FT%TZ).
