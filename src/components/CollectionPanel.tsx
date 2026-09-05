@@ -17,105 +17,7 @@ import type { CollectJob, LiveOffer } from "@/lib/collect/types";
 import { collectedAgoLabel } from "@/lib/collect/types";
 import { formatPrice } from "@/lib/format";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
-
-const SUBTASK_LABEL: Record<string, string> = {
-  pending: "Queued",
-  collecting: "Collecting…",
-  done: "Done",
-  failed: "Failed",
-  timeout: "Timed out",
-};
-
-function ProgressHeader({ job }: { job: CollectJob }) {
-  const total = job.subtasks.length || 1;
-  const settled = job.subtasks.filter(
-    (s) => s.status === "done" || s.status === "failed" || s.status === "timeout",
-  ).length;
-  const pct = job.status === "collecting" ? Math.round((settled / total) * 100) : 100;
-  return (
-    <div>
-      <div
-        role="progressbar"
-        aria-valuenow={pct}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-label="Collection progress"
-        style={{
-          height: 6,
-          borderRadius: 3,
-          background: "var(--color-surface-muted)",
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            width: `${pct}%`,
-            height: "100%",
-            background:
-              job.status === "failed" ? "var(--color-error)" : "var(--color-deal)",
-            transition: "width 300ms ease-out",
-          }}
-        />
-      </div>
-      <p style={{ font: "var(--text-small)", marginTop: 4, color: "var(--color-ink-secondary)" }}>
-        {job.status === "collecting"
-          ? `Collecting live offers… ${settled}/${total} retailers settled`
-          : job.status === "complete"
-            ? `Live collection complete — ${job.offers.length} offer${job.offers.length === 1 ? "" : "s"}`
-            : "Live collection failed"}
-      </p>
-    </div>
-  );
-}
-
-function RetailerRows({
-  job,
-  onRetry,
-}: {
-  job: CollectJob;
-  onRetry: (retailer: string, jobId: string) => void;
-}) {
-  return (
-    <ul style={{ listStyle: "none", padding: 0, margin: "8px 0 0" }}>
-      {job.subtasks.map((sub) => (
-        <li
-          key={sub.retailer}
-          className="flex items-center gap-2"
-          style={{ font: "var(--text-body)", padding: "4px 0" }}
-        >
-          <span
-            aria-hidden
-            className="inline-block h-2 w-2 rounded-full"
-            style={{
-              background:
-                sub.status === "done"
-                  ? "var(--color-deal)"
-                  : sub.status === "failed" || sub.status === "timeout"
-                    ? "var(--color-error)"
-                    : "var(--color-ink-secondary)",
-            }}
-          />
-          <span style={{ color: "var(--color-ink)" }}>{sub.retailer}</span>
-          <span style={{ color: "var(--color-ink-secondary)" }}>
-            {SUBTASK_LABEL[sub.status]}
-            {sub.offersFound > 0 ? ` · ${sub.offersFound} offer${sub.offersFound === 1 ? "" : "s"}` : ""}
-            {sub.error ? ` — ${sub.error}` : ""}
-          </span>
-          {(sub.status === "failed" || sub.status === "timeout") && (
-            <button
-              type="button"
-              onClick={() => onRetry(sub.retailer, job.jobId)}
-              className="hover:underline"
-              style={{ font: "var(--text-small)", color: "var(--color-primary)" }}
-            >
-              Retry {sub.retailer}
-            </button>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
-}
+import CollectionPulse, { PulseOfferCascade } from "@/components/CollectionPulse";
 
 function OfferRow({ offer, best }: { offer: LiveOffer; best: boolean }) {
   const ago = collectedAgoLabel(offer.collectedAt);
@@ -179,7 +81,14 @@ export default function CollectionPanel({
 }) {
   const { state, start, retryRetailer } = useCollection(productId);
   const [staleFallback, setStaleFallback] = useState<CollectJob | null>(null);
-  const now = useState(() => Date.now())[0];
+  // Ticking clock for the elapsed label — updates via interval, never during render.
+  const [now, setNow] = useState(() => Date.now());
+  const collecting = (state as CollectionPhase).kind === "polling";
+  useEffect(() => {
+    if (!collecting) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [collecting]);
 
   // Freshness rule (AC5): auto-start a live collection on selection unless the
   // server serves a fresh cached snapshot (which arrives as a terminal state).
@@ -219,11 +128,6 @@ export default function CollectionPanel({
 
   const phase = state as CollectionPhase;
   const job = phase.kind === "polling" || phase.kind === "terminal" ? phase.job : null;
-  const bestPrice = job
-    ? job.offers.length > 0
-      ? Math.min(...job.offers.map((o) => o.price))
-      : null
-    : null;
 
   if (phase.kind === "idle" || phase.kind === "starting") {
     return (
@@ -245,16 +149,19 @@ export default function CollectionPanel({
 
   return (
     <section aria-label="Live price collection" style={{ marginTop: 16 }}>
-      {job && <ProgressHeader job={job} />}
-      {job && <RetailerRows job={job} onRetry={retryRetailer} />}
-
-      {job && job.offers.length > 0 && (
-        <ul style={{ listStyle: "none", padding: 0, marginTop: 12 }}>
-          {sortOffers(job.offers).map((offer) => (
-            <OfferRow key={`${offer.merchant}-${offer.url}`} offer={offer} best={offer.price === bestPrice} />
-          ))}
-        </ul>
+      {job && (
+        <CollectionPulse
+          job={job}
+          elapsedLabel={
+            job.status === "collecting"
+              ? `${Math.max(0, Math.round((now - Date.parse(job.startedAt)) / 1000))}s`
+              : undefined
+          }
+          onRetryRetailer={(retailer) => void retryRetailer(retailer, job.jobId)}
+        />
       )}
+
+      {job && job.offers.length > 0 && <PulseOfferCascade offers={sortOffers(job.offers)} />}
 
       {/* Full-failure error state with retry CTA (AC6) — never a silent empty state. */}
       {job && job.status === "failed" && (

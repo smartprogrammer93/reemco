@@ -214,55 +214,66 @@ a:focus-visible {
  */
 :root {
   /* Color — brand & semantics (plan §2.2) */
-  --r2-primary: #4f46e5; /* electric indigo: actions, focus, links */
-  --r2-primary-hover: #4338ca;
-  --r2-deal: #16a34a; /* best price / savings */
-  --r2-deal-bg: #dcfce7; /* savings badge tint */
-  --r2-warn: #d97706; /* stale / cached signal */
-  --r2-warn-bg: #fef3c7;
-  --r2-error: #dc2626; /* retailer failed */
-  --r2-error-bg: #fee2e2;
-  --r2-ink: #0f172a; /* headings */
-  --r2-body: #334155; /* body text */
-  --r2-muted: #64748b; /* metadata, provenance */
-  --r2-border: #e2e8f0;
-  --r2-canvas: #f8fafc; /* page background */
-  --r2-surface: #ffffff; /* cards */
+  --rc-primary: #4f46e5; /* electric indigo: actions, focus, links */
+  --rc-primary-hover: #4338ca;
+  --rc-savings: #16a34a; /* best price / savings */
+  --rc-savings-tint: #dcfce7; /* savings badge tint */
+  --rc-stale: #d97706; /* stale / cached signal */
+  --rc-stale-tint: #fef3c7;
+  --rc-error: #dc2626; /* retailer failed */
+  --rc-error-tint: #fee2e2;
+  /* G1 §1.1 AA-safe text-on-tint tokens — tinted text always uses these */
+  --rc-savings-on-tint: #14532d; /* 7.2:1 on savings tint */
+  --rc-stale-on-tint: #78350f; /* 8.1:1 on stale tint */
+  --rc-error-on-tint: #7f1d1d; /* 8.4:1 on error tint */
+  --rc-primary-subtle: #eef2ff; /* selected/active surface tint, bar track */
+  --rc-ink: #0f172a; /* headings */
+  --rc-body: #334155; /* body text */
+  --rc-muted: #64748b; /* metadata, provenance */
+  --rc-border: #e2e8f0;
+  --rc-border-strong: #cbd5e1; /* input borders, hover borders */
+  --rc-canvas: #f8fafc; /* page background */
+  --rc-surface: #ffffff; /* cards */
 
   /* Typography — Space Grotesk display + Inter body, tabular prices */
-  --r2-font-display: var(--font-space-grotesk), var(--font-inter), sans-serif;
-  --r2-font-body: var(--font-inter), sans-serif;
+  --rc-font-display: var(--font-space-grotesk), var(--font-inter), sans-serif;
+  --rc-font-body: var(--font-inter), sans-serif;
   /* Type scale 12/14/16/20/24/32; 1.2 display, 1.5 body line-height */
-  --r2-text-12: 500 12px/16px var(--r2-font-body);
-  --r2-text-14: 400 14px/21px var(--r2-font-body);
-  --r2-text-16: 400 16px/24px var(--r2-font-body);
-  --r2-text-20: 600 20px/24px var(--r2-font-body);
-  --r2-text-24: 600 24px/29px var(--r2-font-display);
-  --r2-text-32: 700 32px/38px var(--r2-font-display);
-  --r2-text-price: 600 28px/34px var(--r2-font-body); /* offer-card price hero */
+  --rc-text-12: 500 12px/16px var(--rc-font-body);
+  --rc-text-14: 400 14px/21px var(--rc-font-body);
+  --rc-text-16: 400 16px/24px var(--rc-font-body);
+  --rc-text-20: 600 20px/24px var(--rc-font-body);
+  --rc-text-24: 600 24px/29px var(--rc-font-display);
+  --rc-text-32: 700 32px/38px var(--rc-font-display);
+  --rc-text-price: 600 28px/34px var(--rc-font-body); /* offer-card price hero */
 
   /* Shape & elevation — 4px grid spacing reused from v1 (--space-*) */
-  --r2-radius-control: 8px;
-  --r2-radius-card: 14px;
-  --r2-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --r2-shadow-md: 0 4px 12px rgba(15, 23, 42, 0.1);
-  --r2-ring: 0 0 0 2px var(--r2-surface), 0 0 0 4px var(--r2-primary); /* 2px brand ring */
-  --r2-ring-focus: 0 0 0 3px rgba(79, 70, 229, 0.35);
+  --rc-radius-control: 8px;
+  --rc-radius-card: 14px;
+  --rc-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --rc-shadow-md: 0 4px 12px rgba(15, 23, 42, 0.1);
+  --rc-ring: 0 0 0 2px var(--rc-surface), 0 0 0 4px var(--rc-primary); /* 2px brand ring */
+  --rc-ring-focus: 0 0 0 3px rgba(79, 70, 229, 0.4); /* G1 §1.1 focus halo */
 
   /* Motion — 150ms standard, 300ms progress moments, 40ms card stagger */
-  --r2-motion-fast: 150ms;
-  --r2-motion-slow: 300ms;
-  --r2-motion-ease: ease-out;
-  --r2-stagger: 40ms;
+  --rc-motion-fast: 150ms;
+  --rc-motion-slow: 300ms;
+  --rc-motion-ease: cubic-bezier(0, 0, 0.2, 1); /* G1 §3 ease-out curve */
+  --rc-stagger: 40ms;
 
   /* Dark-mode token map — DEFINED NOW, activated in v2.1 (plan §2.2).
      Not applied: no selector below attaches it to the document. */
-  --r2-dark-canvas: #0b1120;
-  --r2-dark-surface: #111827;
-  --r2-dark-border: #1f2937;
-  --r2-dark-ink: #f1f5f9;
-  --r2-dark-body: #cbd5e1;
-  --r2-dark-muted: #94a3b8;
+  --rc-dark-canvas: #0b1120;
+  --rc-dark-surface: #111827;
+  --rc-dark-border: #1f2937;
+  --rc-dark-border-strong: #374151;
+  --rc-dark-ink: #f1f5f9;
+  --rc-dark-body: #cbd5e1;
+  --rc-dark-muted: #94a3b8;
+  --rc-dark-primary: #818cf8;
+  --rc-dark-savings: #4ade80;
+  --rc-dark-stale: #fbbf24;
+  --rc-dark-error: #f87171;
 }
 
 /* §2.6 signature moment: header progress bar with moving pulse sheen. */
@@ -270,7 +281,7 @@ a:focus-visible {
   position: relative;
   height: 8px;
   border-radius: 999px;
-  background: var(--r2-border);
+  background: var(--rc-border);
   overflow: hidden;
 }
 
@@ -278,8 +289,8 @@ a:focus-visible {
   position: absolute;
   inset: 0 auto 0 0;
   border-radius: 999px;
-  background: var(--r2-primary);
-  transition: width var(--r2-motion-slow) var(--r2-motion-ease);
+  background: var(--rc-primary);
+  transition: width var(--rc-motion-slow) var(--rc-motion-ease);
 }
 
 .pulse-bar-fill::after {
@@ -297,7 +308,7 @@ a:focus-visible {
 
 /* Completion: the bar snaps green (§2.6). */
 .pulse-bar-fill.is-done {
-  background: var(--r2-deal);
+  background: var(--rc-savings);
 }
 
 .pulse-bar-fill.is-done::after {
@@ -319,8 +330,8 @@ a:focus-visible {
   width: 14px;
   height: 14px;
   border-radius: 999px;
-  border: 2px solid var(--r2-border);
-  border-top-color: var(--r2-primary);
+  border: 2px solid var(--rc-border);
+  border-top-color: var(--rc-primary);
   animation: pulse-spin 0.8s linear infinite;
 }
 
@@ -332,8 +343,8 @@ a:focus-visible {
 
 /* Offer-card cascade on completion: staggered 40ms, 300ms total (§2.6). */
 .pulse-cascade {
-  animation: pulse-rise var(--r2-motion-slow) var(--r2-motion-ease) both;
-  animation-delay: calc(var(--cascade-index, 0) * var(--r2-stagger));
+  animation: pulse-rise var(--rc-motion-slow) var(--rc-motion-ease) both;
+  animation-delay: calc(var(--cascade-index, 0) * var(--rc-stagger));
 }
 
 @keyframes pulse-rise {
@@ -352,7 +363,7 @@ a:focus-visible {
   width: 8px;
   height: 8px;
   border-radius: 999px;
-  background: var(--r2-deal);
+  background: var(--rc-savings);
   animation: live-pulse 2s ease-in-out infinite;
 }
 
@@ -368,42 +379,42 @@ a:focus-visible {
 
 /* Micro-interactions (§2.5): hover lift + brand ring, press scale. */
 .r2-card {
-  background: var(--r2-surface);
-  border: 1px solid var(--r2-border);
-  border-radius: var(--r2-radius-card);
-  box-shadow: var(--r2-shadow-sm);
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-border);
+  border-radius: var(--rc-radius-card);
+  box-shadow: var(--rc-shadow-sm);
   transition:
-    transform var(--r2-motion-fast) var(--r2-motion-ease),
-    box-shadow var(--r2-motion-fast) var(--r2-motion-ease),
-    border-color var(--r2-motion-fast) var(--r2-motion-ease);
+    transform var(--rc-motion-fast) var(--rc-motion-ease),
+    box-shadow var(--rc-motion-fast) var(--rc-motion-ease),
+    border-color var(--rc-motion-fast) var(--rc-motion-ease);
 }
 
 .r2-card.is-best {
-  border-color: var(--r2-deal);
+  border-color: var(--rc-savings);
 }
 
 .r2-card:hover,
 .r2-card:focus-within {
   transform: translateY(-2px);
-  box-shadow: var(--r2-shadow-md), var(--r2-ring);
+  box-shadow: var(--rc-shadow-md), var(--rc-ring);
 }
 
 .r2-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--r2-radius-control);
-  background: var(--r2-primary);
-  color: var(--r2-surface);
-  font: var(--r2-text-14);
+  border-radius: var(--rc-radius-control);
+  background: var(--rc-primary);
+  color: var(--rc-surface);
+  font: var(--rc-text-14);
   font-weight: 600;
   transition:
-    transform var(--r2-motion-fast) var(--r2-motion-ease),
-    background var(--r2-motion-fast) var(--r2-motion-ease);
+    transform var(--rc-motion-fast) var(--rc-motion-ease),
+    background var(--rc-motion-fast) var(--rc-motion-ease);
 }
 
 .r2-btn:hover {
-  background: var(--r2-primary-hover);
+  background: var(--rc-primary-hover);
 }
 
 .r2-btn:active {
@@ -412,13 +423,13 @@ a:focus-visible {
 
 .r2-btn:focus-visible {
   outline: none;
-  box-shadow: var(--r2-ring-focus);
+  box-shadow: var(--rc-ring-focus);
 }
 
 /* Skeletons match the final offer-card layout exactly (§2.5). */
 .r2-skeleton {
-  background: var(--r2-border);
-  border-radius: var(--r2-radius-control);
+  background: var(--rc-border);
+  border-radius: var(--rc-radius-control);
   animation: skeleton-pulse 1.2s ease-in-out infinite;
 }
 

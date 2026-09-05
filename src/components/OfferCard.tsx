@@ -12,6 +12,8 @@ import type { Coupon } from "@/types/product";
 
 export interface OfferCardProps {
   merchant: string;
+  /** Retailer domain shown on the provenance line (G1 §4.2). */
+  domain?: string;
   priceLabel: string;
   /** Effective (coupon-applied) price label — shown under the hero price. */
   effectivePriceLabel?: string;
@@ -29,21 +31,24 @@ export interface OfferCardProps {
 function ProvenanceLine({
   collectedAt,
   method,
+  domain,
 }: {
   collectedAt: string;
   method: "live" | "cache";
+  domain?: string;
 }) {
   const age = relativeAge(collectedAt);
   return (
     <p
       className="mt-2 flex items-center gap-2"
-      style={{ font: "var(--r2-text-12)", color: "var(--r2-muted)" }}
+      style={{ font: "var(--rc-text-12)", color: "var(--rc-muted)" }}
     >
       {method === "live" && age !== null && <span className="live-dot" aria-hidden />}
       <span>
         {age !== null ? `Collected ${age}` : "Collection time unknown"}
         {" · "}
         {method === "live" ? "live" : "cached"}
+        {domain ? ` · ${domain}` : ""}
       </span>
     </p>
   );
@@ -51,6 +56,7 @@ function ProvenanceLine({
 
 export default function OfferCard({
   merchant,
+  domain,
   priceLabel,
   effectivePriceLabel,
   coupon,
@@ -64,16 +70,16 @@ export default function OfferCard({
   return (
     <article className={`r2-card p-4${isBest ? " is-best" : ""}`}>
       <div className="flex items-start justify-between gap-3">
-        <h3 style={{ font: "var(--r2-text-16)", fontWeight: 600, color: "var(--r2-ink)" }}>
+        <h3 style={{ font: "var(--rc-text-16)", fontWeight: 600, color: "var(--rc-ink)" }}>
           {merchant}
         </h3>
         {isBest && (
           <span
             className="label-token rounded px-2 py-0.5"
             style={{
-              background: "var(--r2-deal-bg)",
-              color: "var(--r2-deal)",
-              borderRadius: "var(--r2-radius-control)",
+              background: "var(--rc-savings-tint)",
+              color: "var(--rc-savings-on-tint)",
+              borderRadius: "var(--rc-radius-control)",
             }}
           >
             Best price
@@ -81,16 +87,23 @@ export default function OfferCard({
         )}
       </div>
 
-      <p className="tabular mt-1" style={{ font: "var(--r2-text-price)", color: "var(--r2-ink)" }}>
+      <p
+        className="tabular mt-1"
+        style={{
+          font: "var(--rc-text-price)",
+          color: isBest ? "var(--rc-savings)" : "var(--rc-ink)",
+          fontWeight: isBest ? 700 : undefined,
+        }}
+      >
         {priceLabel}
       </p>
       {effectivePriceLabel && (
-        <p className="tabular" style={{ font: "var(--r2-text-14)", color: "var(--r2-deal)" }}>
+        <p className="tabular" style={{ font: "var(--rc-text-14)", color: "var(--rc-savings)" }}>
           {effectivePriceLabel} with coupon
         </p>
       )}
       {isBest && savings && (
-        <p className="tabular" style={{ font: "var(--r2-text-14)", color: "var(--r2-deal)" }}>
+        <p className="tabular" style={{ font: "var(--rc-text-14)", color: "var(--rc-savings)" }}>
           Save {savings} vs highest
         </p>
       )}
@@ -99,9 +112,9 @@ export default function OfferCard({
         <span
           className="label-token rounded px-2 py-0.5"
           style={{
-            background: inStock ? "var(--r2-deal-bg)" : "var(--r2-error-bg)",
-            color: inStock ? "var(--r2-deal)" : "var(--r2-error)",
-            borderRadius: "var(--r2-radius-control)",
+            background: inStock ? "var(--rc-savings-tint)" : "var(--rc-error-tint)",
+            color: inStock ? "var(--rc-savings-on-tint)" : "var(--rc-error-on-tint)",
+            borderRadius: "var(--rc-radius-control)",
           }}
         >
           {inStock ? "In stock" : "Out of stock"}
@@ -110,10 +123,11 @@ export default function OfferCard({
           <span
             className="rounded px-2 py-0.5"
             style={{
-              font: "var(--r2-text-12)",
-              background: "var(--r2-warn-bg)",
-              color: "var(--r2-warn)",
-              borderRadius: "var(--r2-radius-control)",
+              font: "var(--rc-text-12)",
+              background: "var(--rc-stale-tint)",
+              color: "var(--rc-stale-on-tint)",
+              border: "1px dashed var(--rc-stale)",
+              borderRadius: "var(--rc-radius-control)",
             }}
           >
             {coupon.code ? `${coupon.code} — ` : ""}
@@ -123,7 +137,7 @@ export default function OfferCard({
       </p>
 
       {/* D-AC3 / plan AC4: provenance on EVERY offer card render. */}
-      <ProvenanceLine collectedAt={collectedAt} method={method} />
+      <ProvenanceLine collectedAt={collectedAt} method={method} domain={domain} />
 
       <TrackedOutboundLink
         href={url}

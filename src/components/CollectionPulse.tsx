@@ -15,28 +15,41 @@ import OfferCard from "@/components/OfferCard";
  * (staggered 40ms, disabled under prefers-reduced-motion).
  */
 
-function RetailerRow({ subtask }: { subtask: RetailerSubtask }) {
+function RetailerRow({
+  subtask,
+  onRetry,
+}: {
+  subtask: RetailerSubtask;
+  onRetry?: (retailer: string) => void;
+}) {
   const { status, retailer, offersFound, error } = subtask;
+  const failed = status === "failed" || status === "timeout";
   return (
     <li
       className="flex items-center gap-3 py-1.5"
-      style={{ font: "var(--r2-text-14)", color: "var(--r2-body)" }}
+      style={{
+        font: "var(--rc-text-14)",
+        color: "var(--rc-body)",
+        /* G1 §4.3.4: failed rows get a 3px error-tint left border */
+        borderLeft: failed ? "3px solid var(--rc-error)" : undefined,
+        paddingLeft: failed ? 8 : undefined,
+      }}
       data-status={status}
     >
-      {status === "pending" && <span className="r2-skeleton inline-block h-3.5 w-14" aria-hidden />}
+      {status === "pending" && <span className="r2-skeleton inline-block h-2 w-28" aria-hidden />}
       {status === "collecting" && <span className="pulse-spinner" aria-hidden />}
       {status === "done" && (
-        <span aria-hidden style={{ color: "var(--r2-deal)" }}>
+        <span aria-hidden style={{ color: "var(--rc-savings)" }}>
           ✓
         </span>
       )}
-      {(status === "failed" || status === "timeout") && (
+      {failed && (
         <span
           className="label-token rounded px-2 py-0.5"
           style={{
-            background: "var(--r2-error-bg)",
-            color: "var(--r2-error)",
-            borderRadius: "var(--r2-radius-control)",
+            background: "var(--rc-error-tint)",
+            color: "var(--rc-error-on-tint)",
+            borderRadius: "var(--rc-radius-control)",
           }}
         >
           {status === "timeout" ? "Timed out" : "Failed"}
@@ -44,12 +57,21 @@ function RetailerRow({ subtask }: { subtask: RetailerSubtask }) {
       )}
       <span>{retailer}</span>
       {status === "done" && offersFound > 0 && (
-        <span className="tabular" style={{ color: "var(--r2-muted)" }}>
+        <span className="tabular" style={{ color: "var(--rc-muted)" }}>
           {offersFound} {offersFound === 1 ? "offer" : "offers"}
         </span>
       )}
-      {(status === "failed" || status === "timeout") && error && (
-        <span style={{ color: "var(--r2-muted)" }}>{error}</span>
+      {failed && error && <span style={{ color: "var(--rc-muted)" }}>{error}</span>}
+      {/* G1 §4.3.4: failure always pairs with a retry affordance. */}
+      {failed && onRetry && (
+        <button
+          type="button"
+          onClick={() => onRetry(retailer)}
+          className="hover:underline"
+          style={{ font: "var(--rc-text-12)", color: "var(--rc-error)" }}
+        >
+          Retry
+        </button>
       )}
     </li>
   );
@@ -80,6 +102,7 @@ export function PulseOfferCascade({
           >
             <OfferCard
               merchant={offer.merchant}
+              domain={offer.domain}
               priceLabel={formatPrice(offer.price, offer.currency)}
               effectivePriceLabel={eff !== null ? formatPrice(eff, offer.currency) : undefined}
               coupon={offer.coupon}
@@ -100,10 +123,13 @@ export function PulseOfferCascade({
 export default function CollectionPulse({
   job,
   elapsedLabel,
+  onRetryRetailer,
 }: {
   job: CollectJob;
   /** Human elapsed time, e.g. "12s" — computed by the caller from startedAt. */
   elapsedLabel?: string;
+  /** Per-retailer retry (G1 §4.3.4) — wired by the panel to the W1 retry API. */
+  onRetryRetailer?: (retailer: string) => void;
 }) {
   const progress = Math.round(jobProgress(job) * 100);
   const settled = job.status !== "collecting";
@@ -114,14 +140,14 @@ export default function CollectionPulse({
       </div>
       <p
         className="mt-2 flex items-center justify-between"
-        style={{ font: "var(--r2-text-14)", color: "var(--r2-muted)" }}
+        style={{ font: "var(--rc-text-14)", color: "var(--rc-muted)" }}
       >
         <span>{settled ? "Collection complete" : "Collecting live offers…"}</span>
         <span className="tabular">{elapsedLabel}</span>
       </p>
       <ul className="mt-2">
         {job.subtasks.map((s: RetailerSubtask) => (
-          <RetailerRow key={s.retailer} subtask={s} />
+          <RetailerRow key={s.retailer} subtask={s} onRetry={onRetryRetailer} />
         ))}
       </ul>
     </section>
