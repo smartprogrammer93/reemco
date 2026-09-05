@@ -1,11 +1,12 @@
 "use client";
 
-import { Component, Suspense, type ReactNode } from "react";
+import { Component, Suspense, useEffect, useRef, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import ProductResultCard from "@/components/ProductResultCard";
 import { searchProducts, suggestProducts } from "@/lib/search";
 import { sanitizePage, sanitizeSearchQuery } from "@/lib/search-params";
+import { trackEvents } from "@/lib/telemetry";
 import { PRODUCTS } from "@/lib/feed";
 import type { NormalizedProduct } from "@/types/product";
 
@@ -134,15 +135,36 @@ function Results() {
   const page = sanitizePage(searchParams.get("page"));
   const matches = query ? searchProducts(query, PRODUCTS) : [];
 
-  if (query && matches.length === 0) {
+  // REEA-37: funnel instrumentation — search_submitted (+ zero_results) and
+  // result_impressed fire once per (query, page, result-set) render.
+  // Dedup key is component-local memory only; nothing is persisted client-side.
+  const allProducts = matches.length > 0 ? matches.map((m) => m.product) : PRODUCTS;
+  const PAGE_SIZE = 20;
+  const products = allProducts.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const zero = query && matches.length === 0;
+  const eventsKey = `${query}|${page}|${matches.length}`;
+  const sentKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!query || sentKeyRef.current === eventsKey) return;
+    sentKeyRef.current = eventsKey;
+    trackEvents([
+      { type: "search_submitted", query, result_count: matches.length },
+      ...(zero ? [{ type: "zero_results" as const, query }] : []),
+      ...products.map((p, i) => ({
+        type: "result_impressed" as const,
+        query,
+        rank: (page - 1) * PAGE_SIZE + i,
+        item_id: p.productId,
+      })),
+    ]);
+  }, [eventsKey, query, page, zero, matches.length, products]);
+
+  if (zero) {
     const suggestions = suggestProducts(query, PRODUCTS).map((m) => m.product);
     return <EmptyState query={query} suggestions={suggestions} />;
   }
 
-  const allProducts = matches.length > 0 ? matches.map((m) => m.product) : PRODUCTS;
-  // Page pagination is bounded by sanitizePage (MAX_PAGE); slice defensively.
-  const PAGE_SIZE = 20;
-  const products = allProducts.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   return (
     <>
       {/* Theme v1 §4: display-scale H1, tabular count */}
@@ -151,7 +173,13 @@ function Results() {
       </h1>
       <div className="space-y-4" style={{ marginTop: "var(--space-8)" }}>
         {products.map((p, i) => (
-          <ProductResultCard key={p.productId} product={p} isBest={i === 0} />
+          <ProductResultCard
+            key={p.productId}
+            product={p}
+            isBest={i === 0}
+            query={query}
+            rank={(page - 1) * PAGE_SIZE + i}
+          />
         ))}
       </div>
     </>

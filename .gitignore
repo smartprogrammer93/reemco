@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# REEA-37 local funnel event store
+.events/
+.events-test-*/
