@@ -14,7 +14,8 @@ import process from "node:process";
 
 const root = path.resolve(import.meta.dirname, "..");
 const SERVER_ONLY_ROUTES = ["src/app/api/events/route.ts",
-  "src/app/api/events/report/route.ts"];
+  "src/app/api/events/report/route.ts",
+  "src/app/api/csp-report/route.ts"]; // REEA-74
 
 const renamed = [];
 for (const rel of SERVER_ONLY_ROUTES) {
