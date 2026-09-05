@@ -147,7 +147,7 @@ jobs:
           if [ -n "$VERCEL_TEAM_ID" ]; then SCOPE_ARGS="--scope $VERCEL_TEAM_ID"; fi
           export VERCEL_TELEMETRY_DISABLED=1
           set -o pipefail
-          timeout --signal=INT 20m npx -y vercel@47.2.2 deploy --prod --yes --cwd "$GITHUB_WORKSPACE" \
+          timeout --signal=INT 20m npx -y vercel@59.11.7 deploy --prod --yes --cwd "$GITHUB_WORKSPACE" \
             --token "$VERCEL_TOKEN" $SCOPE_ARGS 2>&1 | tee /tmp/vercel-deploy.log
           URL=$(grep -oE 'https://[a-z0-9.-]+\.vercel\.app' /tmp/vercel-deploy.log | tail -1)
           echo "VERCEL_DEPLOY_URL=$URL" >> "$GITHUB_STEP_SUMMARY"
