@@ -40,6 +40,36 @@ function cacheFile(dir = COLLECT_CACHE_DIR): string {
   return join(dir, "completed-jobs.json");
 }
 
+/**
+ * Per-job snapshot file (jobId -> job), written on every subtask status change
+ * and read through by getJob(). Serverless filesystems are per warm instance,
+ * so this narrows — but does not eliminate — cross-instance visibility of an
+ * in-flight job; the client hook re-starts a collection once on an unknown
+ * jobId as the user-visible fallback (see REEA-88 comment / KV follow-up).
+ */
+function jobSnapshotsFile(dir = COLLECT_CACHE_DIR): string {
+  return join(dir, "job-snapshots.json");
+}
+
+function persistSnapshot(job: CollectJob, dir = COLLECT_CACHE_DIR): void {
+  try {
+    mkdirSync(dir, { recursive: true });
+    const file = jobSnapshotsFile(dir);
+    let all: Record<string, CollectJob> = {};
+    try {
+      all = JSON.parse(readFileSync(file, "utf8")) as Record<string, CollectJob>;
+    } catch {
+      /* first write — start over */
+    }
+    all[job.jobId] = job;
+    const tmp = `${file}.${randomUUID()}.tmp`;
+    writeFileSync(tmp, JSON.stringify(all));
+    renameSync(tmp, file);
+  } catch {
+    /* best-effort */
+  }
+}
+
 function persistLockedProduct(
   productId: string,
   job: CollectJob,
@@ -90,7 +120,29 @@ export function createJob(productId: string): CollectJob {
 }
 
 export function getJob(jobId: string): CollectJob | undefined {
-  return jobs.get(jobId);
+  const mem = jobs.get(jobId);
+  if (mem) return mem;
+  // Read through the snapshot file (same warm instance, post-GC or recycled
+  // module state).
+  try {
+    const all = JSON.parse(
+      readFileSync(jobSnapshotsFile(), "utf8"),
+    ) as Record<string, CollectJob>;
+    const job = all[jobId];
+    if (job) {
+      jobs.set(jobId, job);
+      return job;
+    }
+  } catch {
+    /* no snapshot file yet */
+  }
+  return undefined;
+}
+
+/** Writes the in-memory job and its snapshot to disk (called on state changes). */
+export function touchJob(job: CollectJob): void {
+  jobs.set(job.jobId, job);
+  persistSnapshot(job);
 }
 
 export function getInflightJobId(productId: string): string | undefined {

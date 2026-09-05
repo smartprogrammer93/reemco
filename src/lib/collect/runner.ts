@@ -24,6 +24,7 @@ import {
   finishJob,
   getInflightJobId,
   getJob,
+  touchJob,
 } from "@/lib/collect/store";
 
 export interface StartResult {
@@ -64,6 +65,8 @@ export function startCollection(
 
   const job = createJob(product.productId);
   job.subtasks = product.offers.map((o) => subtaskFor(o));
+  // Snapshot before responding so a poll on another warm instance can find it.
+  touchJob(job);
   return { job, deduped: false, servedFromCache: false };
 }
 
@@ -106,6 +109,7 @@ export async function runCollection(
     } else {
       sub.status = "done";
     }
+    touchJob(job); // publish subtask progress for the polling endpoint (AC2)
     return outcome.offers;
   };
 
@@ -182,6 +186,7 @@ export async function runCollection(
     job.error = err instanceof Error ? err.message : String(err);
   } finally {
     finishJob(job);
+    touchJob(job);
   }
   return job;
 }
@@ -243,6 +248,7 @@ export async function retryRetailer(
     job.error = undefined;
   }
   finishJob(job);
+  touchJob(job);
   return job;
 }
 
