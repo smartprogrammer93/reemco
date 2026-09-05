@@ -33,6 +33,23 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${inter.variable} h-full antialiased`}>
       <body className="flex min-h-full flex-col">
+        {/* REEA-42 interim F2 control for the static-export host (Surge): Surge
+            cannot emit response headers, so the header CSP from src/proxy.ts
+            never runs there. This <meta http-equiv> policy is the static-host
+            fallback (React hoists it into <head>).
+            - Browsers ignore CSP-Report-Only in <meta>, so this ships as an
+              enforce-mode policy tuned to what the static bundle actually uses
+              (inline Next bootstrap scripts => 'unsafe-inline' in script-src;
+              no per-request nonces exist on a static host).
+            - Kept compatible with the header CSP so both can coexist once the
+              Vercel server-render deploy (VERCEL_TOKEN) serves the canonical
+              header policy.
+            - Remove this fallback when the server-render host is live and
+              curl -I shows CSP-Report-Only + nosniff + Referrer-Policy. */}
+        <meta
+          httpEquiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; upgrade-insecure-requests"
+        />
         <header className="site-header">
           <div
             className="mx-auto flex h-full w-full items-center justify-between px-6"
