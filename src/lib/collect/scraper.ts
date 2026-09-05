@@ -12,6 +12,7 @@
  */
 import type { LiveOffer, RetailerSubtask } from "@/lib/collect/types";
 import { PER_RETAILER_TIMEOUT_MS } from "@/lib/collect/types";
+import { searchRetailerFallback } from "@/lib/collect/search-fallback";
 
 export function domainOf(url: string): string {
   try {
@@ -58,7 +59,7 @@ export function extractInStock(html: string): boolean {
   return true; // unknown — assume listed means purchasable
 }
 
-async function fetchWithTimeout(
+export async function fetchWithTimeout(
   url: string,
   timeoutMs: number,
   fetchImpl: FetchImpl,
@@ -86,32 +87,67 @@ async function fetchWithTimeout(
  * (AC7); a timeout is reported distinctly so the UI can show "timed out".
  */
 export async function scrapeOffer(
-  offer: { merchant: string; url: string; currency: string; wasPrice?: number },
+  offer: { merchant: string; url: string; currency: string; wasPrice?: number; titleQuery?: string },
   opts: { timeoutMs?: number; fetchImpl?: FetchImpl; now?: number } = {},
 ): Promise<ScrapeOutcome> {
   const timeoutMs = opts.timeoutMs ?? PER_RETAILER_TIMEOUT_MS;
   const fetchImpl: FetchImpl = opts.fetchImpl ?? ((url, init) => fetch(url, init));
   const domain = domainOf(offer.url);
-  let html: string;
+  const direct = await tryDirectFetch(offer, { timeoutMs, fetchImpl, now: opts.now, domain });
+  if (direct) return direct;
+  // Fallback: re-discover the product via the retailer's own search API —
+  // seeded catalog URLs go stale (REEA-67) and some PDPs are client-rendered.
   try {
-    html = await fetchWithTimeout(offer.url, timeoutMs, fetchImpl);
+    const found = await searchRetailerFallback(domain, offer.titleQuery ?? "", fetchImpl);
+    return {
+      offers: [
+        {
+          merchant: offer.merchant,
+          domain,
+          price: found.price,
+          currency: found.currency,
+          url: found.url,
+          inStock: found.inStock,
+          ...(found.wasPrice != null ? { wasPrice: found.wasPrice } : {}),
+          collectedAt: new Date(opts.now ?? Date.now()).toISOString(),
+          method: "live",
+        },
+      ],
+    };
   } catch (err) {
-    const aborted = err instanceof Error && err.name === "AbortError";
     return {
       offers: [],
-      timedOut: aborted,
-      error: aborted ? `Timed out after ${Math.round(timeoutMs / 1000)}s` : String(err instanceof Error ? err.message : err),
+      error: err instanceof Error ? err.message : String(err),
     };
   }
-  const price = extractPrice(html);
-  if (price == null) {
-    return { offers: [], error: "Could not parse price from retailer page" };
+}
+
+async function tryDirectFetch(
+  offer: { merchant: string; url: string; currency: string; wasPrice?: number; titleQuery?: string },
+  opts: { timeoutMs: number; fetchImpl: FetchImpl; now?: number; domain: string },
+): Promise<{ offers: LiveOffer[]; error?: string; timedOut?: boolean } | null> {
+  let html: string;
+  try {
+    html = await fetchWithTimeout(offer.url, opts.timeoutMs, opts.fetchImpl);
+  } catch (err) {
+    const aborted = err instanceof Error && err.name === "AbortError";
+    if (aborted) {
+      // Hard timeout — do not spend the budget on a fallback search.
+      return {
+        offers: [],
+        timedOut: true,
+        error: `Timed out after ${Math.round(opts.timeoutMs / 1000)}s`,
+      };
+    }
+    return null; // transient HTTP/network error — caller tries search fallback
   }
+  const price = extractPrice(html);
+  if (price == null) return null; // unparseable/client-rendered — try fallback
   return {
     offers: [
       {
         merchant: offer.merchant,
-        domain,
+        domain: opts.domain,
         price,
         currency: offer.currency,
         url: offer.url,

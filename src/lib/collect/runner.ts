@@ -83,6 +83,8 @@ export async function runCollection(
     url: o.url,
     currency: o.currency,
     wasPrice: o.wasPrice,
+    // Title for the retailer-search fallback (stale seed URLs, REEA-67).
+    titleQuery: product.title,
   }));
 
   const scrape = async (retailer: (typeof retailers)[number], sub: RetailerSubtask) => {
@@ -207,7 +209,10 @@ export async function retryRetailer(
   sub.startedAt = new Date().toISOString();
   const offer = product.offers[index];
   try {
-    const outcome = await scrapeOffer(offer, { fetchImpl: opts.fetchImpl, now: opts.now });
+    const outcome = await scrapeOffer({ ...offer, titleQuery: product.title }, {
+      fetchImpl: opts.fetchImpl,
+      now: opts.now,
+    });
     sub.finishedAt = new Date().toISOString();
     sub.offersFound = outcome.offers.length;
     if (outcome.timedOut) {
