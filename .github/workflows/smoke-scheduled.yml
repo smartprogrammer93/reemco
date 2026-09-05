@@ -16,14 +16,24 @@ name: Scheduled live-site smoke check
 # Actions. Ops lenses: Observability-before-Launch, MTTR (deduped issue = one
 # signal, not one per cron tick), Idempotency (same script as post-deploy check),
 # Cost-per-Environment (single job, ~2 min runner, hourly).
+#
+# REEA-71: GitHub-hosted cron was observed silently skipping ticks in this repo
+# (uptime.yml on a */5 cron had multi-hour gaps; the smoke check's 13:17Z and
+# 14:17Z ticks produced no run). Mitigation: fire on several cron lines per hour
+# and dedupe with a guard step that no-ops unless the last completed run is
+# older than 75 minutes. Missed ticks self-heal on the next one (Idempotency);
+# runner cost stays ~hourly because of the guard.
 on:
   schedule:
-    - cron: "17 * * * *" # hourly, off the :00 spike
+    - cron: "17 * * * *" # hourly anchor, off the :00 spike
+    - cron: "47 * * * *" # second chance each hour when a tick is skipped
+    - cron: "7 3,9,15,21 * * *" # sparse extra chances spread across the day
   workflow_dispatch:
 
 permissions:
   contents: read # checkout needs this; specifying any workflow-level permissions revokes the defaults
   issues: write # smoke failure alerts
+  actions: read # guard reads last-run timestamp to dedupe ticks
 
 concurrency:
   group: smoke-scheduled
@@ -35,15 +45,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # REEA-71 dedupe guard: with multiple cron lines, most ticks are redundant.
+      # Only run the smoke check if the last completed run is >= 75 min old
+      # ( hourly cadence + slack for cron delay). Manual dispatches always run.
+      - name: Guard — skip if last completed run is under 75 min old
+        id: guard
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LAST=$(gh api "repos/${{ github.repository }}/actions/workflows/smoke-scheduled.yml/runs?status=completed&per_page=1" \
+            --jq '.workflow_runs[0].created_at // empty')
+          if [ -z "$LAST" ]; then
+            echo "No previous completed run — due."
+            echo "due=true" >> "$GITHUB_OUTPUT"
+          elif [ $(( $(date -u +%s) - $(date -u -d "$LAST" +%s) )) -lt 4500 ]; then
+            echo "Last completed run $LAST is <75min old — not due; skipping tick."
+            echo "due=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Last completed run $LAST is stale — due (missed-tick self-heal)."
+            echo "due=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-node@v4
+        if: steps.guard.outputs.due != 'false'
         with:
           node-version: 22
           cache: npm
 
       - run: npm ci
+        if: steps.guard.outputs.due != 'false'
 
       - name: Smoke check live site (home → search → click-out)
         id: smoke
+        if: steps.guard.outputs.due != 'false'
         env:
           SMOKE_BASE_URL: https://reemco-price-compare-preview.surge.sh
         run: npm run smoke
