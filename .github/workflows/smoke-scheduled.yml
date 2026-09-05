@@ -1,0 +1,83 @@
+name: Scheduled live-site smoke check
+
+# REEA-58: functional smoke check of the LIVE site on a schedule, so regressions
+# are caught between deploys (the post-deploy smoke in deploy.yml only runs when
+# something is deployed).
+#
+# Reuses scripts/smoke-check.mjs from REEA-44 (home → search results → click-out),
+# which is deterministic: the fixture query hits the seeded catalog shipped in the
+# bundle, never fresh scraping data.
+#
+# Resilience: one in-run retry before failing (transient network blips should not
+# page anyone). A real failure opens a deduped `smoke-alert` GitHub issue naming
+# the failed step + run URL — surfaces via repo notifications/email.
+#
+# Alerting path: GitHub issue labeled `smoke-alert` (deduped) + failed run in
+# Actions. Ops lenses: Observability-before-Launch, MTTR (deduped issue = one
+# signal, not one per cron tick), Idempotency (same script as post-deploy check),
+# Cost-per-Environment (single job, ~2 min runner, hourly).
+on:
+  schedule:
+    - cron: "17 * * * *" # hourly, off the :00 spike
+  workflow_dispatch:
+
+permissions:
+  contents: read # checkout needs this; specifying any workflow-level permissions revokes the defaults
+  issues: write # smoke failure alerts
+
+concurrency:
+  group: smoke-scheduled
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Smoke check live site (home → search → click-out)
+        id: smoke
+        env:
+          SMOKE_BASE_URL: https://reemco-price-compare-preview.surge.sh
+        run: npm run smoke
+
+      # One retry to absorb transient network blips (false-positive alerting
+      # burns error budget on noise). A second failure is a real regression.
+      - name: Retry once on failure
+        id: retry
+        if: failure()
+        env:
+          SMOKE_BASE_URL: https://reemco-price-compare-preview.surge.sh
+        run: |
+          echo "first attempt failed - retrying once to rule out a transient blip"
+          sleep 30
+          npm run smoke
+
+      - name: Open deduped smoke-alert issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create smoke-alert --color D93F0B --description "Scheduled live-site smoke check failure" --force || true
+          FAILED_STEPS=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" \
+            --jq '[.jobs[].steps[] | select(.conclusion=="failure") | .name] | join("; ")')
+          BODY="Scheduled smoke check of the live site failed at $(date -u +%FT%TZ) (failed twice, not a transient blip).
+          Failed step(s): ${FAILED_STEPS:-unknown}.
+          Site: https://reemco-price-compare-preview.surge.sh
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          A regression is live that no deploy introduced (site serves artifact $(curl -fsS https://reemco-price-compare-preview.surge.sh/__commit.txt || echo unknown)). Investigate recent deploys first (rollback: Actions > Deploy site > Run workflow with rollback_sha = last green commit), then the live host itself."
+          if gh issue list --label smoke-alert --state open --json url -q '.[0].url' | grep -q .; then
+            gh issue comment "$(gh issue list --label smoke-alert --state open --json number -q '.[0].number')" \
+              --body "$BODY"
+          else
+            gh issue create --title "SMOKE ALERT: live-site scheduled smoke check failed — $FAILED_STEPS" \
+              --label smoke-alert --body "$BODY"
+          fi
