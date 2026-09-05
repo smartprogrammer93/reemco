@@ -2,16 +2,27 @@
 export default function SearchForm({ compact = false }: { compact?: boolean }) {
   const height = compact ? 40 : 48;
   return (
-    <form action="/results" method="get" className="flex gap-2" role="search">
+    <form
+      action="/results"
+      method="get"
+      className="flex flex-wrap gap-2 sm:flex-nowrap"
+      role="search"
+    >
+      {/* REEA-75: min-w-0 lets the input shrink below its intrinsic width;
+          basis-full stacks it above the button under sm (375px-safe). */}
       <input
         type="search"
         name="q"
         placeholder="Search for a product…"
         aria-label="Search for a product"
-        className="text-input focusable flex-1 px-4"
+        className="text-input focusable min-w-0 flex-1 basis-full px-4 sm:basis-auto"
         style={{ height }}
       />
-      <button type="submit" className="btn-primary focusable px-6" style={{ height }}>
+      <button
+        type="submit"
+        className="btn-primary focusable w-full px-6 sm:w-auto"
+        style={{ height }}
+      >
         Search
       </button>
     </form>

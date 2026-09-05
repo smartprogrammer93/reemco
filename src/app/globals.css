@@ -197,4 +197,9 @@ a:focus-visible {
   .result-card {
     padding: var(--space-3);
   }
+  /* REEA-75: the stacked header search needs two rows under sm, so the
+     sticky header grows with its content instead of clipping it. */
+  .site-header {
+    height: auto;
+  }
 }

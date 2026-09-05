@@ -8,7 +8,9 @@ export default function HeaderSearch() {
   const pathname = usePathname();
   if (pathname === "/") return null;
   return (
-    <div className="w-full" style={{ maxWidth: 360 }}>
+    /* REEA-75: min-w-0 + flex-1 instead of a fixed maxWidth so the form can
+       shrink on narrow viewports; cap width from sm up via CSS. */
+    <div className="min-w-0 flex-1 sm:max-w-[360px]">
       <SearchForm compact />
     </div>
   );

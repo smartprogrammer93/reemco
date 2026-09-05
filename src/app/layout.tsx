@@ -52,10 +52,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         />
         <header className="site-header">
           <div
-            className="mx-auto flex h-full w-full items-center justify-between px-6"
+            className="mx-auto flex h-full w-full flex-wrap items-center justify-between gap-x-4 gap-y-1 px-6 py-2 sm:flex-nowrap sm:py-0"
             style={{ maxWidth: "var(--layout-max-w)" }}
           >
-            <Link href="/" className="focusable rounded">
+            <Link href="/" className="focusable shrink-0 rounded">
               <Wordmark />
             </Link>
             <HeaderSearch />
