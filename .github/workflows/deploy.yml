@@ -99,8 +99,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh label create deploy-alert --color D93F0B --description "Post-deploy deploy/smoke check failure" --force || true
-          FAILED_STEPS=$(gh run view ${{ github.run_id }} --json jobs \
-            --jq '.jobs[].steps[] | select(.conclusion=="failure") | .name' | paste -sd '; ' -)
+          sleep 10 # job records settle before we query them
+          FAILED_STEPS=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" \
+            --jq '[.jobs[].steps[] | select(.conclusion=="failure") | .name] | join("; ")')
           BODY="Deploy pipeline failed at $(date -u +%FT%TZ).
           Failed step(s): ${FAILED_STEPS:-unknown}.
           Commit: ${{ inputs.rollback_sha || github.sha }}. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
