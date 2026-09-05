@@ -9,7 +9,7 @@ import { sanitizePage, sanitizeSearchQuery } from "@/lib/search-params";
 import { PRODUCTS } from "@/lib/feed";
 import type { NormalizedProduct } from "@/types/product";
 
-/* F8 loading state: skeleton cards, 1.2s pulse */
+/* Theme v1 §3.5 loading state: 3 skeleton cards, 1.2s pulse — never a blank page. */
 function SkeletonCard() {
   return (
     <div className="result-card" aria-hidden>
@@ -32,7 +32,7 @@ function LoadingFallback() {
   );
 }
 
-/* F8 error state: text #B42318, secondary Retry button */
+/* Theme v1 §3.5 error state: error-bg card with 3px error left border + Retry. */
 class ResultsErrorBoundary extends Component<
   { children: ReactNode },
   { failed: boolean }
@@ -46,18 +46,21 @@ class ResultsErrorBoundary extends Component<
   render() {
     if (this.state.failed) {
       return (
-        <div className="result-card flex flex-col items-center py-12 text-center">
-          <h2 className="text-[20px] font-semibold leading-[26px]" style={{ color: "var(--brand-red)" }}>
+        <div
+          className="result-card"
+          role="alert"
+          style={{ borderLeft: "3px solid var(--color-error)", background: "var(--color-error-bg)" }}
+        >
+          <h2 style={{ font: "var(--text-title)", color: "var(--color-ink)" }}>
             Something went wrong
           </h2>
-          <p className="mt-2 text-sm" style={{ color: "var(--brand-slate-600)" }}>
-            We couldn&apos;t load the results. Please try again.
+          <p className="mt-1" style={{ font: "var(--text-body)", color: "var(--color-ink-secondary)" }}>
+            We couldn&apos;t load the results. Check your connection and try again.
           </p>
           <button
             type="button"
             onClick={() => this.setState({ failed: false })}
-            className="mt-6 h-8 rounded px-4 text-sm font-medium text-white"
-            style={{ background: "var(--brand-red)" }}
+            className="btn-primary focusable mt-4 h-10 px-4"
           >
             Retry
           </button>
@@ -68,8 +71,9 @@ class ResultsErrorBoundary extends Component<
   }
 }
 
-/* F8 empty state: 48px icon in green-tint circle, title, body, primary blue button.
-   Shows nearest-match suggestions so an unmatched query is never a dead end. */
+/* Theme v1 §3.5 no-results state: title, suggestion line, 3 example links. */
+const EXAMPLES = ["iPhone 17 Pro", "WH-1000XM6", "Scope II keyboard"];
+
 function EmptyState({
   query,
   suggestions,
@@ -78,30 +82,27 @@ function EmptyState({
   suggestions: NormalizedProduct[];
 }) {
   return (
-    <div className="result-card flex flex-col items-center py-12 text-center">
-      <span
-        className="flex h-12 w-12 items-center justify-center rounded-full text-2xl"
-        style={{ background: "var(--brand-green-tint)" }}
-        aria-hidden
-      >
-        🔍
-      </span>
-      <h2 className="mt-4 text-[20px] font-semibold leading-[26px]" style={{ color: "var(--brand-ink)" }}>
+    <div className="text-center" style={{ padding: "var(--space-12) 0" }}>
+      <h2 style={{ font: "var(--text-title)", color: "var(--color-ink)" }}>
         No results for &ldquo;{query}&rdquo;
       </h2>
-      <p className="mt-2 text-sm" style={{ color: "var(--brand-slate-600)" }}>
+      <p className="mt-2" style={{ font: "var(--text-body)", color: "var(--color-ink-secondary)" }}>
         {suggestions.length > 0
           ? "Did you mean one of these?"
-          : "Try a different product name or brand."}
+          : "Check the spelling or try a shorter brand name."}
       </p>
       {suggestions.length > 0 && (
-        <ul className="mt-4 w-full max-w-md space-y-2 text-left">
+        <ul className="mx-auto mt-4 w-full max-w-md space-y-2 text-left">
           {suggestions.map((p) => (
             <li key={p.productId} className="result-card px-4 py-3">
-              <Link href={`/results?q=${encodeURIComponent(p.title)}`} className="text-sm font-medium hover:underline" style={{ color: "var(--brand-blue)" }}>
+              <Link
+                href={`/results?q=${encodeURIComponent(p.title)}`}
+                className="hover:underline"
+                style={{ font: "var(--text-body)", fontWeight: 500, color: "var(--color-primary)" }}
+              >
                 {p.title}
               </Link>
-              <p className="text-xs" style={{ color: "var(--brand-slate-600)" }}>
+              <p className="tabular" style={{ font: "var(--text-small)", color: "var(--color-ink-secondary)" }}>
                 {p.brand} · from{" "}
                 {Math.min(...p.offers.map((o) => o.price)).toFixed(2)}{" "}
                 {p.offers[0]?.currency ?? "KWD"}
@@ -110,13 +111,18 @@ function EmptyState({
           ))}
         </ul>
       )}
-      <Link
-        href="/search"
-        className="mt-6 flex h-8 items-center rounded px-4 text-sm font-medium text-white"
-        style={{ background: "var(--brand-blue)" }}
-      >
-        Search again
-      </Link>
+      <div className="flex flex-wrap justify-center gap-4" style={{ marginTop: "var(--space-4)" }}>
+        {EXAMPLES.map((q) => (
+          <Link
+            key={q}
+            href={`/results?q=${encodeURIComponent(q)}`}
+            className="hover:underline"
+            style={{ font: "var(--text-small)", color: "var(--color-primary)" }}
+          >
+            {q}
+          </Link>
+        ))}
+      </div>
     </div>
   );
 }
@@ -138,11 +144,17 @@ function Results() {
   const PAGE_SIZE = 20;
   const products = allProducts.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   return (
-    <div className="space-y-4">
-      {products.map((p) => (
-        <ProductResultCard key={p.productId} product={p} />
-      ))}
-    </div>
+    <>
+      {/* Theme v1 §4: display-scale H1, tabular count */}
+      <h1 style={{ font: "var(--text-display)", color: "var(--color-ink)" }}>
+        <span className="tabular">{products.length}</span> results for &ldquo;{query || "all products"}&rdquo;
+      </h1>
+      <div className="space-y-4" style={{ marginTop: "var(--space-8)" }}>
+        {products.map((p, i) => (
+          <ProductResultCard key={p.productId} product={p} isBest={i === 0} />
+        ))}
+      </div>
+    </>
   );
 }
 

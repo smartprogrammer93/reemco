@@ -4,8 +4,9 @@ import { useRef, useState } from "react";
 import type { Coupon } from "@/types/product";
 
 /**
- * F3 CouponBadge: 1px dashed green border on green tint, radius 8,
- * 6px×10px padding. One badge per card; caller collapses extras.
+ * Theme v1 §3.3 CouponBadge: dashed deal border on deal tint, mono code,
+ * 32×32 copy hit area with focus ring. Label-only text — no countdowns,
+ * no fake urgency.
  */
 export default function CouponBadge({ coupon }: { coupon: Coupon }) {
   const [copied, setCopied] = useState(false);
@@ -25,19 +26,16 @@ export default function CouponBadge({ coupon }: { coupon: Coupon }) {
 
   return (
     <span className="coupon-badge inline-flex items-center gap-2">
-      <span className="label-token" style={{ color: "var(--brand-green)" }}>
-        Coupon
-      </span>
-      <span className="text-[13px] font-medium" style={{ color: "var(--brand-green)" }}>
-        {coupon.discount}
+      <span className="label-token" style={{ color: "var(--color-deal)" }}>
+        Coupon {coupon.discount}
       </span>
       {coupon.code && (
         <>
           <code
-            className="rounded px-1 text-[13px]"
+            className="rounded px-1"
             style={{
-              fontFamily: "var(--font-geist-mono), monospace",
-              color: "var(--brand-ink)",
+              font: "13px/18px var(--font-mono)",
+              color: "var(--color-deal)",
             }}
           >
             {coupon.code}
@@ -46,18 +44,16 @@ export default function CouponBadge({ coupon }: { coupon: Coupon }) {
             type="button"
             onClick={copyCode}
             aria-label={`Copy coupon code ${coupon.code}`}
-            className="flex h-8 w-8 items-center justify-center rounded border text-xs"
+            className="focusable flex h-8 w-8 items-center justify-center rounded border"
             style={{
-              borderColor: "var(--brand-border)",
-              color: "var(--brand-slate-600)",
-              minHeight: 32,
-              minWidth: 32,
+              borderColor: "var(--color-border)",
+              color: "var(--color-ink-secondary)",
             }}
           >
             {copied ? (
-              <span style={{ color: "var(--brand-green)" }}>Copied</span>
+              <span style={{ color: "var(--color-deal)", font: "var(--text-small)" }}>✓</span>
             ) : (
-              "Copy"
+              <span style={{ font: "var(--text-small)" }}>Copy</span>
             )}
           </button>
         </>
