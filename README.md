@@ -54,3 +54,4 @@ UI but has no API; beacons there are silently dropped.
   (reads the local JSONL store in `EVENTS_DIR`, default `./.events`).
 - Raw events are pruned after 90 days (Data Minimization); only aggregates outlive that.
 - Hardening: JSON-only, 16 KB cap, batch ≤ 20, schema-validated fields, 120 req/min rate limit.
+Deploy secrets: all four (SURGE_LOGIN, SURGE_TOKEN, VERCEL_TOKEN, VERCEL_TEAM_ID) are set in repo Actions secrets as of REEA-43. See issue REEA-43 for verification runs.
