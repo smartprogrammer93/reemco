@@ -14,7 +14,19 @@ import { join } from "node:path";
 import type { FunnelEvent } from "@/lib/events";
 
 export const MAX_AGE_DAYS = 90;
-export const EVENTS_DIR = process.env.EVENTS_DIR ?? join(process.cwd(), ".events");
+
+function defaultEventsDir(): string {
+  if (process.env.EVENTS_DIR) return process.env.EVENTS_DIR;
+  // Serverless (Vercel/Lambda) filesystems are read-only except /tmp, and
+  // /tmp is ephemeral per warm instance — acceptable for the minimal funnel
+  // until a durable store lands (see REEA-37 follow-up).
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    return "/tmp/reemco-events";
+  }
+  return join(process.cwd(), ".events");
+}
+
+export const EVENTS_DIR = defaultEventsDir();
 
 function eventsFile(dir = EVENTS_DIR): string {
   return join(dir, "events.jsonl");

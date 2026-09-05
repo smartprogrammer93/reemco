@@ -49,7 +49,13 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
 
   const { accepted, rejected } = validateEventBatch(body);
-  if (accepted.length > 0) appendEvents(accepted);
+  try {
+    if (accepted.length > 0) appendEvents(accepted);
+  } catch (err) {
+    // e.g. read-only filesystem: fail loudly rather than silently dropping events.
+    console.error("event store write failed", err);
+    return Response.json({ error: "event store unavailable" }, { status: 503 });
+  }
   return Response.json(
     { accepted: accepted.length, rejected, max_batch: MAX_EVENTS_PER_REQUEST },
     { status: 202 },
