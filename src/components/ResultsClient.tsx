@@ -172,8 +172,10 @@ function Results() {
         <span className="tabular">{products.length}</span>{" "}
         {products.length === 1 ? "result" : "results"} for &ldquo;{query || "all products"}&rdquo;
       </h1>
-      {/* Design v3 §5.2: single-column list, two columns only ≥1280px. */}
-      <div className="grid items-start gap-4 xl:grid-cols-2" style={{ marginTop: "var(--rc-space-8)" }}>
+      {/* Design v3 §5.2: single-column list, two columns only ≥1280px.
+          minmax(0,1fr) tracks keep long product titles from widening the grid
+          past the viewport at 375px (smoke step 5). */}
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]" style={{ marginTop: "var(--rc-space-8)" }}>
         {products.map((p, i) => (
           <ProductResultCard
             key={p.productId}

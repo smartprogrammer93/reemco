@@ -65,7 +65,7 @@ export function PulseOfferCascade({
   const best = Math.min(...prices);
   const worst = Math.max(...prices);
   return (
-    <ul className="mt-4 grid gap-3 xl:grid-cols-2">
+    <ul className="mt-4 grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 xl:grid-cols-[repeat(2,minmax(0,1fr))]">
       {offers.map((offer, i) => {
         const eff = effectivePrice(offer, offer.coupon);
         return (

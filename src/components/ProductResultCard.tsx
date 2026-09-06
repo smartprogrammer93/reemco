@@ -63,7 +63,10 @@ function PriceBlock({
   // flex-wrap on the baseline row stops the Best badge clipping (M3).
   const saved = offer.wasPrice != null && offer.wasPrice > offer.price;
   return (
-    <div className="ml-auto shrink-0 text-right">
+    // REEA-95 step-5 mobile pass: at narrow widths the price block takes the
+    // full row so its chips wrap inside the viewport instead of forcing the
+    // card wider than the screen (sm: restores side-by-side with the title).
+    <div className="ml-auto w-full shrink-0 text-right sm:w-auto">
       <div className="flex flex-wrap items-baseline justify-end gap-x-2 gap-y-1">
         <span
           className="tabular"
