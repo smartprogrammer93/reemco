@@ -13,7 +13,10 @@
  *  - eureka.com.kw: Algolia index instant_records; app/search keys injected
  *    into every page as hidden inputs #cky/#srcapk (read at runtime, never
  *    hard-coded).
- * All three are documented retailer contracts (docs/RATE-LIMITS-AND-ROBOTS.md).
+ *  - jarir.com: Nuxt SSR payload carries the Constructor.io index key
+ *    (`"key_..."`, en preferred); query ac.cnstrc.com/search directly.
+ *  - amazon.eg: no JSON contract — parse the `/s?k=` results HTML cards.
+ * All five are documented retailer contracts (docs/RATE-LIMITS-AND-ROBOTS.md).
  * Search endpoints only — small page sizes, one call per retailer per run.
  */
 import type { FetchImpl } from "@/lib/collect/scraper";
@@ -130,6 +133,129 @@ export function parseEurekaSearch(payload: unknown, productTitle: string): Found
   };
 }
 
+/**
+ * jarir.com is a Nuxt storefront whose search hits are fetched client-side
+ * from Constructor.io. The per-language index keys are injected into every
+ * SSR page's __NUXT_DATA__ payload (resolved `searchProviderKeys` values
+ * appear as `"key_..."` literals right after the config anchor), so we read
+ * them at runtime like eureka's hidden inputs — never hard-coded.
+ */
+export function extractJarirIndexKey(html: string): string | null {
+  const anchor = html.indexOf("searchProviderKeys");
+  const haystack = anchor >= 0 ? html.slice(anchor) : html;
+  const keys = [...haystack.matchAll(/"(key_[A-Za-z0-9_-]{6,})"/g)].map((m) => m[1]);
+  if (keys.length === 0) return null;
+  // The payload stores {ar, en} in reference order, so the last literal is
+  // the English index — a better match for the Latin-script catalog titles.
+  return keys[keys.length - 1];
+}
+
+interface ConstructorHit {
+  data?: {
+    url?: string;
+    price?: number | string;
+    metadata?: { name?: string; price?: string };
+  };
+}
+
+/** Parse a Constructor.io search response (jarir.com storefront provider). */
+export function parseJarirSearch(payload: unknown, productTitle: string): FoundOffer | null {
+  const results =
+    (payload as { response?: { results?: ConstructorHit[] } })?.response?.results ?? [];
+  let best: { hit: ConstructorHit; score: number } | null = null;
+  for (const hit of results) {
+    const data = hit?.data;
+    const price = typeof data?.price === "number" ? data.price : Number(data?.metadata?.price);
+    const title = data?.metadata?.name ?? "";
+    const slug = data?.url ?? "";
+    if (!Number.isFinite(price) || price <= 0 || !title || !slug) continue;
+    const score = titleMatchScore(title, productTitle);
+    if (score > 0.3 && (!best || score > best.score)) best = { hit, score };
+  }
+  const data = best?.hit?.data;
+  if (!data) return null;
+  const price = typeof data.price === "number" ? data.price : Number(data.metadata?.price);
+  return {
+    price,
+    currency: "SAR",
+    url: `https://www.jarir.com/${data.url}`,
+    // Constructor indexes sellable items only; stock-out state is not exposed
+    // in the hit fields — listed-with-price implies purchasable (same rule as
+    // extractInStock's unknown branch).
+    inStock: true,
+  };
+}
+
+interface AmazonCard {
+  title: string;
+  price: number;
+  path: string;
+  outOfStock: boolean;
+}
+
+/** Arabic-Indic digits appear in some amazon.eg renders — normalize before parsing. */
+function normalizeDigits(s: string): string {
+  return s.replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
+}
+
+/** Coverage of product-title tokens found in a hit title (0..1). */
+function tokenCoverage(hitTitle: string, productTitle: string): number {
+  const hitTokens = hitTitle.toLowerCase();
+  const wanted = Array.from(
+    new Set(
+      productTitle
+        .toLowerCase()
+        .replace(/[^a-z0-9\u0600-\u06FF]+/g, " ")
+        .split(" ")
+        .filter((t) => t.length >= 2),
+    ),
+  );
+  if (wanted.length === 0) return 0;
+  let matched = 0;
+  for (const t of wanted) if (hitTokens.includes(t)) matched += 1;
+  return matched / wanted.length;
+}
+
+/** Parse an amazon.eg `/s?k=` results page into best-matching offer. */
+export function parseAmazonEgSearch(html: string, productTitle: string): FoundOffer | null {
+  const cards: AmazonCard[] = [];
+  for (const seg of html.split('data-component-type="s-search-result"').slice(1)) {
+    const asin = seg.match(/\/dp\/([A-Z0-9-]{6,12})/)?.[1];
+    const priceRaw = normalizeDigits(
+      seg.match(/class="a-offscreen">[\s\u200E\u200F]*([\d٠-٩.,]+)/)?.[1] ?? "",
+    );
+    if (!asin || !priceRaw) continue;
+    const price = Number.parseFloat(priceRaw.replace(/,/g, ""));
+    if (!Number.isFinite(price) || price <= 0) continue;
+    const h2 = seg.match(/<h2[^>]*>([\s\S]{0,400}?)<\/h2>/);
+    const title = (h2?.[1] ?? seg.match(/<h2[^>]*aria-label="([^"]+)"/)?.[1] ?? "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    cards.push({ title, price, path: `/dp/${asin}`, outOfStock: /غير متوفر|out of stock/i.test(seg) });
+  }
+  if (cards.length === 0) return null;
+  // Titles mix Arabic and Latin script, so F-score is too punitive across
+  // scripts: rank by token coverage and fall back to Amazon's own result
+  // order (cards are already relevance-ranked) when nothing covers the title.
+  let bestIdx = -1;
+  let bestScore = 0;
+  cards.forEach((c, i) => {
+    const s = tokenCoverage(c.title, productTitle);
+    if (s > bestScore) {
+      bestScore = s;
+      bestIdx = i;
+    }
+  });
+  const card = bestIdx >= 0 ? cards[bestIdx] : cards.find((c) => !c.outOfStock) ?? cards[0];
+  return {
+    price: card.price,
+    currency: "EGP",
+    url: `https://www.amazon.eg${card.path}`,
+    inStock: !card.outOfStock,
+  };
+}
+
 /** fetch with a hard timeout, returning the raw Response. */
 async function fetchResponse(
   fetchImpl: FetchImpl,
@@ -209,6 +335,39 @@ export async function searchRetailerFallback(
     );
     const found = parseEurekaSearch(payload, productTitle);
     if (!found) throw new Error("No matching product found on eureka search");
+    return found;
+  }
+  if (host.endsWith("jarir.com")) {
+    // Two-step like eureka: read the Constructor index key from any SSR page,
+    // then query the storefront's own search API.
+    const page = await fetchResponse(fetchImpl, "https://www.jarir.com/", {
+      headers: { accept: "text/html" },
+    });
+    if (!page.ok) throw new Error(`jarir homepage HTTP ${page.status}`);
+    const indexKey = extractJarirIndexKey(await page.text());
+    if (!indexKey) throw new Error("jarir: constructor index key not found on page");
+    const payload = await fetchResponse(
+      fetchImpl,
+      `https://ac.cnstrc.com/search/${encodeURIComponent(productTitle)}` +
+        `?key=${indexKey}&num_results_per_page=8`,
+      { headers: { accept: "application/json" } },
+    ).then((res) => {
+      if (!res.ok) throw new Error(`jarir search HTTP ${res.status}`);
+      return res.json();
+    });
+    const found = parseJarirSearch(payload, productTitle);
+    if (!found) throw new Error("No matching product found on jarir search");
+    return found;
+  }
+  if (host.endsWith("amazon.eg")) {
+    const res = await fetchResponse(
+      fetchImpl,
+      `https://www.amazon.eg/s?k=${encodeURIComponent(productTitle)}`,
+      { headers: { accept: "text/html,application/xhtml+xml", "user-agent": "Mozilla/5.0" } },
+    );
+    if (!res.ok) throw new Error(`amazon.eg search HTTP ${res.status}`);
+    const found = parseAmazonEgSearch(await res.text(), productTitle);
+    if (!found) throw new Error("No matching product found on amazon.eg search");
     return found;
   }
   throw new Error(`No search fallback for ${host}`);

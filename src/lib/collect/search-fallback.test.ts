@@ -5,9 +5,13 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  extractJarirIndexKey,
+  parseAmazonEgSearch,
   parseEurekaSearch,
+  parseJarirSearch,
   parseShopifyProducts,
   parseXciteSearch,
+  searchRetailerFallback,
   titleMatchScore,
 } from "@/lib/collect/search-fallback";
 
@@ -116,5 +120,126 @@ describe("parseEurekaSearch", () => {
   it("treats avaqt 0 as out of stock", () => {
     const p = { hits: [{ ...fixture.hits[0], avaqt: 0 }] };
     expect(parseEurekaSearch(p, PRODUCT)?.inStock).toBe(false);
+  });
+});
+
+describe("extractJarirIndexKey", () => {
+  const html =
+    '<script type="application/json" id="__NUXT_DATA__">[{"siteConfig":{"searchProviderKeys":{"ar":2,"en":3}},"key_g0Gi7pKaE5cyqDGl","key_KcSYfmQTEwRpBnd9"]</script>';
+
+  it("picks the English index key (last literal)", () => {
+    expect(extractJarirIndexKey(html)).toBe("key_KcSYfmQTEwRpBnd9");
+  });
+
+  it("falls back to the single key when only one is present", () => {
+    expect(extractJarirIndexKey('{"en":"key_SingleOnly123"}')).toBe("key_SingleOnly123");
+  });
+
+  it("returns null without any key literal", () => {
+    expect(extractJarirIndexKey("<html>no payload</html>")).toBeNull();
+  });
+});
+
+describe("parseJarirSearch", () => {
+  const fixture = {
+    response: {
+      results: [
+        {
+          data: {
+            sku: "632169",
+            url: "asus-rog-strix-keyboard-mouse-combo-632169.html",
+            price: 499,
+            metadata: { name: "Asus ROG Strix Scope II RX Mechanical RGB Gaming Keyboard", price: "499.000000" },
+          },
+        },
+        {
+          data: {
+            sku: "1",
+            url: "wd-black-sn770m.html",
+            price: 3200,
+            metadata: { name: "WD Black SN770M NVMe Internal SSD" },
+          },
+        },
+      ],
+    },
+  };
+
+  it("maps the best Constructor hit to a FoundOffer", () => {
+    const found = parseJarirSearch(fixture, "ASUS ROG Strix Scope II 96 Wireless");
+    expect(found?.price).toBe(499);
+    expect(found?.currency).toBe("SAR");
+    expect(found?.url).toBe("https://www.jarir.com/asus-rog-strix-keyboard-mouse-combo-632169.html");
+    expect(found?.inStock).toBe(true);
+  });
+
+  it("returns null when no hit clears the relevance bar", () => {
+    expect(parseJarirSearch({ response: { results: [] } }, PRODUCT)).toBeNull();
+    expect(parseJarirSearch(null, PRODUCT)).toBeNull();
+  });
+});
+
+describe("parseAmazonEgSearch", () => {
+  const card = (asin: string, price: string, title: string, extra = "") =>
+    `<div data-component-type="s-search-result"><h2 aria-label="${title}" class="a-size-base"><span>${title}</span></h2>` +
+    `<span class="a-offscreen">‏${price} جنيه</span><a href="/%D9%85/dp/${asin}/ref=sr_1_1">${extra}</a></div>`;
+
+  const fixture =
+    card("B0DPWX3WTL", "3,957.00", "لوحة مفاتيح ميكانيكية اكس اولا F75 ماكس", "") +
+    card("B0FX2P81BG", "1,299.00", "كيكرون كيبورد ميكانيكي سلكي Keychron V3 Max QMK", "") +
+    card("B0ZZZZZZZZ", "45.00", "USB Cable");
+
+  it("picks the best token coverage over Arabic/Latin mixed titles", async () => {
+    const html = await Promise.resolve(fixture);
+    const found = parseAmazonEgSearch(html, "Keychron V3 Max QMK Wireless Mechanical Keyboard");
+    expect(found?.price).toBeCloseTo(1299);
+    expect(found?.currency).toBe("EGP");
+    expect(found?.url).toBe("https://www.amazon.eg/dp/B0FX2P81BG");
+    expect(found?.inStock).toBe(true);
+  });
+
+  it("falls back to the first priced organic card when nothing covers the title", () => {
+    const found = parseAmazonEgSearch(fixture, "Totally Unknown Brand Model 9000");
+    expect(found?.url).toBe("https://www.amazon.eg/dp/B0DPWX3WTL");
+  });
+
+  it("returns null when no card carries both ASIN and price", () => {
+    expect(parseAmazonEgSearch("<html>none</html>", PRODUCT)).toBeNull();
+  });
+});
+
+describe("searchRetailerFallback dispatch", () => {
+  it("resolves jarir.com via homepage key + Constructor query", async () => {
+    const fetchImpl = async (url: string): Promise<Response> => {
+      if (url.includes("ac.cnstrc.com")) {
+        return new Response(
+          JSON.stringify({
+            response: {
+              results: [
+                { data: { url: "a.html", price: 499, metadata: { name: "Asus ROG Strix Scope II RX" } } },
+              ],
+            },
+          }),
+        );
+      }
+      return new Response('[{"searchProviderKeys":{"ar":1,"en":2}},"key_aaa111","key_bbb222"]');
+    };
+    const found = await searchRetailerFallback("jarir.com", "ASUS ROG Strix Scope II", fetchImpl);
+    expect(found.price).toBe(499);
+    expect(found.currency).toBe("SAR");
+  });
+
+  it("resolves amazon.eg from the /s results page", async () => {
+    const fetchImpl = async (): Promise<Response> =>
+      new Response(
+        '<div data-component-type="s-search-result"><h2><span>Keychron V3 Max QMK</span></h2>' +
+          '<span class="a-offscreen">‏1,299.00 جنيه</span><a href="/dp/B0FX2P81BG/x"></a></div>',
+      );
+    const found = await searchRetailerFallback(
+      "amazon.eg",
+      "Keychron V3 Max QMK Wireless Mechanical Keyboard",
+      fetchImpl,
+    );
+    expect(found.price).toBeCloseTo(1299);
+    expect(found.url).toBe("https://www.amazon.eg/dp/B0FX2P81BG");
   });
 });
