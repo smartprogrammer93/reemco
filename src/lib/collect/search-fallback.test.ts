@@ -14,6 +14,8 @@ import {
   searchRetailerFallback,
   titleMatchScore,
 } from "@/lib/collect/search-fallback";
+import { domainOf } from "@/lib/collect/scraper";
+import { CATALOG } from "@/lib/catalog";
 
 const PRODUCT = "Sony WH-1000XM6 Wireless Noise Cancelling Headphones";
 
@@ -241,5 +243,26 @@ describe("searchRetailerFallback dispatch", () => {
     );
     expect(found.price).toBeCloseTo(1299);
     expect(found.url).toBe("https://www.amazon.eg/dp/B0FX2P81BG");
+  });
+});
+
+describe("seed catalog dispatch routing (REEA-93)", () => {
+  it("routes jarir/amazon.eg offers to their own hosts, not a search redirector", () => {
+    let checked = 0;
+    for (const product of CATALOG) {
+      for (const offer of product.offers) {
+        const host = domainOf(offer.url);
+        if (offer.merchant.startsWith("Jarir")) {
+          expect(host).toBe("jarir.com");
+          checked += 1;
+        }
+        if (offer.merchant.startsWith("Amazon.eg")) {
+          expect(host).toBe("amazon.eg");
+          checked += 1;
+        }
+      }
+    }
+    // Guard: the assertions above must actually run against the seeded data.
+    expect(checked).toBeGreaterThanOrEqual(4);
   });
 });
