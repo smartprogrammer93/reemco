@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { Coupon, NormalizedProduct, PriceOffer } from "@/types/product";
 import { effectivePrice, formatPrice, sortOffers } from "@/lib/format";
 import CouponBadge from "@/components/CouponBadge";
@@ -8,11 +9,12 @@ import FreshnessBadge from "@/components/FreshnessBadge";
 /**
  * Reemco Design v3 result card (§5.2–§5.4). Single token namespace from
  * globals.css — no hex literals. variant="card": results list.
- * variant="detail": product-page identity chrome (the live CollectionPanel
- * below owns the served prices/availability; this card's scraped figures are
- * labeled reference data via the freshness chip). Price hierarchy per §5.3:
- * effective price ≥28px is the loudest element, strikethrough beside it,
- * savings pill directly after. Horizontal rows ≥768px via flex-wrap.
+ * variant="detail" (REEA-101 realtime AC-1): ships IDENTITIES ONLY in the
+ * served HTML — brand chip, title, coupon pill, variations, alternatives.
+ * Offer prices/availability render solely from the live collection job
+ * (CollectionPanel below), so one screen never shows two contradicting
+ * freshness passes. variant="card" keeps the full normalized-feed summary:
+ * the results list has no live job and is the feed's serving surface.
  */
 
 const STOCK_LABEL = { in: "In stock", out: "Out of stock" } as const;
@@ -131,11 +133,13 @@ export default function ProductResultCard({
 
   return (
     <article className={`result-card${oos ? " is-oos" : ""}`}>
-      {/* REEA-65 §4.1: honest last-verified freshness, always visible */}
+      {/* REEA-65 §4.1: honest last-verified freshness, always visible on the
+          feed-served results list (the detail view's freshness comes from the
+          live job instead — realtime AC-1). */}
       <div className="flex flex-wrap items-center gap-2">
         <RetailerChip>{product.brand}</RetailerChip>
-        {best && <StockDot state={best.inStock ? "in" : "out"} />}
-        <FreshnessBadge scrapedAt={product.scrapedAt} />
+        {!detail && best && <StockDot state={best.inStock ? "in" : "out"} />}
+        {!detail && <FreshnessBadge scrapedAt={product.scrapedAt} />}
       </div>
 
       {/* REEA-75 (M4): flex-wrap lets the price drop under a long title on
@@ -146,15 +150,18 @@ export default function ProductResultCard({
           {detail ? (
             product.title
           ) : (
-            <a
+            <Link
               href={`/product/${encodeURIComponent(product.productId)}`}
               className="hover:underline"
             >
               {product.title}
-            </a>
+            </Link>
           )}
         </h2>
-        {best && (
+        {/* Chrome-only detail (realtime AC-1): the price header renders on the
+            feed-served results list; the product page's price comes solely
+            from the live collection below. */}
+        {!detail && best && (
           <PriceBlock
             offer={best}
             isBest={isBest && !oos}

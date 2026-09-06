@@ -16,7 +16,9 @@
   --rc-surface: #ffffff;
   --rc-ink: #0b1220;
   --rc-body-text: #3a4459;
-  --rc-muted: #6b7385;
+  /* REEA-101 AC-3: muted-on-canvas measured 4.40:1 at #6b7385 — darken to
+     clear the 4.5 floor on canvas (~4.60) and white (~4.97). */
+  --rc-muted: #667085;
   --rc-line: #e3e7f0;
   --rc-line-strong: #c9d2e3;
 
@@ -32,7 +34,9 @@
   /* Semantic — pair each foreground with its tint (all ≥4.5:1, AC-3) */
   --rc-savings: #15803d; --rc-savings-bg: #dcfce7;
   --rc-fresh: #b45309;    --rc-fresh-bg: #fef3c7;
-  --rc-error: #dc2626;    --rc-error-bg: #fee2e2;
+  /* REEA-101 AC-3: #dc2626 on --rc-error-bg measured 3.95:1 — deepen the
+     foreground so the error pair clears 4.5 (#b42318 ≈ 5.38:1). */
+  --rc-error: #b42318;    --rc-error-bg: #fee2e2;
 
   /* Fluid type scale — mobile tight, desktop bold (AC-2) */
   --rc-font-display: var(--font-space-grotesk), ui-sans-serif, sans-serif;
