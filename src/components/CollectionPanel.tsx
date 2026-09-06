@@ -1,15 +1,15 @@
 "use client";
 
 /**
- * REEA-84 W1 T4/T5/T6 — per-product collection panel.
+ * REEA-95 — per-product live collection panel.
  *
- * Renders the real per-retailer subtask states from the polling API (AC2 —
- * progress is never synthetic), offer cards with full provenance (AC3/AC4),
- * per-retailer retry chips (AC6), and the cached-vs-live labeling with the
- * freshness rule (AC5). Stale-cache fallback: when a live run fails, the last
- * completed collection is fetched and rendered labeled with its age (AC6/AC10).
- *
- * Interim styling only — theme v2 lands via the design workstream (REEA-84 W2).
+ * Every product view ALWAYS triggers a live collection run against the
+ * retailer adapters (realtime-policy §4). Renders the real per-retailer
+ * subtask states from the polling API (progress is never synthetic), offer
+ * cards with full provenance, per-retailer retry chips, and the labeled
+ * same-tab-session repeat ("Cached — refreshed at …") which clears when fresh
+ * data lands. On a failed live run the last completed collection is fetched
+ * and rendered labeled with its age — never a silent empty state.
  */
 import { useEffect, useState } from "react";
 import { useCollection, type CollectionPhase } from "@/lib/collect/useCollection";
@@ -24,7 +24,7 @@ function OfferRow({ offer, best }: { offer: LiveOffer; best: boolean }) {
   return (
     <li
       style={{
-        border: `1px solid ${best ? "var(--color-deal)" : "var(--color-border)"}`,
+        border: `1px solid ${best ? "var(--rc-savings)" : "var(--rc-line)"}`,
         borderRadius: 8,
         padding: 12,
         marginBottom: 8,
@@ -38,20 +38,20 @@ function OfferRow({ offer, best }: { offer: LiveOffer; best: boolean }) {
           <span
             className="rounded px-2 py-0.5"
             style={{
-              font: "var(--text-small)",
-              background: "var(--color-deal-muted, var(--color-surface-muted))",
-              color: "var(--color-deal)",
+              font: "var(--rc-text-small)",
+              background: "var(--rc-primary-tint, var(--rc-canvas))",
+              color: "var(--rc-savings)",
             }}
           >
             Best price
           </span>
         )}
-        <span style={{ color: "var(--color-ink-secondary)", font: "var(--text-body)" }}>
+        <span style={{ color: "var(--rc-body-text)", font: "var(--rc-text-body)" }}>
           {offer.inStock ? "In stock" : "Out of stock"}
         </span>
       </div>
       {/* Provenance line (AC4): retailer + domain, collected-at, live/cache. */}
-      <p style={{ font: "var(--text-small)", color: "var(--color-ink-secondary)", marginTop: 4 }}>
+      <p style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)", marginTop: 4 }}>
         {offer.merchant} ({offer.domain}) · collected {ago ?? "date unknown"} · {offer.method}
       </p>
       <TrackedOutboundLink
@@ -60,7 +60,7 @@ function OfferRow({ offer, best }: { offer: LiveOffer; best: boolean }) {
         rank={0}
         itemId={offer.merchant}
         className="hover:underline"
-        style={{ font: "var(--text-small)", color: "var(--color-primary)" }}
+        style={{ font: "var(--rc-text-small)", color: "var(--rc-primary)" }}
       >
         View at retailer →
       </TrackedOutboundLink>
@@ -79,7 +79,7 @@ export default function CollectionPanel({
   productId: string;
   currency: string;
 }) {
-  const { state, start, retryRetailer } = useCollection(productId);
+  const { state, cachedNoticeAt, start, retryRetailer } = useCollection(productId);
   const [staleFallback, setStaleFallback] = useState<CollectJob | null>(null);
   // Ticking clock for the elapsed label — updates via interval, never during render.
   const [now, setNow] = useState(() => Date.now());
@@ -90,8 +90,9 @@ export default function CollectionPanel({
     return () => clearInterval(t);
   }, [collecting]);
 
-  // Freshness rule (AC5): auto-start a live collection on selection unless the
-  // server serves a fresh cached snapshot (which arrives as a terminal state).
+  // Always-collect (realtime-policy §4): selecting a product ALWAYS starts a
+  // live run. With a same-tab snapshot the hook renders it labeled while this
+  // revalidation runs in the background; cold mounts show the starting state.
   useEffect(() => {
     void start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -132,13 +133,13 @@ export default function CollectionPanel({
   if (phase.kind === "idle" || phase.kind === "starting") {
     return (
       <section aria-label="Live price collection" style={{ marginTop: 16 }}>
-        <p style={{ font: "var(--text-body)", color: "var(--color-ink-secondary)" }}>
+        <p style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
           {phase.kind === "starting" ? "Starting live collection…" : "Live collection idle."}{" "}
           <button
             type="button"
             onClick={() => void start({ force: true })}
             className="hover:underline"
-            style={{ font: "var(--text-body)", color: "var(--color-primary)" }}
+            style={{ font: "var(--rc-text-body)", color: "var(--rc-primary)" }}
           >
             Collect now
           </button>
@@ -168,13 +169,13 @@ export default function CollectionPanel({
         <div
           role="alert"
           style={{
-            border: "1px solid var(--color-error)",
+            border: "1px solid var(--rc-error)",
             borderRadius: 8,
             padding: 12,
             marginTop: 12,
           }}
         >
-          <p style={{ font: "var(--text-body)", color: "var(--color-error)" }}>
+          <p style={{ font: "var(--rc-text-body)", color: "var(--rc-error)" }}>
             {job.error ?? "Collection failed"}
           </p>
           <button
@@ -182,8 +183,8 @@ export default function CollectionPanel({
             onClick={() => void start({ force: true })}
             className="rounded px-3 py-1.5"
             style={{
-              font: "var(--text-body)",
-              background: "var(--color-primary)",
+              font: "var(--rc-text-body)",
+              background: "var(--rc-primary)",
               color: "#fff",
               marginTop: 8,
             }}
@@ -192,7 +193,7 @@ export default function CollectionPanel({
           </button>
           {staleFallback && staleFallback.offers.length > 0 && (
             <div style={{ marginTop: 12 }}>
-              <p style={{ font: "var(--text-small)", color: "var(--color-ink-secondary)" }}>
+              <p style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)" }}>
                 Showing last cached results — collected{" "}
                 {collectedAgoLabel(staleFallback.finishedAt ?? staleFallback.startedAt, now) ??
                   "at an unknown time"}{" "}
@@ -212,36 +213,35 @@ export default function CollectionPanel({
         </div>
       )}
 
-      {/* Cached snapshot served fresh (AC5): explicit "Collect again" control. */}
-      {job && job.status === "complete" && job.mode === "cache" && (
-        <p style={{ font: "var(--text-small)", color: "var(--color-ink-secondary)", marginTop: 8 }}>
-          Cached — collected{" "}
-          {collectedAgoLabel(job.finishedAt ?? job.startedAt, now) ?? "at an unknown time"} ·{" "}
-          <button
-            type="button"
-            onClick={() => void start({ force: true })}
-            className="hover:underline"
-            style={{ font: "var(--text-small)", color: "var(--color-primary)" }}
-          >
-            Collect again
-          </button>
+      {/* Same-tab repeat label (realtime-policy §4): shown while the previous
+          snapshot renders ahead of the background revalidation; clears when
+          the fresh collection lands. */}
+      {cachedNoticeAt && job && (
+        <p style={{ marginTop: 8 }}>
+          <span className="cached-chip">
+            Cached — refreshed at{" "}
+            {new Date(cachedNoticeAt).toLocaleTimeString(undefined, {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </span>
         </p>
       )}
-      {job && job.status === "complete" && job.mode === "live" && (
-        <p style={{ font: "var(--text-small)", color: "var(--color-ink-secondary)", marginTop: 8 }}>
+      {job && job.status === "complete" && !cachedNoticeAt && (
+        <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)", marginTop: 8 }}>
           Live results · collected{" "}
           {collectedAgoLabel(job.finishedAt ?? job.startedAt, now) ?? "just now"} ·{" "}
           <button
             type="button"
             onClick={() => void start({ force: true })}
             className="hover:underline"
-            style={{ font: "var(--text-small)", color: "var(--color-primary)" }}
+            style={{ font: "var(--rc-text-small)", color: "var(--rc-primary)" }}
           >
             Collect again
           </button>
         </p>
       )}
-      <p style={{ font: "var(--text-small)", color: "var(--color-ink-secondary)", marginTop: 4 }}>
+      <p style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)", marginTop: 4 }}>
         Prices in {currency}. Collection is scoped to this product only.
       </p>
     </section>

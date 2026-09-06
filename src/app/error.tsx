@@ -5,17 +5,17 @@ export default function GlobalRouteError({ reset }: { error: Error; reset: () =>
   return (
     <div
       className="mx-auto w-full px-6 py-6"
-      style={{ maxWidth: "var(--layout-max-w)" }}
+      style={{ maxWidth: "var(--rc-layout-max-w)" }}
     >
       <div
         className="result-card"
         role="alert"
-        style={{ borderLeft: "3px solid var(--color-error)", background: "var(--color-error-bg)" }}
+        style={{ borderLeft: "3px solid var(--rc-error)", background: "var(--rc-error-bg)" }}
       >
-        <h2 style={{ font: "var(--text-title)", color: "var(--color-ink)" }}>
+        <h2 style={{ font: "var(--rc-text-title)", color: "var(--rc-ink)" }}>
           Something went wrong
         </h2>
-        <p className="mt-1" style={{ font: "var(--text-body)", color: "var(--color-ink-secondary)" }}>
+        <p className="mt-1" style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
           An unexpected error occurred. Please try again.
         </p>
         <button type="button" onClick={reset} className="btn-primary focusable mt-4 h-10 px-4">

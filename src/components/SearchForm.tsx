@@ -1,6 +1,6 @@
-/** Theme v1 §3.2 hero search bar: 48px input + primary button, radius 6. */
+/** Design v3 §5.1 hero search: 52px input + primary button, radius control. */
 export default function SearchForm({ compact = false }: { compact?: boolean }) {
-  const height = compact ? 40 : 48;
+  const height = compact ? 40 : 52;
   return (
     <form
       action="/results"

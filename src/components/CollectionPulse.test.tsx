@@ -29,13 +29,14 @@ describe("CollectionPulse (plan §2.6, REEA-90 C8)", () => {
   it("renders real subtask states — spinner for collecting, failure chip for failed", () => {
     const { container } = render(<CollectionPulse job={runningJob()} elapsedLabel="12s" />);
     expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("50");
+    expect(container.querySelector(".rc-chip-rail")).toBeTruthy();
     expect(container.querySelector(".pulse-spinner")).toBeTruthy();
     expect(screen.getByText("Failed")).toBeTruthy();
     expect(screen.queryByText("Timed out")).toBeNull();
     expect(screen.getByText("2 offers")).toBeTruthy();
   });
 
-  it("snaps the bar green when settled", () => {
+  it("collapses the rail once settled and shows the completion caption", () => {
     const done: CollectJob = {
       ...runningJob(),
       status: "complete",
@@ -46,8 +47,9 @@ describe("CollectionPulse (plan §2.6, REEA-90 C8)", () => {
       ),
     };
     const { container } = render(<CollectionPulse job={done} />);
-    expect(container.querySelector(".pulse-bar-fill.is-done")).toBeTruthy();
     expect(screen.getByText("Collection complete")).toBeTruthy();
+    // Signature rail collapses when every slot is filled (design-v3 §5.6).
+    expect(container.querySelector(".pulse-bar-fill")).toBeNull();
   });
 });
 
@@ -75,12 +77,16 @@ describe("PulseOfferCascade", () => {
     },
   ];
 
-  it("badges the best offer, shows provenance on every card", () => {
-    render(<PulseOfferCascade offers={offers} />);
+  it("badges the best offer with a savings pill, shows provenance on every card", () => {
+    const { container } = render(<PulseOfferCascade offers={offers} />);
     const badges = screen.getAllByText("Best price");
     expect(badges.length).toBe(1);
-    expect(screen.getByText(/vs highest/)).toBeTruthy();
-    expect(screen.getAllByText(/· (live|cached)/).length).toBe(2);
+    // Savings emphasis (design-v3 §5.3): pill directly after the best price.
+    expect(screen.getByText(/^Save /)).toBeTruthy();
+    // Provenance chip on EVERY card (§5.5), live vs cache labeled.
+    expect(container.querySelectorAll(".fresh-chip").length).toBe(2);
+    expect(container.textContent).toMatch(/live/);
+    expect(container.textContent).toMatch(/cached/);
   });
 
   it("never invents savings when there is a single offer", () => {

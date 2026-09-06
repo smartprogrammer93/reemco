@@ -50,12 +50,12 @@ class ResultsErrorBoundary extends Component<
         <div
           className="result-card"
           role="alert"
-          style={{ borderLeft: "3px solid var(--color-error)", background: "var(--color-error-bg)" }}
+          style={{ borderLeft: "3px solid var(--rc-error)", background: "var(--rc-error-bg)" }}
         >
-          <h2 style={{ font: "var(--text-title)", color: "var(--color-ink)" }}>
+          <h2 style={{ font: "var(--rc-text-title)", color: "var(--rc-ink)" }}>
             Something went wrong
           </h2>
-          <p className="mt-1" style={{ font: "var(--text-body)", color: "var(--color-ink-secondary)" }}>
+          <p className="mt-1" style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
             We couldn&apos;t load the results. Check your connection and try again.
           </p>
           <button
@@ -83,11 +83,11 @@ function EmptyState({
   suggestions: NormalizedProduct[];
 }) {
   return (
-    <div className="text-center" style={{ padding: "var(--space-12) 0" }}>
-      <h2 style={{ font: "var(--text-title)", color: "var(--color-ink)" }}>
+    <div className="text-center" style={{ padding: "var(--rc-space-12) 0" }}>
+      <h2 style={{ font: "var(--rc-text-title)", color: "var(--rc-ink)" }}>
         No results for &ldquo;{query}&rdquo;
       </h2>
-      <p className="mt-2" style={{ font: "var(--text-body)", color: "var(--color-ink-secondary)" }}>
+      <p className="mt-2" style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
         {suggestions.length > 0
           ? "Did you mean one of these?"
           : "Check the spelling or try a shorter brand name."}
@@ -99,11 +99,11 @@ function EmptyState({
               <Link
                 href={`/results?q=${encodeURIComponent(p.title)}`}
                 className="hover:underline"
-                style={{ font: "var(--text-body)", fontWeight: 500, color: "var(--color-primary)" }}
+                style={{ font: "var(--rc-text-body)", fontWeight: 500, color: "var(--rc-primary)" }}
               >
                 {p.title}
               </Link>
-              <p className="tabular" style={{ font: "var(--text-small)", color: "var(--color-ink-secondary)" }}>
+              <p className="tabular" style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)" }}>
                 {p.brand} · from{" "}
                 {Math.min(...p.offers.map((o) => o.price)).toFixed(2)}{" "}
                 {p.offers[0]?.currency ?? "KWD"}
@@ -112,13 +112,13 @@ function EmptyState({
           ))}
         </ul>
       )}
-      <div className="flex flex-wrap justify-center gap-4" style={{ marginTop: "var(--space-4)" }}>
+      <div className="flex flex-wrap justify-center gap-4" style={{ marginTop: "var(--rc-space-4)" }}>
         {EXAMPLES.map((q) => (
           <Link
             key={q}
             href={`/results?q=${encodeURIComponent(q)}`}
             className="hover:underline"
-            style={{ font: "var(--text-small)", color: "var(--color-primary)" }}
+            style={{ font: "var(--rc-text-small)", color: "var(--rc-primary)" }}
           >
             {q}
           </Link>
@@ -168,11 +168,12 @@ function Results() {
   return (
     <>
       {/* Theme v1 §4: display-scale H1, tabular count */}
-      <h1 style={{ font: "var(--text-display)", color: "var(--color-ink)" }}>
+      <h1 style={{ font: "var(--rc-text-display)", color: "var(--rc-ink)" }}>
         <span className="tabular">{products.length}</span>{" "}
         {products.length === 1 ? "result" : "results"} for &ldquo;{query || "all products"}&rdquo;
       </h1>
-      <div className="space-y-4" style={{ marginTop: "var(--space-8)" }}>
+      {/* Design v3 §5.2: single-column list, two columns only ≥1280px. */}
+      <div className="grid items-start gap-4 xl:grid-cols-2" style={{ marginTop: "var(--rc-space-8)" }}>
         {products.map((p, i) => (
           <ProductResultCard
             key={p.productId}

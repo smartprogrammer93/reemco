@@ -1,22 +1,27 @@
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
-import { relativeAge } from "@/lib/relative-time";
+import { isTenMinutesOld, relativeAge } from "@/lib/relative-time";
 import type { Coupon } from "@/types/product";
 
 /**
- * Theme v2 offer card (REEA-84 plan §2.3, REEA-90 C7).
- * Price is the hero (28px tabular); best offer gets a green "Best price"
- * badge + green border; savings line only when computable (never invented);
- * availability pill; amber coupon chip; MANDATORY provenance line
- * "Collected Xs ago · live|cache" (D-AC3 / plan AC4).
+ * Design v3 offer card (design-v3 §5.2–§5.5), paired with realtime-policy §6.
+ * Price hierarchy (§5.3): retailer label → chips → EFFECTIVE PRICE (the largest
+ * element, ≥28px tabular) → strikethrough compare-at beside it → savings pill
+ * directly after the price. Best offer keeps elev-2 + the "Best price" flag;
+ * its CTA is filled, everyone else's is outline. Coupon pill shows the VALUE
+ * only (§5.4). Freshness/provenance chip (§5.5): dot + relative time + retailer
+ * — green dot < 10 min, amber thereafter; never omitted. Savings render only
+ * when computable — never invented.
  */
 
 export interface OfferCardProps {
   merchant: string;
-  /** Retailer domain shown on the provenance line (G1 §4.2). */
+  /** Retailer domain shown on the provenance line. */
   domain?: string;
   priceLabel: string;
   /** Effective (coupon-applied) price label — shown under the hero price. */
   effectivePriceLabel?: string;
+  /** Higher listed price for the strikethrough beside the effective price. */
+  compareAtLabel?: string;
   coupon?: Coupon;
   inStock: boolean;
   url: string;
@@ -24,31 +29,32 @@ export interface OfferCardProps {
   collectedAt: string;
   method: "live" | "cache";
   isBest: boolean;
-  /** Human absolute savings (e.g. "€12.40") — null hides the line entirely. */
+  /** Human absolute savings (e.g. "KWD 12.40") — null hides the pill entirely. */
   savings: string | null;
 }
 
-function ProvenanceLine({
+function FreshnessChip({
   collectedAt,
   method,
-  domain,
+  merchant,
 }: {
   collectedAt: string;
   method: "live" | "cache";
-  domain?: string;
+  merchant: string;
 }) {
   const age = relativeAge(collectedAt);
+  const late = age !== null && isTenMinutesOld(collectedAt);
+  // §5.5 wording: fresh arrivals read "updated just now"; older keep the age.
+  const freshSeconds = age !== null && /^\d+s ago$/.test(age);
+  const timePart = age === null ? null : freshSeconds ? "just now" : age;
   return (
-    <p
-      className="mt-2 flex items-center gap-2"
-      style={{ font: "var(--rc-text-12)", color: "var(--rc-muted)" }}
-    >
-      {method === "live" && age !== null && <span className="live-dot" aria-hidden />}
-      <span>
-        {age !== null ? `Collected ${age}` : "Collection time unknown"}
-        {" · "}
-        {method === "live" ? "live" : "cached"}
-        {domain ? ` · ${domain}` : ""}
+    <p className="mt-2">
+      <span className="fresh-chip">
+        <span className={`fresh-dot${late ? " is-late" : ""}`} aria-hidden />
+        <span>
+          {timePart !== null ? `updated ${timePart} · ${merchant}` : merchant} ·{" "}
+          {method === "live" ? "live" : "cached"}
+        </span>
       </span>
     </p>
   );
@@ -59,6 +65,7 @@ export default function OfferCard({
   domain,
   priceLabel,
   effectivePriceLabel,
+  compareAtLabel,
   coupon,
   inStock,
   url,
@@ -68,85 +75,63 @@ export default function OfferCard({
   savings,
 }: OfferCardProps) {
   return (
-    <article className={`r2-card p-4${isBest ? " is-best" : ""}`}>
-      <div className="flex items-start justify-between gap-3">
-        <h3 style={{ font: "var(--rc-text-16)", fontWeight: 600, color: "var(--rc-ink)" }}>
-          {merchant}
-        </h3>
-        {isBest && (
-          <span
-            className="label-token rounded px-2 py-0.5"
-            style={{
-              background: "var(--rc-savings-tint)",
-              color: "var(--rc-savings-on-tint)",
-              borderRadius: "var(--rc-radius-control)",
-            }}
-          >
-            Best price
-          </span>
-        )}
-      </div>
-
-      <p
-        className="tabular mt-1"
-        style={{
-          font: "var(--rc-text-price)",
-          color: isBest ? "var(--rc-savings)" : "var(--rc-ink)",
-          fontWeight: isBest ? 700 : undefined,
-        }}
-      >
-        {priceLabel}
+    <article className={`result-card${isBest ? " is-best" : ""}`}>
+      {/* Retailer name first, calm (§5.3 order) */}
+      <p className="label-token" style={{ color: "var(--rc-muted)" }}>
+        {merchant}
+        {domain ? ` · ${domain}` : ""}
       </p>
-      {effectivePriceLabel && (
-        <p className="tabular" style={{ font: "var(--rc-text-14)", color: "var(--rc-savings)" }}>
-          {effectivePriceLabel} with coupon
-        </p>
-      )}
-      {isBest && savings && (
-        <p className="tabular" style={{ font: "var(--rc-text-14)", color: "var(--rc-savings)" }}>
-          Save {savings} vs highest
-        </p>
-      )}
 
-      <p className="mt-2 flex flex-wrap items-center gap-2">
-        <span
-          className="label-token rounded px-2 py-0.5"
-          style={{
-            background: inStock ? "var(--rc-savings-tint)" : "var(--rc-error-tint)",
-            color: inStock ? "var(--rc-savings-on-tint)" : "var(--rc-error-on-tint)",
-            borderRadius: "var(--rc-radius-control)",
-          }}
-        >
+      {/* Chips row: availability + coupon value (§5.4) */}
+      <p className="mt-1 flex flex-wrap items-center gap-2">
+        <span className="savings-pill" style={!inStock ? { background: "var(--rc-error-bg)", color: "var(--rc-error)" } : undefined}>
           {inStock ? "In stock" : "Out of stock"}
         </span>
         {coupon && (
-          <span
-            className="rounded px-2 py-0.5"
-            style={{
-              font: "var(--rc-text-12)",
-              background: "var(--rc-stale-tint)",
-              color: "var(--rc-stale-on-tint)",
-              border: "1px dashed var(--rc-stale)",
-              borderRadius: "var(--rc-radius-control)",
-            }}
-          >
-            {coupon.code ? `${coupon.code} — ` : ""}
+          <span className="coupon-badge">
             {coupon.discount}
           </span>
         )}
       </p>
 
-      {/* D-AC3 / plan AC4: provenance on EVERY offer card render. */}
-      <ProvenanceLine collectedAt={collectedAt} method={method} domain={domain} />
+      {/* Price block: effective price is the loudest element (P1 / AC-6) */}
+      <div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <span className="tabular" style={{ font: "var(--rc-text-price)", color: "var(--rc-ink)" }}>
+          {priceLabel}
+        </span>
+        {compareAtLabel && (
+          <span
+            className="tabular"
+            style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)", textDecoration: "line-through" }}
+          >
+            {compareAtLabel}
+          </span>
+        )}
+        {isBest && savings && <span className="savings-pill">Save {savings}</span>}
+      </div>
+      {effectivePriceLabel && (
+        <p className="tabular mt-1" style={{ font: "var(--rc-text-small)", color: "var(--rc-savings)" }}>
+          Effective {effectivePriceLabel} with coupon
+        </p>
+      )}
+
+      {isBest && (
+        <p className="mt-2">
+          <span className="best-flag">Best price</span>
+        </p>
+      )}
+
+      {/* Provenance chip (§5.5): dot + time + retailer + live|cache label. */}
+      <FreshnessChip collectedAt={collectedAt} method={method} merchant={merchant} />
 
       <TrackedOutboundLink
         href={url}
         query=""
         rank={0}
         itemId={merchant}
-        className="r2-btn mt-3 w-full px-4 py-2"
+        className={`${isBest ? "r2-btn" : "btn-outline focusable"} mt-3 w-full px-4 py-2`}
       >
-        View at retailer
+        View at {merchant}
       </TrackedOutboundLink>
     </article>
   );

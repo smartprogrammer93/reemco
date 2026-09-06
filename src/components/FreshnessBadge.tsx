@@ -1,10 +1,11 @@
 import { freshness } from "@/lib/freshness";
+import { isTenMinutesOld } from "@/lib/relative-time";
 
 /**
- * REEA-65 §4.1 — last-verified freshness on result cards and detail.
- * Fresh: neutral "Verified <X ago>". Stale (>7d): amber "… may be outdated"
- * (honesty signal, must-have per the spec's Kano note). Missing metadata
- * renders "Verification date unknown" — never a fabricated date.
+ * Design v3 §5.5 freshness/provenance chip — never omitted: dot + relative
+ * time. Green dot < 10 min, amber thereafter ("staleness is honesty"). Stale
+ * (>7d, REEA-65 §4.1) keeps the explicit "may be outdated" suffix. Missing
+ * metadata renders "updated date unknown" — never a fabricated date.
  */
 export default function FreshnessBadge({
   scrapedAt,
@@ -17,37 +18,22 @@ export default function FreshnessBadge({
   const f = freshness(scrapedAt, now);
   if (!f) {
     return (
-      <span
-        className="label-token inline-flex items-center rounded px-2 py-0.5"
-        style={{
-          color: "var(--color-ink-secondary)",
-          background: "var(--color-surface-muted)",
-          border: "1px solid var(--color-border)",
-        }}
-      >
-        Verification date unknown
+      <span className="fresh-chip">
+        <span className="fresh-dot is-late" aria-hidden />
+        updated date unknown
       </span>
     );
   }
-  const text = `Verified ${f.label}`;
+  const late = isTenMinutesOld(scrapedAt, now);
   return (
     <span
-      className="label-token inline-flex items-center rounded px-2 py-0.5"
-      title={f.stale ? "Last verified more than 7 days ago — the price may be outdated." : undefined}
-      style={
-        f.stale
-          ? {
-              color: "var(--color-warn-text)",
-              border: "1px solid var(--color-warn)",
-            }
-          : {
-              color: "var(--color-ink-secondary)",
-              background: "var(--color-surface-muted)",
-              border: "1px solid var(--color-border)",
-            }
+      className="fresh-chip"
+      title={
+        f.stale ? "Last verified more than 7 days ago — the price may be outdated." : undefined
       }
     >
-      {text}
+      <span className={`fresh-dot${late ? " is-late" : ""}`} aria-hidden />
+      updated {f.label}
       {f.stale ? " · may be outdated" : ""}
     </span>
   );

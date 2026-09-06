@@ -23,3 +23,15 @@ export function relativeAge(
   if (h < 24) return `${h}h ago`;
   return `${Math.floor(h / 24)}d ago`;
 }
+
+/**
+ * Design v3 §5.5 dot rule: green while < 10 min old, amber thereafter. Lives
+ * here so components stay render-pure — the clock is read once, via this
+ * helper's default argument. Missing/invalid timestamps count as old.
+ */
+export function isTenMinutesOld(iso: string | undefined, now: number = Date.now()): boolean {
+  if (!iso) return true;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return true;
+  return now - t >= 10 * 60 * 1000;
+}

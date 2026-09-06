@@ -23,7 +23,7 @@ export default async function ProductPage({
   return (
     <div
       className="mx-auto w-full px-6 py-6"
-      style={{ maxWidth: "var(--layout-max-w)" }}
+      style={{ maxWidth: "var(--rc-layout-max-w)" }}
     >
       {/* Theme v1 §3.4: product hero uses the detail variant (28px price, variations, alternatives). */}
       <ProductResultCard product={product} isBest variant="detail" />
@@ -34,11 +34,11 @@ export default async function ProductPage({
         productId={product.productId}
         currency={product.offers[0]?.currency ?? "KWD"}
       />
-      <p style={{ marginTop: "var(--space-4)" }}>
+      <p style={{ marginTop: "var(--rc-space-4)" }}>
         <Link
           href={`/results?q=${encodeURIComponent(product.title)}`}
           className="hover:underline"
-          style={{ font: "var(--text-small)", color: "var(--color-primary)" }}
+          style={{ font: "var(--rc-text-small)", color: "var(--rc-primary)" }}
         >
           ← All offers for this product
         </Link>

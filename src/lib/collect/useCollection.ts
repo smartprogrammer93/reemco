@@ -1,18 +1,36 @@
 "use client";
 
 /**
- * REEA-84 W1 T4 — client collection hook.
+ * REEA-84 W1 T4 — client collection hook, REEA-95 realtime-policy pass.
  *
  * Flow: start(productId) -> POST /api/products/:id/collect -> poll
- * GET /api/collect-jobs/:jobId every 1.5 s until terminal -> expose the job
- * snapshot for rendering. Double-clicks are deduped: a start while a start or
- * poll cycle is active is a no-op (AC8), matching the server-side in-flight
- * dedupe. retryRetailer re-runs one failed retailer (T6) and resumes polling.
+ * GET /api/collect-jobs/:jobId every 400 ms until terminal -> expose the job
+ * snapshot for rendering. The short poll interval keeps first-offer visibility
+ * inside the ≤1.0 s P50 budget (realtime-policy §5). Double-clicks are deduped:
+ * a start while a start or poll cycle is active is a no-op, matching the
+ * server-side in-flight dedupe. retryRetailer re-runs one failed retailer and
+ * resumes polling.
+ *
+ * Same-session repeat cache (realtime-policy §4, deliberately narrow): a
+ * module-level in-memory Map holds the last completed job per product for the
+ * lifetime of THIS browser tab session. Returning to the same product renders
+ * that snapshot immediately, labeled "Cached — refreshed at …", while a fresh
+ * collection runs in the background; the label clears when fresh data lands.
+ * A hard refresh or new tab starts with an empty Map — always fully fresh,
+ * never served from cache. No cookies / localStorage / cross-session ids.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CollectJob } from "@/lib/collect/types";
 
-const POLL_INTERVAL_MS = 1500;
+const POLL_INTERVAL_MS = 400;
+
+/** Same-tab session snapshot cache — cleared automatically on hard refresh. */
+const sessionJobs = new Map<string, CollectJob>();
+
+/** Test/admin helper: clear the same-tab snapshot cache. */
+export function resetSessionCacheForTests(): void {
+  sessionJobs.clear();
+}
 
 export type CollectionPhase =
   | { kind: "idle" }
@@ -21,7 +39,16 @@ export type CollectionPhase =
   | { kind: "terminal"; job: CollectJob };
 
 export function useCollection(productId: string) {
-  const [state, setState] = useState<CollectionPhase>({ kind: "idle" });
+  // Same-tab repeat: render the previous completed snapshot immediately, with
+  // a visible cache label that clears once fresh data lands.
+  const [state, setState] = useState<CollectionPhase>(() => {
+    const cached = sessionJobs.get(productId);
+    return cached ? { kind: "terminal", job: cached } : { kind: "idle" };
+  });
+  const [cachedNoticeAt, setCachedNoticeAt] = useState<string | null>(() => {
+    const cached = sessionJobs.get(productId);
+    return cached ? cached.finishedAt ?? cached.startedAt : null;
+  });
   const busyRef = useRef(false); // dedupe double-clicks / effect re-runs
   const restartsRef = useRef(0); // cross-instance 404 restart budget
   const startRef = useRef<((opts?: { force?: boolean }) => Promise<void>) | null>(null);
@@ -48,7 +75,9 @@ export function useCollection(productId: string) {
             pollTimerRef.current = setTimeout(tick, POLL_INTERVAL_MS);
             return;
           }
+          if (job.status === "complete") sessionJobs.set(productId, job);
           setState({ kind: "terminal", job });
+          setCachedNoticeAt(null); // fresh data landed — clear the cache label
           busyRef.current = false;
           return;
         }
@@ -78,7 +107,9 @@ export function useCollection(productId: string) {
               if (waitRes.ok) {
                 const job = (await waitRes.json()) as CollectJob;
                 if (mountedRef.current && job.status) {
+                  if (job.status === "complete") sessionJobs.set(productId, job);
                   setState({ kind: "terminal", job });
+                  setCachedNoticeAt(null);
                   busyRef.current = false;
                   return;
                 }
@@ -118,9 +149,11 @@ export function useCollection(productId: string) {
   // restart chain cannot loop forever (T6).
   const doStart = useCallback(
     async (opts: { force?: boolean } = {}) => {
-      if (busyRef.current) return; // AC8: dedupe double-clicks client-side too
+      if (busyRef.current) return; // dedupe double-clicks client-side too
       busyRef.current = true;
-      setState({ kind: "starting" });
+      // Background revalidation: keep a cached-labeled snapshot on screen;
+      // only a cold mount shows the starting state.
+      setState((prev) => (prev.kind === "idle" ? { kind: "starting" } : prev));
       try {
         const res = await fetch(`/api/products/${productId}/collect`, {
           method: "POST",
@@ -186,5 +219,5 @@ export function useCollection(productId: string) {
     [poll],
   );
 
-  return { state, start, retryRetailer };
+  return { state, cachedNoticeAt, start, retryRetailer };
 }

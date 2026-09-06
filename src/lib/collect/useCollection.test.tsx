@@ -11,7 +11,7 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useCollection } from "@/lib/collect/useCollection";
+import { resetSessionCacheForTests, useCollection } from "@/lib/collect/useCollection";
 
 type Route =
   | { match: "start"; jobId: string }
@@ -48,6 +48,7 @@ function respond(route: Route): {
 }
 
 beforeEach(() => {
+  resetSessionCacheForTests();
   calls.length = 0;
   routes = [];
   vi.stubGlobal(

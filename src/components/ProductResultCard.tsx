@@ -6,24 +6,28 @@ import { resolveOfferUrl } from "@/lib/links";
 import FreshnessBadge from "@/components/FreshnessBadge";
 
 /**
- * Reemco Theme v1 §3.3 result card / §3.4 product-detail anatomy.
- * All values come from the design tokens in globals.css — no hex literals.
- * variant="card": results list. variant="detail": product page (28px price hero).
+ * Reemco Design v3 result card (§5.2–§5.4). Single token namespace from
+ * globals.css — no hex literals. variant="card": results list.
+ * variant="detail": product-page identity chrome (the live CollectionPanel
+ * below owns the served prices/availability; this card's scraped figures are
+ * labeled reference data via the freshness chip). Price hierarchy per §5.3:
+ * effective price ≥28px is the loudest element, strikethrough beside it,
+ * savings pill directly after. Horizontal rows ≥768px via flex-wrap.
  */
 
 const STOCK_LABEL = { in: "In stock", out: "Out of stock" } as const;
 
 function StockDot({ state }: { state: keyof typeof STOCK_LABEL }) {
   return (
-    <span className="inline-flex items-center gap-1.5" style={{ font: "var(--text-body)" }}>
+    <span className="inline-flex items-center gap-1.5" style={{ font: "var(--rc-text-body)" }}>
       <span
         className="inline-block h-2 w-2 rounded-full"
         style={{
-          background: state === "in" ? "var(--color-deal)" : "var(--color-error)",
+          background: state === "in" ? "var(--rc-savings)" : "var(--rc-error)",
         }}
         aria-hidden
       />
-      <span style={{ color: "var(--color-ink-secondary)" }}>{STOCK_LABEL[state]}</span>
+      <span style={{ color: "var(--rc-body-text)" }}>{STOCK_LABEL[state]}</span>
     </span>
   );
 }
@@ -33,9 +37,9 @@ function RetailerChip({ children }: { children: React.ReactNode }) {
     <span
       className="label-token inline-flex items-center rounded px-2 py-0.5"
       style={{
-        color: "var(--color-ink-secondary)",
-        background: "var(--color-surface-muted)",
-        border: "1px solid var(--color-border)",
+        color: "var(--rc-body-text)",
+        background: "var(--rc-canvas)",
+        border: "1px solid var(--rc-line)",
       }}
     >
       {children}
@@ -46,64 +50,51 @@ function RetailerChip({ children }: { children: React.ReactNode }) {
 function PriceBlock({
   offer,
   isBest,
-  detail,
   coupon,
   oos = false,
 }: {
   offer: PriceOffer;
   isBest: boolean;
-  detail: boolean;
   coupon?: Coupon;
   oos?: boolean;
 }) {
   const eff = effectivePrice(offer, coupon);
   // REEA-75: ml-auto keeps the price right-aligned when the row wraps;
   // flex-wrap on the baseline row stops the Best badge clipping (M3).
+  const saved = offer.wasPrice != null && offer.wasPrice > offer.price;
   return (
     <div className="ml-auto shrink-0 text-right">
       <div className="flex flex-wrap items-baseline justify-end gap-x-2 gap-y-1">
         <span
           className="tabular"
           style={{
-            font: detail ? "var(--text-display)" : "var(--text-price)",
-            color: isBest ? "var(--color-deal)" : "var(--color-ink)",
+            font: "var(--rc-text-price)",
+            color: isBest ? "var(--rc-savings)" : "var(--rc-ink)",
             textDecoration: oos ? "line-through" : undefined,
           }}
         >
           {formatPrice(offer.price, offer.currency)}
         </span>
-        {isBest && (
-          <span
-            className="label-token rounded px-2 py-0.5"
-            style={{ background: "var(--color-deal-bg)", color: "var(--color-deal)" }}
-          >
-            Best
-          </span>
-        )}
-      </div>
-      {offer.wasPrice != null && offer.wasPrice > offer.price && (
-        <div className="mt-1 flex items-baseline justify-end gap-1">
-          {/* ▼ marks a real price drop (§3.3) */}
-          <span aria-hidden style={{ color: "var(--color-warn)", fontSize: "12px" }}>
-            ▼
-          </span>
+        {/* §5.3: strikethrough compare-at BESIDE the price, savings pill right
+            after it — savings emphasis without stealing the price's crown. */}
+        {saved && offer.wasPrice != null && (
           <span
             className="tabular"
-            style={{
-              font: "var(--text-body)",
-              color: "var(--color-ink-secondary)",
-              textDecoration: "line-through",
-            }}
+            style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)", textDecoration: "line-through" }}
           >
             {formatPrice(offer.wasPrice, offer.currency)}
           </span>
-        </div>
-      )}
+        )}
+        {saved && offer.wasPrice != null && (
+          <span className="savings-pill">Save {formatPrice(offer.wasPrice - offer.price, offer.currency)}</span>
+        )}
+        {isBest && <span className="best-flag">Best price</span>}
+      </div>
       {/* Effective-price line: computed value, always explained (§3.3) */}
       {eff != null && (
-        <p className="mt-1" style={{ font: "var(--text-small)", color: "var(--color-ink-secondary)" }}>
+        <p className="mt-1" style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)" }}>
           Effective{" "}
-          <span className="tabular" style={{ color: "var(--color-deal)" }}>
+          <span className="tabular" style={{ color: "var(--rc-savings)" }}>
             {formatPrice(eff, offer.currency)}
           </span>{" "}
           · incl. coupon {coupon?.code ?? coupon?.discount}
@@ -148,7 +139,7 @@ export default function ProductResultCard({
           narrow viewports instead of squeezing the title to one word/line. */}
       <div className="mt-2 flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
         {/* Title links to the product page; underline on hover only (§3.3) */}
-        <h2 className="min-w-0" style={{ font: "var(--text-title)", color: "var(--color-ink)" }}>
+        <h2 className="min-w-0" style={{ font: "var(--rc-text-title)", color: "var(--rc-ink)" }}>
           {detail ? (
             product.title
           ) : (
@@ -164,14 +155,13 @@ export default function ProductResultCard({
           <PriceBlock
             offer={best}
             isBest={isBest && !oos}
-            detail={detail}
             coupon={primaryCoupon}
             oos={oos}
           />
         )}
       </div>
 
-      {/* Coupon badge: dashed deal border, mono code, 32px copy hit area */}
+      {/* Coupon pill (§5.4): amber, value only; extras count beside it */}
       {primaryCoupon && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <CouponBadge coupon={primaryCoupon} />
@@ -182,7 +172,7 @@ export default function ProductResultCard({
                 .map((c) => c.code)
                 .filter(Boolean)
                 .join(", ")}
-              style={{ font: "var(--text-small)", color: "var(--color-ink-secondary)" }}
+              style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)" }}
             >
               +{extraCoupons} more
             </span>
@@ -193,10 +183,10 @@ export default function ProductResultCard({
       {/* REEA-65 §4.2: the card stays cheap — retailer count + lowest price
           only; the full per-retailer comparison lives on the detail view. */}
       {!detail && best && (
-        <p className="mt-3" style={{ font: "var(--text-body)", color: "var(--color-ink-secondary)" }}>
+        <p className="mt-3" style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
           <span className="tabular">{offers.length}</span>{" "}
           {offers.length === 1 ? "retailer" : "retailers"} · from{" "}
-          <span className="tabular" style={{ fontWeight: 600, color: "var(--color-ink)" }}>
+          <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
             {formatPrice(best.price, best.currency)}
           </span>
         </p>
@@ -209,7 +199,7 @@ export default function ProductResultCard({
           One rule for all retailers, labeled with its assumption (§7.2). */}
       {detail && offers.length > 0 && (
         <section aria-label="Prices and availability by retailer" className="mt-4">
-          <h3 className="label-token mb-1" style={{ color: "var(--color-ink-secondary)" }}>
+          <h3 className="label-token mb-1" style={{ color: "var(--rc-body-text)" }}>
             Prices at retailers · excl. delivery
           </h3>
           <ul>
@@ -222,16 +212,16 @@ export default function ProductResultCard({
                 <li
                   key={`${o.merchant}-${o.url}`}
                   className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 py-1"
-                  style={{ borderTop: "1px solid var(--color-border)" }}
+                  style={{ borderTop: "1px solid var(--rc-line)" }}
                 >
                   <span className="flex items-center gap-2">
-                    <span style={{ font: "var(--text-body)", color: "var(--color-ink-secondary)" }}>
+                    <span style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
                       {o.merchant}
                     </span>
                     {isLowest && (
                       <span
                         className="label-token rounded px-2 py-0.5"
-                        style={{ background: "var(--color-deal-bg)", color: "var(--color-deal)" }}
+                        style={{ background: "var(--rc-savings-bg)", color: "var(--rc-savings)" }}
                       >
                         Lowest listed price
                       </span>
@@ -243,7 +233,7 @@ export default function ProductResultCard({
                     <StockDot state={o.inStock ? "in" : "out"} />
                     <span
                       className="tabular"
-                      style={{ font: "var(--text-body)", fontWeight: 600, color: "var(--color-ink)" }}
+                      style={{ font: "var(--rc-text-body)", fontWeight: 600, color: "var(--rc-ink)" }}
                     >
                       {formatPrice(o.price, o.currency)}
                     </span>
@@ -272,7 +262,7 @@ export default function ProductResultCard({
       {/* §3.4 variations: 32px chips, selected = 2px primary border */}
       {detail && product.variations.length > 0 && (
         <section aria-label="Variations" className="mt-4">
-          <h3 className="label-token mb-2" style={{ color: "var(--color-ink-secondary)" }}>
+          <h3 className="label-token mb-2" style={{ color: "var(--rc-body-text)" }}>
             Variations
           </h3>
           <ul className="flex flex-wrap gap-2">
@@ -281,11 +271,11 @@ export default function ProductResultCard({
                 key={v.id}
                 className="flex h-8 min-w-8 items-center justify-center rounded border px-2"
                 style={{
-                  font: "var(--text-body)",
+                  font: "var(--rc-text-body)",
                   fontWeight: 500,
                   borderWidth: i === 0 ? 2 : 1,
-                  borderColor: i === 0 ? "var(--color-primary)" : "var(--color-border)",
-                  color: i === 0 ? "var(--color-primary)" : "var(--color-ink-secondary)",
+                  borderColor: i === 0 ? "var(--rc-primary)" : "var(--rc-line)",
+                  color: i === 0 ? "var(--rc-primary)" : "var(--rc-body-text)",
                 }}
               >
                 {v.label}
@@ -304,7 +294,7 @@ export default function ProductResultCard({
       {/* §3.4 alternatives: 48px rows, right-aligned tabular price, hairline separators */}
       {detail && product.alternatives.length > 0 && (
         <section aria-label="Alternatives" className="mt-4">
-          <h3 className="label-token mb-2" style={{ color: "var(--color-ink-secondary)" }}>
+          <h3 className="label-token mb-2" style={{ color: "var(--rc-body-text)" }}>
             Alternatives
           </h3>
           <ul>
@@ -313,18 +303,18 @@ export default function ProductResultCard({
             {product.alternatives.map((a) => (
               <li
                 key={a.productId}
-                className="flex min-h-12 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded px-1 py-1 hover:bg-[var(--color-surface-muted)]"
+                className="flex min-h-12 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded px-1 py-1 hover:bg-[var(--rc-canvas)]"
               >
                 <a
                   href={`/results?q=${encodeURIComponent(a.title)}`}
                   className="min-w-0 hover:underline"
-                  style={{ font: "var(--text-body)", fontWeight: 500, color: "var(--color-ink)" }}
+                  style={{ font: "var(--rc-text-body)", fontWeight: 500, color: "var(--rc-ink)" }}
                 >
                   {a.title}
                 </a>
                 <span
                   className="tabular ml-auto shrink-0"
-                  style={{ font: "var(--text-body)", fontWeight: 600, color: "var(--color-ink)" }}
+                  style={{ font: "var(--rc-text-body)", fontWeight: 600, color: "var(--rc-ink)" }}
                 >
                   from {formatPrice(a.fromPrice, best?.currency ?? "USD")}
                 </span>

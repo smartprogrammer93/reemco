@@ -56,9 +56,16 @@ export interface CollectJob {
   previousJobId?: string;
 }
 
-export const CACHE_TTL_MS = 10 * 60 * 1000; // AC5 freshness rule
-export const PER_RETAILER_TIMEOUT_MS = 20 * 1000; // T2
-export const OVERALL_BUDGET_MS = 25 * 1000; // T2 / AC7
+export const CACHE_TTL_MS = 10 * 60 * 1000; // labeled-repeat freshness window
+/**
+ * REEA-95 realtime-policy §5 latency budget: each adapter gets its own 4 s
+ * timeout so one slow retailer cannot push the page past the full-set budget;
+ * 6 s soft ceiling renders what arrived while stragglers keep in-progress
+ * chips; 10 s hard ceiling stops waiting entirely.
+ */
+export const PER_RETAILER_TIMEOUT_MS = 4 * 1000; // per-adapter, independent
+export const SOFT_CEILING_MS = 6 * 1000; // render arrived offers, keep chips
+export const OVERALL_BUDGET_MS = 10 * 1000; // hard ceiling
 
 /** True when a completed job is fresh enough to serve as cached (AC5). */
 export function isFreshCompleted(

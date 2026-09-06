@@ -1,87 +1,101 @@
 @import "tailwindcss";
 
 /*
- * Reemco Theme v1 — design tokens (REEA-29 spec doc `reemco-theme-tokens-v1`).
- * Single source of truth: every color/size/weight/radius lives in this :root
- * block. Components reference vars only — zero hex literals outside :root.
- * Light theme only; dark mode is a non-goal this pass.
+ * Reemco Design v3 — "Aurora" (REEA-94 design-v3 §4).
+ * ONE token namespace (`--rc-*`); it replaces BOTH former blocks — the legacy
+ * `--color-*` v1 layer and the Pulse v2 layer — with no aliasing left behind
+ * (design-v3 migration rule + AC-1). Components reference vars only; zero hex
+ * literals outside :root. The signature moment (§5.6): live offers arriving —
+ * per-retailer chips fill and offer cards rise as data lands.
  */
 :root {
-  /* Surfaces */
-  --color-surface: #ffffff; /* cards, page base */
-  --color-surface-muted: #f6f7f9; /* page canvas behind cards, secondary surface */
-  --color-border: #e4e7eb; /* 1px card borders, dividers */
+  color-scheme: light dark;
 
-  /* Text */
-  --color-ink: #111827; /* primary text, headings */
-  --color-ink-secondary: #5b6472; /* metadata, retailer, availability labels */
+  /* Canvas & ink */
+  --rc-canvas: #f4f6fb;
+  --rc-surface: #ffffff;
+  --rc-ink: #0b1220;
+  --rc-body-text: #3a4459;
+  --rc-muted: #6b7385;
+  --rc-line: #e3e7f0;
+  --rc-line-strong: #c9d2e3;
 
-  /* Brand & semantics */
-  --color-primary: #0b5fff; /* links, primary buttons, focus rings */
-  --color-primary-hover: #094cd1; /* hover (≈ -8% lightness) */
-  --color-deal: #0e7c4a; /* best effective price, in stock, coupon text */
-  --color-deal-bg: #e7f4ee; /* coupon/badge tint background */
-  --color-warn: #b4530a; /* low stock, stale-price, price-drop accent */
-  --color-warn-text: #a34606; /* warn-colored TEXT on tint backgrounds (spec r2: AA on warn-bg) */
-  --color-warn-bg: #fbeee4; /* low-stock tint background */
-  --color-error: #b42318; /* out of stock, destructive */
-  --color-error-bg: #fbeae9; /* error tint background */
+  /* Purposeful color — used ONLY on the hero band, live-progress, best-price
+     flag and primary controls (§5.1–§5.3, AC-7). */
+  --rc-primary: #4f46e5;
+  --rc-primary-deep: #3730a3;
+  --rc-accent: #7c3aed;
+  --rc-on-primary: #ffffff;
+  --rc-hero-gradient: linear-gradient(140deg, #3730a3 0%, #4f46e5 45%, #7c3aed 100%);
+  --rc-primary-tint: #eef2ff;
 
-  /* Type */
-  --font-sans: var(--font-inter), -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: ui-monospace, "SFMono-Regular", Menlo, monospace; /* coupon codes only */
-  /* Scale (size/line, weight) — the ONLY sizes allowed */
-  --text-display: 700 28px/34px var(--font-sans); /* page title (results: "42 results for …") */
-  --text-title: 600 16px/22px var(--font-sans); /* result card product title */
-  --text-price: 700 20px/24px var(--font-sans); /* price hero on result card */
-  --text-body: 400 14px/20px var(--font-sans); /* base body, metadata */
-  --text-small: 400 13px/18px var(--font-sans); /* timestamps, disclosure, helper text */
-  --text-label: 500 12px/16px var(--font-sans); /* badges/chips; letter-spacing: 0.02em; uppercase */
+  /* Semantic — pair each foreground with its tint (all ≥4.5:1, AC-3) */
+  --rc-savings: #15803d; --rc-savings-bg: #dcfce7;
+  --rc-fresh: #b45309;    --rc-fresh-bg: #fef3c7;
+  --rc-error: #dc2626;    --rc-error-bg: #fee2e2;
 
-  /* Spacing — 4px grid only: 4 / 8 / 12 / 16 / 24 / 32 / 48 */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-6: 24px;
-  --space-8: 32px;
-  --space-12: 48px;
+  /* Fluid type scale — mobile tight, desktop bold (AC-2) */
+  --rc-font-display: var(--font-space-grotesk), ui-sans-serif, sans-serif;
+  --rc-font-body: var(--font-inter), ui-sans-serif, sans-serif;
+  --rc-font-mono: ui-monospace, "SFMono-Regular", Menlo, monospace; /* coupon codes only */
+  --rc-text-display: 700 clamp(32px, 4.5vw, 48px)/1.08 var(--rc-font-display);
+  --rc-text-h2: 650 24px/1.25 var(--rc-font-display);
+  --rc-text-price: 700 clamp(28px, 3vw, 36px)/1.1 var(--rc-font-body);
+  --rc-text-title: 600 16px/1.35 var(--rc-font-body);
+  --rc-text-body: 400 15px/1.6 var(--rc-font-body);
+  --rc-text-small: 400 13px/1.5 var(--rc-font-body);
+  --rc-text-label: 600 12px/1.4 var(--rc-font-body);
 
-  /* Shape & elevation */
-  --radius-card: 8px; /* cards */
-  --radius-control: 6px; /* buttons, inputs, badges */
-  --shadow-card: 0 1px 2px rgba(17, 24, 39, 0.06);
+  /* Space rhythm (4px base; sections on 8) */
+  --rc-space-1: 4px; --rc-space-2: 8px; --rc-space-3: 12px; --rc-space-4: 16px;
+  --rc-space-6: 24px; --rc-space-8: 32px; --rc-space-12: 48px; --rc-space-16: 64px;
+  --rc-section-pad: clamp(48px, 7vw, 96px);
+  --rc-layout-max-w: 1120px;
+  --rc-gutter: 24px;
 
-  /* Focus (never remove) */
-  --focus-ring: 0 0 0 3px rgba(11, 95, 255, 0.35);
+  /* Shape */
+  --rc-radius-control: 10px;
+  --rc-radius-card: 16px;
+  --rc-radius-pill: 999px;
 
-  /* Layout */
-  --layout-max-w: 1040px; /* content column */
-  --layout-gutter: 24px; /* 16px ≤640px */
-}
+  /* Elevation ladder — exactly three levels (P4) */
+  --rc-elev-1: 0 1px 2px rgba(11, 18, 32, 0.06), 0 2px 8px rgba(11, 18, 32, 0.05);
+  --rc-elev-2: 0 2px 4px rgba(11, 18, 32, 0.06), 0 8px 24px rgba(11, 18, 32, 0.08);
+  --rc-elev-3: 0 12px 32px rgba(11, 18, 32, 0.12);
 
-@theme inline {
-  --color-surface: var(--color-surface);
-  --color-surface-muted: var(--color-surface-muted);
-  --color-border: var(--color-border);
-  --color-ink: var(--color-ink);
-  --color-ink-secondary: var(--color-ink-secondary);
-  --color-primary: var(--color-primary);
-  --color-deal: var(--color-deal);
-  --font-sans: var(--font-sans);
+  /* Interaction — motion marks state changes and arrivals only (P2) */
+  --rc-focus-ring: 0 0 0 3px rgba(79, 70, 229, 0.4);
+  --rc-motion-fast: 150ms;
+  --rc-motion-arrival: 300ms;
+  --rc-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --rc-stagger: 45ms;
+
+  /* Dark-mode token map — updated to match §4 values (design-v3 §3: activated
+     in the designer polish pass, REEA-96; kept inert here, no selector below
+     attaches it). */
+  --rc-dark-canvas: #0b1220;
+  --rc-dark-surface: #151c2c;
+  --rc-dark-line: #26304a;
+  --rc-dark-line-strong: #3b4a68;
+  --rc-dark-ink: #f1f5f9;
+  --rc-dark-body-text: #cbd5e1;
+  --rc-dark-muted: #94a3b8;
+  --rc-dark-primary: #818cf8;
+  --rc-dark-savings: #4ade80;
+  --rc-dark-fresh: #fbbf24;
+  --rc-dark-error: #f87171;
 }
 
 body {
-  background: var(--color-surface-muted);
-  color: var(--color-ink);
-  font-family: var(--font-sans);
-  line-height: 1.5;
+  background: var(--rc-canvas);
+  color: var(--rc-body-text);
+  font: var(--rc-text-body);
 }
 
 h1,
 h2,
 h3 {
-  line-height: 1.2;
+  color: var(--rc-ink);
 }
 
 /* Tabular numerals on every price, count, and timestamp */
@@ -89,63 +103,115 @@ h3 {
   font-variant-numeric: tabular-nums;
 }
 
-/* §3.1 sticky header */
+/* Header — sticky white surface with a hairline (§5.2 restraint) */
 .site-header {
   position: sticky;
   top: 0;
   z-index: 20;
   height: 64px;
-  background: var(--color-surface);
-  border-bottom: 1px solid var(--color-border);
+  background: var(--rc-surface);
+  border-bottom: 1px solid var(--rc-line);
 }
 
-/* Shared focus treatment: primary border + focus ring, never removed */
+/* Shared focus treatment (§5 P5): visible ring on inputs, buttons, links. */
 .focusable:focus-visible,
 input:focus-visible,
 button:focus-visible,
 a:focus-visible {
   outline: none;
-  border-color: var(--color-primary);
-  box-shadow: var(--focus-ring);
+  border-color: var(--rc-primary);
+  box-shadow: var(--rc-focus-ring);
 }
 
-/* §3.3 result card */
+/* Offer/result card (§5.2): elev-1 → elev-2 + lift on hover/focus (AC-4) */
 .result-card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-card);
-  padding: var(--space-4);
-  box-shadow: var(--shadow-card);
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-line);
+  border-radius: var(--rc-radius-card);
+  padding: var(--rc-space-6);
+  box-shadow: var(--rc-elev-1);
+  transition:
+    transform var(--rc-motion-fast) var(--rc-ease-out),
+    box-shadow var(--rc-motion-fast) var(--rc-ease-out),
+    border-color var(--rc-motion-fast) var(--rc-ease-out);
+}
+
+.result-card:hover,
+.result-card:focus-within {
+  transform: translateY(-2px);
+  box-shadow: var(--rc-elev-2);
+  border-color: var(--rc-line-strong);
 }
 
 /* Out-of-stock card: honest, muted, non-buyable */
 .result-card.is-oos {
-  opacity: 0.6;
+  opacity: 0.7;
 }
 
-/* §3.3 coupon badge */
+/* Best offer (§5.3): elev-2 permanently + brand border */
+.result-card.is-best {
+  border-color: var(--rc-primary);
+  box-shadow: var(--rc-elev-2);
+}
+
+/* Coupon badge (§5.4): amber pill, coupon VALUE only */
 .coupon-badge {
-  border: 1px dashed var(--color-deal);
-  background: var(--color-deal-bg);
-  border-radius: var(--radius-control);
-  padding: 4px 8px;
+  background: var(--rc-fresh-bg);
+  color: var(--rc-fresh);
+  border-radius: var(--rc-radius-pill);
+  padding: 2px 10px;
+  font: var(--rc-text-small);
 }
 
 .label-token {
-  font: var(--text-label);
+  font: var(--rc-text-label);
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
 
-/* §3.3 sponsored chip: warn text on warn tint via the r2 AA-safe token */
-.sponsored-chip {
-  font: var(--text-label);
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  background: var(--color-warn-bg);
-  color: var(--color-warn-text);
-  border-radius: var(--radius-control);
-  padding: 2px 8px;
+/* Savings pill (§5.3): sits directly after the price — the number the user
+   decides on stays the loudest element (P1). */
+.savings-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--rc-radius-pill);
+  background: var(--rc-savings-bg);
+  color: var(--rc-savings);
+  padding: 2px 10px;
+  font: var(--rc-text-small);
+  font-weight: 600;
+}
+
+/* Best-price flag (§5.3): primary tint — the only gradient-adjacent moment
+   on a card besides the progress rail. */
+.best-flag {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--rc-radius-pill);
+  background: var(--rc-primary-tint);
+  color: var(--rc-primary-deep);
+  padding: 2px 10px;
+  font: var(--rc-text-label);
+}
+
+/* Freshness / provenance chip (§5.5): dot + relative time, never omitted */
+.fresh-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: var(--rc-text-small);
+  color: var(--rc-muted);
+}
+
+.fresh-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--rc-radius-pill);
+  background: var(--rc-savings); /* < 10 min */
+}
+
+.fresh-dot.is-late {
+  background: var(--rc-fresh); /* ≥ 10 min — amber */
 }
 
 /* Primary action (Search / Go to store / Retry) */
@@ -153,160 +219,138 @@ a:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-control);
-  background: var(--color-primary);
-  color: var(--color-surface);
-  font: 600 var(--text-body);
+  border-radius: var(--rc-radius-control);
+  background: var(--rc-primary);
+  color: var(--rc-on-primary);
+  font-weight: 600;
+  transition: background var(--rc-motion-fast) var(--rc-ease-out);
 }
 
 .btn-primary:hover {
-  background: var(--color-primary-hover);
+  background: var(--rc-primary-deep);
 }
 
-/* Text input (hero 48px / compact 40px) */
+/* Outline action (§5.3): CTA on non-best offer cards */
+.btn-outline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--rc-radius-control);
+  border: 1px solid var(--rc-primary);
+  color: var(--rc-primary);
+  background: transparent;
+  font-weight: 600;
+  transition: background var(--rc-motion-fast) var(--rc-ease-out);
+}
+
+.btn-outline:hover {
+  background: var(--rc-primary-tint);
+}
+
+/* Text input (hero 52px / compact 40px, §5.1) */
 .text-input {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-control);
-  background: var(--color-surface);
-  color: var(--color-ink);
-  font: var(--text-body);
+  border: 1px solid var(--rc-line);
+  border-radius: var(--rc-radius-control);
+  background: var(--rc-surface);
+  color: var(--rc-ink);
+  font: var(--rc-text-body);
+  box-shadow: var(--rc-elev-1);
 }
 
 .text-input::placeholder {
-  color: var(--color-ink-secondary);
+  color: var(--rc-muted);
 }
 
-/* §3.5 skeleton pulse */
-@keyframes skeleton-pulse {
+/* Hero band (§5.1): full-bleed gradient, rounded bottom, display headline */
+.hero-band {
+  background: var(--rc-hero-gradient);
+  border-radius: 0 0 24px 24px;
+  padding-block: var(--rc-section-pad);
+  padding-inline: var(--rc-gutter);
+}
+
+.hero-title {
+  font: var(--rc-text-display);
+  letter-spacing: -0.02em;
+  color: var(--rc-on-primary);
+}
+
+.hero-sub {
+  color: rgba(255, 255, 255, 0.9);
+  font: var(--rc-text-body);
+}
+
+/* Preset-query chips (§5.1): pills in primary tint */
+.query-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--rc-radius-pill);
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--rc-on-primary);
+  padding: 6px 14px;
+  font: var(--rc-text-small);
+  transition: background var(--rc-motion-fast) var(--rc-ease-out);
+}
+
+.query-pill:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+/* Below-the-fold chips on canvas (results empty state) */
+.query-pill-on-light {
+  background: var(--rc-primary-tint);
+  color: var(--rc-primary);
+}
+
+/* Per-slot skeleton while a retailer is still fetching (§6 realtime-policy):
+   light, per-slot — never a full-page simultaneous block (design AC-5). */
+@keyframes rc-sheen {
   0%,
   100% {
     opacity: 1;
   }
   50% {
-    opacity: 0.6;
+    opacity: 0.55;
   }
 }
 
-.skeleton-block {
-  background: var(--color-surface-muted);
-  border-radius: 8px;
-  animation: skeleton-pulse 1.2s ease-in-out infinite;
+.r2-skeleton {
+  background: var(--rc-line);
+  border-radius: var(--rc-radius-control);
+  animation: rc-sheen 1.2s ease-in-out infinite;
 }
 
-@media (max-width: 640px) {
-  .result-card {
-    padding: var(--space-3);
-  }
-  /* REEA-75: the stacked header search needs two rows under sm, so the
-     sticky header grows with its content instead of clipping it. */
-  .site-header {
-    height: auto;
-  }
-}
+/* ============================================================================
+ * Collection-progress rail — the signature moment (design-v3 §5.6 / realtime
+ * -policy §6). Outlined retailer chips fill as offers land; landed cards rise;
+ * the rail collapses once every slot is filled.
+ * ========================================================================== */
 
-/*
- * ============================================================================
- * Theme v2 — "Reemco Pulse" (REEA-84 plan §2.2, REEA-90 C7)
- * Second token layer alongside theme v1; v1 pages are untouched until they
- * adopt v2 components. Every value below is a token — components reference
- * vars only, zero hex literals outside this file.
- * ============================================================================
- */
-:root {
-  /* Color — brand & semantics (plan §2.2) */
-  --rc-primary: #4f46e5; /* electric indigo: actions, focus, links */
-  --rc-primary-hover: #4338ca;
-  --rc-savings: #16a34a; /* best price / savings */
-  --rc-savings-tint: #dcfce7; /* savings badge tint */
-  --rc-stale: #d97706; /* stale / cached signal */
-  --rc-stale-tint: #fef3c7;
-  --rc-error: #dc2626; /* retailer failed */
-  --rc-error-tint: #fee2e2;
-  /* G1 §1.1 AA-safe text-on-tint tokens — tinted text always uses these */
-  --rc-savings-on-tint: #14532d; /* 7.2:1 on savings tint */
-  --rc-stale-on-tint: #78350f; /* 8.1:1 on stale tint */
-  --rc-error-on-tint: #7f1d1d; /* 8.4:1 on error tint */
-  --rc-primary-subtle: #eef2ff; /* selected/active surface tint, bar track */
-  --rc-ink: #0f172a; /* headings */
-  --rc-body: #334155; /* body text */
-  --rc-muted: #64748b; /* metadata, provenance */
-  --rc-border: #e2e8f0;
-  --rc-border-strong: #cbd5e1; /* input borders, hover borders */
-  --rc-canvas: #f8fafc; /* page background */
-  --rc-surface: #ffffff; /* cards */
-
-  /* Typography — Space Grotesk display + Inter body, tabular prices */
-  --rc-font-display: var(--font-space-grotesk), var(--font-inter), sans-serif;
-  --rc-font-body: var(--font-inter), sans-serif;
-  /* Type scale 12/14/16/20/24/32; 1.2 display, 1.5 body line-height */
-  --rc-text-12: 500 12px/16px var(--rc-font-body);
-  --rc-text-14: 400 14px/21px var(--rc-font-body);
-  --rc-text-16: 400 16px/24px var(--rc-font-body);
-  --rc-text-20: 600 20px/24px var(--rc-font-body);
-  --rc-text-24: 600 24px/29px var(--rc-font-display);
-  --rc-text-32: 700 32px/38px var(--rc-font-display);
-  --rc-text-price: 600 28px/34px var(--rc-font-body); /* offer-card price hero */
-
-  /* Shape & elevation — 4px grid spacing reused from v1 (--space-*) */
-  --rc-radius-control: 8px;
-  --rc-radius-card: 14px;
-  --rc-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --rc-shadow-md: 0 4px 12px rgba(15, 23, 42, 0.1);
-  --rc-ring: 0 0 0 2px var(--rc-surface), 0 0 0 4px var(--rc-primary); /* 2px brand ring */
-  --rc-ring-focus: 0 0 0 3px rgba(79, 70, 229, 0.4); /* G1 §1.1 focus halo */
-
-  /* Motion — 150ms standard, 300ms progress moments, 40ms card stagger */
-  --rc-motion-fast: 150ms;
-  --rc-motion-slow: 300ms;
-  --rc-motion-ease: cubic-bezier(0, 0, 0.2, 1); /* G1 §3 ease-out curve */
-  --rc-stagger: 40ms;
-
-  /* Dark-mode token map — DEFINED NOW, activated in v2.1 (plan §2.2).
-     Not applied: no selector below attaches it to the document. */
-  --rc-dark-canvas: #0b1120;
-  --rc-dark-surface: #111827;
-  --rc-dark-border: #1f2937;
-  --rc-dark-border-strong: #374151;
-  --rc-dark-ink: #f1f5f9;
-  --rc-dark-body: #cbd5e1;
-  --rc-dark-muted: #94a3b8;
-  --rc-dark-primary: #818cf8;
-  --rc-dark-savings: #4ade80;
-  --rc-dark-stale: #fbbf24;
-  --rc-dark-error: #f87171;
-}
-
-/* §2.6 signature moment: header progress bar with moving pulse sheen. */
 .pulse-bar {
   position: relative;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--rc-border);
+  height: 6px;
+  border-radius: var(--rc-radius-pill);
+  background: var(--rc-line);
   overflow: hidden;
 }
 
 .pulse-bar-fill {
   position: absolute;
   inset: 0 auto 0 0;
-  border-radius: 999px;
-  background: var(--rc-primary);
-  transition: width var(--rc-motion-slow) var(--rc-motion-ease);
+  border-radius: var(--rc-radius-pill);
+  background: var(--rc-hero-gradient);
+  transition: width var(--rc-motion-arrival) var(--rc-ease-out);
 }
 
 .pulse-bar-fill::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(255, 255, 255, 0.45),
-    transparent
-  );
-  animation: pulse-sheen 1.4s ease-in-out infinite;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+  animation: rc-sheen 1.4s ease-in-out infinite;
 }
 
-/* Completion: the bar snaps green (§2.6). */
+/* Completion: the bar settles to savings-green. */
 .pulse-bar-fill.is-done {
   background: var(--rc-savings);
 }
@@ -316,41 +360,84 @@ a:focus-visible {
   content: none;
 }
 
-@keyframes pulse-sheen {
+/* Rail of retailer chips: outlined → filled on arrival. */
+.rc-chip-rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--rc-space-2);
+  align-items: center;
+}
+
+.rc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--rc-line-strong);
+  border-radius: var(--rc-radius-pill);
+  background: transparent;
+  color: var(--rc-muted);
+  padding: 4px 12px;
+  font: var(--rc-text-small);
+  transition:
+    background var(--rc-motion-fast) var(--rc-ease-out),
+    border-color var(--rc-motion-fast) var(--rc-ease-out),
+    color var(--rc-motion-fast) var(--rc-ease-out);
+}
+
+.rc-chip.is-collecting {
+  border-color: var(--rc-primary);
+  color: var(--rc-primary);
+}
+
+/* Landed: chip fills with the brand and pulses once (§5.6). */
+.rc-chip.is-done {
+  border-color: transparent;
+  background: var(--rc-primary);
+  color: var(--rc-on-primary);
+  animation: rc-chip-pulse var(--rc-motion-fast) var(--rc-ease-out);
+}
+
+.rc-chip.is-failed {
+  border-color: var(--rc-error);
+  background: var(--rc-error-bg);
+  color: var(--rc-error);
+}
+
+@keyframes rc-chip-pulse {
   0% {
-    transform: translateX(-100%);
+    box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.45);
   }
   100% {
-    transform: translateX(100%);
+    box-shadow: 0 0 0 6px rgba(79, 70, 229, 0);
   }
 }
 
-/* Per-retailer row states: skeleton → spinner → check / red chip (§2.6). */
+/* In-progress spinner inside a collecting chip. */
 .pulse-spinner {
-  width: 14px;
-  height: 14px;
-  border-radius: 999px;
-  border: 2px solid var(--rc-border);
+  width: 12px;
+  height: 12px;
+  border-radius: var(--rc-radius-pill);
+  border: 2px solid var(--rc-line);
   border-top-color: var(--rc-primary);
-  animation: pulse-spin 0.8s linear infinite;
+  animation: rc-spin 0.8s linear infinite;
 }
 
-@keyframes pulse-spin {
+@keyframes rc-spin {
   to {
     transform: rotate(360deg);
   }
 }
 
-/* Offer-card cascade on completion: staggered 40ms, 300ms total (§2.6). */
+/* Offer-card arrival (§5.6): rise 8px→0, stagger 45ms. */
 .pulse-cascade {
-  animation: pulse-rise var(--rc-motion-slow) var(--rc-motion-ease) both;
+  animation: rc-rise var(--rc-motion-arrival) var(--rc-ease-out) both;
   animation-delay: calc(var(--cascade-index, 0) * var(--rc-stagger));
 }
 
-@keyframes pulse-rise {
+@keyframes rc-rise {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -358,63 +445,51 @@ a:focus-visible {
   }
 }
 
-/* Freshness live dot — green pulse <2min (§2.4), same pulse language. */
+/* Cached-repeat label chip (realtime-policy §4): clears when fresh lands. */
+.cached-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--rc-radius-pill);
+  background: var(--rc-fresh-bg);
+  color: var(--rc-fresh);
+  padding: 2px 10px;
+  font: var(--rc-text-small);
+}
+
+/* Live dot for freshly collected offers (< 10 min → green pulse). */
 .live-dot {
   width: 8px;
   height: 8px;
-  border-radius: 999px;
+  border-radius: var(--rc-radius-pill);
   background: var(--rc-savings);
-  animation: live-pulse 2s ease-in-out infinite;
+  animation: rc-live-pulse 2s ease-in-out infinite;
 }
 
-@keyframes live-pulse {
+@keyframes rc-live-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.4);
+    box-shadow: 0 0 0 0 rgba(21, 128, 61, 0.4);
   }
   50% {
-    box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.4);
+    box-shadow: 0 0 0 4px rgba(21, 128, 61, 0.4);
   }
 }
 
-/* Micro-interactions (§2.5): hover lift + brand ring, press scale. */
-.r2-card {
-  background: var(--rc-surface);
-  border: 1px solid var(--rc-border);
-  border-radius: var(--rc-radius-card);
-  box-shadow: var(--rc-shadow-sm);
-  transition:
-    transform var(--rc-motion-fast) var(--rc-motion-ease),
-    box-shadow var(--rc-motion-fast) var(--rc-motion-ease),
-    border-color var(--rc-motion-fast) var(--rc-motion-ease);
-}
-
-.r2-card.is-best {
-  border-color: var(--rc-savings);
-}
-
-.r2-card:hover,
-.r2-card:focus-within {
-  transform: translateY(-2px);
-  box-shadow: var(--rc-shadow-md), var(--rc-ring);
-}
-
+/* Micro-interactions: press feedback on primary controls. */
 .r2-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: var(--rc-radius-control);
   background: var(--rc-primary);
-  color: var(--rc-surface);
-  font: var(--rc-text-14);
+  color: var(--rc-on-primary);
+  font: var(--rc-text-body);
   font-weight: 600;
-  transition:
-    transform var(--rc-motion-fast) var(--rc-motion-ease),
-    background var(--rc-motion-fast) var(--rc-motion-ease);
+  transition: background var(--rc-motion-fast) var(--rc-ease-out);
 }
 
 .r2-btn:hover {
-  background: var(--rc-primary-hover);
+  background: var(--rc-primary-deep);
 }
 
 .r2-btn:active {
@@ -423,40 +498,58 @@ a:focus-visible {
 
 .r2-btn:focus-visible {
   outline: none;
-  box-shadow: var(--rc-ring-focus);
+  box-shadow: var(--rc-focus-ring);
 }
 
-/* Skeletons match the final offer-card layout exactly (§2.5). */
-.r2-skeleton {
-  background: var(--rc-border);
-  border-radius: var(--rc-radius-control);
-  animation: skeleton-pulse 1.2s ease-in-out infinite;
-}
-
-/* Reduced motion: kill sheen, spin, cascade, live pulse, lifts (D-AC4). */
+/* Reduced motion (§5.7): keep ≤100ms opacity fades; drop translate/stagger/
+   pulse motion. No other behavior change. */
 @media (prefers-reduced-motion: reduce) {
-  .pulse-bar-fill,
-  .pulse-bar-fill::after,
-  .r2-card,
+  .result-card,
+  .btn-primary,
+  .btn-outline,
+  .query-pill,
   .r2-btn {
-    transition: none;
-    animation: none;
+    transition: opacity 100ms linear;
   }
 
-  .pulse-bar-fill::after {
-    content: none;
-  }
-
-  .pulse-cascade,
-  .live-dot,
-  .pulse-spinner,
-  .r2-skeleton {
-    animation: none;
-  }
-
-  .r2-card:hover,
-  .r2-card:focus-within,
+  .result-card:hover,
+  .result-card:focus-within,
   .r2-btn:active {
     transform: none;
+  }
+
+  .pulse-bar-fill,
+  .pulse-bar-fill::after,
+  .pulse-cascade,
+  .pulse-spinner,
+  .live-dot,
+  .r2-skeleton,
+  .rc-chip.is-done {
+    animation: none;
+  }
+
+  .pulse-cascade {
+    animation: rc-fade 100ms linear both;
+  }
+
+  @keyframes rc-fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}
+
+@media (max-width: 640px) {
+  /* REEA-75: the stacked header search needs two rows under sm, so the
+     sticky header grows with its content instead of clipping it. */
+  .site-header {
+    height: auto;
+  }
+
+  .result-card {
+    padding: var(--rc-space-4);
   }
 }

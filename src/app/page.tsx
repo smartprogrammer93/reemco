@@ -1,41 +1,41 @@
 import Link from "next/link";
 import SearchForm from "@/components/SearchForm";
 
-/* Theme v1 §3.2: hero search on surface-muted; no fake content, no fake logos. */
+/* Design v3 §5.1: full-bleed Aurora gradient band, display headline ≥32px on
+   desktop, left-aligned ≥768px, preset-query pills, trust caption below. */
 const EXAMPLES = ["iPhone 17 Pro", "WH-1000XM6", "Scope II keyboard"];
 
 export default function Home() {
   return (
-    <section
-      className="flex justify-center"
-      style={{ background: "var(--color-surface-muted)", padding: "var(--space-12) 0" }}
-    >
-      <div className="w-full px-6" style={{ maxWidth: 640 }}>
-        <h1 className="text-center" style={{ font: "var(--text-display)", color: "var(--color-ink)" }}>
-          Find the real best price.
-        </h1>
-        <p
-          className="text-center"
-          style={{ font: "var(--text-body)", color: "var(--color-ink-secondary)", marginTop: "var(--space-2)" }}
+    <>
+      <section className="hero-band">
+        <div
+          className="mx-auto w-full px-6 text-center md:text-left"
+          style={{ maxWidth: "calc(var(--rc-layout-max-w) - var(--rc-gutter) * 2)" }}
         >
-          Prices, coupons and stock, compared honestly across retailers.
+          <h1 className="hero-title">Find the real best price.</h1>
+          <p className="hero-sub mt-3 max-w-xl mx-auto md:mx-0">
+            Prices, coupons and stock, collected live from every retailer the moment you
+            open a product — compared honestly, never from a stale snapshot.
+          </p>
+          <div className="mt-6">
+            <SearchForm />
+          </div>
+          <div className="mt-4 flex flex-wrap justify-center md:justify-start gap-2">
+            {EXAMPLES.map((q) => (
+              <Link key={q} href={`/results?q=${encodeURIComponent(q)}`} className="query-pill">
+                {q}
+              </Link>
+            ))}
+          </div>
+        </div>
+      </section>
+      <div className="mx-auto w-full px-6" style={{ maxWidth: "var(--rc-layout-max-w)" }}>
+        <p className="mt-4" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
+          Live collection starts as soon as you pick a product — first offers usually land
+          within a second, and every price shows when it was collected and by whom.
         </p>
-        <div className="mt-6">
-          <SearchForm />
-        </div>
-        <div className="flex flex-wrap justify-center gap-4" style={{ marginTop: "var(--space-4)" }}>
-          {EXAMPLES.map((q) => (
-            <Link
-              key={q}
-              href={`/results?q=${encodeURIComponent(q)}`}
-              className="hover:underline"
-              style={{ font: "var(--text-small)", color: "var(--color-primary)" }}
-            >
-              {q}
-            </Link>
-          ))}
-        </div>
       </div>
-    </section>
+    </>
   );
 }

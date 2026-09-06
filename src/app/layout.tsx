@@ -4,7 +4,7 @@ import Link from "next/link";
 import HeaderSearch from "@/components/HeaderSearch";
 import "./globals.css";
 
-/* Theme v1 §6: Inter 400/500/600/700, display swap; fallback stack in --font-sans. */
+/* Theme v1 §6: Inter 400/500/600/700, display swap; fallback stack in --rc-font-body. */
 const inter = Inter({
   variable: "--font-inter",
   subsets: ["latin"],
@@ -31,7 +31,7 @@ export const metadata: Metadata = {
 
 export function Wordmark({ size = 20 }: { size?: number }) {
   return (
-    <span className="font-bold lowercase" style={{ color: "var(--color-ink)", fontSize: size }}>
+    <span className="font-bold lowercase" style={{ color: "var(--rc-ink)", fontSize: size }}>
       reemco
     </span>
   );
@@ -64,7 +64,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <header className="site-header">
           <div
             className="mx-auto flex h-full w-full flex-wrap items-center justify-between gap-x-4 gap-y-1 px-6 py-2 sm:flex-nowrap sm:py-0"
-            style={{ maxWidth: "var(--layout-max-w)" }}
+            style={{ maxWidth: "var(--rc-layout-max-w)" }}
           >
             <Link href="/" className="focusable shrink-0 rounded">
               <Wordmark />
@@ -77,30 +77,30 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <footer
           className="border-t"
           style={{
-            background: "var(--color-surface-muted)",
-            borderTopColor: "var(--color-border)",
+            background: "var(--rc-canvas)",
+            borderTopColor: "var(--rc-line)",
           }}
         >
           <div
             className="mx-auto w-full px-6 py-6"
-            style={{ maxWidth: "var(--layout-max-w)" }}
+            style={{ maxWidth: "var(--rc-layout-max-w)" }}
           >
             <Wordmark size={16} />
             <p
               className="mt-1"
-              style={{ font: "var(--text-small)", color: "var(--color-ink-secondary)" }}
+              style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)" }}
             >
               Reemco earns affiliate commissions from some retailer links. This never affects the
               ranking you see — best effective price always wins.
             </p>
-            <nav className="mt-1 flex gap-3" style={{ font: "var(--text-small)" }} aria-label="Footer">
-              <Link href="/" className="hover:underline" style={{ color: "var(--color-primary)" }}>
+            <nav className="mt-1 flex gap-3" style={{ font: "var(--rc-text-small)" }} aria-label="Footer">
+              <Link href="/" className="hover:underline" style={{ color: "var(--rc-primary)" }}>
                 About
               </Link>
-              <Link href="/" className="hover:underline" style={{ color: "var(--color-primary)" }}>
+              <Link href="/" className="hover:underline" style={{ color: "var(--rc-primary)" }}>
                 Privacy
               </Link>
-              <Link href="/" className="hover:underline" style={{ color: "var(--color-primary)" }}>
+              <Link href="/" className="hover:underline" style={{ color: "var(--rc-primary)" }}>
                 Contact
               </Link>
             </nav>

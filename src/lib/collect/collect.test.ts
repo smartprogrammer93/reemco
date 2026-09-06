@@ -84,7 +84,7 @@ describe("startCollection", () => {
     expect(second.job.jobId).toBe(first.job.jobId);
   });
 
-  it("serves a fresh completed job as cached (AC5)", () => {
+  it("always collects live even when a fresh completed job exists (REEA-95)", () => {
     const p = product();
     const { job } = startCollection(p);
     job.status = "complete";
@@ -104,12 +104,12 @@ describe("startCollection", () => {
     
     finishJob(job, cacheDir);
     const again = startCollection(p);
-    expect(again.servedFromCache).toBe(true);
-    expect(again.job.mode).toBe("cache");
-    expect(again.job.jobId).toBe(job.jobId);
+    expect(again.servedFromCache).toBe(false);
+    expect(again.job.mode).toBe("live");
+    expect(again.job.jobId).not.toBe(job.jobId);
   });
 
-  it("does not serve a stale (>10 min) job as cached and starts a live run", () => {
+  it("starts a fresh live run when the last completion is stale (>10 min)", () => {
     const p = product();
     const { job } = startCollection(p);
     job.status = "complete";
@@ -120,7 +120,7 @@ describe("startCollection", () => {
     expect(again.job.jobId).not.toBe(job.jobId);
   });
 
-  it("force bypasses the cache", () => {
+  it("accepts force as a no-op — always-live is the default", () => {
     const p = product();
     const { job } = startCollection(p);
     job.status = "complete";

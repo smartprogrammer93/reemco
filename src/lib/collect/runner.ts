@@ -2,16 +2,17 @@
  * REEA-84 W1 — collection job runner (T2) + retry (T6).
  *
  * Fans out one scrape per retailer offer with `Promise.allSettled`, bounded by
- * a 20 s per-retailer timeout (inside the scraper) and a 25 s overall budget
- * (this watchdog). Subtask status is written as the run progresses so the
- * polling endpoint serves real per-retailer states (AC2) — progress is never
- * synthetic. Only the fields in AC3 plus provenance are kept (AC9).
+ * per-adapter 4 s timeouts (inside the scraper) and a 10 s overall budget
+ * (this watchdog, REEA-95 realtime-policy §5). Subtask status is written as
+ * the run progresses so the polling endpoint serves real per-retailer states
+ * — progress is never synthetic. Offers are appended per retailer as they
+ * land, so staged arrival survives the poll. Only the AC fields plus
+ * provenance are kept.
  *
  * Feasibility note (per plan §1.1): the direct-fetch adapters are lightweight
- * (no headless browser), so the fan-out fits the 25 s function budget; the
- * documented fallbacks (maxDuration raise / two-phase design) are not needed.
- * The route still sets `maxDuration = 60` as headroom on platforms that
- * support it — the user-visible 30 s contract is enforced here regardless.
+ * (no headless browser), so the fan-out fits the function budget; the route
+ * still sets `maxDuration = 60` as headroom on platforms that support it —
+ * the budgets above are enforced here regardless.
  */
 import type { CollectJob, LiveOffer, RetailerSubtask } from "@/lib/collect/types";
 import { OVERALL_BUDGET_MS } from "@/lib/collect/types";
@@ -19,7 +20,6 @@ import type { NormalizedProduct } from "@/types/product";
 import { scrapeOffer, subtaskFor, type FetchImpl } from "@/lib/collect/scraper";
 import {
   createJob,
-  findFreshCompleted,
   findLastCompleted,
   finishJob,
   getInflightJobId,
@@ -29,9 +29,9 @@ import {
 
 export interface StartResult {
   job: CollectJob;
-  /** True when an in-flight job for this product was reused (AC8 dedupe). */
+  /** True when an in-flight job for this product was reused (dedupe). */
   deduped: boolean;
-  /** True when a fresh completed job was served from cache (AC5). */
+  /** Kept for API-shape stability; the server always collects live now. */
   servedFromCache: boolean;
 }
 
@@ -39,27 +39,23 @@ export interface StartResult {
  * Entry point for POST /api/products/:id/collect. Returns in well under 300 ms:
  * it only creates/looks up registry entries; the scrape itself is scheduled by
  * the caller via `after()` (runCollectionJob) so the response is never blocked.
+ *
+ * REEA-95 realtime-policy §4 — every product view ALWAYS collects live: the
+ * server cache is no longer a serving path. The only labeled repeat cache is
+ * the client's same-tab session snapshot (see useCollection). `force` remains
+ * accepted (and is now the default behavior) so older clients keep working.
  */
 export function startCollection(
   product: NormalizedProduct,
   opts: { force?: boolean } = {},
 ): StartResult {
-  // AC8: dedupe rapid repeat clicks on the same product by in-flight job.
+  void opts; // always-live: `force` is accepted but no longer changes anything
+  // Dedupe rapid repeat clicks on the same product by in-flight job.
   const inflightId = getInflightJobId(product.productId);
   if (inflightId) {
     const existing = getJob(inflightId);
     if (existing && existing.status === "collecting") {
       return { job: existing, deduped: true, servedFromCache: false };
-    }
-  }
-
-  // AC5 freshness rule: a completed collection <=10 min old is served as cached.
-  if (!opts.force) {
-    const cached = findFreshCompleted(product.productId);
-    if (cached) {
-      // Labeled as cached for provenance rendering (AC4/AC5).
-      cached.mode = "cache";
-      return { job: cached, deduped: false, servedFromCache: true };
     }
   }
 
