@@ -173,13 +173,12 @@ await step(6, "catalog offer URLs resolve (link-health)", async () => {
   for (const url of urls) {
     let ok = false;
     let detail = "";
-    for (let attempt = 0; attempt < 2 && !ok; attempt++) {
+    // 3 attempts with spacing: some retailer CDNs answer plain fetches with a
+    // transient 503; a persistent dead link still fails all attempts.
+    for (let attempt = 0; attempt < 3 && !ok; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
       try {
-        const res = await fetch(url, {
-          headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36" },
-          redirect: "follow",
-          signal: AbortSignal.timeout(15000),
-        });
+        const res = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36" }, redirect: "follow", signal: AbortSignal.timeout(15000) });
         ok = res.status < 400;
         detail = `HTTP ${res.status}`;
       } catch (e) {
