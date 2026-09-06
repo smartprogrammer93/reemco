@@ -159,5 +159,39 @@ await step(5, "375px mobile pass: no horizontal overflow, CTAs in viewport (REEA
 });
 
 await browser.close();
+
+// REEA-67 link-health gate: every unique offer URL shipped in the seeded
+// catalog must resolve (final status < 400 after redirects), so dead retailer
+// deep links fail the deploy check instead of silently breaking the click-out
+// funnel. Deterministic: reads the shipped catalog source, retries once on a
+// transport error so flaky DNS/edge hiccups don't fail the deploy on one miss.
+await step(6, "catalog offer URLs resolve (link-health)", async () => {
+  const src = readFileSync(new URL("../src/lib/catalog.ts", import.meta.url), "utf8");
+  const urls = [...new Set([...src.matchAll(/url:\s*"([^"]+)"/g)].map((m) => m[1]))];
+  if (urls.length === 0) throw new Error("no offer URLs found in src/lib/catalog.ts");
+  const bad = [];
+  for (const url of urls) {
+    let ok = false;
+    let detail = "";
+    for (let attempt = 0; attempt < 2 && !ok; attempt++) {
+      try {
+        const res = await fetch(url, {
+          headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36" },
+          redirect: "follow",
+          signal: AbortSignal.timeout(15000),
+        });
+        ok = res.status < 400;
+        detail = `HTTP ${res.status}`;
+      } catch (e) {
+        ok = false;
+        detail = `ERR ${e?.cause?.code ?? e?.message ?? "unreachable"}`;
+      }
+    }
+    if (!ok) bad.push(`${url} (${detail})`);
+  }
+  if (bad.length) throw new Error(`${bad.length}/${urls.length} offer URL(s) dead: ${bad.join("; ")}`);
+  return `${urls.length} unique offer URL(s) resolve (<400)`;
+});
+
 console.log(results.join("\n"));
-console.log(`SMOKE PASSED — ${BASE} funnel (home → search → click-out → freshness) is healthy.`);
+console.log(`SMOKE PASSED — ${BASE} funnel (home → search → click-out → freshness → link-health) is healthy.`);
