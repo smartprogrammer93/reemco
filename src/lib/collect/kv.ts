@@ -74,11 +74,23 @@ function makeKv(base: string, token: string): SharedKv {
     }
   }
 
+  /**
+   * REEA-143: some Upstash-shaped REST bases fold the trailing SET args
+   * (`EX` / `PX` + ttl) into the stored value instead of parsing them as
+   * options, so a raw GET comes back as `<value>\nEX\n<ttl>`. Normalize so
+   * callers parse exactly what set() wrote. JSON snapshots otherwise fail
+   * JSON.parse on the trailing tail, which is what made cross-instance polls
+   * miss jobs that were present in the shared store.
+   */
+  function stripTtlEcho(value: string): string {
+    return value.replace(/\r?\n(?:EX|PX)\n\d+$/, "");
+  }
+
   return {
     async get(key) {
       const data = await request(`get/${encodeURIComponent(key)}`);
       if (!data || data.ok === false) return null;
-      return typeof data.result === "string" ? data.result : null;
+      return typeof data.result === "string" ? stripTtlEcho(data.result) : null;
     },
     async set(key, value, ttlSeconds) {
       // Upstash REST: remaining SET arguments continue in the request body,
