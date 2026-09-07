@@ -11,6 +11,12 @@ export interface PriceOffer {
   url: string;
   inStock: boolean;
   wasPrice?: number; // optional was-price for the F2 savings pill
+  /**
+   * REEA-167 §2 condition grade of this listing ("renewed-grade-b", …),
+   * present only when it differs from `new`. Grades keep their own rows with
+   * visible badges and their own prices; never averaged into the new set.
+   */
+  grade?: string;
 }
 
 export interface Coupon {

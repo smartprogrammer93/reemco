@@ -20,6 +20,12 @@ import {
   xciteHits,
   type SearchHit,
 } from "@/lib/collect/live-search";
+import {
+  canonicalFields,
+  canonicalKey,
+  compatibleFields,
+  gradeBadgeLabel,
+} from "@/lib/collect/canonical-product";
 
 describe("hit parsers", () => {
   it("xciteHits keeps scored hits with /p product URLs", () => {
@@ -165,7 +171,7 @@ function hit(over: Partial<SearchHit>): SearchHit {
 }
 
 describe("groupHits", () => {
-  it("merges the same title across retailers, cheapest first, in-stock first", () => {
+  it("merges the same title across retailers, cheapest offer first", () => {
     const products = groupHits("samsung", [
       hit({ merchant: "Jarir", price: 410, url: "https://jarir.example/s26" }),
       hit({ merchant: "Amazon.eg", price: 390, url: "https://amz.example/dp/1", currency: "EGP", inStock: false }),
@@ -175,12 +181,119 @@ describe("groupHits", () => {
     expect(products).toHaveLength(2);
     const s26 = products.find((p) => p.title === "Samsung Galaxy S26 Ultra")!;
     const monitor = products.find((p) => p.title === "Samsung Monitor Odyssey")!;
-    expect(s26.offers.map((o) => o.merchant)).toEqual(["Xcite", "Jarir", "Amazon.eg"]);
+    // REEA-167 §2: the canonical offer list ascends by price — cheapest
+    // first; purchasable offers only break ties.
+    expect(s26.offers.map((o) => o.merchant)).toEqual(["Amazon.eg", "Xcite", "Jarir"]);
     expect(s26.alternatives.map((a) => a.title)).toContain("Samsung Monitor Odyssey");
     expect(monitor.offers).toHaveLength(1);
     // Real collection timestamp, not a computed offset — chips age honestly.
     expect(Date.parse(s26.scrapedAt!)).toBeLessThanOrEqual(Date.now());
     expect(Date.now() - Date.parse(s26.scrapedAt!)).toBeLessThan(5_000);
+  });
+
+  it("REEA-168: one canonical view for two title spellings, union of offers, cheapest first", () => {
+    const products = groupHits("galaxy z fold7 256gb silver", [
+      hit({
+        title: "Samsung Galaxy Z Fold7 Phone - Silver",
+        merchant: "Xcite",
+        price: 494.9,
+        url: "https://xcite.example/fold7-phone",
+      }),
+      hit({
+        title: "Samsung Galaxy Z Fold7 256GB 12GB Ram 5G Silver",
+        merchant: "Xcite",
+        price: 429.9,
+        url: "https://xcite.example/fold7-256",
+      }),
+      hit({
+        title: "Samsung Galaxy Z Fold7, 256 GB, 12 GB RAM, Silver Shadow, 5G, Snapdragon 8 Elite",
+        merchant: "Jarir",
+        price: 7699,
+        currency: "SAR",
+        url: "https://jarir.example/fold7",
+      }),
+    ]);
+    // One canonical row, not split pages (REEA-167 acceptance 1/4): three
+    // live listings of one device, one merged view.
+    expect(products).toHaveLength(1);
+    const fold = products[0];
+    // Union preservation: every distinct listing keeps its row, cheapest on top.
+    expect(fold.offers.map((o) => o.price)).toEqual([429.9, 494.9, 7699]);
+    expect(fold.offers.map((o) => o.merchant)).toEqual(["Xcite", "Xcite", "Jarir"]);
+    // Canonical title = member title with the fewest tokens → stable slug.
+    expect(fold.title).toBe("Samsung Galaxy Z Fold7 Phone - Silver");
+    expect(fold.productId).toBe("samsung-galaxy-z-fold7-phone-silver");
+  });
+
+  it("REEA-168: both example spellings reduce to one canonical key", () => {
+    // Worked example from the spec (§1 step 4): brand|model_line|storage|
+    // color|grade, joined with "|", fields in that exact order.
+    expect(canonicalKey("Samsung Galaxy Z Fold7 Phone Silver Renewed Grade B")).toBe(
+      "samsung|galaxy z fold7|silver|renewed-grade-b",
+    );
+    // Worked example from the spec (§1 step 4): the verbose retailer title
+    // lands on the same tuple as the short one; RAM restatements are the
+    // only noise stripped around it.
+    expect(canonicalFields("Samsung Galaxy Z Fold7 Phone Silver")).toMatchObject({
+      brand: "samsung",
+      modelLine: "galaxy z fold7",
+      color: "silver",
+      grade: "new",
+    });
+    expect(canonicalFields("Samsung Galaxy Z Fold7, 256 GB, 12 GB RAM, Silver Shadow, 5G, Snapdragon 8 Elite")).toMatchObject({
+      brand: "samsung",
+      modelLine: "galaxy z fold7",
+      storage: "256gb",
+      color: "silver",
+      grade: "new",
+    });
+    const a = canonicalFields("Samsung Galaxy Z Fold7 Phone Silver");
+    const b = canonicalFields("Samsung Galaxy Z Fold7, 256 GB, 12 GB RAM, Silver Shadow, 5G, Snapdragon 8 Elite");
+    expect(compatibleFields(a, b)).toBe(true); // partial-match rule (§1)
+    // Both live example slugs decode to compatible field sets.
+    expect(
+      compatibleFields(
+        canonicalFields("samsung galaxy z fold7 5g 256gb phone silver"),
+        canonicalFields("samsung galaxy z fold7 256gb 12gb ram 5g silver"),
+      ),
+    ).toBe(true);
+  });
+
+  it("REEA-168: over-merge guards keep distinct variants separate (§3)", () => {
+    const base = canonicalFields("Samsung Galaxy Z Fold7 Phone Silver");
+    expect(compatibleFields(base, canonicalFields("Samsung Galaxy Z Fold7 Phone Gray"))).toBe(false); // color
+    expect(compatibleFields(base, canonicalFields("Samsung Galaxy S25 Phone Silver"))).toBe(false); // model line
+    expect(
+      compatibleFields(
+        canonicalFields("Samsung Galaxy Z Fold7 Phone Silver"),
+        canonicalFields("Samsung Galaxy Z Flip7 Phone Silver"),
+      ),
+    ).toBe(false); // fold ≠ flip
+    expect(
+      compatibleFields(
+        canonicalFields("Samsung Galaxy Z Fold7 Phone Silver"),
+        canonicalFields("Samsung Galaxy Z Fold7 Phone Gray"),
+      ),
+    ).toBe(false); // gray ≠ silver
+    const renewed = canonicalFields("Samsung Galaxy Z Fold7 Phone Silver Renewed Grade B");
+    expect(compatibleFields(base, renewed)).toBe(false); // grade is significant
+    expect(renewed.grade).toBe("renewed-grade-b");
+    expect(gradeBadgeLabel(renewed.grade)).toBe("Renewed Grade B");
+    // Storage restatements and RAM qualify: 512GB never joins the 256GB key;
+    // a subset key (no colour yet) joins the matching group — never forks it.
+    expect(
+      compatibleFields(
+        canonicalFields("Samsung Galaxy Z Fold7 Phone Silver"),
+        canonicalFields("Samsung Galaxy Z Fold7 Phone Silver 512 GB"),
+      ),
+    ).toBe(true); // subset (missing storage) merges
+    expect(
+      compatibleFields(
+        canonicalFields("Samsung Galaxy Z Fold7 Phone Silver 256 GB"),
+        canonicalFields("Samsung Galaxy Z Fold7 Phone Silver 512 GB"),
+      ),
+    ).toBe(false); // present fields must agree
+    expect(compatibleFields(canonicalFields("Samsung Galaxy Z Fold7"), base)).toBe(true);
   });
 });
 

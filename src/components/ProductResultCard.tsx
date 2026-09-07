@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { Coupon, NormalizedProduct, PriceOffer } from "@/types/product";
 import { buildResultsHref, type CountryCode } from "@/lib/country";
 import { effectivePrice, formatPrice, sortOffers } from "@/lib/format";
+import { gradeBadgeLabel } from "@/lib/collect/canonical-product";
 import CouponBadge from "@/components/CouponBadge";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import { resolveOfferUrl } from "@/lib/links";
@@ -236,6 +237,17 @@ export default function ProductResultCard({
                     <span style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
                       {o.merchant}
                     </span>
+                    {/* REEA-167 §2: condition grade rides its own row badge —
+                        renewed/refurbished offers stay distinguishable, never
+                        blended into the new-condition price list. */}
+                    {o.grade && gradeBadgeLabel(o.grade) ? (
+                      <span
+                        className="label-token rounded px-2 py-0.5"
+                        style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px solid var(--rc-line)" }}
+                      >
+                        {gradeBadgeLabel(o.grade)}
+                      </span>
+                    ) : null}
                     {isLowest && (
                       <span
                         className="label-token rounded px-2 py-0.5"

@@ -1,5 +1,6 @@
 import type { NormalizedProduct } from "@/types/product";
 import { CATALOG } from "@/lib/catalog";
+import { canonicalFields, compatibleFields } from "@/lib/collect/canonical-product";
 import { searchProducts } from "@/lib/search";
 import type { CountryCode } from "@/lib/country";
 
@@ -34,7 +35,17 @@ export async function resolveProductIdentity(
   if (!query) return null;
   const { collectLiveResults } = await import("@/lib/collect/live-search");
   const { products } = await collectLiveResults(query, { country: country ?? null });
+  const exact = products.find((p) => p.productId === productId);
+  if (exact) return exact;
+  // REEA-167 §2 alias behaviour, rendered in place: an alias slug decodes to
+  // its canonical fields and lands on the SAME live group as the canonical
+  // slug, so both spellings of one device show the identical merged view.
+  // When the group cannot be matched from the requested slug's tokens, fall
+  // back to the top-ranked live product as before.
+  const want = canonicalFields(query);
   return (
-    products.find((p) => p.productId === productId) ?? products[0] ?? null
+    products.find((p) => compatibleFields(want, canonicalFields(p.title))) ??
+    products[0] ??
+    null
   );
 }

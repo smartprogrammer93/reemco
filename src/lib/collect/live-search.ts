@@ -16,6 +16,7 @@
 import { extractJarirIndexKey, titleMatchScore, tokenCoverage } from "@/lib/collect/search-fallback";
 import type { FetchImpl } from "@/lib/collect/scraper";
 import type { CountryCode } from "@/lib/country";
+import { canonicalFields, compatibleFields, type CanonicalFields } from "@/lib/collect/canonical-product";
 import type { NormalizedProduct, PriceOffer } from "@/types/product";
 
 /**
@@ -530,30 +531,50 @@ const COLLECTORS: RetailerCollector[] = [
 ];
 
 /**
- * Group raw retailer hits into one product per distinct title. Exact
- * normalized-title matching merges the same item across retailers (one card,
- * one offer per retailer — cheapest first). Titles are kept verbatim from the
- * retailer hit that scored highest against the query.
+ * Group raw retailer hits into one product per canonical key (REEA-167 §1–2).
+ * Each live title is reduced to its brand|model_line|storage|color|grade
+ * tuple, offers are grouped by compatible-equality of those tuples — a subset
+ * key joins the matching group (into the cheapest one when several match),
+ * distinct tuples never blend — so the same device listed under two title
+ * spellings lands on one card carrying the UNION of offers, cheapest first.
+ * Titles are kept verbatim; the card shows the member title with the fewest
+ * tokens (tie-break alphabetically smallest slug) as the canonical view title.
  */
 export function groupHits(query: string, hits: SearchHit[]): NormalizedProduct[] {
-  const groups = new Map<string, HitGroup>();
+  const groups: HitGroup[] = [];
+  const cheapestOf = (g: HitGroup): number => Math.min(...g.offers.map((o) => o.price));
+
   for (const hit of hits) {
-    const key = hit.title.toLowerCase().replace(/\s+/g, " ").trim();
-    if (!key) continue;
-    const score = titleMatchScore(hit.title, query);
-    let group = groups.get(key);
-    if (!group) {
-      group = { title: hit.title, titleScore: score, offers: [] };
-      groups.set(key, group);
-    } else if (score > group.titleScore) {
-      // Keep the title form that best matches the query.
-      group.title = hit.title;
-      group.titleScore = score;
+    const title = hit.title.trim();
+    if (!title) continue;
+    const fields = canonicalFields(title);
+    // Partial-match rule: every candidate group whose non-empty fields agree
+    // is eligible; join the one holding the lowest-priced offer so the best
+    // effective price always wins the merge.
+    let chosen: HitGroup | undefined;
+    for (const g of groups) {
+      if (!compatibleFields(g.fields, fields)) continue;
+      if (!chosen || cheapestOf(g) < cheapestOf(chosen)) chosen = g;
     }
-    if (!group.offers.some((o) => o.merchant === hit.merchant)) group.offers.push(hit);
+    if (!chosen) {
+      chosen = { fields, titleScore: 0, titles: new Set<string>(), offers: [] };
+      groups.push(chosen);
+    }
+    const score = titleMatchScore(title, query);
+    if (score > chosen.titleScore) chosen.titleScore = score;
+    chosen.titles.add(title);
+    // Union preservation: distinct listings stay distinct rows; only an exact
+    // same merchant+price+listing is the same offer arriving twice.
+    if (
+      !chosen.offers.some(
+        (o) => o.merchant === hit.merchant && o.price === hit.price && o.url === hit.url,
+      )
+    ) {
+      chosen.offers.push(hit);
+    }
   }
 
-  const sorted = [...groups.values()].sort(
+  const sorted = [...groups].sort(
     (a, b) =>
       b.titleScore - a.titleScore ||
       Math.min(...a.offers.map((o) => o.price)) - Math.min(...b.offers.map((o) => o.price)),
@@ -561,38 +582,67 @@ export function groupHits(query: string, hits: SearchHit[]): NormalizedProduct[]
   const selected = selectAcrossRetailers(sorted, LIVE_SEARCH_MAX_PRODUCTS);
   const scrapedAt = new Date().toISOString(); // real collection completion time
 
+  // Canonical slug selection (REEA-167 §2): the member title with the fewest
+  // tokens, tie-break the alphabetically smallest slug — identical however
+  // the shopper arrived, so every spelling of the same device lands on one
+  // stable view and old links converge instead of forking.
+  const canonicalTitleOf = (group: HitGroup): string => {
+    let title = "";
+    let titleTokens = Infinity;
+    let titleSlug = "";
+    for (const t of group.titles) {
+      const tokens = t.split(/\s+/).length;
+      const slug = slugify(t);
+      if (tokens < titleTokens || (tokens === titleTokens && slug < titleSlug)) {
+        title = t;
+        titleTokens = tokens;
+        titleSlug = slug;
+      }
+    }
+    return title;
+  };
+
   return selected.map((group, idx) => {
+    const title = canonicalTitleOf(group);
     const offers: PriceOffer[] = [...group.offers]
-      .sort((a, b) => Number(b.inStock) - Number(a.inStock) || a.price - b.price)
-      .map((o) => ({
-        merchant: o.merchant,
-        price: o.price,
-        currency: o.currency,
-        url: o.url,
-        inStock: o.inStock,
-        ...(o.wasPrice != null ? { wasPrice: o.wasPrice } : {}),
-      }));
+      // Cheapest offer first (REEA-167 §2); purchasable offers break ties.
+      .sort((a, b) => a.price - b.price || Number(b.inStock) - Number(a.inStock))
+      .map((o) => {
+        const grade = canonicalFields(o.title).grade;
+        return {
+          merchant: o.merchant,
+          price: o.price,
+          currency: o.currency,
+          url: o.url,
+          inStock: o.inStock,
+          ...(o.wasPrice != null ? { wasPrice: o.wasPrice } : {}),
+          ...(grade !== "new" ? { grade } : {}),
+        };
+      });
     return {
-      productId: slugify(group.title) || `live-${idx}`,
-      title: group.title,
-      brand: brandOf(group.title),
+      productId: slugify(title) || `live-${idx}`,
+      title,
+      brand: brandOf(title),
       offers,
       coupons: [],
       variations: [],
       alternatives: selected
         .filter((other) => other !== group)
         .slice(0, 3)
-        .map((other) => ({
-          productId: slugify(other.title),
-          title: other.title,
-          fromPrice: Math.min(...other.offers.map((o) => o.price)),
-        })),
+        .map((other) => {
+          const otherTitle = canonicalTitleOf(other);
+          return {
+            productId: slugify(otherTitle),
+            title: otherTitle,
+            fromPrice: Math.min(...other.offers.map((o) => o.price)),
+          };
+        }),
       scrapedAt,
     } satisfies NormalizedProduct;
   });
 }
 
-type HitGroup = { title: string; titleScore: number; offers: SearchHit[] };
+type HitGroup = { fields: CanonicalFields; titleScore: number; titles: Set<string>; offers: SearchHit[] };
 
 /**
  * REEA-137 — fill the served slice round-robin across retailers instead of a
