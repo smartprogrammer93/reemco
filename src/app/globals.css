@@ -393,12 +393,15 @@ a:focus-visible {
   color: var(--rc-primary);
 }
 
-/* Landed: chip fills with the brand and pulses once (§5.6). */
+/* Landed: chip fills with the brand and pulses once (§5.6). The pulse rides
+   the same stagger ladder as the card cascade (REEA-101 AC-5), so a snapshot
+   that lands already-complete still reads as chips lighting up in sequence. */
 .rc-chip.is-done {
   border-color: transparent;
   background: var(--rc-primary);
   color: var(--rc-on-primary);
   animation: rc-chip-pulse var(--rc-motion-fast) var(--rc-ease-out);
+  animation-delay: calc(var(--cascade-index, 0) * var(--rc-stagger));
 }
 
 .rc-chip.is-failed {

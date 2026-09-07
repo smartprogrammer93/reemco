@@ -244,6 +244,28 @@ describe("searchRetailerFallback dispatch", () => {
     expect(found.price).toBeCloseTo(1299);
     expect(found.url).toBe("https://www.amazon.eg/dp/B0FX2P81BG");
   });
+
+  it("retries amazon.eg once when the apology interstitial comes back", async () => {
+    let calls = 0;
+    let seenHeaders: Headers | undefined;
+    const fetchImpl = async (_url: string, init?: RequestInit): Promise<Response> => {
+      calls += 1;
+      seenHeaders = new Headers(init?.headers);
+      if (calls === 1) return new Response("<html><title>عذرًا!</title></html>");
+      return new Response(
+        '<div data-component-type="s-search-result"><h2><span>ASUS ROG Strix Scope II 96 Wireless</span></h2>' +
+          '<span class="a-offscreen">EGP 3,957.00</span><a href="/dp/B0FX2P81BG/x"></a></div>',
+      );
+    };
+    const found = await searchRetailerFallback(
+      "amazon.eg",
+      "ASUS ROG Strix Scope II 96 Wireless Gaming Keyboard",
+      fetchImpl,
+    );
+    expect(calls).toBe(2);
+    expect(seenHeaders?.get("accept-language")).toBe("en");
+    expect(found.price).toBeCloseTo(3957);
+  });
 });
 
 describe("seed catalog dispatch routing (REEA-93)", () => {

@@ -17,15 +17,22 @@ import OfferCard from "@/components/OfferCard";
 
 function RetailerChip({
   subtask,
+  index,
   onRetry,
 }: {
   subtask: RetailerSubtask;
+  index: number;
   onRetry?: (retailer: string) => void;
 }) {
   const { status, retailer, offersFound, error } = subtask;
   const failed = status === "failed" || status === "timeout";
   return (
-    <li className={`rc-chip is-${status}`} data-status={status} title={error}>
+    <li
+      className={`rc-chip is-${status}`}
+      data-status={status}
+      title={error}
+      style={{ "--cascade-index": index } as React.CSSProperties}
+    >
       {status === "collecting" && <span className="pulse-spinner" aria-hidden />}
       {status === "done" && <span aria-hidden>✓</span>}
       <span>{retailer}</span>
@@ -136,13 +143,18 @@ export default function CollectionPulse({
             <span>Collecting live offers…</span>
             <span className="tabular">{elapsedLabel}</span>
           </p>
-          <ul className="rc-chip-rail mt-2">
-            {job.subtasks.map((s: RetailerSubtask) => (
-              <RetailerChip key={s.retailer} subtask={s} onRetry={onRetryRetailer} />
-            ))}
-          </ul>
         </>
       )}
+      {/* REEA-101 AC-5: the rail stays mounted once settled too. Production's
+          synchronous ?wait=1 path delivers the snapshot already-complete, so a
+          collapse-on-settle rail would never be visible at all; kept mounted,
+          its chips carry the real per-retailer arrival states and pulse in on
+          mount with the same stagger as the cards rising below. */}
+      <ul className={`rc-chip-rail ${settled ? "mt-2" : ""}`}>
+        {job.subtasks.map((s: RetailerSubtask, i: number) => (
+          <RetailerChip key={s.retailer} subtask={s} index={i} onRetry={onRetryRetailer} />
+        ))}
+      </ul>
       {settled && job.status === "complete" && (
         <p
           className="mt-1 flex items-center gap-2"

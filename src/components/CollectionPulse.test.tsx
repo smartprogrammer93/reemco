@@ -36,7 +36,7 @@ describe("CollectionPulse (plan §2.6, REEA-90 C8)", () => {
     expect(screen.getByText("2 offers")).toBeTruthy();
   });
 
-  it("collapses the rail once settled and shows the completion caption", () => {
+  it("collapses the bar once settled, keeps the rail's real states, shows the completion caption", () => {
     const done: CollectJob = {
       ...runningJob(),
       status: "complete",
@@ -48,8 +48,12 @@ describe("CollectionPulse (plan §2.6, REEA-90 C8)", () => {
     };
     const { container } = render(<CollectionPulse job={done} />);
     expect(screen.getByText("Collection complete")).toBeTruthy();
-    // Signature rail collapses when every slot is filled (design-v3 §5.6).
+    // REEA-101 AC-5: only the progress bar collapses when settled — the chip
+    // rail stays mounted with per-retailer arrival states so the synchronous
+    // production path still shows which retailer landed what.
     expect(container.querySelector(".pulse-bar-fill")).toBeNull();
+    expect(container.querySelector(".rc-chip-rail")).toBeTruthy();
+    expect(container.querySelectorAll(".rc-chip.is-done").length).toBe(3);
   });
 });
 

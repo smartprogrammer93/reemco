@@ -202,12 +202,16 @@ export default function ProductResultCard({
         </p>
       )}
 
-      {/* Offers (detail only): one row per retailer — listed price as scraped
+      {/* Offers: one row per retailer — listed price as scraped
           (REEA-60 §7.1, never adjusted), availability, direct outbound link
           resolved via resolveOfferUrl (REEA-25) with REEA-60 §4 tagging where
           enrolled (no programs live yet → untagged canonical, fail-open).
-          One rule for all retailers, labeled with its assumption (§7.2). */}
-      {detail && offers.length > 0 && (
+          One rule for all retailers, labeled with its assumption (§7.2).
+          REEA-101 realtime AC-1: the results LIST is the feed's serving
+          surface; on the product page these rows render solely from the live
+          collection job (CollectionPanel) so seeded figures and live figures
+          never sit on one screen contradicting each other. */}
+      {!detail && offers.length > 0 && (
         <section aria-label="Prices and availability by retailer" className="mt-4">
           <h3 className="label-token mb-1" style={{ color: "var(--rc-body-text)" }}>
             Prices at retailers · excl. delivery

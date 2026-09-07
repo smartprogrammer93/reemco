@@ -222,13 +222,17 @@ export function parseAmazonEgSearch(html: string, productTitle: string): FoundOf
   for (const seg of html.split('data-component-type="s-search-result"').slice(1)) {
     const asin = seg.match(/\/dp\/([A-Z0-9-]{6,12})/)?.[1];
     const priceRaw = normalizeDigits(
-      seg.match(/class="a-offscreen">[\s\u200E\u200F]*([\d٠-٩.,]+)/)?.[1] ?? "",
+      // Live pages render `>EGP 3,957.00` / `>List: EGP 4,667.00` — take the
+      // first digit run inside the offscreen span, whatever the currency prefix.
+      seg.match(/class="a-offscreen">[^<]*?([\d٠-٩][٠-٩\d.,]*)/)?.[1] ?? "",
     );
     if (!asin || !priceRaw) continue;
     const price = Number.parseFloat(priceRaw.replace(/,/g, ""));
     if (!Number.isFinite(price) || price <= 0) continue;
     const h2 = seg.match(/<h2[^>]*>([\s\S]{0,400}?)<\/h2>/);
-    const title = (h2?.[1] ?? seg.match(/<h2[^>]*aria-label="([^"]+)"/)?.[1] ?? "")
+    // Live cards keep only the brand inside <h2>; the full title sits in the
+    // aria-label — prefer it, fall back to the inner text.
+    const title = (seg.match(/<h2[^>]*aria-label="([^"]+)"/)?.[1] ?? h2?.[1] ?? "")
       .replace(/<[^>]+>/g, " ")
       .replace(/\s+/g, " ")
       .trim();
@@ -266,7 +270,10 @@ async function fetchResponse(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetchImpl(url, { ...init, signal: controller.signal });
+    // no-store: Next server-side fetch may otherwise replay the direct-fetch
+    // response (same URL) for fallback retries, so a transient apology page
+    // would survive into every attempt. Fallback reads must be fresh.
+    return await fetchImpl(url, { ...init, cache: "no-store", signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
@@ -360,15 +367,33 @@ export async function searchRetailerFallback(
     return found;
   }
   if (host.endsWith("amazon.eg")) {
-    const res = await fetchResponse(
-      fetchImpl,
-      `https://www.amazon.eg/s?k=${encodeURIComponent(productTitle)}`,
-      { headers: { accept: "text/html,application/xhtml+xml", "user-agent": "Mozilla/5.0" } },
-    );
-    if (!res.ok) throw new Error(`amazon.eg search HTTP ${res.status}`);
-    const found = parseAmazonEgSearch(await res.text(), productTitle);
-    if (!found) throw new Error("No matching product found on amazon.eg search");
-    return found;
+    // amazon.eg intermittently answers with a "عذرًا!" apology interstitial
+    // (HTTP 200, zero result cards) that resolves on an immediate re-fetch;
+    // Accept-Language: en makes the full SSR results page markedly more
+    // consistent than the default ar-ae render. Two attempts fit well inside
+    // the per-retailer budget (each fetch caps at FALLBACK_TIMEOUT_MS).
+    let lastError = "";
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = await fetchResponse(
+        fetchImpl,
+        `https://www.amazon.eg/s?k=${encodeURIComponent(productTitle)}`,
+        {
+          headers: {
+            accept: "text/html,application/xhtml+xml",
+            "accept-language": "en",
+            "user-agent": "Mozilla/5.0",
+          },
+        },
+      );
+      if (!res.ok) {
+        lastError = `amazon.eg search HTTP ${res.status}`;
+        continue;
+      }
+      const found = parseAmazonEgSearch(await res.text(), productTitle);
+      if (found) return found;
+      lastError = "No matching product found on amazon.eg search";
+    }
+    throw new Error(lastError);
   }
   throw new Error(`No search fallback for ${host}`);
 }
