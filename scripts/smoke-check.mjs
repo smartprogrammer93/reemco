@@ -72,14 +72,24 @@ if (existsSync(LIB_DIR)) {
     : LIB_DIR;
 }
 
-// @sparticuz' default arg set (--single-process + swiftshader GL stack) crashes
-// this chromium build inside minimal containers ("Target page ... closed" on
-// first navigation). A minimal headless flag set boots reliably everywhere.
+// Container bootstrap proven by scripts/qa-verify.mjs: HOME + FONTCONFIG_PATH
+// + the vendored NSS/sqlite dirs on LD_LIBRARY_PATH, and `--headless=new`
+// appended (plain --headless dies instantly on first https navigation with
+// "Target page ... closed"). Keep one blank keeper page so the browser —
+// started without a startup window — survives between funnel steps.
+process.env.HOME = "/tmp";
+process.env.FONTCONFIG_PATH = "/tmp/fonts";
+process.env.LD_LIBRARY_PATH = [LIB_DIR, "/tmp/sqlite-extract/usr/lib/x86_64-linux-gnu", "/tmp", process.env.LD_LIBRARY_PATH || ""]
+  .filter(Boolean)
+  .join(":");
+
 const browser = await pw.launch({
   executablePath: await chromium.executablePath(),
-  args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+  args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--headless=new"],
   headless: true,
 });
+const keeper = await browser.newPage();
+await keeper.goto("about:blank");
 const page = await browser.newPage();
 page.setDefaultTimeout(30000);
 
@@ -197,9 +207,16 @@ await step(6, "catalog offer URLs resolve (link-health)", async () => {
     for (let attempt = 0; attempt < 3 && !ok; attempt++) {
       if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
       try {
-        const res = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36" }, redirect: "follow", signal: AbortSignal.timeout(15000) });
-        ok = res.status < 400;
-        detail = `HTTP ${res.status}`;
+        // Same headers the collector uses (REEA-93): amazon.eg answers plain
+        // fetches with an Arabic apology interstitial; Accept-Language: en
+        // makes the real SSR results page come back consistently.
+        const res = await fetch(url, { headers: { accept: "text/html,application/xhtml+xml", "accept-language": "en", "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36" }, redirect: "follow", signal: AbortSignal.timeout(15000) });
+        // REEA-115: xcite answers stale/guessed slugs with HTTP 200 + a branded
+        // "404: Page Not Found" shell — treat that title as a dead link too.
+        const html = await res.text();
+        const title = html.match(/<title[^>]*>([^<]+?)\s*<\/title>/i)?.[1] ?? "";
+        ok = res.status < 400 && !/^(?:404\b|page not found\b)/i.test(title.trim());
+        detail = `HTTP ${res.status}` + (title && !ok ? ` title="${title.trim()}"` : "");
       } catch (e) {
         ok = false;
         detail = `ERR ${e?.cause?.code ?? e?.message ?? "unreachable"}`;

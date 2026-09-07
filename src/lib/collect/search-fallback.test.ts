@@ -51,7 +51,10 @@ describe("parseXciteSearch", () => {
     const found = parseXciteSearch(fixture, PRODUCT);
     expect(found?.price).toBe(79.9);
     expect(found?.currency).toBe("KWD");
-    expect(found?.url).toContain("xcite.com/sony-wireless-noise-cancelling-headphones");
+    // REEA-115: xcite PDPs need the /p suffix — bare /{slug} soft-404s.
+    expect(found?.url).toBe(
+      "https://www.xcite.com/sony-wireless-noise-cancelling-headphones-wh1000xm5-black/p",
+    );
     expect(found?.inStock).toBe(true);
     expect(found?.wasPrice).toBe(109.9);
   });
