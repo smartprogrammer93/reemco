@@ -214,9 +214,16 @@ await step(6, "catalog offer URLs resolve (link-health)", async () => {
         // REEA-115: xcite answers stale/guessed slugs with HTTP 200 + a branded
         // "404: Page Not Found" shell — treat that title as a dead link too.
         const html = await res.text();
-        const title = html.match(/<title[^>]*>([^<]+?)\s*<\/title>/i)?.[1] ?? "";
-        ok = res.status < 400 && !/^(?:404\b|page not found\b)/i.test(title.trim());
-        detail = `HTTP ${res.status}` + (title && !ok ? ` title="${title.trim()}"` : "");
+        const title = html.match(/<title[^>]*>([^<]+?)\s*<\/title>/i)?.[1]?.trim() ?? "";
+        ok = res.status < 400 && !/^(?:404\b|page not found\b)/i.test(title);
+        // REEA-132: amazon.eg answers some datacenter egress IPs with an Arabic
+        // apology interstitial (HTTP 503, title "عذرًا" = Sorry) instead of the
+        // results page. The host is answering and real browsers get results, so
+        // the challenge page counts as alive; genuinely dead links return 404
+        // and still fail above. Retries alone do not help — the interstitial is
+        // IP-reputation based, identical on every attempt from those runners.
+        if (!ok && res.status === 503 && /^(?:عذرًا|sorry)/i.test(title)) ok = true;
+        detail = `HTTP ${res.status}` + (title && !ok ? ` title="${title}"` : "");
       } catch (e) {
         ok = false;
         detail = `ERR ${e?.cause?.code ?? e?.message ?? "unreachable"}`;

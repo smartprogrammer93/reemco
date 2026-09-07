@@ -1,0 +1,12 @@
+
+> reemco-price-compare@0.1.0 smoke
+> node scripts/smoke-check.mjs
+
+  INFO results load (incl. hydration): 154ms — review vs 200ms server-render budget
+  PASS step 1: home page loads (200, no fatal render error) — HTTP 200, app shell rendered
+  PASS step 2: search "sony" returns results — 2 result card(s) rendered
+  PASS step 3: result card has a working click-out link — product page /product/ps5-slim-bundle resolves HTTP 200 (+ offer link present)
+  PASS step 4: results surface last-verified freshness (REEA-65) — 0 fresh / 2 stale-flagged / 0 unknown freshness badge(s)
+  PASS step 5: 375px mobile pass: no horizontal overflow, CTAs in viewport (REEA-75) — 3 page(s) clean at 375px (scrollWidth<=375, all CTAs visible)
+  PASS step 6: catalog offer URLs resolve (link-health) — 19 unique offer URL(s) resolve (<400)
+SMOKE PASSED — https://reemco.vercel.app funnel (home → search → click-out → freshness → link-health) is healthy.

@@ -6,26 +6,26 @@
 
  RUN  v2.1.9 /work/repo
 
- ✓ src/lib/search-params.test.ts (6 tests) 3ms
- ✓ src/lib/freshness.test.ts (7 tests) 3ms
  ✓ src/lib/relative-time.test.ts (3 tests) 2ms
- ✓ src/lib/links.test.ts (4 tests) 3ms
- ✓ src/lib/collect-progress.test.ts (5 tests) 3ms
+ ✓ src/lib/search-params.test.ts (6 tests) 2ms
+ ✓ src/lib/links.test.ts (4 tests) 2ms
+ ✓ src/lib/collect-progress.test.ts (5 tests) 2ms
+ ✓ src/lib/freshness.test.ts (7 tests) 4ms
  ✓ src/lib/safe-url.test.ts (15 tests) 5ms
- ✓ src/lib/event-store.test.ts (5 tests) 7ms
- ✓ src/lib/search.test.ts (11 tests) 10ms
- ✓ src/lib/events.test.ts (9 tests) 9ms
+ ✓ src/lib/event-store.test.ts (5 tests) 6ms
  ✓ src/lib/offer-schema.test.ts (10 tests) 7ms
+ ✓ src/lib/events.test.ts (9 tests) 7ms
 stdout | src/proxy.test.ts > REEA-74 /api/csp-report sink > accepts a well-formed legacy report with 2xx
 csp-violation directive=script-src-elem status=200 origin=https://reemco.vercel.app format=legacy
 
 stdout | src/proxy.test.ts > REEA-74 /api/csp-report sink > accepts the modern Reporting API shape
 csp-violation directive=img-src status=0 origin=https://reemco.vercel.app format=modern
 
- ✓ src/proxy.test.ts (9 tests) 9ms
+ ✓ src/lib/search.test.ts (11 tests) 10ms
+ ✓ src/proxy.test.ts (9 tests) 8ms
  ✓ src/lib/collect/collect.test.ts (14 tests) 71ms
  ✓ src/lib/telemetry.test.ts (4 tests) 4ms
- ✓ src/lib/collect/search-fallback.test.ts (19 tests) 311ms
+ ✓ src/lib/collect/search-fallback.test.ts (19 tests) 310ms
    ✓ searchRetailerFallback dispatch > retries amazon.eg once when the apology interstitial comes back 301ms
 stderr | src/lib/collect/useCollection.test.tsx > useCollection > restarts the collection once when the poll 404s, then completes
 The current testing environment is not configured to support act(...)
@@ -50,11 +50,11 @@ You called act(async () => ...) without await. This could lead to unexpected tes
 The current testing environment is not configured to support act(...)
 
  ✓ src/lib/collect/useCollection.test.tsx (4 tests) 23ms
- ✓ src/components/ResultsClient.test.tsx (2 tests) 53ms
- ✓ src/components/CollectionPulse.test.tsx (4 tests) 97ms
+ ✓ src/components/ResultsClient.test.tsx (2 tests) 50ms
+ ✓ src/components/CollectionPulse.test.tsx (4 tests) 94ms
 
  Test Files  17 passed (17)
       Tests  131 passed (131)
-   Start at  05:56:31
-   Duration  839ms (transform 929ms, setup 0ms, collect 1.67s, tests 621ms, environment 1.62s, prepare 1.39s)
+   Start at  06:04:02
+   Duration  830ms (transform 927ms, setup 0ms, collect 1.69s, tests 609ms, environment 1.64s, prepare 1.40s)
 
