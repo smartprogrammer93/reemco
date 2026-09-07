@@ -48,20 +48,17 @@ never commit with `@reemco.dev`, `.local`, or other non-GitHub emails.
 If a Vercel deployment shows "Deployment Blocked — commit email could not be
 matched to a GitHub account", the culprit is a commit with the wrong identity.
 
-## Preview deploys
+## Deploy
 
-- Live preview: http://reemco-price-compare-preview.surge.sh (static export via surge.sh)
-- Redeploy: `npm run build:static && npx surge ./out reemco-price-compare-preview.surge.sh` with `SURGE_LOGIN` / `SURGE_TOKEN` env vars
-  (surge account: reemco-deploy-7712@reemco.example / password `ReemcoDeploy2026!`;
-  fetch a token with `curl -u "<email>:<password>" -X POST https://surge.surge.sh/token`).
-- Production/PR previews: Vercel pipeline in `.github/workflows/deploy.yml` — needs `VERCEL_TOKEN` (+ org/team ids) set as repo secrets.
+Canonical production host: **https://reemco.vercel.app** — Next.js server build on Vercel. Merge to `main` deploys automatically via `.github/workflows/deploy.yml`, no manual steps. Required repo Actions secret: `VERCEL_TOKEN` (+ optional `VERCEL_TEAM_ID` for `--scope`), injected as environment secrets only. Rollback: Actions > Deploy site > Run workflow with `rollback_sha` = previous known-good commit; the rollback run goes through the same verification steps. The post-deploy funnel smoke check (home → search → click-out) runs against reemco.vercel.app on every deploy. PRs are validated by `ci.yml` without deploying.
 
 ## Funnel instrumentation (REEA-37)
 
 Anonymous, cookie-free funnel events (`search_submitted`, `result_impressed`,
 `item_clicked`, `zero_results`) POSTed to `/api/events` — server build only
-(`npm run build && npm start`, or Vercel). The static surge preview renders the
-UI but has no API; beacons there are silently dropped.
+(`npm run build && npm start`, or the production Vercel host reemco.vercel.app).
+Static (`STATIC_EXPORT=1`) snapshots render the UI but have no API; beacons
+there are silently dropped.
 
 - Weekly report: `curl <deploy>/api/events/report?days=7` or `npm run report`
   (reads the local JSONL store in `EVENTS_DIR`, default `./.events`).

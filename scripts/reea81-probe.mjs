@@ -8,7 +8,7 @@ import { execSync } from "node:child_process";
 import { chromium as pw } from "playwright-core";
 import chromium from "@sparticuz/chromium";
 
-const BASE = (process.env.SMOKE_BASE_URL || "https://reemco-price-compare-preview.surge.sh").replace(/\/$/, "");
+const BASE = (process.env.SMOKE_BASE_URL || "https://reemco.vercel.app").replace(/\/$/, "");
 
 const LIB_DIR = "/tmp/al2023/lib";
 if (!existsSync(LIB_DIR)) {

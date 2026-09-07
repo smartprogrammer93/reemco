@@ -19,7 +19,7 @@ import { execSync } from "node:child_process";
 import { chromium as pw } from "playwright-core";
 import chromium from "@sparticuz/chromium";
 
-const BASE = (process.env.SMOKE_BASE_URL || "https://reemco-price-compare-preview.surge.sh").replace(/\/$/, "");
+const BASE = (process.env.SMOKE_BASE_URL || "https://reemco.vercel.app").replace(/\/$/, "");
 // Stable fixture: "sony" matches seeded catalog products deterministically.
 const FIXTURE_QUERY = process.env.SMOKE_FIXTURE_QUERY || "sony";
 

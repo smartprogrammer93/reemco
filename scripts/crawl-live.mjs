@@ -4,7 +4,7 @@ import chromium from "@sparticuz/chromium";
 const exePath = await chromium.executablePath();
 const browser = await pw.launch({ executablePath: exePath, args: chromium.args, headless: true });
 const page = await browser.newPage();
-const BASE = "https://reemco-price-compare-preview.surge.sh";
+const BASE = "https://reemco.vercel.app";
 const pages = ["/", "/search", "/results?q=sony", "/results?q=asus", "/results?q=zzzqqq"];
 const all = new Map();
 for (const p of pages) {

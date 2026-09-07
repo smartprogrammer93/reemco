@@ -18,7 +18,7 @@ jobs:
       - name: Probe public URL
         id: probe
         run: |
-          BASE="https://reemco-price-compare-preview.surge.sh"
+          BASE="https://reemco.vercel.app"
           FAIL=""
           for CHECK in "/" "/search" "/results?q=iPhone%2017%20Pro"; do
             CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$BASE$CHECK" || echo 000)

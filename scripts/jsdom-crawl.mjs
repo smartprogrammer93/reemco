@@ -1,7 +1,7 @@
 import jsdom from "jsdom";
 const { JSDOM } = jsdom;
 
-const BASE = "https://reemco-price-compare-preview.surge.sh";
+const BASE = "https://reemco.vercel.app";
 const pages = ["/", "/search", "/results?q=sony", "/results?q=asus", "/results?q=zzzqqq"];
 
 for (const p of pages) {

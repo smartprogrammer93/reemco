@@ -19,7 +19,7 @@ for (const h of internal) console.log(h);
 console.log("== external (rendered) links ==");
 for (const h of external) console.log(h);
 
-const BASE = "https://reemco-price-compare-preview.surge.sh";
+const BASE = "https://reemco.vercel.app";
 console.log("== live status codes ==");
 for (const h of internal) {
   const r = await fetch(BASE + h);

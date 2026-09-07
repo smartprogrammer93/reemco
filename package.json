@@ -10,7 +10,7 @@
     "test": "vitest run",
     "build:static": "node scripts/static-export.mjs",
     "smoke": "node scripts/smoke-check.mjs",
-    "deploy:prod": "npm run build:static && npx surge ./out reemco-price-compare-preview.surge.sh && npm run smoke",
+    "deploy:prod": "npm run build && npx -y vercel@59.11.7 deploy --prod --yes && npm run smoke",
     "report": "node --experimental-strip-types scripts/weekly-report.ts"
   },
   "dependencies": {

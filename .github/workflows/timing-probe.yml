@@ -17,7 +17,7 @@ jobs:
       - run: npm ci
       - name: Measure results-page load+render timing (smoke step-4 semantics, no badge assertion)
         env:
-          SMOKE_BASE_URL: https://reemco-price-compare-preview.surge.sh
+          SMOKE_BASE_URL: https://reemco.vercel.app
         run: |
           node scripts/reea81-probe.mjs
           curl -s "$SMOKE_BASE_URL/__commit.txt" | sed 's/^/PROBED artifact: /'

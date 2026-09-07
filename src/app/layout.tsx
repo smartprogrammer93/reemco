@@ -24,7 +24,7 @@ const spaceGrotesk = Space_Grotesk({
 export const metadata: Metadata = {
   title: "Reemco Price Compare",
   description: "Prices, coupons and stock, compared honestly across retailers.",
-  // Static-export host (surge) cannot emit a Referrer-Policy response header;
+  // Static-export builds cannot emit a Referrer-Policy response header;
   // the <meta name="referrer"> equivalent is honored by browsers. The canonical
   // header is set by src/proxy.ts when served from a server host (Vercel).
   other: { referrer: "strict-origin-when-cross-origin" },

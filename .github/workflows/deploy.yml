@@ -1,21 +1,22 @@
 name: Deploy site
 
-# Source of truth: this pipeline builds from a pinned checkout of the ref that
-# triggered it (main push = production). No session-workspace deploys.
+# REEA-132: consolidated deploy path. One merge to main = one deploy to the
+# canonical production host https://reemco.vercel.app (Next.js server build on
+# Vercel, so the /api/events funnel endpoints are served). No preview host:
+# every check below verifies reemco.vercel.app itself. PRs are validated by
+# ci.yml (lint/test/build); only main pushes deploy.
 #
-# Required repo secrets (Settings > Secrets > Actions):
-#   SURGE_LOGIN / SURGE_TOKEN  - static production deploy (reemco-price-compare-preview.surge.sh)
-#   VERCEL_TOKEN (+ VERCEL_ORG_ID / VERCEL_TEAM_ID) - optional server-render path
-#     (needed for F2 response headers: CSP, nosniff, Referrer-Policy; Surge
-#     static hosting cannot emit custom headers).
+# Required repo secret (Settings > Secrets > Actions, env injection only):
+#   VERCEL_TOKEN (+ optional VERCEL_TEAM_ID for --scope)
 #
-# Rollback: run this workflow manually (Actions > Deploy site > Run workflow)
-# with `rollback_sha` set to the previous known-good commit; it rebuilds from
-# that exact SHA and republishes. Rollback = redeploy of the prior artifact.
+# Rollback path: Actions > Deploy site > Run workflow with `rollback_sha` set
+# to the previous known-good commit. The rollback run checks out that exact
+# SHA and passes through the same verification steps (commit stamp, headers,
+# funnel smoke), so a rollback is verified the same way a deploy is. Rollback
+# = redeploy of the prior artifact.
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
     inputs:
       rollback_sha:
@@ -32,7 +33,7 @@ permissions:
   issues: write # deploy/smoke failure alerts
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,48 +47,72 @@ jobs:
           cache: npm
 
       # Stamp the artifact with its source commit so the deployed build is
-      # self-identifying: https://<host>/__commit.txt
+      # self-identifying: https://reemco.vercel.app/__commit.txt
       - name: Stamp commit into build
         run: echo "${{ inputs.rollback_sha || github.sha }}" > public/__commit.txt
 
       - run: npm ci
       - run: npm run lint
       - run: npm test
-      # Static export (./out) is the production artifact for Surge; the plain
-      # server build leaves no ./out and the Surge step fails on it.
-      - run: npm run build:static
+      # Server build (Vercel rebuilds remotely from the uploaded source): keeps
+      # the /api/events funnel endpoints live. The old `npm run build:static`
+      # export only existed for the retired static preview host.
+      - run: npm run build
 
-      - name: Deploy static export to Surge (production)
+      - name: Deploy to Vercel production (reemco.vercel.app)
         env:
-          SURGE_LOGIN: ${{ secrets.SURGE_LOGIN }}
-          SURGE_TOKEN: ${{ secrets.SURGE_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+          CI: "1"
         run: |
-          if [ -z "$SURGE_LOGIN" ] || [ -z "$SURGE_TOKEN" ]; then
-            echo "::error::Repo secrets SURGE_LOGIN/SURGE_TOKEN are not set - cannot deploy. Unblock owner: repo admin (CEO)."
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::error::Repo secret VERCEL_TOKEN is not set - cannot deploy. Unblock owner: repo admin (CEO)."
             exit 1
           fi
-          npx surge ./out reemco-price-compare-preview.surge.sh --token "$SURGE_TOKEN"
+          # --scope avoids the interactive team picker (hangs CI when the token
+          # has multiple scopes); VERCEL_TEAM_ID is the team id/slug.
+          # REEA-75 hardening kept: pinned CLI, telemetry off, hard timeout so
+          # a stuck remote build fails loudly with its log instead of hanging.
+          SCOPE_ARGS=""
+          if [ -n "$VERCEL_TEAM_ID" ]; then SCOPE_ARGS="--scope $VERCEL_TEAM_ID"; fi
+          export VERCEL_TELEMETRY_DISABLED=1
+          set -o pipefail
+          timeout --signal=INT 20m npx -y vercel@59.11.7 deploy --prod --yes --cwd "$GITHUB_WORKSPACE" \
+            --token "$VERCEL_TOKEN" $SCOPE_ARGS 2>&1 | tee /tmp/vercel-deploy.log
+          URL=$(grep -oE 'https://[a-z0-9.-]+\.vercel\.app' /tmp/vercel-deploy.log | tail -1)
+          echo "VERCEL_DEPLOY_URL=$URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "Vercel production URL: $URL"
 
-      # Post-deploy smoke check: live artifact must serve the commit we built.
-      - name: Post-deploy artifact check
+      # Post-deploy verification (Observability-before-Launch): the production
+      # alias must serve this exact build and the F2 headers before the job is
+      # allowed to go green. The raw deployment URL may sit behind Vercel SSO
+      # protection, so verify via the canonical alias reemco.vercel.app.
+      - name: Post-deploy artifact check (commit stamp + headers)
         run: |
           sleep 5
-          SERVED=$(curl -fsS https://reemco-price-compare-preview.surge.sh/__commit.txt 2>/dev/null | tr -d '[:space:]')
+          SERVED=$(curl -fsS https://reemco.vercel.app/__commit.txt 2>/dev/null | tr -d '[:space:]')
           echo "live artifact commit: $SERVED"
           if [ "$SERVED" != "${{ inputs.rollback_sha || github.sha }}" ]; then
-            echo "::error::Deployed artifact does not match built commit ($SERVED != ${{ inputs.rollback_sha || github.sha }})"
+            echo "::error::reemco.vercel.app does not serve this build's commit ($SERVED != ${{ inputs.rollback_sha || github.sha }}) — treating deploy as failed. Rollback: rerun this workflow with rollback_sha = last known-good commit."
             exit 1
           fi
+          for H in "content-security-policy" "x-content-type-options" "referrer-policy" "strict-transport-security"; do
+            curl -fsSI https://reemco.vercel.app/ | grep -iq "^$H:" || {
+              echo "::error::F2 response header missing on reemco.vercel.app: $H"; exit 1; }
+          done
+          echo "F2 headers verified on reemco.vercel.app"
 
       # REEA-44 post-deploy funnel smoke check (CEO P0: nothing new ships until
-      # the deployed site is proven working after every deploy).
-      # Verifies: (1) home loads, (2) fixture query returns result cards,
-      # (3) a card has a working click-out link. Deterministic: the fixture
-      # query hits the seeded catalog shipped in the bundle, never fresh data.
-      # Exit 1 names the failed step; the alert step below opens an issue.
+      # the deployed site is proven working after every deploy). REEA-132: runs
+      # against the canonical production host https://reemco.vercel.app.
+      # Verifies: home loads, fixture query returns result cards, click-out
+      # works, freshness badges render, 375px mobile pass, catalog offer URLs
+      # resolve. Deterministic: the fixture query hits the seeded catalog
+      # shipped in the bundle. Exit 1 names the failed step; the alert step
+      # below opens an issue.
       - name: Post-deploy funnel smoke check (home → search → click-out)
         env:
-          SMOKE_BASE_URL: https://reemco-price-compare-preview.surge.sh
+          SMOKE_BASE_URL: https://reemco.vercel.app
           SMOKE_FIXTURE_QUERY: ${{ inputs.smoke_fixture_query }}
         run: npm run smoke
 
@@ -106,7 +131,7 @@ jobs:
           Failed step(s): ${FAILED_STEPS:-unknown}.
           Commit: ${{ inputs.rollback_sha || github.sha }}. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-          If the failed step is the funnel smoke check, the deployed site did NOT pass home → search → click-out and the deploy must be treated as failed (rollback: rerun this workflow with rollback_sha set to the last green commit)."
+          If the failed step is the funnel smoke check, reemco.vercel.app did NOT pass home → search → click-out and the deploy must be treated as failed (rollback: rerun this workflow with rollback_sha set to the last green commit)."
           if gh issue list --label deploy-alert --state open --json url -q '.[0].url' | grep -q .; then
             gh issue comment "$(gh issue list --label deploy-alert --state open --json number -q '.[0].number')" \
               --body "$BODY"
@@ -114,65 +139,6 @@ jobs:
             gh issue create --title "DEPLOY ALERT: post-deploy check failed — $FAILED_STEPS" \
               --label deploy-alert --body "$BODY"
           fi
-
-  # Optional server-render deploy (unblocks F2 response headers once VERCEL_TOKEN exists).
-  vercel-server:
-    if: github.ref == 'refs/heads/main' && github.event_name != 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    needs: build-and-deploy
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      # REEA-77: stamp the server-render artifact with its source commit too —
-      # the stamp step only existed in build-and-deploy, so reemco.vercel.app
-      # had no /__commit.txt and its build could not be self-identified.
-      - name: Stamp commit into build
-        run: echo "${{ github.sha }}" > public/__commit.txt
-      - name: Deploy to Vercel (production, server render)
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
-          CI: "1"
-        run: |
-          if [ -z "$VERCEL_TOKEN" ]; then
-            echo "::notice::VERCEL_TOKEN not set - skipping server-render deploy. F2 headers remain gated on this secret. Owner: CEO/repo admin."
-            exit 0
-          fi
-          # --scope avoids the interactive team picker (hangs CI when the token
-          # has multiple scopes); VERCEL_TEAM_ID is the team id/slug.
-          # REEA-75 follow-up: every vercel-server job since REEA-37 hangs in
-          # this step (50+ min, no conclusion; reemco.vercel.app serves a stale
-          # build) — pin the CLI, disable telemetry, and hard-timeout at 20m so
-          # the job fails loudly with its log instead of hanging the run.
-          SCOPE_ARGS=""
-          if [ -n "$VERCEL_TEAM_ID" ]; then SCOPE_ARGS="--scope $VERCEL_TEAM_ID"; fi
-          export VERCEL_TELEMETRY_DISABLED=1
-          set -o pipefail
-          timeout --signal=INT 20m npx -y vercel@59.11.7 deploy --prod --yes --cwd "$GITHUB_WORKSPACE" \
-            --token "$VERCEL_TOKEN" $SCOPE_ARGS 2>&1 | tee /tmp/vercel-deploy.log
-          URL=$(grep -oE 'https://[a-z0-9.-]+\.vercel\.app' /tmp/vercel-deploy.log | tail -1)
-          echo "VERCEL_DEPLOY_URL=$URL" >> "$GITHUB_STEP_SUMMARY"
-          echo "Vercel production URL: $URL"
-          # REEA-77 post-deploy verification (Observability-before-Launch):
-          # the production alias must serve this exact build and the F2
-          # headers before the job is allowed to go green. The raw deployment
-          # URL may sit behind Vercel SSO protection, so verify via the alias.
-          sleep 5
-          SERVED=$(curl -fsS https://reemco.vercel.app/__commit.txt 2>/dev/null | tr -d '[:space:]')
-          echo "live artifact commit: $SERVED"
-          if [ "$SERVED" != "${{ github.sha }}" ]; then
-            echo "::error::reemco.vercel.app does not serve this build's commit ($SERVED != ${{ github.sha }}) — treating deploy as failed. Rollback: rerun this workflow from the previous known-good commit."
-            exit 1
-          fi
-          for H in "content-security-policy" "x-content-type-options" "referrer-policy" "strict-transport-security"; do
-            curl -fsSI https://reemco.vercel.app/ | grep -iq "^$H:" || {
-              echo "::error::F2 response header missing on reemco.vercel.app: $H"; exit 1; }
-          done
-          echo "F2 headers verified on reemco.vercel.app"
 
       # REEA-77 diagnostics: when the remote build never completes (exit 124),
       # the CLI poll gives us nothing — pull the builder-side state and build

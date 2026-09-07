@@ -80,7 +80,7 @@ jobs:
         id: smoke
         if: steps.guard.outputs.due != 'false'
         env:
-          SMOKE_BASE_URL: https://reemco-price-compare-preview.surge.sh
+          SMOKE_BASE_URL: https://reemco.vercel.app
         run: npm run smoke
 
       # One retry to absorb transient network blips (false-positive alerting
@@ -89,7 +89,7 @@ jobs:
         id: retry
         if: failure()
         env:
-          SMOKE_BASE_URL: https://reemco-price-compare-preview.surge.sh
+          SMOKE_BASE_URL: https://reemco.vercel.app
         run: |
           echo "first attempt failed - retrying once to rule out a transient blip"
           sleep 30
@@ -105,10 +105,10 @@ jobs:
             --jq '[.jobs[].steps[] | select(.conclusion=="failure") | .name] | join("; ")')
           BODY="Scheduled smoke check of the live site failed at $(date -u +%FT%TZ) (failed twice, not a transient blip).
           Failed step(s): ${FAILED_STEPS:-unknown}.
-          Site: https://reemco-price-compare-preview.surge.sh
+          Site: https://reemco.vercel.app
           Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-          A regression is live that no deploy introduced (site serves artifact $(curl -fsS https://reemco-price-compare-preview.surge.sh/__commit.txt || echo unknown)). Investigate recent deploys first (rollback: Actions > Deploy site > Run workflow with rollback_sha = last green commit), then the live host itself."
+          A regression is live that no deploy introduced (site serves artifact $(curl -fsS https://reemco.vercel.app/__commit.txt || echo unknown)). Investigate recent deploys first (rollback: Actions > Deploy site > Run workflow with rollback_sha = last green commit), then the live host itself."
           if gh issue list --label smoke-alert --state open --json url -q '.[0].url' | grep -q .; then
             gh issue comment "$(gh issue list --label smoke-alert --state open --json number -q '.[0].number')" \
               --body "$BODY"
