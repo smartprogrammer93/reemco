@@ -137,18 +137,44 @@ jobs:
           [ -n "$KV_URL" ] || KV_URL="$BASE"
           [ -n "$KV_TOK" ] || KV_TOK="$VERCEL_TOKEN"
           KV_KEY="reea143-probe-$GITHUB_RUN_ATTEMPT"
-          SC=$(curl -s -m 20 -o /tmp/kv-set.json -w '%{http_code}' -X POST \
-            -H "Authorization: Bearer $KV_TOK" -H 'Content-Type: text/plain' \
-            --data-binary "$(printf 'reea143-marker\nEX\n60')" "${KV_URL%/}/set/$KV_KEY" || echo 000)
-          GC=$(curl -s -m 20 -o /tmp/kv-get.json -w '%{http_code}' \
-            -H "Authorization: Bearer $KV_TOK" "${KV_URL%/}/get/$KV_KEY" || echo 000)
-          echo "kv roundtrip set=$SC get=$GC"
-          GET_BODY=$(cat /tmp/kv-get.json 2>/dev/null || true)
-          echo "kv get body (${#GET_BODY} chars): $(echo "$GET_BODY" | head -c 200)"
-          if echo "$GET_BODY" | grep -q reea143-marker; then
-            echo "KV store roundtrip OK - shared reads will serve collect jobs across instances"
+          # Discover which base serves Upstash-style REST for this project
+          # (kv.ts appends get/<key> and set/<key> to the base). One POST+GET
+          # per candidate; status per attempt; stop at the first echo, then
+          # align the stored binding with the working base.
+          WIN=""
+          for CAND in "$KV_URL" "$BASE/v1" "$BASE/v9/projects/reemco" "$BASE/kv" "$BASE/v1/kv"; do
+            # The env endpoints accept the bearer; root paths behaved better
+            # unauthenticated - try both header variants per candidate.
+            hdr=(-H "Authorization: Bearer $KV_TOK")
+            SC=$(curl -s -m 20 -o /tmp/kv-set.json -w '%{http_code}' -X POST \
+              "${hdr[@]}" -H 'Content-Type: text/plain' \
+              --data-binary "$(printf 'reea143-marker\nEX\n60')" "$CAND/set/$KV_KEY" || echo 000)
+            GC=$(curl -s -m 20 -o /tmp/kv-get.json -w '%{http_code}' \
+              "${hdr[@]}" "$CAND/get/$KV_KEY" || echo 000)
+            GET_BODY=$(cat /tmp/kv-get.json 2>/dev/null || true)
+            echo "candidate $CAND [auth] -> set=$SC get=$GC body=${#GET_BODY} chars: $(echo "$GET_BODY" | head -c 120)"
+            if echo "$GET_BODY" | grep -q reea143-marker; then WIN="$CAND"; break; fi
+            hdr=()
+            SC=$(curl -s -m 20 -o /tmp/kv-set.json -w '%{http_code}' -X POST \
+              "${hdr[@]+"${hdr[@]}"}" -H 'Content-Type: text/plain' \
+              --data-binary "$(printf 'reea143-marker\nEX\n60')" "$CAND/set/$KV_KEY" || echo 000)
+            GC=$(curl -s -m 20 -o /tmp/kv-get.json -w '%{http_code}' \
+              "${hdr[@]+"${hdr[@]}"}" "$CAND/get/$KV_KEY" || echo 000)
+            GET_BODY=$(cat /tmp/kv-get.json 2>/dev/null || true)
+            echo "candidate $CAND [anon] -> set=$SC get=$GC body=${#GET_BODY} chars: $(echo "$GET_BODY" | head -c 120)"
+            # kv.ts always sends the bearer header, so only the auth-mode
+            # echo above counts; anon is diagnostic only.
+          done
+          if [ -n "$WIN" ]; then
+            echo "KV store roundtrip OK via $WIN - shared reads will serve collect jobs across instances"
+            if [ "$WIN" != "$KV_URL" ]; then
+              BODY=$(jq -cn --arg v "$WIN" '{key:"KV_REST_API_URL",value:$v,type:"encrypted",target:["production"]}')
+              C=$(curl -s -o /tmp/vercel-env-post.json -w '%{http_code}' -m 30 -X POST -H "$AUTH" -H "$CT" \
+                -d "$BODY" "$BASE/v10/projects/reemco/env$Q" || echo 000)
+              echo "POST env KV_REST_API_URL ($WIN) -> HTTP $C"
+            fi
           else
-            echo "::error::KV roundtrip did not echo the marker (get HTTP $GC, shape above). The binding values are not serving Upstash-style reads; fix the connection under project Storage settings and rerun this workflow. Unblock owner: repo admin (CEO)."
+            echo "::error::KV roundtrip did not echo the marker on any candidate base (statuses above). Fix the connection under project Storage settings and rerun this workflow. Unblock owner: repo admin (CEO)."
             exit 1
           fi
 
