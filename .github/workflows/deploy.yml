@@ -146,7 +146,7 @@ jobs:
           [ -n "$KV_TOK" ] || KV_TOK="$VERCEL_TOKEN"
           KV_KEY="reea143-probe-$GITHUB_RUN_ATTEMPT"
           WIN=""
-          for CAND in "$KV_URL" "$BASE"; do
+          for CAND in "$KV_URL" "$BASE/v9/projects/reemco/kv" "$BASE/v1/projects/reemco/kv" "$BASE/v9/kv" "$BASE/kv" "$BASE"; do
             hdr=(-H "Authorization: Bearer $KV_TOK")
             SC=$(curl -s -m 20 -o /tmp/kv-set.json -w '%{http_code}' -X POST \
               "${hdr[@]}" -H "Content-Type: text/plain" \
@@ -226,7 +226,7 @@ jobs:
           { [ -n "$ID1" ] && [ "$ID1" != "null" ] && [ -n "$ID2" ] && [ "$ID2" != "null" ]; } || { echo "::error::probe B failed - POST returned no jobId"; exit 1; }
           [ "$ID1" = "$ID2" ] || { echo "::error::probe B failed - back-to-back POSTs created different jobs ($ID1 vs $ID2)"; exit 1; }
           echo "probe B PASS (same job id on second POST)"
-          JOB=$(curl -fsS -m 30 -X POST "$BASE/api/products/samsung-galaxy-s25/collect" -H 'Content-Type: application/json' -d '{}' | jq -r '.jobId')
+          JOB=$(curl -fsS -m 30 -X POST "$BASE/api/products/samsung-galaxy-s25/collect?wait=1" -H 'Content-Type: application/json' -d '{}' | jq -r '.jobId')
           echo "probe A created job: $JOB"
           { [ -n "$JOB" ] && [ "$JOB" != "null" ]; } || { echo "::error::probe A setup failed - POST returned no jobId"; exit 1; }
           OK=0; FIRST=""
