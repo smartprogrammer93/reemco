@@ -82,39 +82,42 @@ jobs:
             echo "::error::Repo secret VERCEL_TOKEN is not set - cannot attach KV binding. Unblock owner: repo admin (CEO)."
             exit 1
           fi
-          Q=""
-          if [ -n "${VERCEL_TEAM_ID:-}" ]; then Q="?teamId=$VERCEL_TEAM_ID"; fi
+          Q="?decrypt=true"
+          if [ -n "${VERCEL_TEAM_ID:-}" ]; then Q="$Q&teamId=$VERCEL_TEAM_ID"; fi
           AUTH="Authorization: Bearer $VERCEL_TOKEN"
           ENV_URL="https://api.vercel.com/v9/projects/reemco/env$Q"
           ENV_JSON=/tmp/vercel-env.json
+          CREATED=/tmp/vercel-kv.json
 
-          # Field-name-only diagnostics: response *shape* goes to the logs,
-          # values never do (secrets policy). These lines make the endpoint
-          # contract self-documenting when this env's platform differs.
+          # Field-name-only diagnostics (values stay out of logs; error
+          # messages are not secret so they are printed). Makes the endpoint
+          # contract self-documenting across platform versions.
           shape() { jq -c '[paths(scalars)] | map(join("."))[:16] | join(", ")' "$1" 2>/dev/null || echo "unparseable"; }
+          errmsg() { jq -r '[.. | objects | .message? // empty] | join(" | ")' "$1" 2>/dev/null || echo ""; }
           env_keys() { jq -r '[.. | objects | .key? // empty] | join(" ")' "$1" 2>/dev/null || true; }
 
           CODE=$(curl -s -o "$ENV_JSON" -w '%{http_code}' -m 30 -H "$AUTH" "$ENV_URL" || echo 000)
-          echo "GET env -> HTTP $CODE; fields: $(shape "$ENV_JSON")"
+          echo "GET env(decrypt) -> HTTP $CODE; fields: $(shape "$ENV_JSON"); msg: $(errmsg "$ENV_JSON")"
           KEYS=$(env_keys "$ENV_JSON")
           if echo "$KEYS" | grep -q KV_REST_API_URL && echo "$KEYS" | grep -q KV_REST_API_TOKEN; then
-            echo "KV binding already attached to reemco ($KEYS)"
+            echo "KV binding already attached to reemco (both KV_REST_* keys present)"
             exit 0
           fi
           echo "KV_REST_* absent (found: ${KEYS:-none}) - attaching KV store..."
 
-          CREATED=/tmp/vercel-kv.json
-          ACODE=$(curl -s -o "$CREATED" -w '%{http_code}' -m 60 -X POST -H "$AUTH" \
-            -H "Content-Type: application/json" -d '{"name":"reemco-collect"}' \
-            "https://api.vercel.com/v1/kv$Q" || echo 000)
-          if [ "$ACODE" = "000" ] || [ "$ACODE" = "404" ]; then
+          # Attach/create the KV store. Attaching injects KV_REST_API_URL and
+          # KV_REST_API_TOKEN into the project env automatically; a short list
+          # of plausible endpoint paths is tried until one answers != 404.
+          for P in /v1/kv /v1/integrations/kv /v2/integrations/kv /v1/stores; do
             ACODE=$(curl -s -o "$CREATED" -w '%{http_code}' -m 60 -X POST -H "$AUTH" \
-              -H "Content-Type: application/json" -d '{"name":"reemco-collect"}' \
-              "https://api.vercel.com/v1/integrations/kv$Q" || echo 000)
-          fi
-          echo "attach -> HTTP $ACODE; fields: $(shape "$CREATED")"
-          KV_URL=$(jq -r '.connectionString // .restApiUrl // .url // .apiUrl // (.connection.url? // null) // (.data.connectionString? // .data.url?) // empty' "$CREATED" 2>/dev/null || true)
-          KV_TOK=$(jq -r '.token // .restToken // .privateToken // (.connection.token? // null) // (.data.token? // .data.privateToken?) // empty' "$CREATED" 2>/dev/null || true)
+              -H "Content-Type: application/json" \
+              -d '{"name":"reemco-collect","projectId":"reemco","destination":"bom1","source":"upstash"}' \
+              "https://api.vercel.com$P$Q" || echo 000)
+            echo "attach POST $P -> HTTP $ACODE; fields: $(shape "$CREATED"); msg: $(errmsg "$CREATED")"
+            if [ "$ACODE" != "404" ] && [ "$ACODE" != "000" ]; then break; fi
+          done
+          KV_URL=$(jq -r '.. | strings | select(test("^https?://"))' "$CREATED" 2>/dev/null | head -1 || true)
+          KV_TOK=$(jq -r '(.token // .restToken // .privateToken // (.data.token? // null) // empty)' "$CREATED" 2>/dev/null || true)
           echo "connection -> url=${#KV_URL} chars token=${#KV_TOK} chars"
 
           post_env() {
@@ -122,7 +125,7 @@ jobs:
             C=$(curl -s -o /tmp/vercel-env-post.json -w '%{http_code}' -m 30 -X POST -H "$AUTH" \
               -H "Content-Type: application/json" -d "$BODY" \
               "https://api.vercel.com/v10/projects/reemco/env$Q" || echo 000)
-            echo "POST env $1 -> HTTP $C $(shape /tmp/vercel-env-post.json)"
+            echo "POST env $1 -> HTTP $C; msg: $(errmsg /tmp/vercel-env-post.json)"
           }
           if [ -n "$KV_URL" ]; then
             echo "$KEYS" | grep -q KV_REST_API_URL || post_env KV_REST_API_URL "$KV_URL"
@@ -138,7 +141,7 @@ jobs:
           if echo "$FINAL_KEYS" | grep -q KV_REST_API_URL && echo "$FINAL_KEYS" | grep -q KV_REST_API_TOKEN; then
             echo "KV binding attached and verified on reemco ($FINAL_KEYS)"
           else
-            echo "::error::KV attach incomplete (final GET HTTP $CODE, keys now: ${FINAL_KEYS:-none}) - deploy would ship without the shared collect-job store. The field-name lines above show this platform's response shapes; adjust endpoints or attach the store in project Storage settings and rerun."
+            echo "::error::KV attach incomplete (final GET HTTP $CODE, keys now: ${FINAL_KEYS:-none}) - deploy would ship without the shared collect-job store. Endpoint paths/messages printed above identify what this platform serves; attach the store in project Storage settings if these paths do not exist."
             exit 1
           fi
 
