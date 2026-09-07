@@ -55,8 +55,15 @@ function CountUpPrice({
   currency: string;
 }) {
   const [shown, setShown] = useState(priceLabel);
-  useEffect(() => {
+  const [lastPriceLabel, setLastPriceLabel] = useState(priceLabel);
+  // Guarded render-time adjustment (react.dev pattern): when the scraped label
+  // changes, the final value resets during render — the count-up below then
+  // animates on top of it. Replaces the synchronous setState in the effect body.
+  if (lastPriceLabel !== priceLabel) {
+    setLastPriceLabel(priceLabel);
     setShown(priceLabel);
+  }
+  useEffect(() => {
     if (typeof window === "undefined" || typeof requestAnimationFrame !== "function") return;
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
     const DURATION_MS = 200;

@@ -1,0 +1,42 @@
+
+> reemco-price-compare@0.1.0 lint
+> eslint
+
+
+/work/repo/scripts/check-links.mjs
+  6:9  warning  'merchantSearchUrl' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/work/repo/scripts/crawl-live.mjs
+  29:98  warning  'e' is defined but never used  @typescript-eslint/no-unused-vars
+
+/work/repo/scripts/qa-verify.mjs
+   11:10  warning  'existsSync' is defined but never used        @typescript-eslint/no-unused-vars
+   42:16  warning  'collectJobInPage' is defined but never used  @typescript-eslint/no-unused-vars
+  513:9   warning  't0' is assigned a value but never used       @typescript-eslint/no-unused-vars
+
+/work/repo/src/app/product/error.tsx
+  3:8  warning  'ProductResultCard' is defined but never used  @typescript-eslint/no-unused-vars
+
+/work/repo/src/lib/offer-schema.test.ts
+  44:13  warning  'sourceUrl' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  44:24  warning  'fetchedAt' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/work/repo/src/lib/offer-schema.ts
+  15:1  warning  Unused eslint-disable directive (no problems were reported from 'no-control-regex')
+  28:3  warning  Unused eslint-disable directive (no problems were reported from 'no-control-regex')
+
+/work/repo/src/lib/safe-url.ts
+  16:1  warning  Unused eslint-disable directive (no problems were reported from 'no-control-regex')
+
+/work/repo/src/lib/search-params.ts
+  19:3  warning  Unused eslint-disable directive (no problems were reported from 'no-control-regex')
+
+/work/repo/src/proxy.test.ts
+  17:1  warning  Unused eslint-disable directive (no problems were reported from 'import/no-relative-packages')
+
+/work/repo/src/proxy.ts
+  15:41  warning  'mode' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+✖ 14 problems (0 errors, 14 warnings)
+  0 errors and 5 warnings potentially fixable with the `--fix` option.
+
