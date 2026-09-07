@@ -231,3 +231,79 @@ describe("stock selection UI (REEA-186)", () => {
     expect((hidden as HTMLInputElement | null)?.value).toBe("1");
   });
 });
+
+describe("staged progressive results (REEA-178)", () => {
+  const STAGE1_PRODUCT: NormalizedProduct = {
+    productId: "sony-wh-1000xm6",
+    title: "Sony WH-1000XM6",
+    brand: "Sony",
+    offers: [
+      { merchant: "Xcite", price: 74, currency: "KWD", url: "https://xcite.example/p", inStock: true },
+    ],
+    coupons: [],
+    variations: [],
+    alternatives: [],
+    scrapedAt: new Date().toISOString(),
+  };
+  const FINAL_PRODUCT_B: NormalizedProduct = {
+    productId: "sony-wh-ch720n",
+    title: "Sony WH-CH720N",
+    brand: "Sony",
+    offers: [
+      { merchant: "Blink", price: 40, currency: "KWD", url: "https://blink.example/ch720n", inStock: true },
+    ],
+    coupons: [],
+    variations: [],
+    alternatives: [],
+    scrapedAt: new Date().toISOString(),
+  };
+  // Converged snapshot: Xcite + Blink offers merged into the XM6 card.
+  const FINAL_MERGED_A: NormalizedProduct = {
+    ...STAGE1_PRODUCT,
+    offers: [
+      { merchant: "Blink", price: 60, currency: "KWD", url: "https://blink.example/xm6", inStock: true },
+      ...STAGE1_PRODUCT.offers,
+    ],
+  };
+
+  it("paints stage-one offers before later stages resolve, then converges", async () => {
+    searchParams.set("q", "sony");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    let resolveFinal: (v: unknown) => void = () => {};
+    const stages = [
+      Promise.resolve({ products: [STAGE1_PRODUCT], notes: [], suggestions: [STAGE1_PRODUCT] }),
+      new Promise((res) => {
+        resolveFinal = res;
+      }),
+    ] as const;
+
+    await act(async () => {
+      render(
+        <ResultsClient query="sony" page={1} country={null} stages={stages as unknown as Promise<any>[]} />,
+      );
+    });
+
+    // AC-1: the first flush is already visible while the later stage is pending.
+    let html = document.body.innerHTML;
+    expect(html).toContain("Sony WH-1000XM6");
+    expect(html).not.toContain("Sony WH-CH720N");
+    // Count heading + funnel events wait for the converged set.
+    expect(document.body.textContent).not.toContain("results for");
+    expect(eventsSent().some((e) => e.type === "search_submitted")).toBe(false);
+
+    await act(async () => {
+      resolveFinal({ products: [FINAL_MERGED_A, FINAL_PRODUCT_B], notes: [], suggestions: [] });
+      await Promise.resolve();
+    });
+
+    html = document.body.innerHTML;
+    expect(html).toContain("Sony WH-CH720N");
+    // Converged view: full count heading with the merged 2-result set.
+    expect(document.body.textContent).toContain("2 results for");
+
+    const evts = eventsSent();
+    const search = evts.find((e) => e.type === "search_submitted");
+    expect(search?.result_count).toBe(2);
+  });
+});
