@@ -141,8 +141,19 @@ jobs:
           export VERCEL_TELEMETRY_DISABLED=1
           SCOPE_ARGS=""
           if [ -n "${VERCEL_TEAM_ID:-}" ]; then SCOPE_ARGS="--scope $VERCEL_TEAM_ID"; fi
-          timeout --signal=INT 10m npx -y vercel@59.11.7 kv add reemco-collect reemco --yes --token "$VERCEL_TOKEN" $SCOPE_ARGS 2>&1 | tail -5 || true
-          timeout --signal=INT 5m npx -y vercel@59.11.7 kv ls --token "$VERCEL_TOKEN" $SCOPE_ARGS 2>&1 | tail -8 || true
+          # Full-output capture (CEO note): headless attach variants with the
+          # deploy token at team scope; one rerun shows which form sticks.
+          for CMD in "kv add reemco-collect reemco" "kv add reemco-collect" "kv add"; do
+            echo "--- vercel $CMD $SCOPE_ARGS"
+            timeout --signal=INT 10m npx -y vercel@59.11.7 $CMD --yes --token "$VERCEL_TOKEN" $SCOPE_ARGS > /tmp/kvadd.txt 2>&1 || echo "exit=$?"
+            head -30 /tmp/kvadd.txt
+          done
+          echo "--- vercel kv ls"
+          timeout --signal=INT 5m npx -y vercel@59.11.7 kv ls --token "$VERCEL_TOKEN" $SCOPE_ARGS > /tmp/kvls.txt 2>&1 || echo "exit=$?"
+          head -20 /tmp/kvls.txt
+          echo "--- vercel env ls production"
+          timeout --signal=INT 5m npx -y vercel@59.11.7 env ls production --token "$VERCEL_TOKEN" $SCOPE_ARGS > /tmp/envls.txt 2>&1 || echo "exit=$?"
+          head -30 /tmp/envls.txt
           CODE=$(curl -s -o "$LIST_JSON" -w '%{http_code}' -m 30 -H "$AUTH" "$BASE/v9/projects/reemco/env$Q" || echo 000)
           echo "verify GET env list after kv add -> HTTP $CODE"
 
