@@ -541,6 +541,29 @@ const COLLECTORS: RetailerCollector[] = [
  * tokens (tie-break alphabetically smallest slug) as the canonical view title.
  */
 export function groupHits(query: string, hits: SearchHit[]): NormalizedProduct[] {
+  const groups = buildGroups(query, hits);
+  const sorted = [...groups].sort(
+    (a, b) =>
+      b.titleScore - a.titleScore ||
+      Math.min(...a.offers.map((o) => o.price)) - Math.min(...b.offers.map((o) => o.price)),
+  );
+  return finalizeGroups(selectAcrossRetailers(sorted, LIVE_SEARCH_MAX_PRODUCTS));
+}
+
+/**
+ * REEA-178 — intermediate-snapshot grouping for progressive per-retailer
+ * streaming: same canonical merge rules as groupHits, but groups keep their
+ * first-seen order and later arrivals only append. That makes each flush an
+ * append-only diff of the previous one — already-rendered cards keep their
+ * slot while slower retailers add offers underneath (AC-2). The final flush
+ * still runs the full groupHits ranking above, so the converged page is the
+ * exact result the non-streamed path produces.
+ */
+export function groupHitsStable(query: string, hits: SearchHit[]): NormalizedProduct[] {
+  return finalizeGroups(buildGroups(query, hits).slice(0, LIVE_SEARCH_MAX_PRODUCTS));
+}
+
+function buildGroups(query: string, hits: SearchHit[]): HitGroup[] {
   const groups: HitGroup[] = [];
   const cheapestOf = (g: HitGroup): number => Math.min(...g.offers.map((o) => o.price));
 
@@ -559,6 +582,16 @@ export function groupHits(query: string, hits: SearchHit[]): NormalizedProduct[]
     if (!chosen) {
       chosen = { fields, titleScore: 0, titles: new Set<string>(), offers: [] };
       groups.push(chosen);
+    } else {
+      // REEA-168 follow-up (board note on REEA-169): seed the group's missing
+      // fields from the incoming offer on merge. Once a group carries a
+      // color/storage value it DISCRIMINATES — a later offer of another color
+      // forms its own group instead of leaking into this ranked list; offers
+      // still missing that field keep joining through the partial-match rule.
+      const f = chosen.fields;
+      if (f.modelLine === "") f.modelLine = fields.modelLine;
+      if (f.storage === "") f.storage = fields.storage;
+      if (f.color === "") f.color = fields.color;
     }
     const score = titleMatchScore(title, query);
     if (score > chosen.titleScore) chosen.titleScore = score;
@@ -573,13 +606,10 @@ export function groupHits(query: string, hits: SearchHit[]): NormalizedProduct[]
       chosen.offers.push(hit);
     }
   }
+  return groups;
+}
 
-  const sorted = [...groups].sort(
-    (a, b) =>
-      b.titleScore - a.titleScore ||
-      Math.min(...a.offers.map((o) => o.price)) - Math.min(...b.offers.map((o) => o.price)),
-  );
-  const selected = selectAcrossRetailers(sorted, LIVE_SEARCH_MAX_PRODUCTS);
+function finalizeGroups(selected: HitGroup[]): NormalizedProduct[] {
   const scrapedAt = new Date().toISOString(); // real collection completion time
 
   // Canonical slug selection (REEA-167 §2): the member title with the fewest
@@ -704,6 +734,186 @@ export interface LiveSearchResult {
   products: NormalizedProduct[];
   /** Per-retailer notes for the diagnostics panel; failures included. */
   notes: { merchant: string; hits: number; error?: string }[];
+  /** Empty-match suggestion set (REEA-114); every snapshot carries its own. */
+  suggestions?: NormalizedProduct[];
+}
+
+/**
+ * REEA-178 — progressive per-retailer collection for the results page.
+ * One promise per adapter in the run; stage k settles when at least k+1
+ * adapters have answered (in completion order) and carries the merged-so-far
+ * snapshot, so each flush is append-only over the previous one. The final
+ * stage deepens silent merchants first (REEA-149 round two) and then serves
+ * the exact full-ranked snapshot the blocking path produces — both paths
+ * share one finish, one live fetch per adapter, no bundled snapshots.
+ */
+export interface LiveSearchStages {
+  stages: Promise<LiveSearchResult>[];
+  /** Same promise as the last stage: the converged full-ranked snapshot. */
+  final: Promise<LiveSearchResult>;
+}
+
+type SettledAdapter = { merchant: string; hits: SearchHit[]; error?: string };
+
+function collectSettled(
+  c: RetailerCollector,
+  q: string,
+  fetchImpl: FetchImpl,
+): Promise<SettledAdapter> {
+  return c.collect(q, fetchImpl).then(
+    (hits): SettledAdapter => ({ merchant: c.merchant, hits }),
+    (err: unknown): SettledAdapter => ({
+      merchant: c.merchant,
+      hits: [],
+      error: err instanceof Error ? err.message : String(err),
+    }),
+  );
+}
+
+/** Shared filter+notes pass — adapter country tag wins before grouping. */
+function filterNotes(
+  country: CountryCode | null,
+  settledSoFar: SettledAdapter[],
+): { hits: SearchHit[]; notes: LiveSearchResult["notes"] } {
+  const hits: SearchHit[] = [];
+  const notes: LiveSearchResult["notes"] = [];
+  for (const s of settledSoFar) {
+    // Defensive second match on the adapter tag (parsers are injectable in
+    // tests); with scoped collectors this is already a tautology.
+    const kept = country ? s.hits.filter((h) => h.country === country) : s.hits;
+    hits.push(...kept);
+    notes.push({ merchant: s.merchant, hits: kept.length, ...(s.error ? { error: s.error } : {}) });
+  }
+  return { hits, notes };
+}
+
+/** Intermediate flush: stable insertion order, append-only across flushes. */
+function stagedSnapshot(
+  q: string,
+  country: CountryCode | null,
+  settledSoFar: SettledAdapter[],
+): LiveSearchResult {
+  const { hits, notes } = filterNotes(country, settledSoFar);
+  const products = groupHitsStable(q, hits);
+  return { products, notes, suggestions: products.slice(0, 3) };
+}
+
+/**
+ * REEA-149 depth pass: retailers that contributed nothing in round one are
+ * queried once more under the normalized query form. Additive only — an
+ * existing offer never depends on this round, and when every merchant already
+ * answered there is nothing to deepen, so it stays a single round. Runs
+ * inside the FINAL stage only, so mid-stream flushes stay single-hop.
+ */
+async function deepenSilent(
+  q: string,
+  settled: SettledAdapter[],
+  fetchImpl: FetchImpl,
+): Promise<void> {
+  const firstHits: SearchHit[] = [];
+  for (const s of settled) firstHits.push(...s.hits);
+  const missing = settled.filter((s) => s.hits.length === 0);
+  if (firstHits.length === 0 || missing.length === 0) return;
+  const enriched = enrichedQuery(firstHits, q);
+  if (!enriched || enriched.toLowerCase() === q.toLowerCase()) return;
+  await Promise.all(
+    missing.map(async (s) => {
+      const collector = COLLECTORS.find((c) => c.merchant === s.merchant);
+      if (!collector) return;
+      try {
+        const hits = await collector.collect(enriched, fetchImpl);
+        if (hits.length > 0) {
+          s.hits = hits;
+          s.error = undefined;
+        }
+      } catch {
+        // Second attempt failed too — keep the round-one note as-is.
+      }
+    }),
+  );
+}
+
+/** Converged snapshot: full groupHits ranking + relaxed-query suggestions. */
+async function finalSnapshot(
+  q: string,
+  country: CountryCode | null,
+  settled: SettledAdapter[],
+  fetchImpl: FetchImpl,
+): Promise<LiveSearchResult> {
+  const { hits, notes } = filterNotes(country, settled);
+  const products = groupHits(q, hits);
+  let suggestions = products.slice(0, 3);
+  if (q && products.length === 0) {
+    // Zero matches: re-collect once with the leading token so the empty state
+    // suggests real live titles, not catalog fixtures.
+    const relaxed = q.split(/\s+/)[0] ?? q;
+    if (relaxed && relaxed !== q) {
+      suggestions = (await collectLiveResults(relaxed, { fetchImpl, country })).products.slice(0, 3);
+    }
+  }
+  return { products, notes, suggestions };
+}
+
+export function collectLiveResultsStaged(
+  query: string,
+  opts: { fetchImpl?: FetchImpl; country?: CountryCode | null } = {},
+): LiveSearchStages {
+  const fetchImpl: FetchImpl = opts.fetchImpl ?? ((u, init) => fetch(u, init));
+  const q = query.trim();
+  const country = opts.country ?? null;
+  const collectors = country
+    ? COLLECTORS.filter((c) => c.country === country)
+    : COLLECTORS;
+
+  // Round one: every retailer is contacted once, in parallel, at call time —
+  // same single request per retailer as the blocking path, same bounded
+  // per-collector timeouts (REEA-156). Completions append to the accumulator
+  // in arrival order and release the next waiting stage.
+  const settled: SettledAdapter[] = [];
+  const waiting: (() => void)[] = [];
+  for (const c of collectors) {
+    void collectSettled(c, q, fetchImpl).then((s) => {
+      settled.push(s);
+      waiting.shift()?.();
+    });
+  }
+
+  const stages: Promise<LiveSearchResult>[] = collectors.map(async (_c, k) => {
+    // Count-based gate instead of chaining: later stages never wait on the
+    // rendering of earlier ones, only on their own adapter-count.
+    while (settled.length < k + 1) {
+      await new Promise<void>((res) => waiting.push(res));
+    }
+    if (k < collectors.length - 1) return stagedSnapshot(q, country, settled.slice());
+    await deepenSilent(q, settled, fetchImpl);
+    return finalSnapshot(q, country, settled, fetchImpl);
+  });
+
+  return { stages, final: stages[stages.length - 1] };
+}
+
+/**
+ * Collect live results for a query at request time — the blocking view of the
+ * staged collection above: every retailer in parallel with bounded per-collector
+ * timeouts (a slow or failed retailer only loses its own offers), then the
+ * bounded REEA-149 depth round for merchants that stayed silent, then the
+ * full-ranked grouping (REEA-167/168) and relaxed-query suggestions. Returns
+ * products ranked by title relevance, cheapest first inside each group. Never
+ * reads seed files or caches — every call re-collects live.
+ *
+ * REEA-170 — the optional `country` selection scopes the fan-out to the
+ * adapters tagged for that country (still fetched live, per adapter, with the
+ * same budgets; unselected retailers are not fetched, staying polite to
+ * retailer endpoints), and hits are matched on their adapter's country tag
+ * BEFORE grouping so every derived figure — main price rows, availability,
+ * best-price flags, retailer counts, cheaper alternatives' fromPrice — comes
+ * from the filtered offer set. With no selection the path is unchanged.
+ */
+export async function collectLiveResults(
+  query: string,
+  opts: { fetchImpl?: FetchImpl; country?: CountryCode | null } = {},
+): Promise<LiveSearchResult> {
+  return await collectLiveResultsStaged(query, opts).final;
 }
 
 /**
@@ -728,84 +938,4 @@ export function enrichedQuery(hits: SearchHit[], query: string): string {
   return best.trim();
 }
 
-/**
- * Collect live results for a query at request time. Round one fans every
- * retailer out in parallel with bounded per-collector timeouts; a slow or
- * failed retailer only loses its own offers. Round two (REEA-149) re-queries
- * only the retailers that stayed silent in round one, using the enriched
- * brand+code query form derived from the round-one answers — bounded, and
- * merchants that already answered are never re-fetched. Returns products
- * ranked by title relevance, cheapest first inside each group. Never reads
- * seed files or caches — every call re-collects live.
- *
- * REEA-170 — the optional `country` selection scopes the fan-out to the
- * adapters tagged for that country (still fetched live, per adapter, with the
- * same budgets; unselected retailers are not fetched, staying polite to
- * retailer endpoints), and hits are matched on their adapter's country tag
- * BEFORE grouping so every derived figure — main price rows, availability,
- * best-price flags, retailer counts, cheaper alternatives' fromPrice — comes
- * from the filtered offer set. With no selection the path is unchanged.
- */
-export async function collectLiveResults(
-  query: string,
-  opts: { fetchImpl?: FetchImpl; country?: CountryCode | null } = {},
-): Promise<LiveSearchResult> {
-  const fetchImpl: FetchImpl = opts.fetchImpl ?? ((u, init) => fetch(u, init));
-  const q = query.trim();
-  const country = opts.country ?? null;
-  const collectors = country
-    ? COLLECTORS.filter((c) => c.country === country)
-    : COLLECTORS;
-  const settled = await Promise.all(
-    collectors.map(async (c): Promise<{ merchant: string; hits: SearchHit[]; error?: string }> => {
-      try {
-        return { merchant: c.merchant, hits: await c.collect(q, fetchImpl) };
-      } catch (err) {
-        return {
-          merchant: c.merchant,
-          hits: [],
-          error: err instanceof Error ? err.message : String(err),
-        };
-      }
-    }),
-  );
 
-  // REEA-149 depth pass: retailers that contributed nothing in round one are
-  // queried once more under the normalized query form. Additive only — an
-  // existing offer never depends on this round, and when every merchant
-  // already answered there is nothing to deepen, so it stays a single round.
-  const firstHits: SearchHit[] = [];
-  for (const s of settled) firstHits.push(...s.hits);
-  const missing = settled.filter((s) => s.hits.length === 0);
-  if (firstHits.length > 0 && missing.length > 0) {
-    const enriched = enrichedQuery(firstHits, q);
-    if (enriched && enriched.toLowerCase() !== q.toLowerCase()) {
-      await Promise.all(
-        missing.map(async (s) => {
-          const collector = COLLECTORS.find((c) => c.merchant === s.merchant);
-          if (!collector) return;
-          try {
-            const hits = await collector.collect(enriched, fetchImpl);
-            if (hits.length > 0) {
-              s.hits = hits;
-              s.error = undefined;
-            }
-          } catch {
-            // Second attempt failed too — keep the round-one note as-is.
-          }
-        }),
-      );
-    }
-  }
-
-  const hits: SearchHit[] = [];
-  const notes: LiveSearchResult["notes"] = [];
-  for (const s of settled) {
-    // Defensive second match on the adapter tag (parsers are injectable in
-    // tests); with scoped collectors this is already a tautology.
-    const kept = country ? s.hits.filter((h) => h.country === country) : s.hits;
-    hits.push(...kept);
-    notes.push({ merchant: s.merchant, hits: kept.length, ...(s.error ? { error: s.error } : {}) });
-  }
-  return { products: groupHits(q, hits), notes };
-}

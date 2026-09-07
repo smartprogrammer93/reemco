@@ -295,6 +295,37 @@ describe("groupHits", () => {
     ).toBe(false); // present fields must agree
     expect(compatibleFields(canonicalFields("Samsung Galaxy Z Fold7"), base)).toBe(true);
   });
+
+  it("REEA-168/169: color discriminates inside the merged offer list", () => {
+    // Board note on REEA-169: on the Silver page the ranked list holds only
+    // Silver units — black/Jet Black units form their own labeled view, and
+    // colorless listings keep joining through the partial-match rule.
+    const products = groupHits("galaxy z fold7 silver", [
+      hit({ title: "Samsung Galaxy Z Fold7 Phone", merchant: "Blink", price: 460, url: "https://blink.example/seed" }),
+      hit({ title: "Samsung Galaxy Z Fold7 Phone Silver", merchant: "Eureka", price: 494.9, url: "https://eureka.example/silver" }),
+      hit({ title: "Samsung Galaxy Z Fold7 Phone Silver", merchant: "Xcite", price: 429.9, url: "https://xcite.example/silver" }),
+      hit({ title: "Samsung Galaxy Z Fold7 Phone Jet Black", merchant: "Jarir", price: 455, url: "https://jarir.example/black" }),
+    ]);
+    expect(products).toHaveLength(2);
+    // Canonical title of the Silver view: fewest tokens among its members —
+    // the colorless seed spelling.
+    const silver = products.find((p) => p.title === "Samsung Galaxy Z Fold7 Phone")!;
+    // Seed merges the Silver offers in (partial-match + field seeding), ranked
+    // cheapest-first; the Jet Black unit never enters this list.
+    expect(silver.offers.map((o) => o.price)).toEqual([429.9, 460, 494.9]);
+    const black = products.find((p) => p.title === "Samsung Galaxy Z Fold7 Phone Jet Black")!;
+    expect(black.offers).toHaveLength(1);
+    // Jet Black collapses to base black without polluting the model line.
+    expect(canonicalFields("Samsung Galaxy Z Fold7 Phone Jet Black").modelLine).toBe("galaxy z fold7");
+    // Accessory listings stay out of the device's offer list (REEA-169 f1):
+    // the accessory noun keeps the variant label distinct.
+    expect(
+      compatibleFields(
+        canonicalFields("Samsung Galaxy Z Fold7 Phone Silver"),
+        canonicalFields("Samsung Galaxy Z Fold7 Case"),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("collectLiveResults", () => {

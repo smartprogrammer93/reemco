@@ -55,18 +55,22 @@ const COLORS = new Set([
  *  shadow") needs no prefix entry — the scan closes the colour on "silver" and
  *  ignores the trailing word after the stop. */
 const COLOR_PREFIXES = new Set([
-  "cobalt", "titanium", "phantom", "cosmic", "midnight", "starlight",
+  "cobalt", "titanium", "phantom", "cosmic", "midnight", "starlight", "jet",
   "sky", "ice", "desert", "mist", "frost", "lava", "solar", "aurora",
 ]);
 
 const GRADE_WORDS = new Set(["new", "renewed", "refurbished", "opened"]);
 const GRADE_LETTERS = new Set(["a", "b", "c", "d"]);
 
-/** Ignored tokens (§1 step 3): device nouns, connectivity, restatements, marketing tails. */
+/** Ignored tokens (§1 step 3): device-type nouns, connectivity suffixes,
+ *  spec restatements, marketing tails. Accessory nouns (case / cover /
+ *  charger …) deliberately STAY in the model line — they identify a
+ *  different product for the same device, so a case must not fold into the
+ *  phone's own offer list (REEA-169 finding 1). */
 const NOISE = new Set([
   "phone", "smartphone", "mobile", "tablet", "laptop", "notebook", "monitor",
   "keyboard", "mouse", "headphones", "headphone", "headset", "earbuds",
-  "speaker", "tv", "charger", "cable", "case", "cover", "protector",
+  "speaker", "tv",
   "5g", "4g", "3g", "lte", "gprs", "wifi", "wi", "fi", "esim", "sim",
   "snapdragon", "elite", "exynos", "dimensity", "helios", "octa", "core",
   "with", "pen", "global", "version", "unlocked", "ram", "memory", "mem",
