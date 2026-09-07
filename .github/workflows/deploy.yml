@@ -111,7 +111,9 @@ jobs:
             jq -r --arg k "$1" '[(.. | objects | select((.key? // .name? // "") == $k) | (.value? // .text? // ""))] | map(select(length > 0)) | .[0] // ""' "$LIST_JSON" 2>/dev/null || true
           }
           post_env() {
-            BODY=$(jq -cn --arg k "$1" --arg v "$2" '{key:$k,value:$v,type:"encrypted",target:["production"]}')
+            # v25: type:"encrypted" stores an opaque envelope; use plain so the
+            # functions receive the literal value kv.ts expects at runtime.
+            BODY=$(jq -cn --arg k "$1" --arg v "$2" '{key:$k,value:$v,type:"plain",target:["production"]}')
             C=$(curl -s -o /tmp/vercel-env-post.json -w '%{http_code}' -m 30 -X POST -H "$AUTH" -H "$CT" \
               -d "$BODY" "$BASE/v10/projects/reemco/env$Q" || echo 000)
             echo "POST env $1 -> HTTP $C $(head -c 120 /tmp/vercel-env-post.json)"
