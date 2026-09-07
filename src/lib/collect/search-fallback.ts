@@ -387,11 +387,15 @@ export async function searchRetailerFallback(
       );
       if (!res.ok) {
         lastError = `amazon.eg search HTTP ${res.status}`;
+        if (attempt < 1) await new Promise((r) => setTimeout(r, 300));
         continue;
       }
       const found = parseAmazonEgSearch(await res.text(), productTitle);
       if (found) return found;
       lastError = "No matching product found on amazon.eg search";
+      // A just-warmed edge can serve two identical cold responses back to
+      // back; ~300ms lets amazon.eg's own cache catch up before retrying.
+      await new Promise((r) => setTimeout(r, 300));
     }
     throw new Error(lastError);
   }
