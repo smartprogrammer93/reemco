@@ -113,7 +113,7 @@ jobs:
               -H 'Content-Type: text/plain' \
               --data-binary "$(printf 'reea143-marker\nEX\n60')" "$1/set/$K" >/dev/null || true
             B=$(curl -s -m 15 -H "Authorization: Bearer $2" "$1/get/$K" || true)
-            echo "roundtrip $1 -> ${#B} chars: $(echo "$B" | head -c 100)"
+            echo "roundtrip $1 -> ${#B} chars: $(echo "$B" | head -c 200)"
             echo "$B" | grep -q reea143-marker
           }
 
@@ -136,9 +136,9 @@ jobs:
           echo "listing after CLI attach -> HTTP $CODE url=${#U} chars token=${#T} chars"
 
           WIN_URL=""; WIN_TOK=""
-          for B in "$KVBASE" "$U" "$BASE"; do
+          for B in "$KVBASE" "$BASE" "$BASE/v9" "$BASE/v9/projects/reemco" "$U"; do
             [ -n "$WIN_URL" ] && continue
-            case "$B" in ''|eyJ*) continue ;; esac
+            case "$B" in http*) : ;; *) continue ;; esac
             for K in "$T" "$VERCEL_TOKEN"; do
               [ -n "$WIN_URL" ] && continue
               case "$K" in ''|eyJ*) continue ;; esac
