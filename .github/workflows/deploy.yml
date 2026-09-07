@@ -110,10 +110,11 @@ jobs:
           INSTALL_OUT=""
           ATTACHED=0
           for SLUG in $SLUGS; do
-            INSTALL_OUT=$(vcli install "$SLUG" 2>&1) && { echo "installed '$SLUG'"; ATTACHED=1; break; } \
+            # install waits for interactive terms acceptance; pipe the
+            # confirmation instead of relying on flags or VERCEL_YES.
+            INSTALL_OUT=$(printf '\ny\n' | timeout 90 npx -y vercel@59.11.7 install "$SLUG" --cwd "$GITHUB_WORKSPACE" --token "$VERCEL_TOKEN" $SCOPE_ARGS 2>&1) \
+              && { echo "installed '$SLUG'"; ATTACHED=1; break; } \
               || echo "install '$SLUG' -> $(echo "$INSTALL_OUT" | tail -1 | cut -c1-200)"
-            INSTALL_OUT=$(vcli install -y "$SLUG" 2>&1) && { echo "installed '$SLUG' (-y)"; ATTACHED=1; break; } \
-              || echo "install -y '$SLUG' -> $(echo "$INSTALL_OUT" | tail -1 | cut -c1-200)"
           done
 
           # Attaching the store injects KV_REST_API_URL/KV_REST_API_TOKEN on
