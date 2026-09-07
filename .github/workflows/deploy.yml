@@ -133,6 +133,7 @@ jobs:
           SCOPE_ARGS=""
           if [ -n "${VERCEL_TEAM_ID:-}" ]; then SCOPE_ARGS="--scope $VERCEL_TEAM_ID"; fi
           timeout --signal=INT 10m npx -y vercel@59.11.7 kv add reemco-collect reemco --yes --token "$VERCEL_TOKEN" $SCOPE_ARGS 2>&1 | tail -5 || true
+          timeout --signal=INT 5m npx -y vercel@59.11.7 kv ls --token "$VERCEL_TOKEN" $SCOPE_ARGS 2>&1 | tail -8 || true
           CODE=$(curl -s -o "$LIST_JSON" -w '%{http_code}' -m 30 -H "$AUTH" "$BASE/v9/projects/reemco/env$Q" || echo 000)
           echo "verify GET env list after kv add -> HTTP $CODE"
 
