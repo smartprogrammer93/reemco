@@ -11,6 +11,7 @@ import {
   eurekaHits,
   groupHits,
   jarirHits,
+  LIVE_SEARCH_HITS_PER_PAGE,
   resetDiscoveryCache,
   sultanCenterHits,
   xciteHits,
@@ -392,5 +393,71 @@ describe("collectLiveResults depth pass (REEA-149)", () => {
     const { products } = await collectLiveResults("quiet-widget", { fetchImpl });
     expect(products).toHaveLength(0);
     expect(calls.filter((u) => u.includes("cnstrc.com"))).toHaveLength(1);
+  });
+});
+
+describe("collectLiveResults page width (REEA-156)", () => {
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+  }
+
+  // Thin tail-model fixture: every retailer answers "lg gram" with one
+  // relevant hit, so no enriched retry runs and each endpoint is seen once.
+  function widthFetch(seen: { url: string; body?: BodyInit | null }[]) {
+    return async (url: string, init?: RequestInit): Promise<Response> => {
+      seen.push({ url, ...(init?.body != null ? { body: init.body } : {}) });
+      if (url === "https://www.jarir.com/") {
+        return new Response('x searchProviderKeys "key_width001" y', { headers: { "content-type": "text/html" } });
+      }
+      if (url.includes("cnstrc.com")) {
+        return jsonResponse({ response: { results: [{ data: { url: "lg-gram-16", price: 429, metadata: { name: "LG gram 16 Notebook" } } }] } });
+      }
+      if (url.endsWith("eureka.com.kw/")) {
+        return new Response('<input id="cky" value="appw"><input id="srcapk" value="keywidth1">', { headers: { "content-type": "text/html" } });
+      }
+      if (url.includes("xcite.com")) {
+        return jsonResponse({ results: [{ hits: [{ name: "LG gram 16 Notebook", slug: "lgg16", price: 399, currency: "KWD", inStock: true }] }] });
+      }
+      if (url.includes("algolia.net")) {
+        return jsonResponse({ hits: [{ itmn: "LG gram 16 Notebook", objectID: "8001", clprc: 389, avaqt: 2 }] });
+      }
+      if (url.includes("blink.com.kw")) {
+        return jsonResponse({ products: [{ title: "LG gram 16 Notebook", handle: "lgg16", variants: [{ price: "395.00", available: true }] }] });
+      }
+      if (url.includes("sultan-center.com")) {
+        return jsonResponse({ status: "1", products: { product_list: [{ name: "LG gram 16 Notebook", slug: "lgg16", price: "379.0000", is_in_stock: "1" }] } });
+      }
+      return new Response('data-component-type="s-search-result" <h2 aria-label="LG gram 16 Notebook"></h2><span class="a-offscreen">EGP 12,900</span><a href="/dp/LGG16161">z</a>');
+    };
+  }
+
+  it("carries the widened page on every retailer's page-size parameter", async () => {
+    resetDiscoveryCache();
+    const seen: { url: string; body?: BodyInit | null }[] = [];
+    await collectLiveResults("lg gram", { fetchImpl: widthFetch(seen) });
+    const n = LIVE_SEARCH_HITS_PER_PAGE;
+    const bodyOf = (match: (url: string) => boolean) => {
+      const hit = seen.find((s) => match(s.url));
+      return typeof hit?.body === "string" ? JSON.parse(hit.body) : undefined;
+    };
+
+    const xciteBody = bodyOf((u) => u.includes("xcite.com"));
+    expect(xciteBody?.requests?.[0]?.params?.hitsPerPage).toBe(n);
+    const eurekaBody = bodyOf((u) => u.includes("algolia.net"));
+    expect(String(eurekaBody?.params)).toContain(`hitsPerPage=${n}`);
+    const sultanBody = bodyOf((u) => u.includes("sultan-center.com"));
+    expect(sultanBody?.pagesize).toBe(n);
+
+    const blink = seen.find((s) => s.url.includes("blink.com.kw"));
+    expect(blink?.url).toContain(`limit=${n}`);
+    const jarir = seen.find((s) => s.url.includes("cnstrc.com"));
+    expect(decodeURIComponent(jarir?.url ?? "")).toContain(`num_results_per_page=${n}`);
+  });
+
+  it("keeps the widened page above the thin 12-hit window it replaces", () => {
+    // The old 12-hit page measured binding on tail queries (xcite answered a
+    // full 12-item page for "airpods pro 2" / "lg gram"); the replacement
+    // must stay strictly wider so the depth-of-list fix does not regress.
+    expect(LIVE_SEARCH_HITS_PER_PAGE).toBeGreaterThanOrEqual(24);
   });
 });

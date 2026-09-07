@@ -23,6 +23,19 @@ export const LIVE_SEARCH_TIMEOUT_MS = 3_500;
 export const LIVE_SEARCH_BUDGET_MS = 7_500;
 /** Cap of distinct product groups served per query. */
 export const LIVE_SEARCH_MAX_PRODUCTS = 20;
+/**
+ * REEA-156 — per-source page size for the query-time fan-out. Tail
+ * model-number queries ("lg gram", "dyson airwrap") are the thin lists: each
+ * retailer's own index answers them with only a handful of relevant variants,
+ * and the old 12-hit window itself became binding — measured live, xcite
+ * answered "airpods pro 2" with a full 12 fetched/12 relevant and "lg gram"
+ * with 12 fetched/17 relevant at a wider window, i.e. the page cut the tail
+ * of relevant hits, not relevance. One wider page per retailer keeps head
+ * queries unchanged (selection is still capped at MAX_PRODUCTS groups) while
+ * thin lists arrive with enough variants to stand on their own. Same single
+ * request per retailer as before; nothing extra is fetched.
+ */
+export const LIVE_SEARCH_HITS_PER_PAGE = 24;
 
 export interface SearchHit {
   title: string;
@@ -297,7 +310,7 @@ const COLLECTORS: RetailerCollector[] = [
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             requests: [
-              { indexName: "xcite_prod_kw_en_main", params: { query, hitsPerPage: 12 } },
+              { indexName: "xcite_prod_kw_en_main", params: { query, hitsPerPage: LIVE_SEARCH_HITS_PER_PAGE } },
             ],
           }),
         },
@@ -311,7 +324,7 @@ const COLLECTORS: RetailerCollector[] = [
     collect: async (query, fetchImpl) => {
       const res = await fetchChecked(
         fetchImpl,
-        `https://blink.com.kw/products.json?title=${encodeURIComponent(query)}&limit=12`,
+        `https://blink.com.kw/products.json?title=${encodeURIComponent(query)}&limit=${LIVE_SEARCH_HITS_PER_PAGE}`,
         { headers: { accept: "application/json" } },
         AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
       );
@@ -351,7 +364,7 @@ const COLLECTORS: RetailerCollector[] = [
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ params: `query=${encodeURIComponent(query)}&hitsPerPage=12` }),
+          body: JSON.stringify({ params: `query=${encodeURIComponent(query)}&hitsPerPage=${LIVE_SEARCH_HITS_PER_PAGE}` }),
         },
         signal,
       );
@@ -382,7 +395,7 @@ const COLLECTORS: RetailerCollector[] = [
             store: 1,
             sortOrder: "asc",
             search_data: query,
-            pagesize: 12,
+            pagesize: LIVE_SEARCH_HITS_PER_PAGE,
             area: "",
             uid: null,
             deviceId: "reemco-web",
@@ -425,7 +438,7 @@ const COLLECTORS: RetailerCollector[] = [
       const res = await fetchChecked(
         fetchImpl,
         `https://ac.cnstrc.com/search/${encodeURIComponent(query)}` +
-          `?key=${indexKey}&num_results_per_page=12`,
+          `?key=${indexKey}&num_results_per_page=${LIVE_SEARCH_HITS_PER_PAGE}`,
         { headers: { accept: "application/json" } },
         signal,
       );
