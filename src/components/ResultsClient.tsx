@@ -1,6 +1,6 @@
 "use client";
 
-import { Component, Suspense, useEffect, useRef, type ReactNode } from "react";
+import { Component, Suspense, useEffect, useRef, useState, use, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import CountryFilter from "@/components/CountryFilter";
@@ -22,6 +22,7 @@ import {
 } from "@/lib/country";
 import { trackEvents } from "@/lib/telemetry";
 import { PRODUCTS } from "@/lib/feed";
+import type { LiveSearchResult } from "@/lib/collect/live-search";
 import type { NormalizedProduct } from "@/types/product";
 
 /**
@@ -30,6 +31,14 @@ import type { NormalizedProduct } from "@/types/product";
  * the freshness chips all ride on the passed-in products. No client-side
  * fallback array: hydration reuses the served data; a new query re-runs the
  * server collection through the router.
+ *
+ * REEA-178: with a staged run (`stages`) the same live collection streams —
+ * each adapter flush appends its merged-so-far cards inside its own Suspense
+ * boundary, so the first price paints while slower adapters are still in
+ * flight. Appends never reorder already-visible cards; once every stage has
+ * settled the view converges onto the exact full-ranked snapshot the blocking
+ * path produced (shared final render path). Country/stock selections are
+ * applied per snapshot before slicing, same rules as the plain path.
  */
 
 const PAGE_SIZE = 20;
@@ -148,6 +157,43 @@ function EmptyState({
   );
 }
 
+/* Design v3 §5.2 grid: single-column list, two columns only ≥1280px.
+   minmax(0,1fr) tracks keep long product titles from widening the grid past
+   the viewport at 375px (smoke step 5). Shared by the staged and plain paths
+   so both converge on identical markup. */
+function ResultsGrid({
+  products,
+  query,
+  page,
+  country,
+  showOutOfStock,
+}: {
+  products: NormalizedProduct[];
+  query: string;
+  page: number;
+  country: CountryCode | null;
+  showOutOfStock: boolean;
+}) {
+  return (
+    <div
+      className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]"
+      style={{ marginTop: "var(--rc-space-8)" }}
+    >
+      {products.map((p, i) => (
+        <ProductResultCard
+          key={p.productId}
+          product={p}
+          isBest={i === 0}
+          query={query}
+          rank={(page - 1) * PAGE_SIZE + i}
+          country={country}
+          showOutOfStock={showOutOfStock}
+        />
+      ))}
+    </div>
+  );
+}
+
 export default function ResultsClient(props: {
   /** Server-collected live set (REEA-114). Absent props fall back to the
    *  client-side feed read so tests and the static-export host still work. */
@@ -159,11 +205,212 @@ export default function ResultsClient(props: {
   country?: CountryCode | null;
   /** REEA-186 stock selection resolved server-side from `?oos=` (false = hide). */
   showOutOfStock?: boolean;
+  /** REEA-178 staged live collection — one promise per adapter flush. */
+  stages?: Promise<LiveSearchResult>[];
 }) {
   return (
     <Suspense fallback={<LoadingFallback />}>
       <ResultsInner {...props} />
     </Suspense>
+  );
+}
+
+function SelectionRow({
+  query,
+  country,
+  showOutOfStock,
+}: {
+  query: string;
+  country: CountryCode | null;
+  showOutOfStock: boolean;
+}) {
+  return (
+    /* REEA-170: country pills above the list — same control for both the
+       result list and the empty state, active choice echoed from the URL.
+       REEA-186: stock selection beside the country pills — visible in both
+       the result list and the empty state, same control. */
+    <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: "var(--rc-space-4)" }}>
+      <CountryFilter query={query} country={country} />
+      <StockToggle query={query} country={country} showOutOfStock={showOutOfStock} />
+    </div>
+  );
+}
+
+/* Selections apply BEFORE slicing, per snapshot — same chain (country, then
+   stock) the plain path runs, so staged and converged views agree. */
+function stagedView(
+  snap: LiveSearchResult,
+  page: number,
+  country: CountryCode | null,
+  showOutOfStock: boolean,
+): NormalizedProduct[] {
+  const filtered = filterProductsByStock(
+    filterProductsByCountry(snap.products, country),
+    showOutOfStock,
+  );
+  return filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+}
+
+function stagedSuggestions(
+  snap: LiveSearchResult,
+  country: CountryCode | null,
+  showOutOfStock: boolean,
+): NormalizedProduct[] {
+  return filterProductsByStock(
+    filterProductsByCountry(snap.suggestions ?? snap.products.slice(0, 3), country),
+    showOutOfStock,
+  );
+}
+
+/* One boundary per adapter flush: renders the cards that are NEW in this
+   snapshot (append-only over `seen` — already-visible cards keep their slot,
+   AC-2), then nests the next stage inside its own boundary so slower
+   adapters stream in under the visible set without disturbing it. */
+function StageAppend(props: {
+  stages: Promise<LiveSearchResult>[];
+  index: number;
+  seen: Set<string>;
+  ranks: { next: number };
+  query: string;
+  page: number;
+  country: CountryCode | null;
+  showOutOfStock: boolean;
+}) {
+  const { stages, index, seen, ranks, query, page, country, showOutOfStock } = props;
+  const snap = use(stages[index]);
+  const visible = stagedView(snap, page, country, showOutOfStock);
+  const fresh: NormalizedProduct[] = [];
+  for (const p of visible) {
+    if (seen.has(p.productId)) continue;
+    seen.add(p.productId);
+    fresh.push(p);
+  }
+  return (
+    <>
+      {fresh.map((p) => {
+        const rank = ranks.next++;
+        return (
+          <ProductResultCard
+            key={p.productId}
+            product={p}
+            isBest={rank === (page - 1) * PAGE_SIZE}
+            query={query}
+            rank={rank}
+            country={country}
+            showOutOfStock={showOutOfStock}
+          />
+        );
+      })}
+      {index + 1 < stages.length ? (
+        <Suspense fallback={null}>
+          <StageAppend {...props} index={index + 1} />
+        </Suspense>
+      ) : null}
+    </>
+  );
+}
+
+function StagedResults(props: {
+  stages: Promise<LiveSearchResult>[];
+  query: string;
+  page: number;
+  country: CountryCode | null;
+  showOutOfStock: boolean;
+}) {
+  const { stages, query, page, country, showOutOfStock } = props;
+  const finalPromise = stages[stages.length - 1];
+  const [finalSnap, setFinalSnap] = useState<LiveSearchResult | null>(null);
+
+  // Converge onto the full-ranked snapshot once every stage has settled.
+  useEffect(() => {
+    let alive = true;
+    finalPromise.then(
+      (snap) => {
+        if (alive) setFinalSnap(snap);
+      },
+      () => {
+        /* staged boundaries failed — keep whatever streamed; the served
+           snapshot already covers the retailers that answered. */
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [finalPromise]);
+
+  // REEA-37 funnel events fire once per CONVERGED result set (identity with
+  // the REEA-186 stock selection included), so partial flushes never emit
+  // half-count impression storms.
+  const products = finalSnap ? stagedView(finalSnap, page, country, showOutOfStock) : null;
+  const eventsKey = products
+    ? `${query}|${page}|${products.length}|${showOutOfStock ? 1 : 0}`
+    : "";
+  const sentKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!products || !query || sentKeyRef.current === eventsKey) return;
+    sentKeyRef.current = eventsKey;
+    trackEvents([
+      { type: "search_submitted", query, result_count: products.length },
+      ...(products.length === 0 ? [{ type: "zero_results" as const, query }] : []),
+      ...products.map((p, i) => ({
+        type: "result_impressed" as const,
+        query,
+        rank: (page - 1) * PAGE_SIZE + i,
+        item_id: p.productId,
+      })),
+    ]);
+  }, [eventsKey, query, page, products]);
+
+  if (finalSnap && products) {
+    // Converged view: full count + empty state, identical to the blocking path.
+    return (
+      <ResultsErrorBoundary>
+        <SelectionRow query={query} country={country} showOutOfStock={showOutOfStock} />
+        {products.length === 0 && query.length > 0 ? (
+          <EmptyState query={query} suggestions={stagedSuggestions(finalSnap, country, showOutOfStock)} country={country} />
+        ) : (
+          <>
+            {/* Theme v1 §4: display-scale H1, tabular count */}
+            <h1 style={{ font: "var(--rc-text-display)", color: "var(--rc-ink)" }}>
+              <span className="tabular">{products.length}</span>{" "}
+              {products.length === 1 ? "result" : "results"} for &ldquo;{query || "all products"}&rdquo;
+            </h1>
+            <ResultsGrid
+              products={products}
+              query={query}
+              page={page}
+              country={country}
+              showOutOfStock={showOutOfStock}
+            />
+          </>
+        )}
+      </ResultsErrorBoundary>
+    );
+  }
+
+  // Streaming view: append-only flushes; count/empty state wait for the
+  // converged snapshot so a partial arrival never reads as "no results".
+  return (
+    <ResultsErrorBoundary>
+      <SelectionRow query={query} country={country} showOutOfStock={showOutOfStock} />
+      <div
+        className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]"
+        style={{ marginTop: "var(--rc-space-8)" }}
+      >
+        <Suspense fallback={null}>
+          <StageAppend
+            stages={stages}
+            index={0}
+            seen={new Set<string>()}
+            ranks={{ next: (page - 1) * PAGE_SIZE }}
+            query={query}
+            page={page}
+            country={country}
+            showOutOfStock={showOutOfStock}
+          />
+        </Suspense>
+      </div>
+    </ResultsErrorBoundary>
   );
 }
 
@@ -174,6 +421,7 @@ function ResultsInner(props: {
   suggestions?: NormalizedProduct[];
   country?: CountryCode | null;
   showOutOfStock?: boolean;
+  stages?: Promise<LiveSearchResult>[];
 }) {
   const searchParams = useSearchParams();
   // AC-U4 (REEA-13): malformed/oversized params degrade safely before use.
@@ -192,6 +440,19 @@ function ResultsInner(props: {
     sanitizeShowOutOfStock(searchParams.get("oos")) ??
     recallShowOutOfStock() ??
     false;
+
+  if (props.stages && props.stages.length > 0) {
+    return (
+      <StagedResults
+        stages={props.stages}
+        query={query}
+        page={page}
+        country={country}
+        showOutOfStock={showOutOfStock}
+      />
+    );
+  }
+
   const matched = props.products ? [] : query ? searchProducts(query, PRODUCTS) : [];
   const allProducts =
     props.products ?? (matched.length > 0 ? matched.map((m) => m.product) : PRODUCTS);
@@ -240,14 +501,7 @@ function ResultsInner(props: {
 
   return (
     <ResultsErrorBoundary>
-      {/* REEA-170: country pills above the list — same control for both the
-          result list and the empty state, active choice echoed from the URL. */}
-      <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: "var(--rc-space-4)" }}>
-        <CountryFilter query={query} country={country} />
-        {/* REEA-186: stock selection beside the country pills — visible in both
-            the result list and the empty state, same control. */}
-        <StockToggle query={query} country={country} showOutOfStock={showOutOfStock} />
-      </div>
+      <SelectionRow query={query} country={country} showOutOfStock={showOutOfStock} />
       {zero ? (
         <EmptyState query={query} suggestions={suggestions} country={country} />
       ) : (
@@ -257,25 +511,13 @@ function ResultsInner(props: {
             <span className="tabular">{products.length}</span>{" "}
             {products.length === 1 ? "result" : "results"} for &ldquo;{query || "all products"}&rdquo;
           </h1>
-          {/* Design v3 §5.2: single-column list, two columns only ≥1280px.
-              minmax(0,1fr) tracks keep long product titles from widening the
-              grid past the viewport at 375px (smoke step 5). */}
-          <div
-            className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]"
-            style={{ marginTop: "var(--rc-space-8)" }}
-          >
-            {products.map((p, i) => (
-              <ProductResultCard
-                key={p.productId}
-                product={p}
-                isBest={i === 0}
-                query={query}
-                rank={(page - 1) * PAGE_SIZE + i}
-                country={country}
-                showOutOfStock={showOutOfStock}
-              />
-            ))}
-          </div>
+          <ResultsGrid
+            products={products}
+            query={query}
+            page={page}
+            country={country}
+            showOutOfStock={showOutOfStock}
+          />
         </>
       )}
     </ResultsErrorBoundary>

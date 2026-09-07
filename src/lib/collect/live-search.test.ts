@@ -9,6 +9,7 @@ import {
   amazonEgHits,
   blinkHits,
   collectLiveResults,
+  collectLiveResultsStaged,
   eurekaHits,
   groupHits,
   jarirHits,
@@ -720,5 +721,95 @@ describe("collectLiveResults page width (REEA-156)", () => {
       expect(merchants).toContain("Jarir");
       expect(merchants).toContain("Amazon.eg");
     });
+  });
+});
+
+describe("collectLiveResultsStaged (REEA-178)", () => {
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+  }
+
+  // Fast KW electronics retailers answer immediately; the two-step Eureka
+  // chain and the slow Sultan storefront answer after a short delay — so the
+  // first flush must already serve while those hops are still in flight.
+  function mixedSpeedFetch(): FetchImplLike {
+    return async (url: string): Promise<Response> => {
+      if (url.endsWith("eureka.com.kw/")) {
+        return new Promise((res) =>
+          setTimeout(
+            () => res(new Response('<input id="cky" value="APPS1"><input id="srcapk" value="keyStage01">', { headers: { "content-type": "text/html" } })),
+            30,
+          ),
+        );
+      }
+      if (url.includes("algolia.net")) {
+        return new Promise((res) =>
+          setTimeout(
+            () =>
+              res(
+                jsonResponse({ hits: [{ itmn: "Samsung Galaxy S26 Ultra", objectID: "9101", clprc: 379, avaqt: 3 }] }),
+              ),
+            30,
+          ),
+        );
+      }
+      if (url.includes("sultan-center.com")) {
+        return new Promise((res) =>
+          setTimeout(
+            () =>
+              res(
+                jsonResponse({
+                  status: "1",
+                  products: { product_list: [{ name: "Samsung Galaxy S26 Ultra", slug: "s26u", price: "385.0000", is_in_stock: "1" }] },
+                }),
+              ),
+            30,
+          ),
+        );
+      }
+      if (url.includes("xcite.com")) {
+        return jsonResponse({
+          results: [{ hits: [{ name: "Samsung Galaxy S26 Ultra", slug: "s26u", price: 399, currency: "KWD", inStock: true }] }],
+        });
+      }
+      if (url.includes("blink.com.kw")) {
+        return jsonResponse({ products: [{ title: "Samsung Galaxy S26 Ultra", handle: "s26u", variants: [{ price: "390.00", available: true }] }] });
+      }
+      return jsonResponse({});
+    };
+  }
+
+  type FetchImplLike = (url: string, init?: RequestInit) => Promise<Response>;
+
+  it("flushes the fast retailers' offers while slower hops are still in flight", async () => {
+    resetDiscoveryCache();
+    const staged = collectLiveResultsStaged("samsung", { fetchImpl: mixedSpeedFetch(), country: "KW" });
+
+    const first = await staged.stages[0];
+    expect(first.products).toHaveLength(1);
+    // AC-1: a real price renders from the answered adapters alone.
+    expect(first.products[0].offers.some((o) => o.merchant === "Xcite" || o.merchant === "Blink")).toBe(true);
+    // Slow hops had no say in the first flush.
+    expect(first.notes.length).toBeLessThanOrEqual(2);
+    // AC-3: every snapshot carries its own real completion stamp.
+    expect(Date.now() - Date.parse(first.products[0].scrapedAt!)).toBeLessThan(5_000);
+
+    const finalSnap = await staged.final;
+    const merchants = new Set(finalSnap.products.flatMap((p) => p.offers.map((o) => o.merchant)));
+    // AC-2 on the data side: the early card survives into the final flush as
+    // the FIRST card, carrying the merged union (cheapest first).
+    expect(finalSnap.products[0].productId).toBe(first.products[0].productId);
+    expect(finalSnap.products[0].offers.map((o) => o.price)).toEqual([379, 385, 390, 399]);
+    expect(merchants.has("Eureka")).toBe(true);
+    expect(merchants.has("Sultan Center")).toBe(true);
+    expect(finalSnap.notes).toHaveLength(4);
+  });
+
+  it("the final flush equals the blocking path on the same live answers", async () => {
+    resetDiscoveryCache();
+    const staged = await collectLiveResultsStaged("samsung", { fetchImpl: mixedSpeedFetch(), country: "KW" }).final;
+    const blocking = await collectLiveResults("samsung", { fetchImpl: mixedSpeedFetch(), country: "KW" });
+    const shape = (s: typeof staged) => s.products.map((p) => [p.productId, p.offers.map((o) => `${o.merchant}:${o.price}`)]);
+    expect(shape(staged)).toEqual(shape(blocking));
   });
 });

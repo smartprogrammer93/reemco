@@ -1,8 +1,8 @@
 import ResultsClient from "@/components/ResultsClient";
-import { collectLiveResults } from "@/lib/collect/live-search";
+import { collectLiveResultsStaged } from "@/lib/collect/live-search";
 import { sanitizeCountry } from "@/lib/country";
 import { sanitizeSearchQuery, sanitizePage } from "@/lib/search-params";
-import { filterProductsByStock, sanitizeShowOutOfStock } from "@/lib/stock";
+import { sanitizeShowOutOfStock } from "@/lib/stock";
 
 export const metadata = {
   title: "Results — Reemco",
@@ -14,12 +14,18 @@ export const metadata = {
  * served result set (no seed/snapshot arrays on this path). Every product
  * carries a real scrapedAt (collection completion), so freshness chips show
  * true ages that keep aging after render.
+ *
+ * REEA-178 — the handler no longer blocks on the FULL collection: it starts
+ * the same per-retailer live fan-out, hands the per-stage promises to
+ * ResultsClient, and lets the Suspense boundaries flush a merged-so-far
+ * snapshot as each adapter answers, so the first price shows well before the
+ * slowest hop finishes. The final stage carries the exact full-ranked
+ * snapshot the blocking path produced — both paths share one final results-
+ * render, live-per-query fetch preserved, no bundled/static snapshot.
  */
 export const dynamic = "force-dynamic";
 // Headroom above the collector's bounded window on slow cold starts.
 export const maxDuration = 20;
-
-const PAGE_SIZE = 20;
 
 export default async function ResultsPage({
   searchParams,
@@ -32,27 +38,13 @@ export default async function ResultsPage({
   // REEA-170 — optional country selection (`?c=`); null keeps today's behavior.
   const country = sanitizeCountry(params.c);
   // REEA-186 — stock selection (`?oos=1` shows out-of-stock listings).
-  // Default hides them; the filter runs BEFORE pagination so the served page
-  // counts and slices match the visible set. Offers stay live-collected; this
-  // only selects among the freshly fetched set, never a bundled catalog.
+  // Default hides them; the ResultsClient view applies it BEFORE slicing each
+  // staged snapshot so counts and pages match the visible set. Offers stay
+  // live-collected; this only selects among the freshly fetched set.
   const showOutOfStock = sanitizeShowOutOfStock(params.oos) ?? false;
 
-  const { products } = await collectLiveResults(query, { country });
-  const results = filterProductsByStock(products, showOutOfStock);
-  let suggestions = results.slice(0, 3);
-  if (query && results.length === 0) {
-    // Zero matches: re-collect once with the leading token so the empty state
-    // suggests real live titles, not catalog fixtures.
-    const relaxed = query.split(/\s+/)[0] ?? query;
-    if (relaxed && relaxed !== query) {
-      suggestions = filterProductsByStock(
-        (await collectLiveResults(relaxed, { country })).products,
-        showOutOfStock,
-      ).slice(0, 3);
-    }
-  }
-  const offset = (page - 1) * PAGE_SIZE;
-  const visible = results.slice(offset, offset + PAGE_SIZE);
+  // Fan-out starts here; rendering does not wait for the slowest adapter.
+  const staged = collectLiveResultsStaged(query, { country });
 
   return (
     <div
@@ -62,9 +54,9 @@ export default async function ResultsPage({
       <ResultsClient
         query={query}
         page={page}
-        products={visible}
-        suggestions={suggestions}
+        country={country}
         showOutOfStock={showOutOfStock}
+        stages={staged.stages}
       />
     </div>
   );
