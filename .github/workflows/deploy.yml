@@ -102,25 +102,35 @@ jobs:
           echo "KV_REST_* missing from project env - attaching KV store via Marketplace..."
           DISCOVER=$(vcli integration discover kv 2>&1 || true)
           echo "integration discover -> $(echo "$DISCOVER" | tr '\n' ' ' | cut -c1-400)"
+          # KV-compatible products from the Slug column (lowercase tokens);
+          # upstash first per the REEA-92 Upstash REST contract in kv.ts.
+          SLUGS="upstash redis"
+          INSTALL_OUT=""
           ATTACHED=0
-          for SLUG in $(echo "$DISCOVER" | grep -oE '@?[A-Za-z][A-Za-z0-9._/-]*' | head -4) kv vercel-kv "@vercel/kv"; do
-            OUT=$(vcli install "$SLUG" --yes 2>&1) && { echo "installed '$SLUG'"; ATTACHED=1; break; } \
-              || echo "install '$SLUG' -> $(echo "$OUT" | tail -1 | cut -c1-200)"
-            OUT=$(vcli integration add "$SLUG" --yes 2>&1) && { echo "integration add '$SLUG' ok"; ATTACHED=1; break; } \
-              || echo "integration add '$SLUG' -> $(echo "$OUT" | tail -1 | cut -c1-200)"
+          for SLUG in $SLUGS; do
+            INSTALL_OUT=$(vcli install "$SLUG" 2>&1) && { echo "installed '$SLUG'"; ATTACHED=1; break; } \
+              || echo "install '$SLUG' -> $(echo "$INSTALL_OUT" | tail -1 | cut -c1-200)"
           done
 
-          # Attaching a KV store injects KV_REST_API_URL/KV_REST_API_TOKEN on
-          # the platform side; verify names only (values are never echoed).
+          # Attaching the store injects KV_REST_API_URL/KV_REST_API_TOKEN on
+          # the platform side. If the listing still lacks them but the install
+          # output carried the connection values, add them explicitly (values
+          # never echoed - lengths only).
           LIST=$(vcli env list production 2>&1 || true)
           echo "env list after attach: $(echo "$LIST" | tr '\n' ' ' | cut -c1-400)"
+          val_of() { echo "$INSTALL_OUT" | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1; }
+          add_env() {
+            V=$(val_of "$1")
+            [ -n "$V" ] || { echo "$1: no value in install output"; return; }
+            printf '%s\n' "$V" | timeout 90 npx -y vercel@59.11.7 env add "$1" production --cwd "$GITHUB_WORKSPACE" --token "$VERCEL_TOKEN" $SCOPE_ARGS \
+              && echo "added $1 (${#V} chars)" || echo "env add $1 failed"
+          }
+          has_both "$LIST" || { echo "keys not auto-injected - adding from install output"; add_env KV_REST_API_URL; add_env KV_REST_API_TOKEN; LIST=$(vcli env list production 2>&1 || true); }
+          echo "final env list: $(echo "$LIST" | tr '\n' ' ' | cut -c1-400)"
           if has_both "$LIST"; then
             echo "KV binding attached and verified on reemco"
-          elif [ "$ATTACHED" = "1" ]; then
-            echo "::error::KV integration installed but KV_REST_* still missing from the env list above - check connection-string injection under project Storage settings, then rerun."
-            exit 1
           else
-            echo "::error::KV attach incomplete (discover/install messages above). Attach the KV store under project Storage settings and rerun this workflow. Unblock owner: repo admin (CEO)."
+            echo "::error::KV attach incomplete (attach/install/env-add messages above; ATTACHED=$ATTACHED). Attach the KV store under project Storage settings and rerun this workflow. Unblock owner: repo admin (CEO)."
             exit 1
           fi
 
