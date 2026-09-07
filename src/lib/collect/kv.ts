@@ -43,12 +43,21 @@ export function getSharedKv(): SharedKv | null {
 }
 
 function makeKv(base: string, token: string): SharedKv {
+  // Upstash-style REST bases may carry an auth/query suffix on the root URL;
+  // assemble via URL parts so command paths always land on the pathname and
+  // any query survives. (Authorization header is also sent — Upstash accepts
+  // either.)
+  const root = new URL(base);
+  const pathPrefix = root.pathname.replace(/\/+$/, "");
+  const buildUrl = (commandPath: string) =>
+    `${root.origin}${pathPrefix}/${commandPath}${root.search}`;
+
   async function request(
-    path: string,
+    commandPath: string,
     init: { method?: string; body?: string } = {},
   ): Promise<KvRestResponse | null> {
     try {
-      const res = await fetch(`${base}/${path}`, {
+      const res = await fetch(buildUrl(commandPath), {
         method: init.method ?? "GET",
         headers: {
           Authorization: `Bearer ${token}`,
