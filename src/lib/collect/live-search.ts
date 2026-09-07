@@ -47,6 +47,39 @@ interface RetailerCollector {
   collect: (query: string, fetchImpl: FetchImpl) => Promise<SearchHit[]>;
 }
 
+/**
+ * REEA-141 — per-instance TTL cache for the two-step collectors' discovery hop
+ * (eureka's Algolia keys, jarir's Constructor index key). Discovery is
+ * credential lookup, not offer data: the offer query itself still runs live on
+ * every call, so the data policy is untouched. The hop is what makes these two
+ * collectors a sequential chain — homepage HTML first, search API second — and
+ * on slow edges the whole chain overruns the collector window, silently losing
+ * the retailer from the page breadth. With the hop cached, a warm instance
+ * answers these collectors in a single round-trip, matching the one-step
+ * retailers. Expired entries just re-run the chain; nothing is bundled.
+ */
+const DISCOVERY_TTL_MS = 5 * 60_000;
+const discoveryCache = new Map<string, { values: string[]; expiresAt: number }>();
+
+function readDiscovery(name: string): string[] | null {
+  const hit = discoveryCache.get(name);
+  if (!hit) return null;
+  if (hit.expiresAt < Date.now()) {
+    discoveryCache.delete(name);
+    return null;
+  }
+  return hit.values;
+}
+
+function writeDiscovery(name: string, values: string[]): void {
+  discoveryCache.set(name, { values, expiresAt: Date.now() + DISCOVERY_TTL_MS });
+}
+
+/** Test support: make discovery counts deterministic across test cases. */
+export function resetDiscoveryCache(): void {
+  discoveryCache.clear();
+}
+
 async function fetchChecked(
   fetchImpl: FetchImpl,
   url: string,
@@ -273,16 +306,23 @@ const COLLECTORS: RetailerCollector[] = [
     merchant: "Eureka",
     collect: async (query, fetchImpl) => {
       const signal = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
-      const page = await fetchChecked(
-        fetchImpl,
-        "https://www.eureka.com.kw/",
-        { headers: { accept: "text/html" } },
-        signal,
-      );
-      const html = await page.text();
-      const appId = html.match(/id="cky"[^>]*value="([^"]+)"/)?.[1];
-      const searchKey = html.match(/id="srcapk"[^>]*value="([^"]+)"/)?.[1];
-      if (!appId || !searchKey) throw new Error("eureka credentials missing");
+      let appId, searchKey;
+      const cached = readDiscovery("eureka");
+      if (cached) {
+        [appId, searchKey] = cached;
+      } else {
+        const page = await fetchChecked(
+          fetchImpl,
+          "https://www.eureka.com.kw/",
+          { headers: { accept: "text/html" } },
+          signal,
+        );
+        const html = await page.text();
+        appId = html.match(/id="cky"[^>]*value="([^"]+)"/)?.[1];
+        searchKey = html.match(/id="srcapk"[^>]*value="([^"]+)"/)?.[1];
+        if (!appId || !searchKey) throw new Error("eureka credentials missing");
+        writeDiscovery("eureka", [appId, searchKey]);
+      }
       const res = await fetchChecked(
         fetchImpl,
         `https://${appId}-dsn.algolia.net/1/indexes/instant_records/query` +
@@ -344,14 +384,18 @@ const COLLECTORS: RetailerCollector[] = [
     merchant: "Jarir",
     collect: async (query, fetchImpl) => {
       const signal = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
-      const page = await fetchChecked(
-        fetchImpl,
-        "https://www.jarir.com/",
-        { headers: { accept: "text/html" } },
-        signal,
-      );
-      const indexKey = extractJarirIndexKey(await page.text());
-      if (!indexKey) throw new Error("jarir index key missing");
+      let indexKey = readDiscovery("jarir")?.[0];
+      if (!indexKey) {
+        const page = await fetchChecked(
+          fetchImpl,
+          "https://www.jarir.com/",
+          { headers: { accept: "text/html" } },
+          signal,
+        );
+        indexKey = extractJarirIndexKey(await page.text()) ?? undefined;
+        if (!indexKey) throw new Error("jarir index key missing");
+        writeDiscovery("jarir", [indexKey]);
+      }
       const res = await fetchChecked(
         fetchImpl,
         `https://ac.cnstrc.com/search/${encodeURIComponent(query)}` +

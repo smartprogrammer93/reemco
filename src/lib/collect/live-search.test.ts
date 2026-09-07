@@ -11,6 +11,7 @@ import {
   eurekaHits,
   groupHits,
   jarirHits,
+  resetDiscoveryCache,
   sultanCenterHits,
   xciteHits,
   type SearchHit,
@@ -223,5 +224,39 @@ describe("collectLiveResults", () => {
     // same live path as the incumbents.
     expect(merchants.has("Eureka")).toBe(true);
     expect(merchants.has("Sultan Center")).toBe(true);
+  });
+
+  it("caches only the hop; offer queries re-run on every call (REEA-141)", async () => {
+    resetDiscoveryCache();
+    const calls: string[] = [];
+    const fetchImpl = async (url: string): Promise<Response> => {
+      calls.push(url);
+      if (url === "https://www.jarir.com/") {
+        return new Response('x searchProviderKeys "key_cached01" y', { headers: { "content-type": "text/html" } });
+      }
+      if (url.endsWith("eureka.com.kw/")) {
+        return new Response('<input id="cky" value="appC"><input id="srcapk" value="keyC">', { headers: { "content-type": "text/html" } });
+      }
+      if (url.includes("cnstrc.com")) {
+        return jsonResponse({ response: { results: [{ data: { url: "p/s26", price: 1499, metadata: { name: "Samsung Galaxy S26 Ultra" } } }] } });
+      }
+      if (url.includes("algolia.net")) {
+        return jsonResponse({ hits: [{ itmn: "Samsung Galaxy S26 Ultra", objectID: "9001", clprc: 380, avaqt: 2 }] });
+      }
+      if (url.includes("xcite.com")) {
+        return jsonResponse({ results: [{ hits: [{ name: "Samsung Galaxy S26 Ultra", slug: "s26u", price: 399, currency: "KWD", inStock: true }] }] });
+      }
+      return jsonResponse({});
+    };
+
+    await collectLiveResults("samsung", { fetchImpl });
+    const afterFirst = calls.length;
+    await collectLiveResults("samsung", { fetchImpl });
+
+    const homeRuns = calls.filter((u) => u === "https://www.jarir.com/" || u === "https://www.eureka.com.kw/").length;
+    expect(homeRuns).toBe(2); // one discovery chain total, not one per call
+    expect(afterFirst).toBeGreaterThan(homeRuns);
+    // Offers stay live: every call re-queries each retailer's search endpoint.
+    expect(calls.filter((u) => u.includes("cnstrc.com") || u.includes("algolia.net"))).toHaveLength(4);
   });
 });
