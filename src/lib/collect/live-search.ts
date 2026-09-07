@@ -71,7 +71,10 @@ const discoveryCache = new Map<string, { values: string[]; expiresAt: number }>(
  * the query tail, never close the origin or inject a second segment. Values
  * are checked before entering the cache, so cache reads inherit the guarantee.
  */
-const APP_ID_ALLOW = /^[a-z0-9-]{1,64}$/;
+// Real Algolia app ids carry upper-case letters (eureka.com.kw ships
+// "5GPHMAA239"), so the alphabet must include upper-case like SEARCH_KEY_ALLOW
+// does; still only characters safe for interpolation into the hop-fetch URL.
+const APP_ID_ALLOW = /^[A-Za-z0-9-]{1,64}$/;
 const SEARCH_KEY_ALLOW = /^[A-Za-z0-9_-]{8,128}$/;
 
 function readDiscovery(name: string): string[] | null {

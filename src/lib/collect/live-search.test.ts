@@ -200,7 +200,9 @@ describe("collectLiveResults", () => {
           return jsonResponse({ response: { results: [{ data: { url: "p/s26", price: 1499, metadata: { name: "Samsung Galaxy S26 Ultra" } } }] } });
         }
         if (url.endsWith("eureka.com.kw/")) {
-          return new Response('<input id="cky" value="app"><input id="srcapk" value="keyA1b2c3">', { headers: { "content-type": "text/html" } });
+          // Realistic Eureka shape: Algolia app ids are upper-case in the
+          // wild ("5GPHMAA239" on the live homepage), so fixtures must be.
+          return new Response('<input id="cky" value="A1B2C3D4"><input id="srcapk" value="keyA1b2c3">', { headers: { "content-type": "text/html" } });
         }
         if (url.includes("algolia.net")) {
           return jsonResponse({ hits: [{ itmn: "Samsung Galaxy S26 Ultra", objectID: "9001", clprc: 380, avaqt: 2 }] });
@@ -235,7 +237,7 @@ describe("collectLiveResults", () => {
         return new Response('x searchProviderKeys "key_cached01" y', { headers: { "content-type": "text/html" } });
       }
       if (url.endsWith("eureka.com.kw/")) {
-        return new Response('<input id="cky" value="appc"><input id="srcapk" value="keyCkeyC1">', { headers: { "content-type": "text/html" } });
+        return new Response('<input id="cky" value="APPC9"><input id="srcapk" value="keyCkeyC1">', { headers: { "content-type": "text/html" } });
       }
       if (url.includes("cnstrc.com")) {
         return jsonResponse({ response: { results: [{ data: { url: "p/s26", price: 1499, metadata: { name: "Samsung Galaxy S26 Ultra" } } }] } });
