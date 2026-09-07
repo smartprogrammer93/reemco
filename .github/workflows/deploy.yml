@@ -83,6 +83,7 @@ jobs:
             exit 1
           fi
           export VERCEL_TELEMETRY_DISABLED=1
+          export VERCEL_YES=1 # auto-accept integration terms non-interactively
           SCOPE_ARGS=""
           if [ -n "${VERCEL_TEAM_ID:-}" ]; then SCOPE_ARGS="--scope $VERCEL_TEAM_ID"; fi
           # Pinned CLI (same version the deploy step uses); token via env
@@ -102,14 +103,17 @@ jobs:
           echo "KV_REST_* missing from project env - attaching KV store via Marketplace..."
           DISCOVER=$(vcli integration discover kv 2>&1 || true)
           echo "integration discover -> $(echo "$DISCOVER" | tr '\n' ' ' | cut -c1-400)"
-          # KV-compatible products from the Slug column (lowercase tokens);
-          # upstash first per the REEA-92 Upstash REST contract in kv.ts.
-          SLUGS="upstash redis"
+          # KV-compatible products; install wants vendor/product slugs (per the
+          # CLI hint), bare slugs from the discover table as fallback. Upstash
+          # first per the REEA-92 Upstash REST contract in kv.ts.
+          SLUGS="upstash/upstash-qstash upstash redis"
           INSTALL_OUT=""
           ATTACHED=0
           for SLUG in $SLUGS; do
             INSTALL_OUT=$(vcli install "$SLUG" 2>&1) && { echo "installed '$SLUG'"; ATTACHED=1; break; } \
               || echo "install '$SLUG' -> $(echo "$INSTALL_OUT" | tail -1 | cut -c1-200)"
+            INSTALL_OUT=$(vcli install -y "$SLUG" 2>&1) && { echo "installed '$SLUG' (-y)"; ATTACHED=1; break; } \
+              || echo "install -y '$SLUG' -> $(echo "$INSTALL_OUT" | tail -1 | cut -c1-200)"
           done
 
           # Attaching the store injects KV_REST_API_URL/KV_REST_API_TOKEN on
@@ -118,7 +122,7 @@ jobs:
           # never echoed - lengths only).
           LIST=$(vcli env list production 2>&1 || true)
           echo "env list after attach: $(echo "$LIST" | tr '\n' ' ' | cut -c1-400)"
-          val_of() { echo "$INSTALL_OUT" | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1; }
+          val_of() { echo "$INSTALL_OUT" | tr ' ' '\n' | sed -n "s/^$1[:=]//p" | head -1; }
           add_env() {
             V=$(val_of "$1")
             [ -n "$V" ] || { echo "$1: no value in install output"; return; }
