@@ -50,7 +50,7 @@ matched to a GitHub account", the culprit is a commit with the wrong identity.
 
 ## Deploy
 
-Canonical production host: **https://reemco.vercel.app** — Next.js server build on Vercel. Merge to `main` deploys automatically via `.github/workflows/deploy.yml`, no manual steps. Required repo Actions secret: `VERCEL_TOKEN` (+ optional `VERCEL_TEAM_ID` for `--scope`), injected as environment secrets only. Rollback: Actions > Deploy site > Run workflow with `rollback_sha` = previous known-good commit; the rollback run goes through the same verification steps. The post-deploy funnel smoke check (home → search → click-out) runs against reemco.vercel.app on every deploy. PRs are validated by `ci.yml` without deploying.
+Canonical production host: **https://reemco.vercel.app** — Next.js server build on Vercel. Merge to `main` deploys automatically via `.github/workflows/deploy.yml`, no manual steps. Required repo Actions secret: `VERCEL_TOKEN` (+ optional `VERCEL_TEAM_ID` for `--scope`), injected as environment secrets only. Rollback: Actions > Deploy site > Run workflow with `rollback_sha` = previous known-good commit; the rollback run goes through the same verification steps. The post-deploy funnel smoke check (home → search → click-out) runs against reemco.vercel.app on every deploy. PRs are validated by `ci.yml` without deploying. The shared KV binding for the collect-job store (REEA-92) is ensured by the pipeline itself: the Attach KV step attaches the KV store to the `reemco` project before deploying when `KV_REST_API_URL` / `KV_REST_API_TOKEN` are missing from the project environment (REEA-143). Values come from the platform response at attach time — never committed.
 
 ## Funnel instrumentation (REEA-37)
 

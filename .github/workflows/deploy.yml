@@ -59,6 +59,82 @@ jobs:
       # export only existed for the retired static preview host.
       - run: npm run build
 
+      # REEA-143 — attach the shared KV store backing the REEA-92 collect-job
+      # store BEFORE creating the deployment, so the new artifact carries
+      # KV_REST_API_URL / KV_REST_API_TOKEN. Without them every serverless
+      # instance falls back to per-process memory/disk and follow-up GET polls
+      # on other instances miss the job (the ok=0/17 bom1/iad1 pattern from
+      # REEA-92). Attaching a KV store injects both keys automatically; values
+      # come from the platform response and are never hardcoded or echoed.
+      # Idempotent: when both keys are already on the project this no-ops.
+      # Blast radius: env addition only — KV failures degrade to the local
+      # cache by design (kv.ts), never to a failed request. Rollback: revert
+      # this commit and rerun the workflow with rollback_sha = last known-good
+      # commit; to drop the binding later, unassign the KV store in project
+      # Storage settings and rerun so the alias picks up the new env.
+      - name: Attach KV store binding for the shared collect-job store
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+        run: |
+          set -u
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::error::Repo secret VERCEL_TOKEN is not set - cannot attach KV binding. Unblock owner: repo admin (CEO)."
+            exit 1
+          fi
+          Q=""
+          if [ -n "${VERCEL_TEAM_ID:-}" ]; then Q="?teamId=$VERCEL_TEAM_ID"; fi
+
+          # Current env-var keys on the project (tolerates {env:[..]} or bare array).
+          keys_present() {
+            curl -fsS -m 30 -H "Authorization: Bearer $VERCEL_TOKEN" "$1" \
+              | jq -r '(.env // .) | map(.key) | join(" ")' 2>/dev/null || true
+          }
+          ENV_URL="https://api.vercel.com/v9/projects/reemco/env$Q"
+          KEYS=$(keys_present "$ENV_URL")
+          if echo "$KEYS" | grep -q KV_REST_API_URL && echo "$KEYS" | grep -q KV_REST_API_TOKEN; then
+            echo "KV binding already attached to reemco ($KEYS)"
+            exit 0
+          fi
+          echo "KV_REST_* absent (found: ${KEYS:-none}) - attaching KV store..."
+
+          # Attach/create the KV store. Attaching injects KV_REST_API_URL and
+          # KV_REST_API_TOKEN into the project environment automatically.
+          CREATED=$(curl -fsS -m 60 -X POST \
+            -H "Authorization: Bearer $VERCEL_TOKEN" -H "Content-Type: application/json" \
+            -d '{"name":"reemco-collect"}' \
+            "https://api.vercel.com/v1/kv$Q" 2>/dev/null \
+            || curl -fsS -m 60 -X POST \
+              -H "Authorization: Bearer $VERCEL_TOKEN" -H "Content-Type: application/json" \
+              -d '{"name":"reemco-collect"}' \
+              "https://api.vercel.com/v1/integrations/kv$Q" 2>/dev/null || true)
+
+          # If the create response carries the connection values, fill any
+          # still-missing env key from them (encrypted, production target).
+          KV_URL=$(echo "$CREATED" | jq -r '.connectionString // .restApiUrl // .url // empty' 2>/dev/null || true)
+          KV_TOK=$(echo "$CREATED" | jq -r '.token // .restToken // .privateToken // empty' 2>/dev/null || true)
+          post_env() {
+            BODY=$(jq -cn --arg k "$1" --arg v "$2" '{key:$k,value:$v,type:"encrypted",target:["production"]}')
+            curl -fsS -m 30 -X POST -H "Authorization: Bearer $VERCEL_TOKEN" \
+              -H "Content-Type: application/json" -d "$BODY" \
+              "https://api.vercel.com/v10/projects/reemco/env$Q" >/dev/null \
+            || curl -fsS -m 30 -X POST -H "Authorization: Bearer $VERCEL_TOKEN" \
+              -H "Content-Type: application/json" -d "$BODY" \
+              "https://api.vercel.com/v9/projects/reemco/env$Q" >/dev/null || true
+          }
+          if [ -n "$KV_URL" ]; then echo "$KEYS" | grep -q KV_REST_API_URL || post_env KV_REST_API_URL "$KV_URL"; fi
+          if [ -n "$KV_TOK" ]; then echo "$KEYS" | grep -q KV_REST_API_TOKEN || post_env KV_REST_API_TOKEN "$KV_TOK"; fi
+
+          # Verify-before-deploy: both keys must be present before the deploy
+          # step creates an artifact that is supposed to use them.
+          FINAL_KEYS=$(keys_present "$ENV_URL")
+          if echo "$FINAL_KEYS" | grep -q KV_REST_API_URL && echo "$FINAL_KEYS" | grep -q KV_REST_API_TOKEN; then
+            echo "KV binding attached and verified on reemco"
+          else
+            echo "::error::KV attach incomplete (keys now: ${FINAL_KEYS:-none}) - the deploy would ship without the shared collect-job store. Check VERCEL_TOKEN scope/KV plan in the Vercel project."
+            exit 1
+          fi
+
       - name: Deploy to Vercel production (reemco.vercel.app)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
