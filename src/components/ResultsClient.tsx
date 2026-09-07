@@ -262,45 +262,43 @@ function stagedSuggestions(
   );
 }
 
-/* One boundary per adapter flush: renders the cards that are NEW in this
-   snapshot (append-only over `seen` — already-visible cards keep their slot,
-   AC-2), then nests the next stage inside its own boundary so slower
-   adapters stream in under the visible set without disturbing it. */
+/* One boundary per adapter flush: renders only the cards NEW in this snapshot.
+   A card whose id already appeared in the immediately-prior snapshot keeps its
+   slot and is not re-rendered (append-only over cumulative snapshots, AC-2).
+   All values derive purely from the snapshot pair — no mutable accumulators —
+   so flush order, hydration, and re-renders land on identical markup. */
 function StageAppend(props: {
   stages: Promise<LiveSearchResult>[];
   index: number;
-  seen: Set<string>;
-  ranks: { next: number };
   query: string;
   page: number;
   country: CountryCode | null;
   showOutOfStock: boolean;
 }) {
-  const { stages, index, seen, ranks, query, page, country, showOutOfStock } = props;
+  const { stages, index, query, page, country, showOutOfStock } = props;
   const snap = use(stages[index]);
   const visible = stagedView(snap, page, country, showOutOfStock);
-  const fresh: NormalizedProduct[] = [];
-  for (const p of visible) {
-    if (seen.has(p.productId)) continue;
-    seen.add(p.productId);
-    fresh.push(p);
-  }
+  // Snapshots are cumulative, so comparing against the adjacent prior stage is
+  // enough to isolate what this flush adds. At index 0 the "prior" promise is
+  // this same stage — everything visible is fresh.
+  const prevSnap = use(stages[Math.max(0, index - 1)]);
+  const prevIds = new Set(
+    stagedView(prevSnap, page, country, showOutOfStock).map((p) => p.productId),
+  );
+  const fresh = index === 0 ? visible : visible.filter((p) => !prevIds.has(p.productId));
   return (
     <>
-      {fresh.map((p) => {
-        const rank = ranks.next++;
-        return (
-          <ProductResultCard
-            key={p.productId}
-            product={p}
-            isBest={rank === (page - 1) * PAGE_SIZE}
-            query={query}
-            rank={rank}
-            country={country}
-            showOutOfStock={showOutOfStock}
-          />
-        );
-      })}
+      {fresh.map((p, i) => (
+        <ProductResultCard
+          key={p.productId}
+          product={p}
+          isBest={index === 0 && i === 0}
+          query={query}
+          rank={(page - 1) * PAGE_SIZE + i}
+          country={country}
+          showOutOfStock={showOutOfStock}
+        />
+      ))}
       {index + 1 < stages.length ? (
         <Suspense fallback={null}>
           <StageAppend {...props} index={index + 1} />
@@ -401,8 +399,6 @@ function StagedResults(props: {
           <StageAppend
             stages={stages}
             index={0}
-            seen={new Set<string>()}
-            ranks={{ next: (page - 1) * PAGE_SIZE }}
             query={query}
             page={page}
             country={country}
@@ -441,22 +437,13 @@ function ResultsInner(props: {
     recallShowOutOfStock() ??
     false;
 
-  if (props.stages && props.stages.length > 0) {
-    return (
-      <StagedResults
-        stages={props.stages}
-        query={query}
-        page={page}
-        country={country}
-        showOutOfStock={showOutOfStock}
-      />
-    );
-  }
+  const staged = props.stages && props.stages.length > 0 ? props.stages : null;
 
-  const matched = props.products ? [] : query ? searchProducts(query, PRODUCTS) : [];
-  const allProducts =
-    props.products ?? (matched.length > 0 ? matched.map((m) => m.product) : PRODUCTS);
-  const served = props.products
+  const matched = staged || props.products ? [] : query ? searchProducts(query, PRODUCTS) : [];
+  const allProducts = staged
+    ? []
+    : props.products ?? (matched.length > 0 ? matched.map((m) => m.product) : PRODUCTS);
+  const served = staged || props.products
     ? allProducts // server already paginated
     : allProducts.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   // The server filters offers BEFORE grouping, so everything derived
@@ -469,23 +456,26 @@ function ResultsInner(props: {
   );
   const matchCount = products.length;
   const zero = query.length > 0 && matchCount === 0;
-  const suggestions = filterProductsByStock(
-    filterProductsByCountry(
-      props.suggestions ?? suggestProducts(query, PRODUCTS).map((m) => m.product),
-      country,
-    ),
-    showOutOfStock,
-  );
+  const suggestions = staged
+    ? [] // the staged path derives suggestions from each snapshot
+    : filterProductsByStock(
+        filterProductsByCountry(
+          props.suggestions ?? suggestProducts(query, PRODUCTS).map((m) => m.product),
+          country,
+        ),
+        showOutOfStock,
+      );
   // REEA-37: funnel instrumentation — search_submitted (+ zero_results) and
   // result_impressed fire once per (query, page, result-set). Dedup key is
   // component-local memory only; nothing is persisted client-side. The stock
   // selection is part of the result-set identity (REEA-186): toggling shows or
   // hides listings, so impressions of the new set must not be deduped away.
+  // The staged path owns its own converged-set events (StagedResults below).
   const eventsKey = `${query}|${page}|${matchCount}|${showOutOfStock ? 1 : 0}`;
   const sentKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!query || sentKeyRef.current === eventsKey) return;
+    if (staged || !query || sentKeyRef.current === eventsKey) return;
     sentKeyRef.current = eventsKey;
     trackEvents([
       { type: "search_submitted", query, result_count: matchCount },
@@ -497,7 +487,19 @@ function ResultsInner(props: {
         item_id: p.productId,
       })),
     ]);
-  }, [eventsKey, query, page, zero, matchCount, products]);
+  }, [staged, eventsKey, query, page, zero, matchCount, products]);
+
+  if (staged) {
+    return (
+      <StagedResults
+        stages={staged}
+        query={query}
+        page={page}
+        country={country}
+        showOutOfStock={showOutOfStock}
+      />
+    );
+  }
 
   return (
     <ResultsErrorBoundary>

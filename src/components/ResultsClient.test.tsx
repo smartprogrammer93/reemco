@@ -29,6 +29,7 @@ vi.mock("next/link", () => ({
 import ResultsClient from "@/components/ResultsClient";
 import HeaderSearch from "@/components/HeaderSearch";
 import { resetStockPrefs } from "@/lib/stock";
+import type { LiveSearchResult } from "@/lib/collect/live-search";
 import type { NormalizedProduct } from "@/types/product";
 
 const beaconCalls: { url: string; body: unknown }[] = [];
@@ -270,17 +271,18 @@ describe("staged progressive results (REEA-178)", () => {
     searchParams.set("q", "sony");
     searchParams.delete("oos");
     searchParams.delete("c");
-    let resolveFinal: (v: unknown) => void = () => {};
-    const stages = [
-      Promise.resolve({ products: [STAGE1_PRODUCT], notes: [], suggestions: [STAGE1_PRODUCT] }),
-      new Promise((res) => {
+    let resolveFinal: (v: LiveSearchResult) => void = () => {};
+    const stageOne: LiveSearchResult = { products: [STAGE1_PRODUCT], notes: [], suggestions: [STAGE1_PRODUCT] };
+    const stages: Promise<LiveSearchResult>[] = [
+      Promise.resolve(stageOne),
+      new Promise<LiveSearchResult>((res) => {
         resolveFinal = res;
       }),
-    ] as const;
+    ];
 
     await act(async () => {
       render(
-        <ResultsClient query="sony" page={1} country={null} stages={stages as unknown as Promise<any>[]} />,
+        <ResultsClient query="sony" page={1} country={null} stages={stages} />,
       );
     });
 
