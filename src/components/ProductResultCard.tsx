@@ -239,10 +239,21 @@ export default function ProductResultCard({
               return (
                 <li
                   key={`${o.merchant}-${o.url}`}
-                  className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 py-1"
+                  /* REEA-203: ONE row structure per breakpoint — below sm every
+                     row stacks its label line above the right-aligned action
+                     cluster; from sm up every row renders inline with no row-level
+                     reflow (no sm:wrap — a chip on the label column must not push
+                     the action cluster onto its own line like a wrap would). The
+                     label column absorbs its own wraps; the action cluster keeps
+                     its intrinsic width so every row shares one baseline. */
+                  className="flex flex-col justify-between gap-1 py-1 sm:flex-row sm:items-center sm:gap-x-2"
                   style={{ borderTop: "1px solid var(--rc-line)" }}
                 >
-                  <span className="flex items-center gap-2">
+                  {/* REEA-203: the label column absorbs its own wraps (min-w-0
+                      lets the Lowest-listed chip drop under the merchant name);
+                      the action cluster keeps one identical inline structure and
+                      baseline in every row, chip or not. */}
+                  <span className="flex min-w-0 flex-wrap items-center gap-2">
                     <span style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
                       {o.merchant}
                     </span>
@@ -266,9 +277,11 @@ export default function ProductResultCard({
                       </span>
                     )}
                   </span>
-                  {/* REEA-75 (M2): flex-wrap keeps the Go-to-store CTA inside
-                      the card at 375px instead of overflowing the viewport. */}
-                  <span className="ml-auto flex flex-wrap items-center gap-3">
+                  {/* REEA-75 (M2): flex-wrap keeps the Go to store CTA inside
+                      the card at narrow widths instead of overflowing the
+                      viewport; from sm the cluster keeps its intrinsic width so
+                      every row (chip or not) shares one inline structure. */}
+                  <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-3 sm:shrink-0">
                     <StockDot state={o.inStock ? "in" : "out"} />
                     <span
                       className="tabular"
