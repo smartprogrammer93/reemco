@@ -560,10 +560,36 @@ export interface LiveSearchResult {
 }
 
 /**
- * Collect live results for a query at request time. One bounded call per
- * retailer, run in parallel; a slow or failed retailer only loses its own
- * offers. Returns products ranked by title relevance, cheapest first inside
- * each group. Never reads seed files or caches — every call re-collects.
+ * REEA-149 — canonical query form derived from the answers that DID arrive.
+ * Shoppers type model codes ("WH-1000XM6"); some retailers' search engines
+ * answer those forms with unrelated filler while the same product is found by
+ * its brand+code title ("Sony WH-1000XM6"). The best round-one hit title —
+ * a live answer, never seeded data — is exactly that normalized form, so the
+ * silent retailers get one more bounded query for the same product instead of
+ * dropping out of the comparison entirely.
+ */
+export function enrichedQuery(hits: SearchHit[], query: string): string {
+  let best = "";
+  let bestScore = 0;
+  for (const h of hits) {
+    const score = titleMatchScore(h.title, query);
+    if (score > bestScore) {
+      bestScore = score;
+      best = h.title;
+    }
+  }
+  return best.trim();
+}
+
+/**
+ * Collect live results for a query at request time. Round one fans every
+ * retailer out in parallel with bounded per-collector timeouts; a slow or
+ * failed retailer only loses its own offers. Round two (REEA-149) re-queries
+ * only the retailers that stayed silent in round one, using the enriched
+ * brand+code query form derived from the round-one answers — bounded, and
+ * merchants that already answered are never re-fetched. Returns products
+ * ranked by title relevance, cheapest first inside each group. Never reads
+ * seed files or caches — every call re-collects live.
  */
 export async function collectLiveResults(
   query: string,
@@ -584,6 +610,35 @@ export async function collectLiveResults(
       }
     }),
   );
+
+  // REEA-149 depth pass: retailers that contributed nothing in round one are
+  // queried once more under the normalized query form. Additive only — an
+  // existing offer never depends on this round, and when every merchant
+  // already answered there is nothing to deepen, so it stays a single round.
+  const firstHits: SearchHit[] = [];
+  for (const s of settled) firstHits.push(...s.hits);
+  const missing = settled.filter((s) => s.hits.length === 0);
+  if (firstHits.length > 0 && missing.length > 0) {
+    const enriched = enrichedQuery(firstHits, q);
+    if (enriched && enriched.toLowerCase() !== q.toLowerCase()) {
+      await Promise.all(
+        missing.map(async (s) => {
+          const collector = COLLECTORS.find((c) => c.merchant === s.merchant);
+          if (!collector) return;
+          try {
+            const hits = await collector.collect(enriched, fetchImpl);
+            if (hits.length > 0) {
+              s.hits = hits;
+              s.error = undefined;
+            }
+          } catch {
+            // Second attempt failed too — keep the round-one note as-is.
+          }
+        }),
+      );
+    }
+  }
+
   const hits: SearchHit[] = [];
   const notes: LiveSearchResult["notes"] = [];
   for (const s of settled) {

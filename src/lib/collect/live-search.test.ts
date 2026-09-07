@@ -260,3 +260,105 @@ describe("collectLiveResults", () => {
     expect(calls.filter((u) => u.includes("cnstrc.com") || u.includes("algolia.net"))).toHaveLength(4);
   });
 });
+
+describe("collectLiveResults depth pass (REEA-149)", () => {
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+  }
+
+  // Fixture shaped from live answers: the Constructor endpoint answers the
+  // bare code "WH-1000XM6" with filler titles that fail relevance, but the
+  // brand+code form "Sony WH-1000XM6 ..." returns the real headphone hits.
+  function modelCodeFetch(calls: string[]) {
+    return async (url: string): Promise<Response> => {
+      calls.push(url);
+      if (url === "https://www.jarir.com/") {
+        return new Response('x searchProviderKeys "key_reea149x" y', { headers: { "content-type": "text/html" } });
+      }
+      if (url.includes("cnstrc.com")) {
+        const path = decodeURIComponent(url.split("?")[0].replace("https://ac.cnstrc.com/search/", ""));
+        if (path.toLowerCase().startsWith("sony")) {
+          return jsonResponse({
+            response: {
+              results: [
+                { data: { url: "sony-mark-6", price: 1699, metadata: { name: "Sony Mark 6 Over-Ear Headphones, Active Noise Cancelling, Bluetooth, Wireless, Black" } } },
+              ],
+            },
+          });
+        }
+        return jsonResponse({ response: { results: [{ data: { url: "ebook", price: 24, metadata: { name: "W W W, eBook" } } }] } });
+      }
+      if (url.endsWith("eureka.com.kw/")) {
+        return new Response('<input id="cky" value="appR"><input id="srcapk" value="keyR">', { headers: { "content-type": "text/html" } });
+      }
+      if (url.includes("xcite.com")) {
+        return jsonResponse({
+          results: [{ hits: [{ name: "Sony WH-1000XM6 Wireless Noise Cancelling Headphones", slug: "xm6", price: 449, currency: "KWD", inStock: true }] }],
+        });
+      }
+      if (url.includes("algolia.net")) {
+        return jsonResponse({ hits: [{ itmn: "Sony WH-1000XM6 Headphones", objectID: "7001", clprc: 439, avaqt: 3 }] });
+      }
+      if (url.includes("blink.com.kw")) {
+        return jsonResponse({ products: [{ title: "Sony WH-1000XM6", handle: "xm6", variants: [{ price: "430.00", available: true }] }] });
+      }
+      if (url.includes("sultan-center.com")) {
+        return jsonResponse({ status: "1", products: { product_list: [{ name: "Sony WH-1000XM6", slug: "xm6", price: "425.0000", is_in_stock: "1" }] } });
+      }
+      return new Response('data-component-type="s-search-result" <h2 aria-label="Sony WH-1000XM6 Headphones"></h2><span class="a-offscreen">EGP 15,900</span><a href="/dp/XM612345">z</a>');
+    };
+  }
+
+  it("re-queries silent retailers under the enriched brand+code form", async () => {
+    resetDiscoveryCache();
+    const calls: string[] = [];
+    const { products, notes } = await collectLiveResults("WH-1000XM6", { fetchImpl: modelCodeFetch(calls) });
+
+    const cnstrcCalls = calls.filter((u) => u.includes("cnstrc.com"));
+    // Raw code first, then exactly one enriched retry — bounded, not per-form.
+    expect(cnstrcCalls).toHaveLength(2);
+    expect(decodeURIComponent(cnstrcCalls[1])).toContain("Sony WH-1000XM6");
+
+    // Jarir's live offer now renders beside the round-one merchants.
+    const merchants = new Set(products.flatMap((p) => p.offers.map((o) => o.merchant)));
+    expect(merchants.has("Jarir")).toBe(true);
+    expect(merchants.has("Xcite")).toBe(true);
+    const jarirNote = notes.find((n) => n.merchant === "Jarir")!;
+    expect(jarirNote.hits).toBe(1);
+    expect(jarirNote.error).toBeUndefined();
+  });
+
+  it("merchants that answered in round one are not re-fetched", async () => {
+    resetDiscoveryCache();
+    const calls: string[] = [];
+    await collectLiveResults("WH-1000XM6", { fetchImpl: modelCodeFetch(calls) });
+    const xciteCalls = calls.filter((u) => u.includes("xcite.com")).length;
+    expect(xciteCalls).toBe(1);
+  });
+
+  it("answered merchants keep single round-trip chains", async () => {
+    resetDiscoveryCache();
+    const calls: string[] = [];
+    await collectLiveResults("WH-1000XM6", { fetchImpl: modelCodeFetch(calls) });
+    const eurekaHops = calls.filter((u) => u.endsWith("eureka.com.kw/")).length;
+    expect(eurekaHops).toBe(1);
+  });
+
+  it("skips the enriched round when round one collects nothing at all", async () => {
+    resetDiscoveryCache();
+    const calls: string[] = [];
+    const fetchImpl = async (url: string): Promise<Response> => {
+      calls.push(url);
+      if (url === "https://www.jarir.com/") {
+        return new Response('x searchProviderKeys "key_empty01" y', { headers: { "content-type": "text/html" } });
+      }
+      if (url.endsWith("eureka.com.kw/")) {
+        return new Response('<input id="cky" value="appE"><input id="srcapk" value="keyE">', { headers: { "content-type": "text/html" } });
+      }
+      return jsonResponse({});
+    };
+    const { products } = await collectLiveResults("quiet-widget", { fetchImpl });
+    expect(products).toHaveLength(0);
+    expect(calls.filter((u) => u.includes("cnstrc.com"))).toHaveLength(1);
+  });
+});
