@@ -133,9 +133,13 @@ h1 {
   letter-spacing: -0.025em;
 }
 
-/* Tabular numerals on every price, count, and timestamp */
+/* Tabular numerals on every price, count, and timestamp. The `!important` is
+   load-bearing: price spans set type via the inline `font:` shorthand
+   (font: var(--rc-text-price)), and that shorthand resets font-variant to its
+   initial value — a plain class declaration loses to the inline style.
+   Measured proof: proof.js in the REEA-53 harness (plain loses, important wins). */
 .tabular {
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: tabular-nums !important;
 }
 
 /* Header — sticky surface with a hairline (restraint carries over) */
