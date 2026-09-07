@@ -2,6 +2,7 @@ import ResultsClient from "@/components/ResultsClient";
 import { collectLiveResults } from "@/lib/collect/live-search";
 import { sanitizeCountry } from "@/lib/country";
 import { sanitizeSearchQuery, sanitizePage } from "@/lib/search-params";
+import { filterProductsByStock, sanitizeShowOutOfStock } from "@/lib/stock";
 
 export const metadata = {
   title: "Results — Reemco",
@@ -30,16 +31,24 @@ export default async function ResultsPage({
   const page = sanitizePage(params.page);
   // REEA-170 — optional country selection (`?c=`); null keeps today's behavior.
   const country = sanitizeCountry(params.c);
+  // REEA-186 — stock selection (`?oos=1` shows out-of-stock listings).
+  // Default hides them; the filter runs BEFORE pagination so the served page
+  // counts and slices match the visible set. Offers stay live-collected; this
+  // only selects among the freshly fetched set, never a bundled catalog.
+  const showOutOfStock = sanitizeShowOutOfStock(params.oos) ?? false;
 
   const { products } = await collectLiveResults(query, { country });
-  const results = products;
-  let suggestions = products.slice(0, 3);
-  if (query && products.length === 0) {
+  const results = filterProductsByStock(products, showOutOfStock);
+  let suggestions = results.slice(0, 3);
+  if (query && results.length === 0) {
     // Zero matches: re-collect once with the leading token so the empty state
     // suggests real live titles, not catalog fixtures.
     const relaxed = query.split(/\s+/)[0] ?? query;
     if (relaxed && relaxed !== query) {
-      suggestions = (await collectLiveResults(relaxed, { country })).products.slice(0, 3);
+      suggestions = filterProductsByStock(
+        (await collectLiveResults(relaxed, { country })).products,
+        showOutOfStock,
+      ).slice(0, 3);
     }
   }
   const offset = (page - 1) * PAGE_SIZE;
@@ -55,6 +64,7 @@ export default async function ResultsPage({
         page={page}
         products={visible}
         suggestions={suggestions}
+        showOutOfStock={showOutOfStock}
       />
     </div>
   );

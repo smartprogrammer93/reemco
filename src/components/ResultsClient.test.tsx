@@ -28,6 +28,7 @@ vi.mock("next/link", () => ({
 
 import ResultsClient from "@/components/ResultsClient";
 import HeaderSearch from "@/components/HeaderSearch";
+import { resetStockPrefs } from "@/lib/stock";
 import type { NormalizedProduct } from "@/types/product";
 
 const beaconCalls: { url: string; body: unknown }[] = [];
@@ -159,5 +160,74 @@ describe("country filter UI (REEA-170)", () => {
     });
     const hidden = document.querySelector('input[name="c"]');
     expect((hidden as HTMLInputElement | null)?.value).toBe("KW");
+  });
+});
+
+describe("stock selection UI (REEA-186)", () => {
+  const MIXED_STOCK: NormalizedProduct[] = [
+    {
+      productId: "sony-wh-1000xm6",
+      title: "Sony WH-1000XM6",
+      brand: "Sony",
+      offers: [
+        { merchant: "Xcite", price: 74, currency: "KWD", url: "https://xcite.example/p", inStock: true },
+        { merchant: "Jarir", price: 69, currency: "SAR", url: "https://jarir.example/p", inStock: false },
+      ],
+      coupons: [],
+      variations: [],
+      alternatives: [],
+    },
+  ];
+
+  beforeEach(() => {
+    // Deterministic baseline: the shared mocked searchParams may carry the
+    // country selection from the REEA-170 block above.
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    resetStockPrefs();
+  });
+
+  it("hides out-of-stock listings by default and shows the toggle unchecked", async () => {
+    searchParams.set("q", "xm6");
+    await act(async () => {
+      render(<ResultsClient query="xm6" page={1} products={MIXED_STOCK} suggestions={MIXED_STOCK} />);
+    });
+    // Default: only the in-stock listing renders.
+    const html = document.body.innerHTML;
+    expect(html).toContain("Xcite");
+    expect(html).not.toContain("Jarir");
+    // Visible checkbox-style toggle, unchecked, linking to the opt-in state.
+    const toggle = document.querySelector('[role="checkbox"]');
+    expect(toggle).not.toBeNull();
+    expect(toggle?.textContent).toContain("Show out-of-stock items");
+    expect(toggle?.getAttribute("aria-checked")).toBe("false");
+    expect(toggle?.getAttribute("href")).toBe("/results?q=xm6&oos=1");
+  });
+
+  it("shows every listing while the toggle is checked, and unchecked hides again", async () => {
+    searchParams.set("q", "xm6");
+    searchParams.set("oos", "1");
+    await act(async () => {
+      render(
+        <ResultsClient query="xm6" page={1} products={MIXED_STOCK} suggestions={MIXED_STOCK} showOutOfStock />,
+      );
+    });
+    const html = document.body.innerHTML;
+    expect(html).toContain("Xcite");
+    expect(html).toContain("Jarir");
+    const toggle = document.querySelector('[role="checkbox"]');
+    expect(toggle?.getAttribute("aria-checked")).toBe("true");
+    // Unchecking drops the flag — the next request is back to default-hide.
+    expect(toggle?.getAttribute("href")).toBe("/results?q=xm6");
+  });
+
+  it("the header search carries the stock selection into the next query", async () => {
+    searchParams.set("q", "xm6");
+    searchParams.set("oos", "1");
+    await act(async () => {
+      render(<HeaderSearch />);
+    });
+    const hidden = document.querySelector('input[name="oos"]');
+    expect((hidden as HTMLInputElement | null)?.value).toBe("1");
   });
 });

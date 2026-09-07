@@ -4,9 +4,15 @@ import { Component, Suspense, useEffect, useRef, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import CountryFilter from "@/components/CountryFilter";
+import StockToggle from "@/components/StockToggle";
 import ProductResultCard from "@/components/ProductResultCard";
 import { searchProducts, suggestProducts } from "@/lib/search";
 import { sanitizePage, sanitizeSearchQuery } from "@/lib/search-params";
+import {
+  filterProductsByStock,
+  recallShowOutOfStock,
+  sanitizeShowOutOfStock,
+} from "@/lib/stock";
 import {
   buildResultsHref,
   filterProductsByCountry,
@@ -151,6 +157,8 @@ export default function ResultsClient(props: {
   suggestions?: NormalizedProduct[];
   /** REEA-170 country selection resolved server-side from `?c=` (null = All). */
   country?: CountryCode | null;
+  /** REEA-186 stock selection resolved server-side from `?oos=` (false = hide). */
+  showOutOfStock?: boolean;
 }) {
   return (
     <Suspense fallback={<LoadingFallback />}>
@@ -165,6 +173,7 @@ function ResultsInner(props: {
   products?: NormalizedProduct[];
   suggestions?: NormalizedProduct[];
   country?: CountryCode | null;
+  showOutOfStock?: boolean;
 }) {
   const searchParams = useSearchParams();
   // AC-U4 (REEA-13): malformed/oversized params degrade safely before use.
@@ -175,27 +184,43 @@ function ResultsInner(props: {
   // without re-selecting. null = "All" = unchanged default behavior.
   const country =
     props.country ?? sanitizeCountry(searchParams.get("c")) ?? recallCountry() ?? null;
+  // REEA-186: same resolution chain as the country selection — server-resolved
+  // value wins, then the URL, then the same-tab remembered choice; default is
+  // hide out-of-stock listings (checkbox unchecked).
+  const showOutOfStock =
+    props.showOutOfStock ??
+    sanitizeShowOutOfStock(searchParams.get("oos")) ??
+    recallShowOutOfStock() ??
+    false;
   const matched = props.products ? [] : query ? searchProducts(query, PRODUCTS) : [];
   const allProducts =
     props.products ?? (matched.length > 0 ? matched.map((m) => m.product) : PRODUCTS);
   const served = props.products
     ? allProducts // server already paginated
     : allProducts.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  // The server path filters offers BEFORE grouping, so everything derived
+  // The server filters offers BEFORE grouping, so everything derived
   // (counts, cheapest-first, alternatives) already honors the selection; this
   // pass is idempotent there and is the whole filter on the static-host
-  // catalog fallback.
-  const products = filterProductsByCountry(served, country);
+  // catalog fallback. Same for the stock selection (REEA-186).
+  const products = filterProductsByStock(
+    filterProductsByCountry(served, country),
+    showOutOfStock,
+  );
   const matchCount = products.length;
   const zero = query.length > 0 && matchCount === 0;
-  const suggestions = filterProductsByCountry(
-    props.suggestions ?? suggestProducts(query, PRODUCTS).map((m) => m.product),
-    country,
+  const suggestions = filterProductsByStock(
+    filterProductsByCountry(
+      props.suggestions ?? suggestProducts(query, PRODUCTS).map((m) => m.product),
+      country,
+    ),
+    showOutOfStock,
   );
   // REEA-37: funnel instrumentation — search_submitted (+ zero_results) and
   // result_impressed fire once per (query, page, result-set). Dedup key is
-  // component-local memory only; nothing is persisted client-side.
-  const eventsKey = `${query}|${page}|${matchCount}`;
+  // component-local memory only; nothing is persisted client-side. The stock
+  // selection is part of the result-set identity (REEA-186): toggling shows or
+  // hides listings, so impressions of the new set must not be deduped away.
+  const eventsKey = `${query}|${page}|${matchCount}|${showOutOfStock ? 1 : 0}`;
   const sentKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -217,8 +242,11 @@ function ResultsInner(props: {
     <ResultsErrorBoundary>
       {/* REEA-170: country pills above the list — same control for both the
           result list and the empty state, active choice echoed from the URL. */}
-      <div style={{ marginBottom: "var(--rc-space-4)" }}>
+      <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: "var(--rc-space-4)" }}>
         <CountryFilter query={query} country={country} />
+        {/* REEA-186: stock selection beside the country pills — visible in both
+            the result list and the empty state, same control. */}
+        <StockToggle query={query} country={country} showOutOfStock={showOutOfStock} />
       </div>
       {zero ? (
         <EmptyState query={query} suggestions={suggestions} country={country} />
@@ -244,6 +272,7 @@ function ResultsInner(props: {
                 query={query}
                 rank={(page - 1) * PAGE_SIZE + i}
                 country={country}
+                showOutOfStock={showOutOfStock}
               />
             ))}
           </div>

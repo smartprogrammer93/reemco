@@ -118,6 +118,7 @@ export default function ProductResultCard({
   query = "",
   rank = -1,
   country = null,
+  showOutOfStock = false,
 }: {
   product: NormalizedProduct;
   /** True when this offer carries the best effective price on the page (§3.3 Von Restorff). */
@@ -128,6 +129,8 @@ export default function ProductResultCard({
   rank?: number;
   /** REEA-170 active country selection, carried into alternatives queries. */
   country?: CountryCode | null;
+  /** REEA-186 stock selection, carried into alternatives queries on the list. */
+  showOutOfStock?: boolean;
 }) {
   const detail = variant === "detail";
   const offers = sortOffers(product.offers);
@@ -337,7 +340,7 @@ export default function ProductResultCard({
                 className="flex min-h-12 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded px-1 py-1 hover:bg-[var(--rc-canvas)]"
               >
                 <a
-                  href={buildResultsHref(a.title, 1, country)}
+                  href={buildResultsHref(a.title, 1, country, showOutOfStock)}
                   className="min-w-0 hover:underline"
                   style={{ font: "var(--rc-text-body)", fontWeight: 500, color: "var(--rc-ink)" }}
                 >
