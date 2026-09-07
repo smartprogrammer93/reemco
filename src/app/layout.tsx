@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { Inter, Space_Grotesk } from "next/font/google";
 import Link from "next/link";
 import HeaderSearch from "@/components/HeaderSearch";
@@ -69,7 +70,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <Link href="/" className="focusable shrink-0 rounded">
               <Wordmark />
             </Link>
-            <HeaderSearch />
+            <Suspense fallback={null}>
+              <HeaderSearch />
+            </Suspense>
           </div>
         </header>
         <main className="flex-1">{children}</main>

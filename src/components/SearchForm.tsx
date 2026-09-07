@@ -1,8 +1,16 @@
-/** Design v3 §5.1 hero search: 52px input + primary button, radius control. */
-export default function SearchForm({ compact = false }: { compact?: boolean }) {
-  const height = compact ? 40 : 52;
+/** Brief v4 search: hero 52px / compact 44px (AC6 tap floor) input + button.
+ *  defaultValue echoes the active ?q so the query survives retry (AC5). */
+export default function SearchForm({
+  compact = false,
+  defaultValue,
+}: {
+  compact?: boolean;
+  defaultValue?: string;
+}) {
+  const height = compact ? 44 : 52;
   return (
     <form
+      key={defaultValue ?? ""}
       action="/results"
       method="get"
       className="flex flex-wrap gap-2 sm:flex-nowrap"
@@ -15,12 +23,13 @@ export default function SearchForm({ compact = false }: { compact?: boolean }) {
         name="q"
         placeholder="Search for a product…"
         aria-label="Search for a product"
+        defaultValue={defaultValue}
         className="text-input focusable min-w-0 flex-1 basis-full px-4 sm:basis-auto"
         style={{ height }}
       />
       <button
         type="submit"
-        className="btn-primary focusable w-full px-6 sm:w-auto"
+        className="btn-primary focusable w-full min-h-11 px-6 sm:w-auto"
         style={{ height }}
       >
         Search

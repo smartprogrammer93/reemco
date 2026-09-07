@@ -1,17 +1,20 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import SearchForm from "@/components/SearchForm";
 
-/** Theme v1 §3.1: compact 40px search sits in the sticky header on results/product pages. */
+/** Compact search in the sticky header on results/product pages (v4: ≥44px
+ *  controls). Echoes the active ?q so the query survives retry/loading. */
 export default function HeaderSearch() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   if (pathname === "/") return null;
+  const q = searchParams.get("q") ?? undefined;
   return (
     /* REEA-75: min-w-0 + flex-1 instead of a fixed maxWidth so the form can
        shrink on narrow viewports; cap width from sm up via CSS. */
     <div className="min-w-0 flex-1 sm:max-w-[360px]">
-      <SearchForm compact />
+      <SearchForm compact defaultValue={q} />
     </div>
   );
 }

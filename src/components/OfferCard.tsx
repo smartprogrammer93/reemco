@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import { isTenMinutesOld, relativeAge } from "@/lib/relative-time";
+import { formatPrice } from "@/lib/format";
 import type { Coupon } from "@/types/product";
 
 /**
@@ -31,6 +33,45 @@ export interface OfferCardProps {
   isBest: boolean;
   /** Human absolute savings (e.g. "KWD 12.40") — null hides the pill entirely. */
   savings: string | null;
+  /** Raw numeric price for the Arrival count-up; label falls back otherwise. */
+  price?: number;
+  currency?: string;
+}
+
+/**
+ * Arrival count-up (Brief v4 signature moment): the price animates to its
+ * final value over ~200ms as the card lands, then settles on the exact
+ * scraped figure. With prefers-reduced-motion it simply shows the final
+ * label — the count-up is a flourish, never a data delay: the final value
+ * renders first and only animates on top of it.
+ */
+function CountUpPrice({
+  priceLabel,
+  price,
+  currency,
+}: {
+  priceLabel: string;
+  price: number;
+  currency: string;
+}) {
+  const [shown, setShown] = useState(priceLabel);
+  useEffect(() => {
+    setShown(priceLabel);
+    if (typeof window === "undefined" || typeof requestAnimationFrame !== "function") return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const DURATION_MS = 200;
+    const start = performance.now();
+    let raf = 0;
+    const tick = (t: number) => {
+      const p = Math.min(1, (t - start) / DURATION_MS);
+      const eased = 1 - Math.pow(1 - p, 3); // ease-out, lands exactly on price
+      setShown(formatPrice(price * eased, currency));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [priceLabel, price, currency]);
+  return <>{shown}</>;
 }
 
 function FreshnessChip({
@@ -64,6 +105,8 @@ export default function OfferCard({
   merchant,
   domain,
   priceLabel,
+  price,
+  currency,
   effectivePriceLabel,
   compareAtLabel,
   coupon,
@@ -97,7 +140,11 @@ export default function OfferCard({
       {/* Price block: effective price is the loudest element (P1 / AC-6) */}
       <div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <span className="tabular" style={{ font: "var(--rc-text-price)", color: "var(--rc-ink)" }}>
-          {priceLabel}
+          {price != null ? (
+            <CountUpPrice priceLabel={priceLabel} price={price} currency={currency ?? "KWD"} />
+          ) : (
+            priceLabel
+          )}
         </span>
         {compareAtLabel && (
           <span
@@ -129,7 +176,7 @@ export default function OfferCard({
         query=""
         rank={0}
         itemId={merchant}
-        className={`${isBest ? "r2-btn" : "btn-outline focusable"} mt-3 w-full px-4 py-2`}
+        className={`${isBest ? "r2-btn" : "btn-outline focusable"} mt-3 min-h-11 w-full px-4 py-2`}
       >
         View at {merchant}
       </TrackedOutboundLink>

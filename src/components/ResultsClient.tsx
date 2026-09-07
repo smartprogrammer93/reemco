@@ -10,7 +10,8 @@ import { trackEvents } from "@/lib/telemetry";
 import { PRODUCTS } from "@/lib/feed";
 import type { NormalizedProduct } from "@/types/product";
 
-/* Theme v1 §3.5 loading state: 3 skeleton cards, 1.2s pulse — never a blank page. */
+/* Brief v4 loading state: 3 card-shaped ghosts with sheen + the slim amber
+   pulse bar carrying a retailer-count label — never a blank area. */
 function SkeletonCard() {
   return (
     <div className="result-card" aria-hidden>
@@ -26,6 +27,12 @@ function SkeletonCard() {
 function LoadingFallback() {
   return (
     <div className="space-y-4">
+      <div className="pulse-bar" aria-hidden>
+        <div className="pulse-bar-fill" style={{ width: "100%" }} />
+      </div>
+      <p className="meta-stamp" style={{ color: "var(--rc-muted)" }}>
+        Checking live stores…
+      </p>
       <SkeletonCard />
       <SkeletonCard />
       <SkeletonCard />
@@ -61,7 +68,7 @@ class ResultsErrorBoundary extends Component<
           <button
             type="button"
             onClick={() => this.setState({ failed: false })}
-            className="btn-primary focusable mt-4 h-10 px-4"
+            className="btn-primary focusable mt-4 min-h-11 px-4"
           >
             Retry
           </button>
@@ -72,7 +79,9 @@ class ResultsErrorBoundary extends Component<
   }
 }
 
-/* Theme v1 §3.5 no-results state: title, suggestion line, 3 example links. */
+/* Brief v4 empty state: single card echoing the query, one plain sentence,
+   2–3 suggested-query pills and Retry. The query itself always stays in the
+   header input (it lives in the URL), so Retry never loses it. */
 const EXAMPLES = ["iPhone 17 Pro", "WH-1000XM6", "Scope II keyboard"];
 
 function EmptyState({
@@ -82,48 +91,35 @@ function EmptyState({
   query: string;
   suggestions: NormalizedProduct[];
 }) {
+  const pills = suggestions.slice(0, 3).map((p) => p.title);
+  while (pills.length < EXAMPLES.length && pills.length < 3) pills.push(EXAMPLES[pills.length]);
   return (
-    <div className="text-center" style={{ padding: "var(--rc-space-12) 0" }}>
-      <h2 style={{ font: "var(--rc-text-title)", color: "var(--rc-ink)" }}>
-        No results for &ldquo;{query}&rdquo;
+    <div className="result-card mx-auto w-full max-w-xl">
+      <h2 style={{ font: "var(--rc-text-h2)", color: "var(--rc-ink)" }}>
+        No matches for &ldquo;{query}&rdquo; yet
       </h2>
       <p className="mt-2" style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
-        {suggestions.length > 0
-          ? "Did you mean one of these?"
-          : "Check the spelling or try a shorter brand name."}
+        We check live stores — spelling matters. Try a suggested search below; your query stays
+        in the box.
       </p>
-      {suggestions.length > 0 && (
-        <ul className="mx-auto mt-4 w-full max-w-md space-y-2 text-left">
-          {suggestions.map((p) => (
-            <li key={p.productId} className="result-card px-4 py-3">
-              <Link
-                href={`/results?q=${encodeURIComponent(p.title)}`}
-                className="hover:underline"
-                style={{ font: "var(--rc-text-body)", fontWeight: 500, color: "var(--rc-primary)" }}
-              >
-                {p.title}
-              </Link>
-              <p className="tabular" style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)" }}>
-                {p.brand} · from{" "}
-                {Math.min(...p.offers.map((o) => o.price)).toFixed(2)}{" "}
-                {p.offers[0]?.currency ?? "KWD"}
-              </p>
-            </li>
-          ))}
-        </ul>
-      )}
-      <div className="flex flex-wrap justify-center gap-4" style={{ marginTop: "var(--rc-space-4)" }}>
-        {EXAMPLES.map((q) => (
+      <div className="mt-4 flex flex-wrap gap-2">
+        {pills.map((q) => (
           <Link
             key={q}
             href={`/results?q=${encodeURIComponent(q)}`}
-            className="hover:underline"
-            style={{ font: "var(--rc-text-small)", color: "var(--rc-primary)" }}
+            className="query-pill query-pill-on-light"
           >
             {q}
           </Link>
         ))}
       </div>
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        className="btn-primary focusable mt-4 h-11 px-5"
+      >
+        Retry
+      </button>
     </div>
   );
 }

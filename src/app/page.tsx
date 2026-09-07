@@ -1,8 +1,9 @@
 import Link from "next/link";
 import SearchForm from "@/components/SearchForm";
 
-/* Design v3 §5.1: full-bleed Aurora gradient band, display headline ≥32px on
-   desktop, left-aligned ≥768px, preset-query pills, trust caption below. */
+/* Design v4 "Warm Signal": full-bleed espresso hero band, ivory display type,
+   ONE amber underline accent under "best price", preset-query pills, trust
+   caption below. */
 const EXAMPLES = ["iPhone 17 Pro", "WH-1000XM6", "Scope II keyboard"];
 
 export default function Home() {
@@ -13,7 +14,9 @@ export default function Home() {
           className="mx-auto w-full px-6 text-center md:text-left"
           style={{ maxWidth: "calc(var(--rc-layout-max-w) - var(--rc-gutter) * 2)" }}
         >
-          <h1 className="hero-title">Find the real best price.</h1>
+          <h1 className="hero-title">
+            Find the real <span className="hero-accent">best price</span>.
+          </h1>
           <p className="hero-sub mt-3 max-w-xl mx-auto md:mx-0">
             Prices, coupons and stock, collected live from every retailer the moment you
             open a product — compared honestly, never from a stale snapshot.

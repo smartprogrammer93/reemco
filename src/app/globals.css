@@ -1,93 +1,119 @@
 @import "tailwindcss";
 
 /*
- * Reemco Design v3 — "Aurora" (REEA-94 design-v3 §4).
- * ONE token namespace (`--rc-*`); it replaces BOTH former blocks — the legacy
- * `--color-*` v1 layer and the Pulse v2 layer — with no aliasing left behind
- * (design-v3 migration rule + AC-1). Components reference vars only; zero hex
- * literals outside :root. The signature moment (§5.6): live offers arriving —
- * per-retailer chips fill and offer cards rise as data lands.
+ * Reemco Design v4 — "Warm Signal" (Design Brief v4, plan rev 4c7474c1).
+ * Warm editorial "paper-and-ink ledger": ivory paper canvas, espresso ink,
+ * ONE burnt-amber signal accent used only for actions and the live pulse;
+ * green is reserved strictly for savings/best-price semantics so a green pill
+ * always means money saved. Numbers are heroes: Space Grotesk tabular prices
+ * are the loudest element on a card; meta stamps ("live · 3s ago · Jarir")
+ * ride system mono, uppercase — a receipts-printer cue for "collected live".
+ * ONE token namespace (`--rc-*`), names kept from v3 (brief: token-level
+ * restyle only); components reference vars only, zero hex outside :root.
  */
 :root {
   color-scheme: light dark;
 
-  /* Canvas & ink */
-  --rc-canvas: #f4f6fb;
-  --rc-surface: #ffffff;
-  --rc-ink: #0b1220;
-  --rc-body-text: #3a4459;
-  /* REEA-101 AC-3: muted-on-canvas measured 4.40:1 at #6b7385 — darken to
-     clear the 4.5 floor on canvas (~4.60) and white (~4.97). */
-  --rc-muted: #667085;
-  --rc-line: #e3e7f0;
-  --rc-line-strong: #c9d2e3;
+  /* Canvas & ink — Warm Signal light values, verbatim from the brief */
+  --rc-canvas: #F8F5EF;
+  --rc-surface: #FFFFFF;
+  --rc-ink: #1F1A14;
+  --rc-body-text: #453D33;
+  --rc-muted: #7A6F61;
+  --rc-line: #E8E2D6;
+  --rc-line-strong: #CFC5B4;
 
-  /* Purposeful color — used ONLY on the hero band, live-progress, best-price
-     flag and primary controls (§5.1–§5.3, AC-7). */
-  --rc-primary: #4f46e5;
-  --rc-primary-deep: #3730a3;
-  --rc-accent: #7c3aed;
-  --rc-on-primary: #ffffff;
-  --rc-hero-gradient: linear-gradient(140deg, #3730a3 0%, #4f46e5 45%, #7c3aed 100%);
-  --rc-primary-tint: #eef2ff;
+  /* Signal — burnt amber, actions + live pulse only (§Direction) */
+  --rc-primary: #C2410C;
+  --rc-primary-deep: #9A3412;
+  --rc-accent: #F97316;
+  --rc-on-primary: #FFFFFF;
+  --rc-hero: #1F1A14; /* solid espresso hero band, replaces the v3 gradient */
+  --rc-primary-tint: #FFEDD5;
 
-  /* Semantic — pair each foreground with its tint (all ≥4.5:1, AC-3) */
-  --rc-savings: #15803d; --rc-savings-bg: #dcfce7;
-  --rc-fresh: #b45309;    --rc-fresh-bg: #fef3c7;
-  /* REEA-101 AC-3: #dc2626 on --rc-error-bg measured 3.95:1 — deepen the
-     foreground so the error pair clears 4.5 (#b42318 ≈ 5.38:1). */
-  --rc-error: #b42318;    --rc-error-bg: #fee2e2;
+  /* Semantic — green = money saved; amber = freshness; red = error */
+  --rc-savings: #166534; --rc-savings-bg: #DCFCE7;
+  --rc-fresh: #92400E;    --rc-fresh-bg: #FEF3C7;
+  --rc-error: #B91C1C;    --rc-error-bg: #FEE2E2;
 
-  /* Fluid type scale — mobile tight, desktop bold (AC-2) */
+  /* Type roles: Space Grotesk = display/prices/headings; Inter = body/UI;
+     ui-monospace = meta stamps only */
   --rc-font-display: var(--font-space-grotesk), ui-sans-serif, sans-serif;
   --rc-font-body: var(--font-inter), ui-sans-serif, sans-serif;
-  --rc-font-mono: ui-monospace, "SFMono-Regular", Menlo, monospace; /* coupon codes only */
-  --rc-text-display: 700 clamp(32px, 4.5vw, 48px)/1.08 var(--rc-font-display);
+  --rc-font-mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --rc-text-display: 700 clamp(34px, 4.6vw, 52px)/1.05 var(--rc-font-display);
   --rc-text-h2: 650 24px/1.25 var(--rc-font-display);
-  --rc-text-price: 700 clamp(28px, 3vw, 36px)/1.1 var(--rc-font-body);
+  --rc-text-price: 700 clamp(30px, 3.2vw, 40px)/1.05 var(--rc-font-display);
   --rc-text-title: 600 16px/1.35 var(--rc-font-body);
   --rc-text-body: 400 15px/1.6 var(--rc-font-body);
   --rc-text-small: 400 13px/1.5 var(--rc-font-body);
+  --rc-text-meta: 400 12px/1.4 var(--rc-font-mono);
   --rc-text-label: 600 12px/1.4 var(--rc-font-body);
 
-  /* Space rhythm (4px base; sections on 8) */
+  /* Space rhythm unchanged (4px base; sections on 8) */
   --rc-space-1: 4px; --rc-space-2: 8px; --rc-space-3: 12px; --rc-space-4: 16px;
   --rc-space-6: 24px; --rc-space-8: 32px; --rc-space-12: 48px; --rc-space-16: 64px;
   --rc-section-pad: clamp(48px, 7vw, 96px);
   --rc-layout-max-w: 1120px;
-  --rc-gutter: 24px;
+  --rc-gutter: 24px; /* tightens to 20px ≤400px below */
 
   /* Shape */
   --rc-radius-control: 10px;
-  --rc-radius-card: 16px;
+  --rc-radius-card: 14px;
   --rc-radius-pill: 999px;
 
-  /* Elevation ladder — exactly three levels (P4) */
-  --rc-elev-1: 0 1px 2px rgba(11, 18, 32, 0.06), 0 2px 8px rgba(11, 18, 32, 0.05);
-  --rc-elev-2: 0 2px 4px rgba(11, 18, 32, 0.06), 0 8px 24px rgba(11, 18, 32, 0.08);
-  --rc-elev-3: 0 12px 32px rgba(11, 18, 32, 0.12);
+  /* Elevation ladder — shadows warmed toward the espresso ink */
+  --rc-elev-1: 0 1px 2px #1F1A140F, 0 2px 8px #1F1A140A;
+  --rc-elev-2: 0 2px 4px #1F1A1412, 0 8px 24px #1F1A1414;
+  --rc-elev-3: 0 12px 32px #1F1A1421;
 
-  /* Interaction — motion marks state changes and arrivals only (P2) */
-  --rc-focus-ring: 0 0 0 3px rgba(79, 70, 229, 0.4);
-  --rc-motion-fast: 150ms;
-  --rc-motion-arrival: 300ms;
+  /* Interaction — the Arrival moment carries the motion budget */
+  --rc-focus-ring: 0 0 0 3px #C2410C59;
+  --rc-motion-fast: 0.15s;
+  --rc-motion-arrival: 0.3s;
   --rc-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --rc-stagger: 45ms;
 
-  /* Dark-mode token map — updated to match §4 values (design-v3 §3: activated
-     in the designer polish pass, REEA-96; kept inert here, no selector below
-     attaches it). */
-  --rc-dark-canvas: #0b1220;
-  --rc-dark-surface: #151c2c;
-  --rc-dark-line: #26304a;
-  --rc-dark-line-strong: #3b4a68;
-  --rc-dark-ink: #f1f5f9;
-  --rc-dark-body-text: #cbd5e1;
-  --rc-dark-muted: #94a3b8;
-  --rc-dark-primary: #818cf8;
-  --rc-dark-savings: #4ade80;
-  --rc-dark-fresh: #fbbf24;
-  --rc-dark-error: #f87171;
+  /* Dark-mode token map — Warm Signal dark values, verbatim from the brief;
+     attached onto the shared names by the prefers-color-scheme block below
+     (token-level theming only, no JS). */
+  --rc-dark-canvas: #171310;
+  --rc-dark-surface: #201A15;
+  --rc-dark-line: #3A3128;
+  --rc-dark-line-strong: #57493A;
+  --rc-dark-ink: #F5EFE6;
+  --rc-dark-body-text: #D9CFBF;
+  --rc-dark-muted: #A79783;
+  --rc-dark-primary: #FB923C;
+  --rc-dark-savings: #4ADE80;
+  --rc-dark-fresh: #FBBF24;
+  --rc-dark-error: #F87171;
+}
+
+/* Dark theme attaches the verbatim dark values onto the shared names. Tints
+   and the espresso hero keep their light values (the brief lists dark
+   overrides for these nine roles only). */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --rc-canvas: var(--rc-dark-canvas);
+    --rc-surface: var(--rc-dark-surface);
+    --rc-line: var(--rc-dark-line);
+    --rc-line-strong: var(--rc-dark-line-strong);
+    --rc-ink: var(--rc-dark-ink);
+    --rc-body-text: var(--rc-dark-body-text);
+    --rc-muted: var(--rc-dark-muted);
+    --rc-primary: var(--rc-dark-primary);
+    --rc-savings: var(--rc-dark-savings);
+    --rc-fresh: var(--rc-dark-fresh);
+    --rc-error: var(--rc-dark-error);
+  }
+}
+
+/* Layout gutter tightens below 400px (brief Layout line: "20px ≤400px"). */
+@media (max-width: 400px) {
+  :root {
+    --rc-gutter: 20px;
+  }
 }
 
 body {
@@ -102,12 +128,17 @@ h3 {
   color: var(--rc-ink);
 }
 
+/* Display tracking per the brief's type scale (ls -.025em). */
+h1 {
+  letter-spacing: -0.025em;
+}
+
 /* Tabular numerals on every price, count, and timestamp */
 .tabular {
   font-variant-numeric: tabular-nums;
 }
 
-/* Header — sticky white surface with a hairline (§5.2 restraint) */
+/* Header — sticky surface with a hairline (restraint carries over) */
 .site-header {
   position: sticky;
   top: 0;
@@ -117,7 +148,7 @@ h3 {
   border-bottom: 1px solid var(--rc-line);
 }
 
-/* Shared focus treatment (§5 P5): visible ring on inputs, buttons, links. */
+/* Shared focus treatment: visible amber-ringed focus on controls. */
 .focusable:focus-visible,
 input:focus-visible,
 button:focus-visible,
@@ -127,7 +158,7 @@ a:focus-visible {
   box-shadow: var(--rc-focus-ring);
 }
 
-/* Offer/result card (§5.2): elev-1 → elev-2 + lift on hover/focus (AC-4) */
+/* Offer/result card: elev-1 → elev-2 + lift on hover/focus */
 .result-card {
   background: var(--rc-surface);
   border: 1px solid var(--rc-line);
@@ -152,13 +183,13 @@ a:focus-visible {
   opacity: 0.7;
 }
 
-/* Best offer (§5.3): elev-2 permanently + brand border */
+/* Best offer: elev-2 permanently + signal border */
 .result-card.is-best {
   border-color: var(--rc-primary);
   box-shadow: var(--rc-elev-2);
 }
 
-/* Coupon badge (§5.4): amber pill, coupon VALUE only */
+/* Coupon badge: amber pill, coupon VALUE only */
 .coupon-badge {
   background: var(--rc-fresh-bg);
   color: var(--rc-fresh);
@@ -167,14 +198,17 @@ a:focus-visible {
   font: var(--rc-text-small);
 }
 
-.label-token {
-  font: var(--rc-text-label);
-  letter-spacing: 0.02em;
+/* Meta stamps ("live · 3s ago · Jarir", section labels) — receipt-printer
+   cue: system mono, uppercase, wide tracking. */
+.label-token,
+.meta-stamp {
+  font: var(--rc-text-meta);
   text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
-/* Savings pill (§5.3): sits directly after the price — the number the user
-   decides on stays the loudest element (P1). */
+/* Savings pill: sits directly after the price — green always means money
+   saved; the number the user decides on stays the loudest element. */
 .savings-pill {
   display: inline-flex;
   align-items: center;
@@ -186,8 +220,7 @@ a:focus-visible {
   font-weight: 600;
 }
 
-/* Best-price flag (§5.3): primary tint — the only gradient-adjacent moment
-   on a card besides the progress rail. */
+/* Best-price flag: signal tint — the loudest non-price moment on a card. */
 .best-flag {
   display: inline-flex;
   align-items: center;
@@ -198,12 +231,15 @@ a:focus-visible {
   font: var(--rc-text-label);
 }
 
-/* Freshness / provenance chip (§5.5): dot + relative time, never omitted */
+/* Freshness / provenance stamp: mono uppercase, dot + relative time, never
+   omitted. */
 .fresh-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font: var(--rc-text-small);
+  font: var(--rc-text-meta);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   color: var(--rc-muted);
 }
 
@@ -234,7 +270,7 @@ a:focus-visible {
   background: var(--rc-primary-deep);
 }
 
-/* Outline action (§5.3): CTA on non-best offer cards */
+/* Outline action: CTA on non-best offer cards */
 .btn-outline {
   display: inline-flex;
   align-items: center;
@@ -251,7 +287,7 @@ a:focus-visible {
   background: var(--rc-primary-tint);
 }
 
-/* Text input (hero 52px / compact 40px, §5.1) */
+/* Text input (hero 52px / compact 40px) */
 .text-input {
   border: 1px solid var(--rc-line);
   border-radius: var(--rc-radius-control);
@@ -265,9 +301,10 @@ a:focus-visible {
   color: var(--rc-muted);
 }
 
-/* Hero band (§5.1): full-bleed gradient, rounded bottom, display headline */
+/* Hero band: solid espresso band, ivory type, rounded bottom — stronger
+   contrast than the old gradient, less template-y. */
 .hero-band {
-  background: var(--rc-hero-gradient);
+  background: var(--rc-hero);
   border-radius: 0 0 24px 24px;
   padding-block: var(--rc-section-pad);
   padding-inline: var(--rc-gutter);
@@ -275,29 +312,34 @@ a:focus-visible {
 
 .hero-title {
   font: var(--rc-text-display);
-  letter-spacing: -0.02em;
-  color: var(--rc-on-primary);
+  letter-spacing: -0.025em;
+  color: var(--rc-dark-ink);
+}
+
+/* The one amber underline accent — sits under "best price" only. */
+.hero-accent {
+  border-bottom: 3px solid var(--rc-accent);
 }
 
 .hero-sub {
-  color: rgba(255, 255, 255, 0.9);
+  color: rgba(245, 239, 230, 0.82);
   font: var(--rc-text-body);
 }
 
-/* Preset-query chips (§5.1): pills in primary tint */
+/* Preset-query chips on the espresso band */
 .query-pill {
   display: inline-flex;
   align-items: center;
   border-radius: var(--rc-radius-pill);
-  background: rgba(255, 255, 255, 0.14);
-  color: var(--rc-on-primary);
+  background: rgba(245, 239, 230, 0.14);
+  color: var(--rc-dark-ink);
   padding: 6px 14px;
   font: var(--rc-text-small);
   transition: background var(--rc-motion-fast) var(--rc-ease-out);
 }
 
 .query-pill:hover {
-  background: rgba(255, 255, 255, 0.24);
+  background: rgba(245, 239, 230, 0.24);
 }
 
 /* Below-the-fold chips on canvas (results empty state) */
@@ -306,8 +348,8 @@ a:focus-visible {
   color: var(--rc-primary);
 }
 
-/* Per-slot skeleton while a retailer is still fetching (§6 realtime-policy):
-   light, per-slot — never a full-page simultaneous block (design AC-5). */
+/* Loading ghosts: card-shaped blocks with a sheen — pre-first-offer never a
+   blank area. */
 @keyframes rc-sheen {
   0%,
   100% {
@@ -324,10 +366,19 @@ a:focus-visible {
   animation: rc-sheen 1.2s ease-in-out infinite;
 }
 
+.skeleton-block {
+  background: var(--rc-line);
+  border-radius: var(--rc-radius-control);
+  animation: rc-sheen 1.2s ease-in-out infinite;
+}
+
 /* ============================================================================
- * Collection-progress rail — the signature moment (design-v3 §5.6 / realtime
- * -policy §6). Outlined retailer chips fill as offers land; landed cards rise;
- * the rail collapses once every slot is filled.
+ * The Arrival — the signature moment (Brief v4). On results load a slim amber
+ * pulse bar sweeps left→right while retailer chips ignite one-by-one
+ * (collected → done); each arriving card rises (translateY 8px→0, opacity,
+ * 45ms stagger) and its price counts up ~200ms. Progress derives only from
+ * REAL per-retailer subtask states — never synthetic timers. Reduced motion:
+ * plain fade, no transforms.
  * ========================================================================== */
 
 .pulse-bar {
@@ -342,16 +393,26 @@ a:focus-visible {
   position: absolute;
   inset: 0 auto 0 0;
   border-radius: var(--rc-radius-pill);
-  background: var(--rc-hero-gradient);
+  background: var(--rc-primary);
   transition: width var(--rc-motion-arrival) var(--rc-ease-out);
 }
 
+/* The amber sweep: a slim highlight traveling left→right across the bar. */
 .pulse-bar-fill::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
-  animation: rc-sheen 1.4s ease-in-out infinite;
+  background: linear-gradient(90deg, transparent, var(--rc-accent), transparent);
+  animation: rc-sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes rc-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
 }
 
 /* Completion: the bar settles to savings-green. */
@@ -364,7 +425,7 @@ a:focus-visible {
   content: none;
 }
 
-/* Rail of retailer chips: outlined → filled on arrival. */
+/* Rail of retailer chips: outlined → filled as offers land ("ignite"). */
 .rc-chip-rail {
   display: flex;
   flex-wrap: wrap;
@@ -393,9 +454,9 @@ a:focus-visible {
   color: var(--rc-primary);
 }
 
-/* Landed: chip fills with the brand and pulses once (§5.6). The pulse rides
-   the same stagger ladder as the card cascade (REEA-101 AC-5), so a snapshot
-   that lands already-complete still reads as chips lighting up in sequence. */
+/* Landed: the chip ignites with the signal color and pulses once. The pulse
+   rides the same stagger ladder as the card cascade, so a snapshot that lands
+   already-complete still reads as chips lighting up in sequence. */
 .rc-chip.is-done {
   border-color: transparent;
   background: var(--rc-primary);
@@ -412,10 +473,10 @@ a:focus-visible {
 
 @keyframes rc-chip-pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.45);
+    box-shadow: 0 0 0 0 rgba(194, 65, 12, 0.45);
   }
   100% {
-    box-shadow: 0 0 0 6px rgba(79, 70, 229, 0);
+    box-shadow: 0 0 0 6px rgba(194, 65, 12, 0);
   }
 }
 
@@ -435,7 +496,7 @@ a:focus-visible {
   }
 }
 
-/* Offer-card arrival (§5.6): rise 8px→0, stagger 45ms. */
+/* Offer-card arrival: rise 8px→0, opacity, stagger 45ms. */
 .pulse-cascade {
   animation: rc-rise var(--rc-motion-arrival) var(--rc-ease-out) both;
   animation-delay: calc(var(--cascade-index, 0) * var(--rc-stagger));
@@ -452,7 +513,7 @@ a:focus-visible {
   }
 }
 
-/* Cached-repeat label chip (realtime-policy §4): clears when fresh lands. */
+/* Cached-repeat label chip: clears when fresh lands. */
 .cached-chip {
   display: inline-flex;
   align-items: center;
@@ -475,10 +536,10 @@ a:focus-visible {
 @keyframes rc-live-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(21, 128, 61, 0.4);
+    box-shadow: 0 0 0 0 rgba(22, 101, 52, 0.4);
   }
   50% {
-    box-shadow: 0 0 0 4px rgba(21, 128, 61, 0.4);
+    box-shadow: 0 0 0 4px rgba(22, 101, 52, 0.4);
   }
 }
 
@@ -508,8 +569,7 @@ a:focus-visible {
   box-shadow: var(--rc-focus-ring);
 }
 
-/* Reduced motion (§5.7): keep ≤100ms opacity fades; drop translate/stagger/
-   pulse motion. No other behavior change. */
+/* Reduced motion: plain fades only — no transforms, no stagger, no sweep. */
 @media (prefers-reduced-motion: reduce) {
   .result-card,
   .btn-primary,
@@ -531,6 +591,7 @@ a:focus-visible {
   .pulse-spinner,
   .live-dot,
   .r2-skeleton,
+  .skeleton-block,
   .rc-chip.is-done {
     animation: none;
   }

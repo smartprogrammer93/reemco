@@ -15,9 +15,9 @@ export const CATALOG: NormalizedProduct[] = [
     offers: [
       {
         merchant: "Xcite",
-        price: 42.5,
+        price: 47.9,
         currency: "KWD",
-        url: "https://www.xcite.com/asus-rog-strix-scope-ii-96",
+        url: "https://www.xcite.com/asus-rog-x901-strix-scope-ii-96-rgb-wireless-gaming-arabic-keyboard-black/p",
         inStock: true,
         wasPrice: 49,
       },
@@ -68,9 +68,9 @@ export const CATALOG: NormalizedProduct[] = [
     offers: [
       {
         merchant: "Xcite",
-        price: 24.9,
+        price: 34.9,
         currency: "KWD",
-        url: "https://www.xcite.com/asus-rog-keris-ii",
+        url: "https://www.xcite.com/asus-p722-rog-keris-ii-origin-wireless-rgb-gaming-mouse-black/p",
         inStock: true,
       },
       {
@@ -128,9 +128,9 @@ export const CATALOG: NormalizedProduct[] = [
     offers: [
       {
         merchant: "Xcite",
-        price: 38,
+        price: 77.9,
         currency: "KWD",
-        url: "https://www.xcite.com/logitech-g-pro-x-tkl",
+        url: "https://www.xcite.com/logitech-pro-x-tkl-lightspeed-wireless-gaming-keyboard-920-012148-white/p",
         inStock: true,
         wasPrice: 42,
       },
@@ -178,9 +178,9 @@ export const CATALOG: NormalizedProduct[] = [
     offers: [
       {
         merchant: "Xcite",
-        price: 119,
+        price: 99.9,
         currency: "KWD",
-        url: "https://www.xcite.com/sony-wh-1000xm6",
+        url: "https://www.xcite.com/sony-wireless-noise-cancelling-headphone-wh-1000xm6-s-silver/p",
         inStock: true,
       },
       {
@@ -242,9 +242,9 @@ export const CATALOG: NormalizedProduct[] = [
     offers: [
       {
         merchant: "Xcite",
-        price: 389,
+        price: 374.9,
         currency: "KWD",
-        url: "https://www.xcite.com/iphone-17-pro-256",
+        url: "https://www.xcite.com/apple-iphone-17-pro-6-3-256gb-silver/p",
         inStock: true,
       },
       {
@@ -282,11 +282,25 @@ export const CATALOG: NormalizedProduct[] = [
     offers: [
       {
         merchant: "Xcite",
-        price: 370,
+        price: 299.9,
         currency: "KWD",
-        url: "https://www.xcite.com/galaxy-s26-ultra",
+        url: "https://www.xcite.com/samsung-s26-ultra-5g-phone-6-3-12gb-256gb-white/p",
         inStock: true,
         wasPrice: 399,
+      },
+      {
+        merchant: "Jarir Bookstore Kuwait",
+        price: 315,
+        currency: "KWD",
+        url: "https://www.jarir.com/?q=Samsung%20Galaxy%20S26%20Ultra%20256GB",
+        inStock: true,
+      },
+      {
+        merchant: "Amazon.eg (ships to KW)",
+        price: 305.5,
+        currency: "KWD",
+        url: "https://www.amazon.eg/s?k=Samsung%20Galaxy%20S26%20Ultra%20256GB",
+        inStock: true,
       },
     ],
     coupons: [],
@@ -325,9 +339,9 @@ export const CATALOG: NormalizedProduct[] = [
     offers: [
       {
         merchant: "Xcite",
-        price: 118,
+        price: 139.9,
         currency: "KWD",
-        url: "https://www.xcite.com/xbox-series-s-1tb",
+        url: "https://www.xcite.com/microsoft-xbox-series-s-all-digital-gaming-console-1tb-ssd-xxu-00013-carbon-black/p",
         inStock: false,
       },
     ],

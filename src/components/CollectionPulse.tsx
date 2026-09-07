@@ -84,6 +84,8 @@ export function PulseOfferCascade({
             <OfferCard
               merchant={offer.merchant}
               domain={offer.domain}
+              price={offer.price}
+              currency={offer.currency}
               priceLabel={formatPrice(offer.price, offer.currency)}
               effectivePriceLabel={eff !== null ? formatPrice(eff, offer.currency) : undefined}
               compareAtLabel={
@@ -123,6 +125,13 @@ export default function CollectionPulse({
 }) {
   const progress = Math.round(jobProgress(job) * 100);
   const settled = job.status !== "collecting";
+  // Warm Signal loading label: name the store being checked right now
+  // ("Checking Jarir…") beside the amber sweep + the retailer count. Real
+  // subtask states only — never synthetic progress.
+  const active = job.subtasks.find((s) => s.status === "collecting");
+  const checking =
+    active?.retailer ?? job.subtasks.find((s) => s.status === "pending")?.retailer;
+  const doneCount = job.subtasks.filter((s) => s.status === "done").length;
   return (
     <section aria-label="Collecting live offers" aria-busy={!settled}>
       {!settled && (
@@ -137,11 +146,14 @@ export default function CollectionPulse({
             <div className="pulse-bar-fill" style={{ width: `${progress}%` }} />
           </div>
           <p
-            className="mt-2 flex items-center justify-between"
+            className="mt-2 flex flex-wrap items-center justify-between gap-2"
             style={{ font: "var(--rc-text-body)", color: "var(--rc-muted)" }}
           >
-            <span>Collecting live offers…</span>
-            <span className="tabular">{elapsedLabel}</span>
+            <span>{checking ? `Checking ${checking}…` : "Checking live stores…"}</span>
+            <span className="tabular">
+              {doneCount}/{job.subtasks.length} stores
+              {elapsedLabel ? ` · ${elapsedLabel}` : ""}
+            </span>
           </p>
         </>
       )}

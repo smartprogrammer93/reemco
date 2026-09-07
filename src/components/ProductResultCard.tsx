@@ -261,7 +261,7 @@ export default function ProductResultCard({
                         query={query}
                         rank={rank}
                         itemId={product.productId}
-                        className="btn-primary focusable h-10 px-4"
+                        className="btn-primary focusable min-h-11 px-4"
                       >
                         Go to store
                       </TrackedOutboundLink>
