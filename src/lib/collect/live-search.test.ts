@@ -66,6 +66,26 @@ describe("hit parsers", () => {
     expect(hits[0]).toMatchObject({ merchant: "Jarir", price: 1499, currency: "SAR", url: "https://www.jarir.com/p/s26" });
   });
 
+  it("jarirHits keeps verbose live index titles on one-word brand queries (REEA-137)", () => {
+    // Fixture trimmed from the real Constructor answer for "samsung": every
+    // genuine hit carries a spec tail. Under the old symmetric title score
+    // those titles fell below MIN_SCORE and the retailer silently vanished
+    // from samsung results.
+    const hits = jarirHits(
+      {
+        response: {
+          results: [
+            { data: { url: "samsung-galaxy-s25-ultra-256-titanium-black.html", price: 4399, metadata: { name: "Samsung Galaxy S25 Ultra, 256 GB, 12 GB RAM, Titanium Black, 5G, Snapdragon 8 Elite" } } },
+            { data: { url: "anker-powercore.html", price: 10, metadata: { name: "Anker PowerCore 20100" } } },
+          ],
+        },
+      },
+      "samsung",
+    );
+    expect(hits).toHaveLength(1);
+    expect(hits[0].merchant).toBe("Jarir");
+  });
+
   it("sultanCenterHits maps product_list rows to direct store URLs", () => {
     // Fixture trimmed from the live mobile/api/search answer for "air fryer".
     const payload = {

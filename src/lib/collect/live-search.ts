@@ -13,7 +13,7 @@
  * retailer that fails never blocks the others; failures are dropped silently
  * in production but surfaced in tests via the returned diagnostics.
  */
-import { extractJarirIndexKey, titleMatchScore } from "@/lib/collect/search-fallback";
+import { extractJarirIndexKey, titleMatchScore, tokenCoverage } from "@/lib/collect/search-fallback";
 import type { FetchImpl } from "@/lib/collect/scraper";
 import type { NormalizedProduct, PriceOffer } from "@/types/product";
 
@@ -34,7 +34,12 @@ export interface SearchHit {
   wasPrice?: number;
 }
 
-/** Minimum title/query relevance for a hit to be served as a result. */
+/**
+ * Minimum title/query relevance for a hit to be served as a result, compared
+ * with tokenCoverage (share of query tokens found in the hit title) so long
+ * descriptive retailer titles are not punished for their length (REEA-137).
+ * titleMatchScore stays for grouping/ranking, which wants a symmetric fit.
+ */
 const MIN_SCORE = 0.25;
 
 interface RetailerCollector {
@@ -64,7 +69,7 @@ export function xciteHits(payload: unknown, query: string): SearchHit[] {
     const price = typeof hit.price === "number" ? hit.price : NaN;
     const slug = typeof hit.slug === "string" ? hit.slug : "";
     if (!title || !Number.isFinite(price) || price <= 0 || !slug) continue;
-    if (titleMatchScore(title, query) < MIN_SCORE) continue;
+    if (tokenCoverage(title, query) < MIN_SCORE) continue;
     const unmodified = typeof hit.unmodifiedPrice === "number" ? hit.unmodifiedPrice : undefined;
     out.push({
       title,
@@ -88,7 +93,7 @@ export function blinkHits(payload: unknown, query: string): SearchHit[] {
     const variant = p.variants?.[0];
     const price = variant?.price != null ? Number(variant.price) : NaN;
     if (!p.title || !p.handle || !Number.isFinite(price) || price <= 0) continue;
-    if (titleMatchScore(p.title, query) < MIN_SCORE) continue;
+    if (tokenCoverage(p.title, query) < MIN_SCORE) continue;
     out.push({
       title: p.title,
       merchant: "Blink",
@@ -108,7 +113,7 @@ export function eurekaHits(payload: unknown, query: string): SearchHit[] {
   const out: SearchHit[] = [];
   for (const hit of hits) {
     if (!hit.itmn || !hit.objectID || typeof hit.clprc !== "number" || hit.clprc <= 0) continue;
-    if (titleMatchScore(hit.itmn, query) < MIN_SCORE) continue;
+    if (tokenCoverage(hit.itmn, query) < MIN_SCORE) continue;
     out.push({
       title: hit.itmn,
       merchant: "Eureka",
@@ -140,7 +145,7 @@ export function sultanCenterHits(payload: unknown, query: string): SearchHit[] {
     const promo = Number.isFinite(special) && special > 0 && special < regular;
     const price = promo ? special : regular;
     if (!Number.isFinite(price) || price <= 0) continue;
-    if (titleMatchScore(title, query) < MIN_SCORE) continue;
+    if (tokenCoverage(title, query) < MIN_SCORE) continue;
     out.push({
       title,
       merchant: "Sultan Center",
@@ -171,7 +176,7 @@ export function jarirHits(payload: unknown, query: string): SearchHit[] {
     const price = Number(rawPrice);
     const slug = data?.url ?? "";
     if (!Number.isFinite(price) || price <= 0 || !title || !slug) continue;
-    if (titleMatchScore(title, query) < MIN_SCORE) continue;
+    if (tokenCoverage(title, query) < MIN_SCORE) continue;
     out.push({
       title,
       merchant: "Jarir",
@@ -390,7 +395,7 @@ const COLLECTORS: RetailerCollector[] = [
  * retailer hit that scored highest against the query.
  */
 export function groupHits(query: string, hits: SearchHit[]): NormalizedProduct[] {
-  const groups = new Map<string, { title: string; titleScore: number; offers: SearchHit[] }>();
+  const groups = new Map<string, HitGroup>();
   for (const hit of hits) {
     const key = hit.title.toLowerCase().replace(/\s+/g, " ").trim();
     if (!key) continue;
@@ -412,7 +417,7 @@ export function groupHits(query: string, hits: SearchHit[]): NormalizedProduct[]
       b.titleScore - a.titleScore ||
       Math.min(...a.offers.map((o) => o.price)) - Math.min(...b.offers.map((o) => o.price)),
   );
-  const selected = sorted.slice(0, LIVE_SEARCH_MAX_PRODUCTS);
+  const selected = selectAcrossRetailers(sorted, LIVE_SEARCH_MAX_PRODUCTS);
   const scrapedAt = new Date().toISOString(); // real collection completion time
 
   return selected.map((group, idx) => {
@@ -444,6 +449,52 @@ export function groupHits(query: string, hits: SearchHit[]): NormalizedProduct[]
       scrapedAt,
     } satisfies NormalizedProduct;
   });
+}
+
+type HitGroup = { title: string; titleScore: number; offers: SearchHit[] };
+
+/**
+ * REEA-137 — fill the served slice round-robin across retailers instead of a
+ * plain top-N slice of the score ranking. On one-word brand queries every
+ * retailer's hits clear relevance, and the symmetric fit-score ranks short
+ * titles above verbose ones; a pure slice then lets the two fastest responders
+ * occupy all slots (samsung served Xcite + Eureka only even though Jarir and
+ * Amazon.eg had collected hits). Round-robin over the fixed collector order
+ * keeps relevance order inside each retailer's queue while guaranteeing the
+ * page breadth the >=3-retailer requirement asks for. Groups shared by several
+ * retailers serve from whichever queue reaches them first.
+ */
+function selectAcrossRetailers(sorted: HitGroup[], limit: number): HitGroup[] {
+  const queues = new Map<string, HitGroup[]>();
+  for (const group of sorted) {
+    for (const merchant of new Set(group.offers.map((o) => o.merchant))) {
+      let queue = queues.get(merchant);
+      if (!queue) queues.set(merchant, (queue = []));
+      if (!queue.includes(group)) queue.push(group);
+    }
+  }
+  const order = COLLECTORS.map((c) => c.merchant).filter((m) => queues.has(m));
+  for (const merchant of queues.keys()) if (!order.includes(merchant)) order.push(merchant);
+
+  const selected: HitGroup[] = [];
+  const seen = new Set<HitGroup>();
+  let progressed = true;
+  while (progressed && selected.length < limit) {
+    progressed = false;
+    for (const merchant of order) {
+      const queue = queues.get(merchant);
+      if (!queue) continue;
+      const next = queue.shift();
+      if (!next) continue;
+      progressed = true;
+      if (!seen.has(next)) {
+        seen.add(next);
+        selected.push(next);
+        if (selected.length >= limit) break;
+      }
+    }
+  }
+  return selected;
 }
 
 function slugify(title: string): string {

@@ -14,6 +14,7 @@ import {
   parseXciteSearch,
   searchRetailerFallback,
   titleMatchScore,
+  tokenCoverage,
 } from "@/lib/collect/search-fallback";
 import { domainOf } from "@/lib/collect/scraper";
 import { CATALOG } from "@/lib/catalog";
@@ -25,6 +26,27 @@ describe("titleMatchScore", () => {
     expect(titleMatchScore("Sony WH-1000XM6 Wireless Headphones", PRODUCT)).toBeGreaterThan(0.5);
     expect(titleMatchScore("Apple iPhone case", PRODUCT)).toBeLessThan(0.2);
     expect(titleMatchScore("", PRODUCT)).toBe(0);
+  });
+});
+
+describe("tokenCoverage (REEA-137 acceptance metric)", () => {
+  const verbose =
+    "Samsung Galaxy S25 Ultra, 256 GB, 12 GB RAM, Titanium Black, 5G, Snapdragon 8 Elite";
+
+  it("a verbose title answering the query scores full coverage", () => {
+    expect(tokenCoverage(verbose, "samsung")).toBe(1);
+    // The symmetric score this replaced fell under the live-floor here — the
+    // reason retailers vanished on one-word brand queries.
+    expect(titleMatchScore(verbose, "samsung")).toBeLessThan(0.25);
+  });
+
+  it("an unrelated title scores zero regardless of title length", () => {
+    expect(tokenCoverage("Anker PowerCore 20100 mAh Power Bank", "samsung")).toBe(0);
+  });
+
+  it("partial answers scale with the answered query tokens", () => {
+    expect(tokenCoverage("Samsung Galaxy Book4 Laptop", "samsung galaxy s26 ultra")).toBeCloseTo(0.5);
+    expect(tokenCoverage("", "samsung")).toBe(0);
   });
 });
 

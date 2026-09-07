@@ -27,6 +27,13 @@ import type { FetchImpl } from "@/lib/collect/scraper";
 
 const FALLBACK_TIMEOUT_MS = 8_000;
 
+/**
+ * Minimum query-token coverage for a fallback hit to count (REEA-137). Half
+ * the query tokens present keeps the single-best-hit pick targeted while the
+ * descriptive tail of retailer titles no longer suppresses a real match.
+ */
+const MIN_TOKEN_COVERAGE = 0.5;
+
 /** Token-overlap relevance of a hit title vs the product title (0..1). */
 export function titleMatchScore(hitTitle: string, productTitle: string): number {
   const tokens = (s: string): Set<string> =>
@@ -71,8 +78,9 @@ export function parseXciteSearch(payload: unknown, productTitle: string): FoundO
     const price = typeof hit.price === "number" ? hit.price : NaN;
     const slug = typeof hit.slug === "string" ? hit.slug : "";
     if (!title || !Number.isFinite(price) || !slug) continue;
+    if (tokenCoverage(title, productTitle) < MIN_TOKEN_COVERAGE) continue;
     const score = titleMatchScore(title, productTitle);
-    if (score > 0.3 && (!best || score > best.score)) best = { hit, score };
+    if (!best || score > best.score) best = { hit, score };
   }
   const hit = best?.hit;
   if (!hit) return null;
@@ -102,8 +110,9 @@ export function parseShopifyProducts(payload: unknown, productTitle: string): Fo
     const variant = p.variants?.[0];
     const price = variant?.price != null ? Number(variant.price) : NaN;
     if (!p.title || !p.handle || !Number.isFinite(price)) continue;
+    if (tokenCoverage(p.title, productTitle) < MIN_TOKEN_COVERAGE) continue;
     const score = titleMatchScore(p.title, productTitle);
-    if (score > 0.3 && (!best || score > best.score)) best = { p, score };
+    if (!best || score > best.score) best = { p, score };
   }
   const p = best?.p;
   const variant = p?.variants?.[0];
@@ -130,8 +139,9 @@ export function parseEurekaSearch(payload: unknown, productTitle: string): Found
   let best: { hit: EurekaHit; score: number } | null = null;
   for (const hit of hits) {
     if (typeof hit.clprc !== "number" || !hit.itmn || !hit.objectID) continue;
+    if (tokenCoverage(hit.itmn, productTitle) < MIN_TOKEN_COVERAGE) continue;
     const score = titleMatchScore(hit.itmn, productTitle);
-    if (score > 0.3 && (!best || score > best.score)) best = { hit, score };
+    if (!best || score > best.score) best = { hit, score };
   }
   const hit = best?.hit;
   if (!hit) return null;
@@ -182,8 +192,9 @@ export function parseJarirSearch(payload: unknown, productTitle: string): FoundO
     const title = data?.metadata?.name ?? "";
     const slug = data?.url ?? "";
     if (!Number.isFinite(price) || price <= 0 || !title || !slug) continue;
+    if (tokenCoverage(title, productTitle) < MIN_TOKEN_COVERAGE) continue;
     const score = titleMatchScore(title, productTitle);
-    if (score > 0.3 && (!best || score > best.score)) best = { hit, score };
+    if (!best || score > best.score) best = { hit, score };
   }
   const data = best?.hit?.data;
   if (!data) return null;
@@ -211,8 +222,20 @@ function normalizeDigits(s: string): string {
   return s.replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
 }
 
-/** Coverage of product-title tokens found in a hit title (0..1). */
-function tokenCoverage(hitTitle: string, productTitle: string): number {
+/**
+ * Coverage of product-title tokens found in a hit title (0..1) — the share of
+ * query tokens the title actually answers.
+ *
+ * REEA-137: coverage is the acceptance bar for every retailer parser because
+ * the symmetric F-score (`titleMatchScore`) punishes long descriptive titles
+ * purely for their extra tokens — a one-word brand query ("samsung") silently
+ * dropped whole retailers whose index titles are verbose: "Samsung Galaxy
+ * A17 5G, 256 GB, 8 GB RAM, Grey, 5G, Exynos 1330" scored ~0.18 even though
+ * every query token matched. Coverage asks the question that matters for a
+ * search hit — is the query contained in the title — without penalising the
+ * descriptive tail (same reasoning parseAmazonEgSearch already documents).
+ */
+export function tokenCoverage(hitTitle: string, productTitle: string): number {
   const hitTokens = hitTitle.toLowerCase();
   const wanted = Array.from(
     new Set(
@@ -290,8 +313,9 @@ export function parseSultanCenterSearch(payload: unknown, productTitle: string):
   for (const item of list) {
     const price = Number(item?.price);
     if (!item?.name || !item.slug || !Number.isFinite(price) || price <= 0) continue;
+    if (tokenCoverage(item.name, productTitle) < MIN_TOKEN_COVERAGE) continue;
     const score = titleMatchScore(item.name, productTitle);
-    if (score > 0.3 && (!best || score > best.score)) best = { item, score };
+    if (!best || score > best.score) best = { item, score };
   }
   const item = best?.item;
   if (!item) return null;
