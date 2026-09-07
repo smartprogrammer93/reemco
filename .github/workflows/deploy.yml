@@ -169,6 +169,36 @@ jobs:
           done
           echo "F2 headers verified on reemco.vercel.app"
 
+      # REEA-143 probes for the shared collect-job store (REAA-92 addendum),
+      # run against the live alias so the evidence is the production stack:
+      # (a) POST a collect job, then GET-poll it — each curl is a fresh
+      #     connection, so a hit proves cross-instance visibility (ideally
+      #     on the first poll; a solid majority of hits also counts);
+      # (b) two back-to-back POSTs for the same query must dedupe to the
+      #     SAME job id. Per-poll evidence printed; failure rolls back.
+      - name: Shared collect-job store probes
+        run: |
+          set -u
+          BASE=https://reemco.vercel.app
+          ID1=$(curl -fsS -m 30 -X POST "$BASE/api/products/logitech-pro-x-tkl/collect" -H 'Content-Type: application/json' -d '{}' | jq -r '.jobId')
+          ID2=$(curl -fsS -m 30 -X POST "$BASE/api/products/logitech-pro-x-tkl/collect" -H 'Content-Type: application/json' -d '{}' | jq -r '.jobId')
+          echo "probe B ids: $ID1 | $ID2"
+          [ "$ID1" = "$ID2" ] || { echo "::error::probe B failed - back-to-back POSTs created different jobs ($ID1 vs $ID2)"; exit 1; }
+          echo "probe B PASS (same job id on second POST)"
+          JOB=$(curl -fsS -m 30 -X POST "$BASE/api/products/samsung-galaxy-s25/collect" -H 'Content-Type: application/json' -d '{}' | jq -r '.jobId')
+          OK=0; FIRST=""
+          for i in $(seq 1 8); do
+            R=$(curl -fsS -m 20 "$BASE/api/collect-jobs/$JOB" || true)
+            FOUND=$(echo "$R" | jq -r 'if .jobId then "found" else "miss" end' 2>/dev/null || echo miss)
+            FIRST="${FIRST:-$FOUND}"
+            [ "$FOUND" = found ] && OK=$((OK+1))
+            echo "poll$i: $FOUND"
+            sleep 1
+          done
+          echo "probe A: first=$FIRST ok=$OK/8 job=$JOB"
+          [ "$FIRST" = found ] || [ "$OK" -ge 4 ] || { echo "::error::probe A failed - follow-up polls miss the job ($OK/8)"; exit 1; }
+          echo "probe A PASS"
+
       # REEA-44 post-deploy funnel smoke check (CEO P0: nothing new ships until
       # the deployed site is proven working after every deploy). REEA-132: runs
       # against the canonical production host https://reemco.vercel.app.
