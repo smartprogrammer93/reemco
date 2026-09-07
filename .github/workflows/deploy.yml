@@ -126,6 +126,16 @@ jobs:
           fi
           echo "KV binding present on reemco (both KV_REST_* keys listed)"
 
+          # CLI equivalent of the Storage-settings attach: gives the platform
+          # a chance to inject its own KV_REST_* pair (the REST listing shows
+          # whatever is currently stored; the CLI is how the panel writes it).
+          export VERCEL_TELEMETRY_DISABLED=1
+          SCOPE_ARGS=""
+          if [ -n "${VERCEL_TEAM_ID:-}" ]; then SCOPE_ARGS="--scope $VERCEL_TEAM_ID"; fi
+          timeout --signal=INT 10m npx -y vercel@59.11.7 kv add reemco-collect reemco --yes --token "$VERCEL_TOKEN" $SCOPE_ARGS 2>&1 | tail -5 || true
+          CODE=$(curl -s -o "$LIST_JSON" -w '%{http_code}' -m 30 -H "$AUTH" "$BASE/v9/projects/reemco/env$Q" || echo 000)
+          echo "verify GET env list after kv add -> HTTP $CODE"
+
           # Diagnostic roundtrip with the exact values the runtime sees. Try
           # the stored URL first, then the API origin itself (bearer header
           # matches kv.ts behavior). Echo of the marker = shared reads work.
