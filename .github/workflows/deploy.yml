@@ -114,7 +114,7 @@ jobs:
             BODY=$(jq -cn --arg k "$1" --arg v "$2" '{key:$k,value:$v,type:"encrypted",target:["production"]}')
             C=$(curl -s -o /tmp/vercel-env-post.json -w '%{http_code}' -m 30 -X POST -H "$AUTH" -H "$CT" \
               -d "$BODY" "$BASE/v10/projects/reemco/env$Q" || echo 000)
-            echo "POST env $1 -> HTTP $C"
+            echo "POST env $1 -> HTTP $C $(head -c 120 /tmp/vercel-env-post.json)"
           }
 
           # CEO handoff path (comment ff6ae9f3): when provisioned store creds
@@ -129,8 +129,23 @@ jobs:
               --data-binary "$(printf 'reea143-marker\nEX\n60')" "$WIN_URL/set/$K" >/dev/null || true
             RB=$(curl -s -m 15 -H "Authorization: Bearer $WIN_TOK" "$WIN_URL/get/$K" || true)
             echo "roundtrip provided $WIN_URL -> $(echo "$RB" | head -c 120)"
-            post_env KV_REST_API_URL "$WIN_URL"
-            post_env KV_REST_API_TOKEN "$WIN_TOK"
+            apply_pair() { # $1=key $2=value ; replace existing entry then create fresh
+              CODE=$(curl -s -o "$LIST_JSON" -w '%{http_code}' -m 30 -H "$AUTH" "$BASE/v9/projects/reemco/env$Q" || echo 000)
+              CUR=$(val_by_key "$1")
+              if [ "$CUR" != "$2" ]; then
+                EID=$(jq -r --arg k "$1" '[.. | objects | select((.key? // .name? // "") == $k) | (.id? // "")] | map(select(length > 0)) | .[0] // ""' "$LIST_JSON" 2>/dev/null || true)
+                if [ -n "$EID" ]; then
+                  DC=$(curl -s -o /tmp/envdel.txt -w '%{http_code}' -m 30 -X DELETE -H "$AUTH" "$BASE/v9/projects/reemco/env/$EID$Q" || echo 000)
+                  echo "$1 existing entry DELETE -> HTTP $DC $(head -c 100 /tmp/envdel.txt)"
+                fi
+                post_env "$1" "$2"
+                CODE=$(curl -s -o "$LIST_JSON" -w '%{http_code}' -m 30 -H "$AUTH" "$BASE/v9/projects/reemco/env$Q" || echo 000)
+                CUR=$(val_by_key "$1")
+              fi
+              if [ "$CUR" = "$2" ]; then echo "$1 carries the provided value"; else echo "$1 listing len=${#CUR} (expect ${#2})"; fi
+            }
+            apply_pair KV_REST_API_URL "$WIN_URL"
+            apply_pair KV_REST_API_TOKEN "$WIN_TOK"
             CODE=$(curl -s -o "$LIST_JSON" -w '%{http_code}' -m 30 -H "$AUTH" "$BASE/v9/projects/reemco/env$Q" || echo 000)
             echo "verify GET env list after provided attach -> HTTP $CODE; listed: $(has_both && echo yes || echo no)"
             exit 0
