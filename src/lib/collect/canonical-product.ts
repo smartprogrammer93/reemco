@@ -8,8 +8,9 @@
  * role), not product data: every field value comes from the fetched title.
  *
  * Rules implemented, in spec order:
- *  1. lowercase / trim / collapse whitespace; commas, hyphens and en/em-dashes
- *     between attribute tokens act as spaces ("256 GB" ≡ "256GB" ≡ "256-gb");
+ *  1. lowercase / trim / collapse whitespace; commas, hyphens, en/em-dashes
+ *     and quote marks between attribute tokens act as spaces
+ *     ("256 GB" ≡ "256GB" ≡ "256-gb"; `6.9"` ≡ "6.9 inch");
  *  2. brand = first known-brand token (fallback: first token); model_line =
  *     contiguous model-line tokens after the brand — size suffixes that define
  *     the line are kept; storage = first `<digits> gb|tb` NOT qualified as
@@ -81,33 +82,58 @@ const STORAGE_RE = /^(\d+(?:\.\d+)?)(gb|tb)$/;
 /** "12gbram" (merged in the join pass) is RAM restated, never storage. */
 const RAM_QUANTITY_RE = /^\d+(?:g|gb|t|tb)ram$/i;
 
+/** Arabic storage units, joined onto the quantity in the join pass so an
+ *  Arabic-script capacity keeps the same normalized value as the Latin one
+ *  (REEA-205: "256 جيجابايت" ≡ "256GB", so 256 vs 512 still discriminates). */
+const AR_UNITS = new Map([
+  ["جيجابايت", "gb"], ["جيجا", "gb"], ["جب", "gb"],
+  ["تيرابايت", "tb"], ["تيرا", "tb"],
+]);
+
+/** RAM/memory restatements in either script — same role as the NOISE words. */
+const RAM_WORDS = new Set(["ram", "memory", "mem", "رام", "ذاكرة"]);
+
 /**
  * Normalise + tokenize: casing/whitespace collapsed, commas/hyphens/dashes
- * become spaces, then a small join pass reassembles split attribute tokens
- * ("256 gb" → "256gb", "fold 7" → "fold7", "grade b" stays adjacent).
+ * and quote marks become spaces, then a small join pass reassembles split
+ * attribute tokens ("256 gb" → "256gb", "fold 7" → "fold7", "grade b" stays
+ * adjacent).
  */
 export function canonicalTokens(title: string): string[] {
   const raw = title
     .toLowerCase()
     .replace(/open[\s-]+box/g, "open-box")
     .replace(/[,;:\-/‒–—]/g, " ")
+    // REEA-205: quote-family marks fold to separators too — the inch sign
+    // arrives as `"`/″/” depending on the retailer's feed encoding, and a
+    // trailing quote after a size figure must tokenize exactly like the
+    // spelled form (`6.9"` ≡ `6.9 inch`), not ride inside the number token.
+    .replace(/["“″”"'‘]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   const base = raw.split(" ").filter(Boolean);
 
   const out: string[] = [];
+  /** True when the token at j is a storage/RAM qualifier — a quantity that
+   *  carries its own unit must be joined by the number pass, not swallowed
+   *  by the preceding word ("ماكس 256 جيجابايت" keeps storage visible). */
+  const qualifierAt = (j: number): boolean => {
+    const w = base[j];
+    return w === "gb" || w === "tb" || (w !== undefined && (AR_UNITS.has(w) || RAM_WORDS.has(w)));
+  };
   for (let i = 0; i < base.length; i++) {
     let t = base[i];
     const next = (): string | undefined => base[i + 1];
     // numeric + unit → single token; "ram"-qualified quantities stay marked.
     if (/^\d+(?:\.\d+)?$/.test(t)) {
       const n = next();
-      if (n === "gb" || n === "tb") {
+      const unit = n === "gb" || n === "tb" ? n : AR_UNITS.get(n ?? "");
+      if (unit) {
         const third = base[i + 2];
-        const rammed = third === "ram" || third === "memory" || third === "mem";
-        t = `${t}${n}${rammed ? "ram" : ""}`;
+        const rammed = third !== undefined && RAM_WORDS.has(third);
+        t = `${t}${unit}${rammed ? "ram" : ""}`;
         i += rammed ? 2 : 1;
-      } else if (n === "ram" || n === "memory" || n === "mem") {
+      } else if (n !== undefined && RAM_WORDS.has(n)) {
         t = `${t}gbram`;
         i += 1;
       } else {
@@ -118,8 +144,17 @@ export function canonicalTokens(title: string): string[] {
       }
     }
     // word + number merge for model codes written apart ("fold 7" → "fold7"),
-    // unless the word itself is ignored noise ("snapdragon 8" is dropped).
-    if (/^[a-z]+$/.test(t) && !NOISE.has(t) && !COLORS.has(t) && /^\d{1,4}$/.test(base[i + 1] ?? "")) {
+    // unless the word itself is ignored noise ("snapdragon 8" is dropped) or
+    // the number carries its own unit/RAM qualifier right after it.
+    // REEA-205: any-script word — Arabic model lines keep their generation
+    // number too ("آيفون 17" → "آيفون17"), matching what Latin titles get.
+    if (
+      /^[\p{L}]+$/u.test(t) &&
+      !NOISE.has(t) &&
+      !COLORS.has(t) &&
+      /^\d{1,4}$/.test(base[i + 1] ?? "") &&
+      !qualifierAt(i + 2)
+    ) {
       const joined = base[i + 1];
       t = `${t}${joined}`;
       i += 1;
@@ -184,7 +219,7 @@ export function canonicalFields(title: string): CanonicalFields {
       // A number qualified as RAM right after it ("12gb ram" arriving as
       // separate tokens) is a RAM restatement, not storage (§1 step 2).
       const nx = tokens[i + 1];
-      if (nx === "ram" || nx === "memory" || nx === "mem") continue;
+      if (nx !== undefined && RAM_WORDS.has(nx)) continue;
       if (!storage) {
         storage = t;
         stopped = true;
@@ -199,7 +234,11 @@ export function canonicalFields(title: string): CanonicalFields {
       continue;
     }
 
-    if (NOISE.has(t) || /^\d+$/.test(t)) continue;
+    // Standalone quantities restate what the joined tokens already carry:
+    // integer model numbers ride on their word ("fold7"), sizes restate the
+    // display ("6.9", REEA-205 — quoted or spelled, like RAM/CPU restatements
+    // above). Capacity tokens keep discriminating through STORAGE_RE.
+    if (NOISE.has(t) || /^\d+(?:\.\d+)?$/.test(t)) continue;
 
     if (!stopped) {
       // Single-letter model-line parts ("Galaxy Z Fold7") stay in the line;

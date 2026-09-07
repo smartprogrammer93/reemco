@@ -355,6 +355,52 @@ describe("groupHits", () => {
     ).toBe(true);
   });
 
+  it("REEA-205: inch-quote noise collapses the iPhone live pair into one card", () => {
+    // Live board pair for "iphone 17 pro max": Xcite quotes the inch sign,
+    // Eureka spells it out and carries a network token — one device must
+    // render ONE card, cheapest offer leading (the LOWEST LISTED PRICE row).
+    const products = groupHits("iphone 17 pro max", [
+      hit({ title: 'Apple iPhone 17 Pro Max 6.9" 256GB - Silver', merchant: "Xcite", price: 429.9, url: "https://xcite.example/17pm-silver" }),
+      hit({ title: "Apple iPhone 17 Pro Max 6.9 inch 256GB 5G Silver", merchant: "Eureka", price: 379.9, url: "https://eureka.example/17pm" }),
+    ]);
+    expect(products).toHaveLength(1);
+    expect(products[0].offers.map((o) => [o.merchant, o.price])).toEqual([
+      ["Eureka", 379.9],
+      ["Xcite", 429.9],
+    ]);
+  });
+
+  it("REEA-205: quote marks fold like separators in every encoding flavour", () => {
+    // Straight inch sign, right curly quote and the prime all tokenize to
+    // the same size token as the spelled "inch".
+    const spelled = canonicalKey("Apple iPhone 17 Pro Max 6.9 inch 256GB Silver");
+    expect(canonicalKey('Apple iPhone 17 Pro Max 6.9" 256GB - Silver')).toBe(spelled);
+    expect(canonicalKey("Apple iPhone 17 Pro Max 6.9\u201D 256GB Silver")).toBe(spelled);
+    expect(canonicalKey("Apple iPhone 17 Pro Max 6.9\u2033 256GB Silver")).toBe(spelled);
+    // Over-merge guard survives the folding: capacities stay separate cards.
+    expect(
+      compatibleFields(
+        canonicalFields('Apple iPhone 17 Pro Max 6.9" 256GB - Silver'),
+        canonicalFields("Apple iPhone 17 Pro Max 6.9 inch 512GB Silver"),
+      ),
+    ).toBe(false);
+  });
+
+  it("REEA-205: Arabic titles merge on separator noise, capacities discriminate", () => {
+    // Arabic-script listings of the same device fold across comma/dash
+    // noise; an Arabic-unit capacity ("جيجابايت") keeps discriminating, so
+    // 512GB never rides the 256GB card.
+    const products = groupHits("آيفون 17 برو ماكس", [
+      hit({ title: "أبل آيفون 17 برو ماكس 256 جيجابايت فضي", merchant: "Jarir", price: 410, url: "https://jarir.example/ar1" }),
+      hit({ title: "أبل آيفون 17 برو ماكس, 256 جيجابايت - فضي", merchant: "Xcite", price: 429.9, url: "https://xcite.example/ar2" }),
+      hit({ title: "أبل آيفون 17 برو ماكس 512 جيجابايت فضي", merchant: "Eureka", price: 459.9, url: "https://eureka.example/ar3" }),
+    ]);
+    expect(products).toHaveLength(2);
+    // Cheapest group leads with both 256GB listings inside it.
+    expect(products[0].offers.map((o) => o.merchant)).toEqual(["Jarir", "Xcite"]);
+    expect(products[1].offers).toHaveLength(1);
+  });
+
   it("REEA-168: over-merge guards keep distinct variants separate (§3)", () => {
     const base = canonicalFields("Samsung Galaxy Z Fold7 Phone Silver");
     expect(compatibleFields(base, canonicalFields("Samsung Galaxy Z Fold7 Phone Gray"))).toBe(false); // color
