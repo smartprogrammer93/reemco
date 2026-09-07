@@ -13,12 +13,23 @@
  * retailer that fails never blocks the others; failures are dropped silently
  * in production but surfaced in tests via the returned diagnostics.
  */
-import { extractJarirIndexKey, titleMatchScore, tokenCoverage } from "@/lib/collect/search-fallback";
+import {
+  brandAwareCoverage,
+  extractJarirIndexKey,
+  jarirIndexLang,
+  titleMatchScore,
+} from "@/lib/collect/search-fallback";
 import type { FetchImpl } from "@/lib/collect/scraper";
 import type { CountryCode } from "@/lib/country";
 import { canonicalFields, compatibleFields, type CanonicalFields } from "@/lib/collect/canonical-product";
-import { isAccessoryTitle } from "@/lib/relevance";
-import { resolveBrand } from "@/lib/relevance";
+import {
+  arabicBrandIntent,
+  isAccessoryTitle,
+  matchesQueryToken,
+  queryMatchTokens,
+  resolveBrand,
+  titleMatchesBrand,
+} from "@/lib/relevance";
 import type { NormalizedProduct, PriceOffer } from "@/types/product";
 
 /**
@@ -186,7 +197,7 @@ export function xciteHits(payload: unknown, query: string): SearchHit[] {
     const price = typeof hit.price === "number" ? hit.price : NaN;
     const slug = typeof hit.slug === "string" ? hit.slug : "";
     if (!title || !Number.isFinite(price) || price <= 0 || !slug) continue;
-    if (tokenCoverage(title, query) < MIN_SCORE) continue;
+    if (brandAwareCoverage(title, query) < MIN_SCORE) continue;
     const unmodified = typeof hit.unmodifiedPrice === "number" ? hit.unmodifiedPrice : undefined;
     const brand = pickBrand(hit);
     out.push({
@@ -213,7 +224,7 @@ export function blinkHits(payload: unknown, query: string): SearchHit[] {
     const variant = p.variants?.[0];
     const price = variant?.price != null ? Number(variant.price) : NaN;
     if (!p.title || !p.handle || !Number.isFinite(price) || price <= 0) continue;
-    if (tokenCoverage(p.title, query) < MIN_SCORE) continue;
+    if (brandAwareCoverage(p.title, query) < MIN_SCORE) continue;
     const brand = pickBrand(p as unknown as Record<string, unknown>);
     out.push({
       title: p.title,
@@ -236,7 +247,7 @@ export function eurekaHits(payload: unknown, query: string): SearchHit[] {
   const out: SearchHit[] = [];
   for (const hit of hits) {
     if (!hit.itmn || !hit.objectID || typeof hit.clprc !== "number" || hit.clprc <= 0) continue;
-    if (tokenCoverage(hit.itmn, query) < MIN_SCORE) continue;
+    if (brandAwareCoverage(hit.itmn, query) < MIN_SCORE) continue;
     const brand = pickBrand(hit as unknown as Record<string, unknown>);
     out.push({
       title: hit.itmn,
@@ -271,7 +282,7 @@ export function sultanCenterHits(payload: unknown, query: string): SearchHit[] {
     const promo = Number.isFinite(special) && special > 0 && special < regular;
     const price = promo ? special : regular;
     if (!Number.isFinite(price) || price <= 0) continue;
-    if (tokenCoverage(title, query) < MIN_SCORE) continue;
+    if (brandAwareCoverage(title, query) < MIN_SCORE) continue;
     const brand = pickBrand(item as unknown as Record<string, unknown>);
     out.push({
       title,
@@ -305,11 +316,17 @@ export function jarirHits(payload: unknown, query: string): SearchHit[] {
     const price = Number(rawPrice);
     const slug = data?.url ?? "";
     if (!Number.isFinite(price) || price <= 0 || !title || !slug) continue;
-    if (tokenCoverage(title, query) < MIN_SCORE) continue;
+    if (brandAwareCoverage(title, query) < MIN_SCORE) continue;
+    // REEA-195 — brand pickup through the same candidate chain as every other
+    // JSON adapter: jarir's Constructor metadata carries `brand`, and the
+    // Arabic index ships it populated ("Apple") — the Arabic path must not
+    // lose the brand line just because the field sits in metadata.
+    const brand = pickBrand((data?.metadata ?? {}) as Record<string, unknown>);
     out.push({
       title,
       merchant: "Jarir",
       country: "SA",
+      ...(brand ? { brand } : {}),
       price,
       // Constructor hits on jarir.com carry SAR; rendered as scraped (REEA-60 §7.1).
       currency: "SAR",
@@ -324,13 +341,7 @@ export function jarirHits(payload: unknown, query: string): SearchHit[] {
 /** amazon.eg `/s?k=` cards → hits (also exported for the single-best parser). */
 export function amazonEgHits(html: string, query: string): SearchHit[] {
   const out: SearchHit[] = [];
-  const wanted = new Set(
-    query
-      .toLowerCase()
-      .replace(/[^a-z0-9\u0600-\u06FF]+/g, " ")
-      .split(" ")
-      .filter((t) => t.length >= 2),
-  );
+  const wanted = queryMatchTokens(query);
   for (const seg of html.split('data-component-type="s-search-result"').slice(1)) {
     const asin = seg.match(/\/dp\/([A-Z0-9-]{6,12})/)?.[1];
     const priceRaw = (seg.match(/class="a-offscreen">[^<]*?([\d٠-٩][٠-٩\d.,٫٬]*)/)?.[1] ?? "")
@@ -346,11 +357,11 @@ export function amazonEgHits(html: string, query: string): SearchHit[] {
       .replace(/\s+/g, " ")
       .trim();
     if (!title) continue;
-    if (wanted.size > 0) {
+    if (wanted.length > 0) {
       const lower = title.toLowerCase();
       let matched = 0;
-      for (const t of wanted) if (lower.includes(t)) matched++;
-      if (matched / wanted.size < MIN_SCORE) continue;
+      for (const t of wanted) if (matchesQueryToken(lower, t)) matched++;
+      if (matched / wanted.length < MIN_SCORE) continue;
     }
     out.push({
       title,
@@ -492,7 +503,13 @@ const COLLECTORS: RetailerCollector[] = [
     country: "SA",
     collect: async (query, fetchImpl) => {
       const signal = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
-      let indexKey = readDiscovery("jarir")?.[0];
+      // REEA-195 — the ar/en index choice follows the query script: Arabic
+      // queries answer from jarir's Arabic index (correct titles + populated
+      // brand), Latin queries keep the English index. Cached per language so
+      // a warm instance still answers in one round-trip.
+      const lang = jarirIndexLang(query);
+      const cacheKey = `jarir:${lang}`;
+      let indexKey = readDiscovery(cacheKey)?.[0];
       if (!indexKey) {
         const page = await fetchChecked(
           fetchImpl,
@@ -500,14 +517,14 @@ const COLLECTORS: RetailerCollector[] = [
           { headers: { accept: "text/html" } },
           signal,
         );
-        indexKey = extractJarirIndexKey(await page.text()) ?? undefined;
+        indexKey = extractJarirIndexKey(await page.text(), lang) ?? undefined;
         if (!indexKey) throw new Error("jarir index key missing");
         if (!SEARCH_KEY_ALLOW.test(indexKey)) {
           // Same discovery-failure semantics as the eureka hop: throw before
           // writeDiscovery so a crafted value never reaches cache or URL.
           throw new Error("jarir index key failed validation");
         }
-        writeDiscovery("jarir", [indexKey]);
+        writeDiscovery(cacheKey, [indexKey]);
       }
       const res = await fetchChecked(
         fetchImpl,
@@ -578,7 +595,26 @@ export function groupHits(query: string, hits: SearchHit[]): NormalizedProduct[]
       b.titleScore - a.titleScore ||
       Math.min(...a.offers.map((o) => o.price)) - Math.min(...b.offers.map((o) => o.price)),
   );
-  return finalizeGroups(selectAcrossRetailers(sorted, LIVE_SEARCH_MAX_PRODUCTS));
+  return finalizeGroups(selectAcrossRetailers(leadWithBrandMatch(sorted, query), LIVE_SEARCH_MAX_PRODUCTS));
+}
+
+/**
+ * REEA-195 — brand-match lead for Arabic brand queries: when the Arabic query
+ * carries an explicit brand token ("سماعة أبل" → Apple), groups whose titles
+ * carry that brand lead the list; everything keeps its relative order inside
+ * both buckets. This is a partition, not a synonym/taxonomy expansion — a
+ * query without a brand token returns the list untouched, and Latin-only
+ * queries never enter this path. Without it the symmetric fit score (higher
+ * for same-script titles) keeps ranking Arabic-script AABLE-style Quran
+ * listings — whose only link to the query is the same "أبل" spelling — above
+ * the actual Apple devices the shopper asked for.
+ */
+function leadWithBrandMatch(groups: HitGroup[], query: string): HitGroup[] {
+  const brand = arabicBrandIntent(query);
+  if (!brand) return groups;
+  const matched = groups.filter((g) => [...g.titles].some((t) => titleMatchesBrand(t, brand)));
+  if (matched.length === 0 || matched.length === groups.length) return groups;
+  return [...matched, ...groups.filter((g) => !matched.includes(g))];
 }
 
 /**

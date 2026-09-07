@@ -7,11 +7,14 @@
 import { describe, expect, it } from "vitest";
 import {
   CURATED_BRANDS,
+  arabicBrandIntent,
   curatedBrandInTitle,
   isAccessoryTitle,
+  matchesQueryToken,
   partitionForQuery,
   resolveBrand,
   titleHasDeviceIntent,
+  titleMatchesBrand,
 } from "@/lib/relevance";
 
 describe("brand resolution (Rule 1)", () => {
@@ -106,5 +109,47 @@ describe("device-intent tiering (Rules 2–3)", () => {
 
   it("curated list stays inside the spec cap of 75 entries", () => {
     expect(CURATED_BRANDS.length).toBeLessThanOrEqual(75);
+  });
+});
+
+describe("Arabic brand-token matching (REEA-195)", () => {
+  it("an Arabic brand spelling is answered by the curated Latin form", () => {
+    // The QA-reported shape: Arabic query, English-index title. Plain
+    // substring coverage is 0 across scripts; the alias bridge closes it.
+    expect(matchesQueryToken("apple airpods 4 - white", "أبل")).toBe(true);
+    expect(matchesQueryToken("samsung galaxy buds fe", "سامسونج")).toBe(true);
+    // Hamza variants of the same spelling share one alias key.
+    expect(matchesQueryToken("apple iphone 17 pro", "آبل")).toBe(true);
+    expect(matchesQueryToken("apple iphone 17 pro", "ابل")).toBe(true);
+  });
+
+  it("non-brand tokens and Latin queries keep the plain substring path", () => {
+    expect(matchesQueryToken("sony wh-1000xm6 headphones", "sony")).toBe(true);
+    expect(matchesQueryToken("boase quietcomfort", "bose")).toBe(false);
+    expect(matchesQueryToken("سماعة القرآن للأطفال", "سماعة")).toBe(true);
+  });
+
+  it("Arabic brand queries name the brand for lead ordering", () => {
+    expect(arabicBrandIntent("سماعة أبل")).toBe("Apple");
+    expect(arabicBrandIntent("آيفون 17")).toBe("Apple");
+    expect(arabicBrandIntent("سماعات سامسونج")).toBe("Samsung");
+    // No brand token → untouched ordering; Latin-only queries never enter.
+    expect(arabicBrandIntent("سماعة بلوتوث")).toBeNull();
+    expect(arabicBrandIntent("apple airpods")).toBeNull();
+  });
+
+  it("brand lead matching reads Latin and Arabic spellings of the brand", () => {
+    expect(titleMatchesBrand("Apple Airpods 4 - White", "Apple")).toBe(true);
+    expect(titleMatchesBrand("سماعة أبل لاسلكية", "Apple")).toBe(true);
+    expect(titleMatchesBrand("Samsung Galaxy Buds FE", "Apple")).toBe(false);
+  });
+
+  it("empty retailer brand fields fall back through the curated title match", () => {
+    // The blank brand lines from the fold7 pass (pg68903, pg22394, cr60744):
+    // no retailer brand field, title carries the brand — the curated fallback
+    // fills the line with one canonical casing; the longest entry wins over
+    // the fitted-device brand inside the same title.
+    expect(resolveBrand(undefined, "PanzerGlass Urban Fit for Samsung Galaxy S26")).toBe("PanzerGlass");
+    expect(resolveBrand("", "PanzerGlass Screen Protector")).toBe("PanzerGlass");
   });
 });

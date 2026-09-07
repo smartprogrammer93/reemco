@@ -23,7 +23,7 @@ export const CURATED_BRANDS: readonly string[] = [
   "Dell", "HP", "Lenovo", "Asus", "Acer", "LG", "Toshiba", "Philips",
   "Panasonic", "Hisense", "TCL", "Sharp", "Fujifilm", "Dyson", "Braun",
   "DeLonghi", "Nespresso", "Tefal", "Kenwood", "Electrolux", "NILLKIN",
-  "Araree", "RINGKE", "GRABIST", "GravaStar",
+  "Araree", "RINGKE", "GRABIST", "GravaStar", "PanzerGlass",
   // Grocery / household (Sultan Center)
   "Almarai", "Al Safi", "Tamanies", "Nada", "Inver", "Cowbell", "Lipton",
   "Nescafe", "Nestle", "Kellogg's", "Nature Valley", "Coca-Cola", "Pepsi",
@@ -58,6 +58,106 @@ const MODEL_TOKEN_RE = /\p{L}[\p{L}\p{M}]*[\s/-]{0,2}\p{Nd}/u;
  *  Arabic and EN marker lists stay simple substring checks. */
 export function normalizedTitle(title: string): string {
   return title.trim().replace(/\s+/g, " ");
+}
+
+/* ---- REEA-195: Arabic brand-token matching (query side only). ---- */
+
+/** Arabic-script spellings of curated brands as the Kuwait storefronts carry
+ *  them. Keys are compared after normalizeArabicText(), so hamza variants share
+ *  one entry. Used ONLY to match an Arabic query against retailer titles and
+ *  to rank brand-intent queries — brand LINES still come from resolveBrand's
+ *  Rule-1 chain, so an unbranded item never inherits a brand from its title's
+ *  alias spelling. */
+const ARABIC_BRAND_ALIASES: ReadonlyMap<string, string> = new Map([
+  ["ابل", "Apple"],
+  ["ايفون", "Apple"],
+  ["سامسونج", "Samsung"],
+  ["سامسونغ", "Samsung"],
+  ["سوني", "Sony"],
+  ["بوز", "Bose"],
+  ["شاومي", "Xiaomi"],
+  ["هواوي", "Huawei"],
+  ["هونر", "Honor"],
+  ["اوبو", "Oppo"],
+  ["فيفو", "Vivo"],
+  ["ريلمي", "Realme"],
+  ["جوجل", "Google"],
+  ["مايكروسوفت", "Microsoft"],
+  ["ديل", "Dell"],
+  ["لينوفو", "Lenovo"],
+  ["اسوس", "Asus"],
+  ["ايسر", "Acer"],
+  ["ال جي", "LG"],
+  ["توشيبا", "Toshiba"],
+  ["فيليبس", "Philips"],
+  ["باناسونيك", "Panasonic"],
+  ["هايسنس", "Hisense"],
+  ["شارب", "Sharp"],
+  ["دايسون", "Dyson"],
+  ["المراعي", "Almarai"],
+  ["الصافي", "Al Safi"],
+]);
+
+/** Fold the alef family + case so alias keys and storefront spellings meet in
+ *  one form ("أبل"/"ابل"/"آبل" all normalize to the same shape). */
+export function normalizeArabicText(text: string): string {
+  return text.toLowerCase().replace(/[\u0621\u0622\u0623\u0625\u0627\u0671]/g, "ا").trim();
+}
+
+/** Split a query into match tokens with the same tokenizer the retailer
+ *  coverage gates use (Latin letters/digits + Arabic block, min length 2). */
+export function queryMatchTokens(query: string): string[] {
+  return Array.from(
+    new Set(
+      query
+        .toLowerCase()
+        .replace(/[^a-z0-9\u0600-\u06FF]+/g, " ")
+        .split(" ")
+        .filter((t) => t.length >= 2),
+    ),
+  );
+}
+
+/** True when one query token is answered by the title: substring match on the
+ *  alef-folded pair (so "أبل"/"ابل" spellings meet), or — for Arabic-script
+ *  brand spellings — the curated Latin form of the brand ("أبل" ⇄ "Apple").
+ *  Tokens without an alias behave exactly like the plain substring check. */
+export function matchesQueryToken(titleLower: string, token: string): boolean {
+  const title = normalizeArabicText(titleLower);
+  const folded = normalizeArabicText(token);
+  if (folded !== "" && title.includes(folded)) return true;
+  const entry = ARABIC_BRAND_ALIASES.get(folded);
+  return entry !== undefined && title.includes(entry.toLowerCase());
+}
+
+/** Query-side brand intent for Arabic-script queries: when the query carries
+ *  at least one Arabic-script token AND one token is an alias spelling or the
+ *  curated brand itself, return the curated entry. Purely-Latin queries keep
+ *  their untouched scoring path; Arabic queries without a brand token return
+ *  null and keep current behavior exactly. */
+export function arabicBrandIntent(query: string): string | null {
+  const tokens = queryMatchTokens(query);
+  if (!tokens.some((t) => /[\u0600-\u06FF]/.test(t))) return null;
+  for (const t of tokens) {
+    const aliased = ARABIC_BRAND_ALIASES.get(normalizeArabicText(t));
+    if (aliased) return aliased;
+    for (const entry of CURATED_BRANDS) {
+      if (entry.toLowerCase() === t) return entry;
+    }
+  }
+  return null;
+}
+
+/** True when a title carries the query's brand — curated whole-word match on
+ *  the Latin form, or one of the brand's Arabic alias spellings. Drives the
+ *  brand-match lead ordering only. */
+export function titleMatchesBrand(title: string, brand: string): boolean {
+  if (curatedBrandInTitle(title) === brand) return true;
+  const folded = normalizeArabicText(normalizedTitle(title));
+  for (const [alias, entry] of ARABIC_BRAND_ALIASES) {
+    if (entry === brand && folded.includes(alias)) return true;
+  }
+  return false;
 }
 
 function escapeRe(s: string): string {

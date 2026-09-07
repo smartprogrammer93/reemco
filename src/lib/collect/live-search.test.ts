@@ -79,6 +79,53 @@ describe("hit parsers", () => {
     expect(hits[0]).toMatchObject({ merchant: "Jarir", price: 1499, currency: "SAR", url: "https://www.jarir.com/p/s26" });
   });
 
+  it("jarirHits reads the metadata brand through the shared candidate chain (REEA-195)", () => {
+    // Adapter symmetry: jarir is the only JSON contract that nests `brand`
+    // inside metadata — the Arabic index ships it populated and the card's
+    // brand line must not go blank for that reason.
+    const hits = jarirHits(
+      { response: { results: [{ data: { url: "p/ap-airpods4", price: 59, metadata: { name: "سماعة أبل AirPod Slic 4 Generate", brand: "Apple" } } }] } },
+      "سماعة أبل",
+    );
+    expect(hits[0]).toMatchObject({ brand: "Apple", title: "سماعة أبل AirPod Slic 4 Generate" });
+  });
+
+  it("Arabic brand queries survive the English-index coverage gates (REEA-195)", () => {
+    // Observed live: xcite's en index answers the Arabic query with Latin
+    // titles. Plain cross-script substring coverage drops every one of them,
+    // leaving only Jarir's Arabic listings — the QA-reported generic-speaker
+    // result. The alias bridge keeps the branded hit and still cuts noise.
+    const hits = xciteHits(
+      {
+        results: [
+          {
+            hits: [
+              { name: "Apple Airpods 4 - White", slug: "apple-airpods-4-white", price: 34.9, currency: "KWD", inStock: true },
+              { name: "Anker PowerCore 20100 mAh", slug: "anker-powercore", price: 15, currency: "KWD", inStock: true },
+            ],
+          },
+        ],
+      },
+      "سماعة أبل",
+    );
+    expect(hits.map((h) => h.title)).toEqual(["Apple Airpods 4 - White"]);
+  });
+
+  it("Arabic brand queries lead with the branded offers (REEA-195)", () => {
+    // Same-script filler out-scores the branded device in the symmetric fit
+    // score; the brand-match partition moves the Apple offer in front while
+    // everything keeps its relative order behind it. One merchant on both
+    // rows keeps the retailer round-robin out of the ordering question.
+    const hits: SearchHit[] = [
+      { title: "سماعة القرآن الكريم للاطفال", merchant: "Jarir", country: "SA", price: 299, currency: "SAR", url: "https://www.jarir.com/arabic-books-675545.html", inStock: true },
+      { title: "Apple Airpods 4 - White", merchant: "Jarir", country: "SA", brand: "Apple", price: 34.9, currency: "SAR", url: "https://www.jarir.com/p/ap-airpods4", inStock: true },
+    ];
+    const products = groupHits("سماعة أبل", hits);
+    expect(products[0].title).toBe("Apple Airpods 4 - White");
+    expect(products[0].brand).toBe("Apple");
+    expect(products[1].title).toBe("سماعة القرآن الكريم للاطفال");
+  });
+
   it("jarirHits keeps verbose live index titles on one-word brand queries (REEA-137)", () => {
     // Fixture trimmed from the real Constructor answer for "samsung": every
     // genuine hit carries a spec tail. Under the old symmetric title score

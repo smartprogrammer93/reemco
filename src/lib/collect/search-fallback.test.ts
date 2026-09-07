@@ -5,7 +5,9 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  brandAwareCoverage,
   extractJarirIndexKey,
+  jarirIndexLang,
   parseAmazonEgSearch,
   parseEurekaSearch,
   parseJarirSearch,
@@ -165,6 +167,31 @@ describe("extractJarirIndexKey", () => {
 
   it("returns null without any key literal", () => {
     expect(extractJarirIndexKey("<html>no payload</html>")).toBeNull();
+  });
+
+  it("answers Arabic-script queries from the Arabic index (REEA-195)", () => {
+    // {ar,en} reference order: the FIRST literal is the Arabic index — the
+    // one that returns Arabic titles with a populated brand field. Latin
+    // queries keep the English pick above.
+    expect(extractJarirIndexKey(html, "ar")).toBe("key_g0Gi7pKaE5cyqDGl");
+    expect(jarirIndexLang("سماعة أبل")).toBe("ar");
+    expect(jarirIndexLang("fold7")).toBe("en");
+  });
+});
+
+describe("brandAwareCoverage (REEA-195)", () => {
+  it("bridges the Arabic brand spelling to the curated Latin form", () => {
+    // أبل ⇄ Apple answers one of the two query tokens on a Latin title:
+    // above the 0.25 live-floor, so English-index retailers stop vanishing
+    // from Arabic queries. Unrelated titles still score 0.
+    expect(brandAwareCoverage("Apple Airpods 4 - White", "سماعة أبل")).toBeCloseTo(0.5);
+    expect(brandAwareCoverage("Anker PowerCore 20100 mAh", "سماعة أبل")).toBe(0);
+  });
+
+  it("Latin queries and Arabic-on-Arabic matching keep the plain path", () => {
+    expect(brandAwareCoverage("Samsung Galaxy Buds FE", "سامسونج")).toBe(1);
+    expect(brandAwareCoverage("سماعة القرآن للأطفال", "سماعة أبل")).toBeCloseTo(0.5);
+    expect(brandAwareCoverage("Sony WH-1000XM6", "sony")).toBe(1);
   });
 });
 

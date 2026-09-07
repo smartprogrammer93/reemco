@@ -22,6 +22,7 @@
  * All six are documented retailer contracts (docs/RATE-LIMITS-AND-ROBOTS.md).
  * Search endpoints only — small page sizes, one call per retailer per run.
  */
+import { matchesQueryToken, queryMatchTokens } from "@/lib/relevance";
 import type { FetchImpl } from "@/lib/collect/scraper";
 
 
@@ -34,18 +35,22 @@ const FALLBACK_TIMEOUT_MS = 8_000;
  */
 const MIN_TOKEN_COVERAGE = 0.5;
 
+/** Tokenizer shared by every coverage/score metric: Latin letters/digits plus
+ *  the Arabic block, minimum length 2 (same shape queryMatchTokens uses). */
+function matchTokens(s: string): Set<string> {
+  return new Set(
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9\u0600-\u06FF]+/g, " ")
+      .split(" ")
+      .filter((t) => t.length >= 2),
+  );
+}
+
 /** Token-overlap relevance of a hit title vs the product title (0..1). */
 export function titleMatchScore(hitTitle: string, productTitle: string): number {
-  const tokens = (s: string): Set<string> =>
-    new Set(
-      s
-        .toLowerCase()
-        .replace(/[^a-z0-9\u0600-\u06FF]+/g, " ")
-        .split(" ")
-        .filter((t) => t.length >= 2),
-    );
-  const hits = tokens(hitTitle);
-  const wanted = tokens(productTitle);
+  const hits = matchTokens(hitTitle);
+  const wanted = matchTokens(productTitle);
   if (hits.size === 0 || wanted.size === 0) return 0;
   let matched = 0;
   for (const t of wanted) if (hits.has(t)) matched += 1;
@@ -162,15 +167,26 @@ export function parseEurekaSearch(payload: unknown, productTitle: string): Found
  * SSR page's __NUXT_DATA__ payload (resolved `searchProviderKeys` values
  * appear as `"key_..."` literals right after the config anchor), so we read
  * them at runtime like eureka's hidden inputs — never hard-coded.
+ *
+ * The payload stores {ar, en} in reference order: the FIRST literal answers
+ * Arabic-script queries with the storefront's Arabic titles (brand field
+ * included), the LAST answers Latin queries with English titles. REEA-195:
+ * the Arabic index is the right hop for Arabic-script queries — the Latin one
+ * answers them with unrelated filler — while Latin-script queries keep the
+ * existing English pick.
  */
-export function extractJarirIndexKey(html: string): string | null {
+export function extractJarirIndexKey(html: string, lang: "ar" | "en" = "en"): string | null {
   const anchor = html.indexOf("searchProviderKeys");
   const haystack = anchor >= 0 ? html.slice(anchor) : html;
   const keys = [...haystack.matchAll(/"(key_[A-Za-z0-9_-]{6,})"/g)].map((m) => m[1]);
   if (keys.length === 0) return null;
-  // The payload stores {ar, en} in reference order, so the last literal is
-  // the English index — a better match for the Latin-script catalog titles.
-  return keys[keys.length - 1];
+  return lang === "ar" ? keys[0] : keys[keys.length - 1];
+}
+
+/** Index language for a query: Arabic-script text rides jarir's Arabic
+ *  index, anything else the English one. */
+export function jarirIndexLang(query: string): "ar" | "en" {
+  return /[\u0600-\u06FF]/.test(query) ? "ar" : "en";
 }
 
 interface ConstructorHit {
@@ -237,18 +253,29 @@ function normalizeDigits(s: string): string {
  */
 export function tokenCoverage(hitTitle: string, productTitle: string): number {
   const hitTokens = hitTitle.toLowerCase();
-  const wanted = Array.from(
-    new Set(
-      productTitle
-        .toLowerCase()
-        .replace(/[^a-z0-9\u0600-\u06FF]+/g, " ")
-        .split(" ")
-        .filter((t) => t.length >= 2),
-    ),
-  );
+  const wanted = Array.from(matchTokens(productTitle));
   if (wanted.length === 0) return 0;
   let matched = 0;
   for (const t of wanted) if (hitTokens.includes(t)) matched += 1;
+  return matched / wanted.length;
+}
+
+/**
+ * REEA-195 — coverage gate for Arabic-script queries: same acceptance math as
+ * tokenCoverage, except an Arabic brand spelling may also be answered by the
+ * brand's curated Latin form ("أبل" ⇄ "Apple"). Without that bridge a Kuwaiti
+ * Arabic brand query is dropped by every English-index retailer (their titles
+ * are Latin-script, so plain coverage is 0 for all of them) and the shopper
+ * waits ~5 s for the few Arabic-script listings that survive — the timing gap
+ * REEA-195 measured. Non-brand tokens and Latin queries take the identical
+ * plain-substring path, so their behavior is untouched.
+ */
+export function brandAwareCoverage(hitTitle: string, query: string): number {
+  const hitTokens = hitTitle.toLowerCase();
+  const wanted = queryMatchTokens(query);
+  if (wanted.length === 0) return 0;
+  let matched = 0;
+  for (const t of wanted) if (matchesQueryToken(hitTokens, t)) matched += 1;
   return matched / wanted.length;
 }
 
@@ -449,12 +476,13 @@ export async function searchRetailerFallback(
   }
   if (host.endsWith("jarir.com")) {
     // Two-step like eureka: read the Constructor index key from any SSR page,
-    // then query the storefront's own search API.
+    // then query the storefront's own search API. Arabic-script titles ride
+    // the ar index, Latin titles the en one (see jarirIndexLang).
     const page = await fetchResponse(fetchImpl, "https://www.jarir.com/", {
       headers: { accept: "text/html" },
     });
     if (!page.ok) throw new Error(`jarir homepage HTTP ${page.status}`);
-    const indexKey = extractJarirIndexKey(await page.text());
+    const indexKey = extractJarirIndexKey(await page.text(), jarirIndexLang(productTitle));
     if (!indexKey) throw new Error("jarir: constructor index key not found on page");
     const payload = await fetchResponse(
       fetchImpl,
