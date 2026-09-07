@@ -319,7 +319,7 @@ describe("collectLiveResults depth pass (REEA-149)", () => {
         return jsonResponse({ response: { results: [{ data: { url: "ebook", price: 24, metadata: { name: "W W W, eBook" } } }] } });
       }
       if (url.endsWith("eureka.com.kw/")) {
-        return new Response('<input id="cky" value="appR"><input id="srcapk" value="keyR">', { headers: { "content-type": "text/html" } });
+        return new Response('<input id="cky" value="appr"><input id="srcapk" value="keyr149abc">', { headers: { "content-type": "text/html" } });
       }
       if (url.includes("xcite.com")) {
         return jsonResponse({
@@ -383,7 +383,7 @@ describe("collectLiveResults depth pass (REEA-149)", () => {
         return new Response('x searchProviderKeys "key_empty01" y', { headers: { "content-type": "text/html" } });
       }
       if (url.endsWith("eureka.com.kw/")) {
-        return new Response('<input id="cky" value="appE"><input id="srcapk" value="keyE">', { headers: { "content-type": "text/html" } });
+        return new Response('<input id="cky" value="appe"><input id="srcapk" value="keye149abc">', { headers: { "content-type": "text/html" } });
       }
       return jsonResponse({});
     };
