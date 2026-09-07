@@ -2,11 +2,16 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import ProductResultCard from "@/components/ProductResultCard";
 import CollectionPanel from "@/components/CollectionPanel";
-import { PRODUCTS } from "@/lib/feed";
+import { PRODUCTS, resolveProductIdentity } from "@/lib/feed";
 
 export const metadata = {
   title: "Product — Reemco",
 };
+
+// REEA-114: identities not in the catalog resolve through the live fan-out,
+// so the page must render per request (server builds), not be pre-baked.
+export const dynamic = "force-dynamic";
+export const maxDuration = 20;
 
 /* Static export: pre-render one page per catalog product. */
 export function generateStaticParams() {
@@ -17,7 +22,7 @@ export default async function ProductPage({
   params,
 }: PageProps<"/product/[productId]">) {
   const { productId } = await params;
-  const product = PRODUCTS.find((p) => p.productId === productId);
+  const product = await resolveProductIdentity(productId);
   if (!product) notFound();
 
   return (

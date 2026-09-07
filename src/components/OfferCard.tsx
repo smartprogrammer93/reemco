@@ -65,13 +65,13 @@ function CountUpPrice({
   }
   useEffect(() => {
     if (typeof window === "undefined" || typeof requestAnimationFrame !== "function") return;
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
-    const DURATION_MS = 200;
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    const DURATION_MS = reduce ? 0 : 200;
     const start = performance.now();
     let raf = 0;
     const tick = (t: number) => {
-      const p = Math.min(1, (t - start) / DURATION_MS);
-      const eased = 1 - Math.pow(1 - p, 3); // ease-out, lands exactly on price
+      const p = DURATION_MS === 0 ? 1 : Math.min(1, (t - start) / DURATION_MS);
+      const eased = reduce ? 1 : 1 - Math.pow(1 - p, 3); // ease-out, lands exactly on price
       setShown(formatPrice(price * eased, currency));
       if (p < 1) raf = requestAnimationFrame(tick);
     };

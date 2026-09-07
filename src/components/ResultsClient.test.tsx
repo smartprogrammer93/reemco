@@ -21,6 +21,7 @@ vi.mock("next/link", () => ({
 }));
 
 import ResultsClient from "@/components/ResultsClient";
+import type { NormalizedProduct } from "@/types/product";
 
 const beaconCalls: { url: string; body: unknown }[] = [];
 
@@ -45,11 +46,30 @@ function eventsSent(): { type: string; [k: string]: unknown }[] {
   return beaconCalls.flatMap((c) => (c.body as { events: [] }).events);
 }
 
+// REEA-114: ResultsClient renders exactly what the server collected, so the
+// test feeds it a minimal normalized product the same way the page does.
+const SAMPLE_PRODUCTS: NormalizedProduct[] = [
+  {
+    productId: "sony-wh-1000xm6",
+    title: "Sony WH-1000XM6",
+    brand: "Sony",
+    offers: [
+      { merchant: "Jarir", price: 1299, currency: "SAR", url: "https://www.jarir.com/", inStock: true },
+    ],
+    coupons: [],
+    variations: [],
+    alternatives: [],
+    scrapedAt: "2026-09-07T00:00:00.000Z",
+  },
+];
+
 describe("ResultsClient funnel instrumentation", () => {
   it("fires search_submitted and result_impressed for a query with results", async () => {
     searchParams.set("q", "sony");
     await act(async () => {
-      render(<ResultsClient />);
+      render(
+        <ResultsClient query="sony" page={1} products={SAMPLE_PRODUCTS} suggestions={SAMPLE_PRODUCTS} />,
+      );
     });
     const evts = eventsSent();
     const search = evts.find((e) => e.type === "search_submitted");
@@ -62,7 +82,9 @@ describe("ResultsClient funnel instrumentation", () => {
     // deduped: no second batch on re-render of the same query/page
     const before = beaconCalls.length;
     await act(async () => {
-      render(<ResultsClient />);
+      render(
+        <ResultsClient query="sony" page={1} products={SAMPLE_PRODUCTS} suggestions={SAMPLE_PRODUCTS} />,
+      );
     });
     expect(beaconCalls.length).toBeLessThanOrEqual(before + 1);
   });
@@ -70,7 +92,9 @@ describe("ResultsClient funnel instrumentation", () => {
   it("fires zero_results for a query with no matches", async () => {
     searchParams.set("q", "zzzqqqnothing");
     await act(async () => {
-      render(<ResultsClient />);
+      render(
+        <ResultsClient query="zzzqqqnothing" page={1} products={[]} suggestions={[]} />,
+      );
     });
     const evts = eventsSent();
     expect(evts.some((e) => e.type === "zero_results" && e.query === "zzzqqqnothing")).toBe(true);

@@ -5,7 +5,7 @@
  * on a terminal job and re-evaluates job status. The client resumes polling
  * GET /api/collect-jobs/:jobId for the updated snapshot.
  */
-import { PRODUCTS } from "@/lib/feed";
+import { resolveProductIdentity } from "@/lib/feed";
 import { retryRetailer } from "@/lib/collect/runner";
 import { getJob } from "@/lib/collect/store";
 
@@ -36,7 +36,7 @@ export async function POST(
     return Response.json({ error: "retailer is required" }, { status: 400 });
   }
 
-  const product = PRODUCTS.find((p) => p.productId === job.productId);
+  const product = await resolveProductIdentity(job.productId);
   if (!product) {
     return Response.json({ error: "Unknown product" }, { status: 404 });
   }

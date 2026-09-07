@@ -384,32 +384,39 @@ export const CATALOG: NormalizedProduct[] = [
 ];
 
 /**
- * REEA-65 §4.1 seed freshness fixture: last-verified timestamps (hours before
- * build time) so the deployed catalog exercises every freshness bucket —
- * fresh (<24h), stale (>7d, "may be outdated"), and one metadata-less product
- * ("Verification date unknown"). The real feed replaces this with per-record
- * `scraped_at` from the scraping pipeline; the mapping is this one place.
+ * REEA-65 §4.1 seed freshness fixture: last-verified timestamps (MINUTES
+ * before this module's load time) so the deployed catalog exercises every
+ * freshness bucket — fresh (<1h), hours, days, stale (>7d, "may be
+ * outdated"), and one metadata-less product ("Verification date unknown").
+ * REEA-114: the anchor is the module-load clock, so chip ages GROW with real
+ * elapsed time instead of being re-fabricated at every render; the offset
+ * unit is minutes, multiplied by the minutes constant (m * 60 * 1000 ms) —
+ * not the hours constant that made 9 minutes render as "updated 9h ago".
+ * The real feed replaces this with per-record `scraped_at` from the scraping
+ * pipeline; the mapping is this one place. Live query-time serving
+ * (src/app/results/page.tsx) never reads these fixtures.
  */
 const BUILD_TIME = Date.now();
-const hoursBeforeBuild = (h: number): string =>
-  new Date(BUILD_TIME - h * 60 * 60 * 1000).toISOString();
+const MINUTE_MS = 60 * 1000;
+const minutesBeforeNow = (m: number): string =>
+  new Date(BUILD_TIME - m * MINUTE_MS).toISOString();
 
-const FRESHNESS_FIXTURE_HOURS: Record<string, number | undefined> = {
-  "asus-rog-strix-scope-ii": 3,
+const FRESHNESS_FIXTURE_MINUTES: Record<string, number | undefined> = {
+  "asus-rog-strix-scope-ii": 180,
   "asus-rog-keris-ii-aimpoint": 9,
-  "logitech-gpro-superlight-2": 30,
-  "razer-huntsman-v3-pro": 52,
-  "logitech-pro-x-tkl": 74,
+  "logitech-gpro-superlight-2": 60 * 30,
+  "razer-huntsman-v3-pro": 60 * 52,
+  "logitech-pro-x-tkl": 60 * 74,
   "sony-wh-1000xm6": 8,
-  "bose-qc-ultra": 24 * 9, // stale: >7d
-  "iphone-17-pro": 5,
-  "galaxy-s26-ultra": 27,
-  "ps5-slim-bundle": 24 * 12, // stale: >7d
-  "xbox-series-s": 2,
+  "bose-qc-ultra": 60 * 24 * 9, // stale: >7d
+  "iphone-17-pro": 60 * 5,
+  "galaxy-s26-ultra": 60 * 27,
+  "ps5-slim-bundle": 60 * 24 * 12, // stale: >7d
+  "xbox-series-s": 60 * 2,
   // keychron-v3-max: deliberately omitted — renders "Verification date unknown".
 };
 
 for (const product of CATALOG) {
-  const hours = FRESHNESS_FIXTURE_HOURS[product.productId];
-  if (hours != null) product.scrapedAt = hoursBeforeBuild(hours);
+  const minutes = FRESHNESS_FIXTURE_MINUTES[product.productId];
+  if (minutes != null) product.scrapedAt = minutesBeforeNow(minutes);
 }

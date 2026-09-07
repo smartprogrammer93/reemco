@@ -12,3 +12,24 @@ import { searchProducts } from "@/lib/search";
 export const PRODUCTS: NormalizedProduct[] = CATALOG;
 
 export const filterProducts = searchProducts;
+
+/**
+ * REEA-114 — resolve a product identity for follow-through pages
+ * (/product/[id], collection routes). Catalog ids win first; ids produced by
+ * the LIVE query-time collector (slugified scraped titles) are decoded back
+ * into a search query and resolved against the same live fan-out, so
+ * result → detail → retailer links stay on one consistent live path.
+ */
+export async function resolveProductIdentity(
+  productId: string,
+): Promise<NormalizedProduct | null> {
+  const seeded = PRODUCTS.find((p) => p.productId === productId);
+  if (seeded) return seeded;
+  const query = productId.replace(/-/g, " ").trim();
+  if (!query) return null;
+  const { collectLiveResults } = await import("@/lib/collect/live-search");
+  const { products } = await collectLiveResults(query);
+  return (
+    products.find((p) => p.productId === productId) ?? products[0] ?? null
+  );
+}

@@ -8,7 +8,7 @@
  * with mode "cache" — no scrape is triggered (AC5).
  */
 import { after } from "next/server";
-import { PRODUCTS } from "@/lib/feed";
+import { resolveProductIdentity } from "@/lib/feed";
 import { runCollection, startCollection } from "@/lib/collect/runner";
 
 export const dynamic = "force-dynamic";
@@ -21,7 +21,7 @@ export async function POST(
   ctx: RouteContext<"/api/products/[productId]/collect">,
 ) {
   const { productId } = await ctx.params;
-  const product = PRODUCTS.find((p) => p.productId === productId);
+  const product = await resolveProductIdentity(productId);
   if (!product) {
     return Response.json({ error: "Unknown product" }, { status: 404 });
   }

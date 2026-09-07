@@ -10,37 +10,19 @@ import { trackEvents } from "@/lib/telemetry";
 import { PRODUCTS } from "@/lib/feed";
 import type { NormalizedProduct } from "@/types/product";
 
-/* Brief v4 loading state: 3 card-shaped ghosts with sheen + the slim amber
-   pulse bar carrying a retailer-count label — never a blank area. */
-function SkeletonCard() {
-  return (
-    <div className="result-card" aria-hidden>
-      <div className="skeleton-block h-5 w-2/3" />
-      <div className="skeleton-block mt-2 h-4 w-1/3" />
-      <div className="skeleton-block mt-4 h-7 w-32" />
-      <div className="skeleton-block mt-4 h-12" />
-      <div className="skeleton-block mt-2 h-12" />
-    </div>
-  );
-}
+/**
+ * REEA-114: the results surface renders EXACTLY what the server collected at
+ * query time (see src/app/results/page.tsx) — offers/titles/coupons/stock and
+ * the freshness chips all ride on the passed-in products. No client-side
+ * fallback array: hydration reuses the served data; a new query re-runs the
+ * server collection through the router.
+ */
 
-function LoadingFallback() {
-  return (
-    <div className="space-y-4">
-      <div className="pulse-bar" aria-hidden>
-        <div className="pulse-bar-fill" style={{ width: "100%" }} />
-      </div>
-      <p className="meta-stamp" style={{ color: "var(--rc-muted)" }}>
-        Checking live stores…
-      </p>
-      <SkeletonCard />
-      <SkeletonCard />
-      <SkeletonCard />
-    </div>
-  );
-}
+const PAGE_SIZE = 20;
 
-/* Theme v1 §3.5 error state: error-bg card with 3px error left border + Retry. */
+/* Brief v4 loading/error states come from app/results/loading.tsx and the
+   boundary below — keep the markup identical to the former in-component
+   versions (Theme v1 §3.5, Brief v4). */
 class ResultsErrorBoundary extends Component<
   { children: ReactNode },
   { failed: boolean }
@@ -67,7 +49,7 @@ class ResultsErrorBoundary extends Component<
           </p>
           <button
             type="button"
-            onClick={() => this.setState({ failed: false })}
+            onClick={() => window.location.reload()}
             className="btn-primary focusable mt-4 min-h-11 px-4"
           >
             Retry
@@ -79,9 +61,39 @@ class ResultsErrorBoundary extends Component<
   }
 }
 
-/* Brief v4 empty state: single card echoing the query, one plain sentence,
-   2–3 suggested-query pills and Retry. The query itself always stays in the
-   header input (it lives in the URL), so Retry never loses it. */
+/* Brief v4 loading state: card-shaped ghosts with sheen + the slim amber
+   pulse bar carrying the "checking stores" label — never a blank area. */
+function SkeletonCard() {
+  return (
+    <div className="result-card" aria-hidden>
+      <div className="skeleton-block h-5 w-2/3" />
+      <div className="skeleton-block mt-2 h-4 w-1/3" />
+      <div className="skeleton-block mt-4 h-7 w-32" />
+      <div className="skeleton-block mt-4 h-12" />
+      <div className="skeleton-block mt-2 h-12" />
+    </div>
+  );
+}
+
+export function LoadingFallback() {
+  return (
+    <div className="space-y-4">
+      <div className="pulse-bar" aria-hidden>
+        <div className="pulse-bar-fill" style={{ width: "100%" }} />
+      </div>
+      <p className="meta-stamp" style={{ color: "var(--rc-muted)" }}>
+        Checking live stores…
+      </p>
+      <SkeletonCard />
+      <SkeletonCard />
+      <SkeletonCard />
+    </div>
+  );
+}
+
+/* Brief v4 empty state: single card echoing the query, suggested-query pills
+   from the relaxed live collection, Retry. The query lives in the URL, so
+   Retry never loses it. */
 const EXAMPLES = ["iPhone 17 Pro", "WH-1000XM6", "Scope II keyboard"];
 
 function EmptyState({
@@ -124,28 +136,52 @@ function EmptyState({
   );
 }
 
-function Results() {
+export default function ResultsClient(props: {
+  /** Server-collected live set (REEA-114). Absent props fall back to the
+   *  client-side feed read so tests and the static-export host still work. */
+  query?: string;
+  page?: number;
+  products?: NormalizedProduct[];
+  suggestions?: NormalizedProduct[];
+}) {
+  return (
+    <Suspense fallback={<LoadingFallback />}>
+      <ResultsInner {...props} />
+    </Suspense>
+  );
+}
+
+function ResultsInner(props: {
+  query?: string;
+  page?: number;
+  products?: NormalizedProduct[];
+  suggestions?: NormalizedProduct[];
+}) {
   const searchParams = useSearchParams();
   // AC-U4 (REEA-13): malformed/oversized params degrade safely before use.
-  const query = sanitizeSearchQuery(searchParams.get("q")) ?? "";
-  const page = sanitizePage(searchParams.get("page"));
-  const matches = query ? searchProducts(query, PRODUCTS) : [];
-
+  const query = props.query ?? sanitizeSearchQuery(searchParams.get("q")) ?? "";
+  const page = props.page ?? sanitizePage(searchParams.get("page"));
+  const matched = props.products ? [] : query ? searchProducts(query, PRODUCTS) : [];
+  const matchCount = props.products ? props.products.length : matched.length;
+  const allProducts =
+    props.products ?? (matched.length > 0 ? matched.map((m) => m.product) : PRODUCTS);
+  const products = props.products
+    ? allProducts // server already paginated
+    : allProducts.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const zero = query.length > 0 && matchCount === 0;
+  const suggestions =
+    props.suggestions ?? suggestProducts(query, PRODUCTS).map((m) => m.product);
   // REEA-37: funnel instrumentation — search_submitted (+ zero_results) and
-  // result_impressed fire once per (query, page, result-set) render.
-  // Dedup key is component-local memory only; nothing is persisted client-side.
-  const allProducts = matches.length > 0 ? matches.map((m) => m.product) : PRODUCTS;
-  const PAGE_SIZE = 20;
-  const products = allProducts.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  const zero = query && matches.length === 0;
-  const eventsKey = `${query}|${page}|${matches.length}`;
+  // result_impressed fire once per (query, page, result-set). Dedup key is
+  // component-local memory only; nothing is persisted client-side.
+  const eventsKey = `${query}|${page}|${matchCount}`;
   const sentKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!query || sentKeyRef.current === eventsKey) return;
     sentKeyRef.current = eventsKey;
     trackEvents([
-      { type: "search_submitted", query, result_count: matches.length },
+      { type: "search_submitted", query, result_count: matchCount },
       ...(zero ? [{ type: "zero_results" as const, query }] : []),
       ...products.map((p, i) => ({
         type: "result_impressed" as const,
@@ -154,44 +190,38 @@ function Results() {
         item_id: p.productId,
       })),
     ]);
-  }, [eventsKey, query, page, zero, matches.length, products]);
+  }, [eventsKey, query, page, zero, matchCount, products]);
 
-  if (zero) {
-    const suggestions = suggestProducts(query, PRODUCTS).map((m) => m.product);
-    return <EmptyState query={query} suggestions={suggestions} />;
-  }
-
-  return (
-    <>
-      {/* Theme v1 §4: display-scale H1, tabular count */}
-      <h1 style={{ font: "var(--rc-text-display)", color: "var(--rc-ink)" }}>
-        <span className="tabular">{products.length}</span>{" "}
-        {products.length === 1 ? "result" : "results"} for &ldquo;{query || "all products"}&rdquo;
-      </h1>
-      {/* Design v3 §5.2: single-column list, two columns only ≥1280px.
-          minmax(0,1fr) tracks keep long product titles from widening the grid
-          past the viewport at 375px (smoke step 5). */}
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]" style={{ marginTop: "var(--rc-space-8)" }}>
-        {products.map((p, i) => (
-          <ProductResultCard
-            key={p.productId}
-            product={p}
-            isBest={i === 0}
-            query={query}
-            rank={(page - 1) * PAGE_SIZE + i}
-          />
-        ))}
-      </div>
-    </>
-  );
-}
-
-export default function ResultsClient() {
   return (
     <ResultsErrorBoundary>
-      <Suspense fallback={<LoadingFallback />}>
-        <Results />
-      </Suspense>
+      {zero ? (
+        <EmptyState query={query} suggestions={suggestions} />
+      ) : (
+        <>
+          {/* Theme v1 §4: display-scale H1, tabular count */}
+          <h1 style={{ font: "var(--rc-text-display)", color: "var(--rc-ink)" }}>
+            <span className="tabular">{products.length}</span>{" "}
+            {products.length === 1 ? "result" : "results"} for &ldquo;{query || "all products"}&rdquo;
+          </h1>
+          {/* Design v3 §5.2: single-column list, two columns only ≥1280px.
+              minmax(0,1fr) tracks keep long product titles from widening the
+              grid past the viewport at 375px (smoke step 5). */}
+          <div
+            className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]"
+            style={{ marginTop: "var(--rc-space-8)" }}
+          >
+            {products.map((p, i) => (
+              <ProductResultCard
+                key={p.productId}
+                product={p}
+                isBest={i === 0}
+                query={query}
+                rank={(page - 1) * PAGE_SIZE + i}
+              />
+            ))}
+          </div>
+        </>
+      )}
     </ResultsErrorBoundary>
   );
 }
