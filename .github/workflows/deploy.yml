@@ -73,9 +73,12 @@ jobs:
       # commit; to drop the binding later, unassign the KV store in project
       # Storage settings and rerun so the alias picks up the new env.
       - name: Attach KV store binding for the shared collect-job store
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
         run: |
           set -u
-          if [ -z "$VERCEL_TOKEN" ]; then
+          if [ -z "${VERCEL_TOKEN:-}" ]; then
             echo "::error::Repo secret VERCEL_TOKEN is not set - cannot attach KV binding. Unblock owner: repo admin (CEO)."
             exit 1
           fi
