@@ -131,18 +131,23 @@ await step(3, "result card has a working click-out link", async () => {
 });
 
 // REEA-65 AC-1/AC-4: every result card renders honest last-verified freshness
-// ("Verified …", "… may be outdated", or "Verification date unknown"); render
-// timing is logged against the 200ms server-render regression budget (AC-4).
+// chip; render timing is logged against the 200ms server-render regression
+// budget (AC-4). Design v3 §5.5 renamed the chip copy from "Verified …" to
+// "updated …" (FreshnessBadge renders `updated <!-- -->minutes ago`, the
+// comment being React's text-node split). Match both wordings against the
+// component's actual output — an assertion stuck on old copy is a false
+// negative that fails every deploy despite healthy cards.
 await step(4, "results surface last-verified freshness (REEA-65)", async () => {
   const t0 = Date.now();
   await page.goto(`${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`, { waitUntil: "load" });
   await page.waitForSelector(".result-card", { timeout: 25000 });
   const html = await page.content();
-  const fresh = (html.match(/Verified \d+[hd] ago|Verified minutes ago/g) || []).length;
+  const chip = "(?:Verified|updated)[ ]*(?:<!--[ ]-->)?[ ]*(?:\\d+[hd] ago|minutes ago)";
+  const fresh = (html.match(new RegExp(chip, "g")) || []).length;
   const stale = (html.match(/may be outdated/g) || []).length;
-  const unknown = (html.match(/Verification date unknown/g) || []).length;
+  const unknown = (html.match(/(?:updated|Verification) date unknown/g) || []).length;
   if (fresh + stale + unknown === 0) {
-    throw new Error("no freshness badge on any result card (expected 'Verified …' / 'may be outdated' / 'Verification date unknown')");
+    throw new Error("no freshness badge on any result card (expected 'updated … ago' / 'may be outdated' / 'updated date unknown')");
   }
   console.log(`  INFO results load (incl. hydration): ${Date.now() - t0}ms — review vs 200ms server-render budget`);
   return `${fresh} fresh / ${stale} stale-flagged / ${unknown} unknown freshness badge(s)`;
