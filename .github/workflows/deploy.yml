@@ -27,6 +27,14 @@ on:
         description: "Override the smoke-check fixture query (deliberately bad query = demonstrates a failed smoke check)."
         required: false
         default: ""
+      KV_URL:
+        description: "REEA-143: KV_REST_API_URL from the provisioned Upstash-shaped store (empty = probe/auto path)."
+        required: false
+        default: ""
+      KV_TOKEN:
+        description: "REEA-143: KV_REST_API_TOKEN from the provisioned store (empty = probe/auto path)."
+        required: false
+        default: ""
 
 permissions:
   contents: read # checkout needs this; specifying any workflow-level permissions revokes the defaults
@@ -76,6 +84,8 @@ jobs:
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+          KV_URL_IN: "${{ inputs.KV_URL || secrets.KV_REST_URL }}"
+          KV_TOK_IN: "${{ inputs.KV_TOKEN || secrets.KV_REST_TOKEN }}"
         run: |
           set -u
           if [ -z "${VERCEL_TOKEN:-}" ]; then
@@ -106,6 +116,25 @@ jobs:
               -d "$BODY" "$BASE/v10/projects/reemco/env$Q" || echo 000)
             echo "POST env $1 -> HTTP $C"
           }
+
+          # CEO handoff path (comment ff6ae9f3): when provisioned store creds
+          # arrive via workflow_dispatch inputs KV_URL/KV_TOKEN or repo secrets
+          # KV_REST_URL/KV_REST_TOKEN, persist that pair and verify roundtrip.
+          if [ -n "${KV_URL_IN:-}" ] && [ -n "${KV_TOK_IN:-}" ]; then
+            echo "attach: applying provided store credentials (url=${#KV_URL_IN} chars)"
+            WIN_URL="$KV_URL_IN"; WIN_TOK="$KV_TOK_IN"
+            K="reea143-probe-$GITHUB_RUN_ATTEMPT"
+            curl -s -m 15 -o /dev/null -X POST -H "Authorization: Bearer $WIN_TOK" \
+              -H 'Content-Type: text/plain' \
+              --data-binary "$(printf 'reea143-marker\nEX\n60')" "$WIN_URL/set/$K" >/dev/null || true
+            RB=$(curl -s -m 15 -H "Authorization: Bearer $WIN_TOK" "$WIN_URL/get/$K" || true)
+            echo "roundtrip provided $WIN_URL -> $(echo "$RB" | head -c 120)"
+            post_env KV_REST_API_URL "$WIN_URL"
+            post_env KV_REST_API_TOKEN "$WIN_TOK"
+            CODE=$(curl -s -o "$LIST_JSON" -w '%{http_code}' -m 30 -H "$AUTH" "$BASE/v9/projects/reemco/env$Q" || echo 000)
+            echo "verify GET env list after provided attach -> HTTP $CODE; listed: $(has_both && echo yes || echo no)"
+            exit 0
+          fi
           roundtrip() { # $1=base-url $2=token ; 0 when GET echoes the marker
             local K B
             K="reea143-probe-$GITHUB_RUN_ATTEMPT"
