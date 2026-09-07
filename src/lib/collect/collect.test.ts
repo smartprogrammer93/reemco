@@ -66,9 +66,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("startCollection", () => {
-  it("creates a live job with one subtask per retailer and offers empty", () => {
-    const { job } = startCollection(product());
+describe("startCollection", async () => {
+  it("creates a live job with one subtask per retailer and offers empty", async () => {
+    const { job } = await startCollection(product());
     expect(job.status).toBe("collecting");
     expect(job.mode).toBe("live");
     expect(job.subtasks.map((s) => s.retailer)).toEqual(["Alpha", "Beta"]);
@@ -76,17 +76,17 @@ describe("startCollection", () => {
     expect(job.offers).toEqual([]);
   });
 
-  it("dedupes an in-flight job for the same product (AC8)", () => {
+  it("dedupes an in-flight job for the same product (AC8)", async () => {
     const p = product();
-    const first = startCollection(p);
-    const second = startCollection(p);
+    const first = await startCollection(p);
+    const second = await startCollection(p);
     expect(second.deduped).toBe(true);
     expect(second.job.jobId).toBe(first.job.jobId);
   });
 
-  it("always collects live even when a fresh completed job exists (REEA-95)", () => {
+  it("always collects live even when a fresh completed job exists (REEA-95)", async () => {
     const p = product();
-    const { job } = startCollection(p);
+    const { job } = await startCollection(p);
     job.status = "complete";
     job.offers = [
       {
@@ -102,38 +102,38 @@ describe("startCollection", () => {
     ];
     // Simulate runner completion (persists + releases in-flight slot).
     
-    finishJob(job, cacheDir);
-    const again = startCollection(p);
+    await finishJob(job, cacheDir);
+    const again = await startCollection(p);
     expect(again.servedFromCache).toBe(false);
     expect(again.job.mode).toBe("live");
     expect(again.job.jobId).not.toBe(job.jobId);
   });
 
-  it("starts a fresh live run when the last completion is stale (>10 min)", () => {
+  it("starts a fresh live run when the last completion is stale (>10 min)", async () => {
     const p = product();
-    const { job } = startCollection(p);
+    const { job } = await startCollection(p);
     job.status = "complete";
-    finishJob(job, cacheDir, Date.now() - CACHE_TTL_MS - 1000);
-    const again = startCollection(p);
+    await finishJob(job, cacheDir, Date.now() - CACHE_TTL_MS - 1000);
+    const again = await startCollection(p);
     expect(again.servedFromCache).toBe(false);
     expect(again.job.mode).toBe("live");
     expect(again.job.jobId).not.toBe(job.jobId);
   });
 
-  it("accepts force as a no-op — always-live is the default", () => {
+  it("accepts force as a no-op — always-live is the default", async () => {
     const p = product();
-    const { job } = startCollection(p);
+    const { job } = await startCollection(p);
     job.status = "complete";
     
-    finishJob(job, cacheDir);
-    const forced = startCollection(p, { force: true });
+    await finishJob(job, cacheDir);
+    const forced = await startCollection(p, { force: true });
     expect(forced.servedFromCache).toBe(false);
   });
 });
 
-describe("runCollection", () => {
+describe("runCollection", async () => {
   it("fans out per retailer and completes with provenance-tagged offers (T2/T5)", async () => {
-    const { job } = startCollection(product());
+    const { job } = await startCollection(product());
     const done = await runCollection(job, product(), { fetchImpl: fetchOk, now: 1_000_000 });
     expect(done.status).toBe("complete");
     expect(done.subtasks.every((s) => s.status === "done")).toBe(true);
@@ -143,7 +143,7 @@ describe("runCollection", () => {
     expect(done.offers.find((o) => o.merchant === "Beta")?.inStock).toBe(false);
     expect(done.finishedAt).toBeTruthy();
     // In-flight slot released: next start is not deduped.
-    const next = startCollection(product());
+    const next = await startCollection(product());
     expect(next.deduped).toBe(false);
   });
 
@@ -152,7 +152,7 @@ describe("runCollection", () => {
       url.includes("beta")
         ? Promise.reject(new Error("HTTP 503"))
         : Promise.resolve(new Response(okHtml, { status: 200 }));
-    const { job } = startCollection(product());
+    const { job } = await startCollection(product());
     const done = await runCollection(job, product(), { fetchImpl: failing });
     expect(done.status).toBe("complete");
     expect(done.subtasks.find((s) => s.retailer === "Beta")?.status).toBe("failed");
@@ -162,17 +162,17 @@ describe("runCollection", () => {
 
   it("marks all retailers failed -> job failed with stale-cache link (AC6)", async () => {
     const failing = (): Promise<Response> => Promise.reject(new Error("boom"));
-    const { job } = startCollection(product(), { force: true });
+    const { job } = await startCollection(product(), { force: true });
     const done = await runCollection(job, product(), { fetchImpl: failing });
     expect(done.status).toBe("failed");
     expect(done.error).toBeTruthy();
     expect(done.offers).toHaveLength(0);
-    expect(findLastCompleted(done.productId)).toBeUndefined();
+    expect(await findLastCompleted(done.productId)).toBeUndefined();
   });
 
   it("enforces the overall budget by timing out pending subtasks (AC7)", async () => {
     const hanging = (): Promise<Response> => new Promise(() => {});
-    const { job } = startCollection(product(), { force: true });
+    const { job } = await startCollection(product(), { force: true });
     const done = await runCollection(job, product(), {
       fetchImpl: hanging,
       overallBudgetMs: 50,
@@ -183,14 +183,14 @@ describe("runCollection", () => {
   });
 });
 
-describe("retryRetailer (T6)", () => {
+describe("retryRetailer (T6)", async () => {
   it("retries one failed retailer and restores job completeness", async () => {
     let betaFails = true;
     const flaky = (url: string): Promise<Response> => {
       if (url.includes("beta") && betaFails) return Promise.reject(new Error("HTTP 503"));
       return Promise.resolve(new Response(okHtml, { status: 200 }));
     };
-    const { job } = startCollection(product(), { force: true });
+    const { job } = await startCollection(product(), { force: true });
     const first = await runCollection(job, product(), { fetchImpl: flaky });
     expect(first.status).toBe("complete");
     expect(first.subtasks.find((s) => s.retailer === "Beta")?.status).toBe("failed");
@@ -205,14 +205,14 @@ describe("retryRetailer (T6)", () => {
   });
 
   it("refuses retry while the job is still collecting", async () => {
-    const { job } = startCollection(product());
+    const { job } = await startCollection(product());
     const result = await retryRetailer(job, product(), "Alpha", { fetchImpl: fetchOk });
     expect(result).toBeUndefined();
   });
 });
 
-describe("freshness helpers (AC5)", () => {
-  it("isFreshCompleted respects status and TTL", () => {
+describe("freshness helpers (AC5)", async () => {
+  it("isFreshCompleted respects status and TTL", async () => {
     const base: CollectJob = {
       jobId: "j",
       productId: "p",
@@ -233,8 +233,8 @@ describe("freshness helpers (AC5)", () => {
   });
 });
 
-describe("misc", () => {
-  it("sortLiveOffers orders by ascending price", () => {
+describe("misc", async () => {
+  it("sortLiveOffers orders by ascending price", async () => {
     const offers = [
       { merchant: "A", domain: "a", price: 3, currency: "KWD", url: "u", inStock: true, collectedAt: "", method: "live" as const },
       { merchant: "B", domain: "b", price: 1, currency: "KWD", url: "u", inStock: true, collectedAt: "", method: "live" as const },
@@ -242,14 +242,14 @@ describe("misc", () => {
     expect(sortLiveOffers(offers).map((o) => o.merchant)).toEqual(["B", "A"]);
   });
 
-  it("findFreshCompleted reads through the persisted cache", () => {
+  it("findFreshCompleted reads through the persisted cache", async () => {
     const p = product();
-    const { job } = startCollection(p, { force: true });
+    const { job } = await startCollection(p, { force: true });
     job.status = "complete";
     
-    finishJob(job);
-    const fresh = findFreshCompleted(p.productId);
+    await finishJob(job);
+    const fresh = await findFreshCompleted(p.productId);
     expect(fresh?.jobId).toBe(job.jobId);
-    expect(getJob(job.jobId)).toBeTruthy();
+    expect(await getJob(job.jobId)).toBeTruthy();
   });
 });
