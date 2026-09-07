@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { Inter, Space_Grotesk } from "next/font/google";
 import Link from "next/link";
 import HeaderSearch from "@/components/HeaderSearch";
+import FooterNav from "@/components/FooterNav";
 import "./globals.css";
 
 /* Theme v1 §6: Inter 400/500/600/700, display swap; fallback stack in --rc-font-body. */
@@ -96,17 +97,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
               Reemco earns affiliate commissions from some retailer links. This never affects the
               ranking you see — best effective price always wins.
             </p>
-            <nav className="mt-1 flex gap-3" style={{ font: "var(--rc-text-small)" }} aria-label="Footer">
-              <Link href="/" className="hover:underline" style={{ color: "var(--rc-primary)" }}>
-                About
-              </Link>
-              <Link href="/" className="hover:underline" style={{ color: "var(--rc-primary)" }}>
-                Privacy
-              </Link>
-              <Link href="/" className="hover:underline" style={{ color: "var(--rc-primary)" }}>
-                Contact
-              </Link>
-            </nav>
+            {/* REEA-181: each label links to its own page now (was: three
+                copies of href="/"). Markup moved to FooterNav so the active
+                route can carry aria-current="page". */}
+            <FooterNav />
           </div>
         </footer>
       </body>
