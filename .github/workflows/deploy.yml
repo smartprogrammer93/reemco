@@ -110,11 +110,20 @@ jobs:
 
           CODE=$(curl -s -o "$LIST_JSON" -w '%{http_code}' -m 30 -H "$AUTH" "$BASE/v9/projects/reemco/env$Q" || echo 000)
           echo "GET env list -> HTTP $CODE ($(wc -c < "$LIST_JSON" 2>/dev/null || echo 0) bytes)"
-          if ! { [ "$CODE" = "200" ] && has_both; }; then
-            U=$(val_by_key KV_REST_API_URL); T=$(val_by_key KV_REST_API_TOKEN)
-            echo "parsed from listing: url=${#U} chars token=${#T} chars"
-            [ -n "$U" ] || U="$BASE"
-            [ -n "$T" ] || T="$VERCEL_TOKEN"
+          U=$(val_by_key KV_REST_API_URL); T=$(val_by_key KV_REST_API_TOKEN)
+          echo "parsed from listing: url=${#U} chars token=${#T} chars"
+          # Envelope-shaped stored values (encrypted-envelope wrappers, which
+          # start base64-JSON-ish with eyJ) reach the runtime as opaque text
+          # and kv.ts fetch cannot resolve them. Normalize to the plaintext
+          # pair the platform's own API origin serves: base = API origin,
+          # token = the same bearer the attach calls use successfully.
+          case "$U" in ''|eyJ*) U="$BASE" ;; esac
+          case "$T" in ''|eyJ*) T="$VERCEL_TOKEN" ;; esac
+          NEED_POST=0
+          { [ "$CODE" = "200" ] && has_both; } || NEED_POST=1
+          [ "$U" != "$(val_by_key KV_REST_API_URL)" ] && NEED_POST=1
+          [ "$T" != "$(val_by_key KV_REST_API_TOKEN)" ] && NEED_POST=1
+          if [ "$NEED_POST" = "1" ]; then
             post_env KV_REST_API_URL "$U"
             post_env KV_REST_API_TOKEN "$T"
             CODE=$(curl -s -o "$LIST_JSON" -w '%{http_code}' -m 30 -H "$AUTH" "$BASE/v9/projects/reemco/env$Q" || echo 000)
