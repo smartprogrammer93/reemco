@@ -82,76 +82,45 @@ jobs:
             echo "::error::Repo secret VERCEL_TOKEN is not set - cannot attach KV binding. Unblock owner: repo admin (CEO)."
             exit 1
           fi
-          Q="?decrypt=true"
-          if [ -n "${VERCEL_TEAM_ID:-}" ]; then Q="$Q&teamId=$VERCEL_TEAM_ID"; fi
-          AUTH="Authorization: Bearer $VERCEL_TOKEN"
-          ENV_URL="https://api.vercel.com/v9/projects/reemco/env$Q"
-          ENV_JSON=/tmp/vercel-env.json
-          CREATED=/tmp/vercel-kv.json
+          export VERCEL_TELEMETRY_DISABLED=1
+          SCOPE_ARGS=""
+          if [ -n "${VERCEL_TEAM_ID:-}" ]; then SCOPE_ARGS="--scope $VERCEL_TEAM_ID"; fi
+          # Pinned CLI (same version the deploy step uses); token via env
+          # injection only. --cwd keeps it on this repo's linked project.
+          vcli() { timeout 150 npx -y vercel@59.11.7 "$@" --cwd "$GITHUB_WORKSPACE" --token "$VERCEL_TOKEN" $SCOPE_ARGS; }
 
-          shape() { jq -c '[paths(scalars)] | map(join("."))[:16] | join(", ")' "$1" 2>/dev/null || echo "unparseable"; }
-          errmsg() { jq -r '[.. | objects | .message? // empty] | join(" | ")' "$1" 2>/dev/null || echo ""; }
-          env_keys() { jq -r '[.. | objects | .key? // empty] | join(" ")' "$1" 2>/dev/null || true; }
+          has_both() { echo "$1" | grep -q KV_REST_API_URL && echo "$1" | grep -q KV_REST_API_TOKEN; }
 
-          # 1) Listing first; when values are hidden server-side, fall back to
-          # per-key GETs. Diagnostics print field NAMES + lengths only.
-          CODE=$(curl -s -o "$ENV_JSON" -w '%{http_code}' -m 30 -H "$AUTH" "$ENV_URL" || echo 000)
-          HC=$(jq -r '.hiddenProductionEnvCount // "?"' "$ENV_JSON" 2>/dev/null || echo "?")
-          echo "GET env list -> HTTP $CODE hidden=$HC fields: $(shape "$ENV_JSON")"
-          KEYS=$(env_keys "$ENV_JSON")
-          key_value() {
-            curl -s -m 30 -H "$AUTH" "https://api.vercel.com/v9/projects/reemco/env/$1$Q" \
-              | jq -r '[(.. | strings | select(length > 8))] | first // ""' 2>/dev/null || true
-          }
-          U_VAL=$(key_value KV_REST_API_URL)
-          T_VAL=$(key_value KV_REST_API_TOKEN)
-          echo "per-key GET -> url=${#U_VAL} chars token=${#T_VAL} chars"
-          if echo "$KEYS" | grep -q KV_REST_API_URL && echo "$KEYS" | grep -q KV_REST_API_TOKEN \
-            || { [ -n "$U_VAL" ] && [ -n "$T_VAL" ]; }; then
-            echo "KV binding already attached to reemco (both KV_REST_* keys resolve)"
+          vcli link --yes --project reemco || echo "link returned non-zero - continuing"
+          LIST=$(vcli env list production 2>&1 || true)
+          echo "env list: $(echo "$LIST" | tr '\n' ' ' | cut -c1-400)"
+          if has_both "$LIST"; then
+            echo "KV binding already attached to reemco (both KV_REST_* keys listed)"
             exit 0
           fi
-          echo "KV_REST_* missing (listing: ${KEYS:-none}; per-key ${#U_VAL}/${#T_VAL} chars) - attaching KV store..."
 
-          # 2) Attach/create the KV store; attaching injects KV_REST_API_URL
-          # and KV_REST_API_TOKEN automatically. Try list-style GETs first (an
-          # existing store may just need attaching), then POST create paths.
-          for P in /v1/kv/list /v1/kv /v1/integrations/kv /v1/stores; do
-            ACODE=$(curl -s -o "$CREATED" -w '%{http_code}' -m 60 -X POST -H "$AUTH" \
-              -H "Content-Type: application/json" \
-              -d '{"name":"reemco-collect","projectId":"reemco","destination":"bom1","source":"upstash"}' \
-              "https://api.vercel.com$P$Q" || echo 000)
-            echo "attach POST $P -> HTTP $ACODE fields: $(shape "$CREATED") msg: $(errmsg "$CREATED")"
-            if [ "$ACODE" != "404" ] && [ "$ACODE" != "000" ]; then break; fi
+          echo "KV_REST_* missing from project env - attaching KV store via Marketplace..."
+          DISCOVER=$(vcli integration discover kv 2>&1 || true)
+          echo "integration discover -> $(echo "$DISCOVER" | tr '\n' ' ' | cut -c1-400)"
+          ATTACHED=0
+          for SLUG in $(echo "$DISCOVER" | grep -oE '@?[A-Za-z][A-Za-z0-9._/-]*' | head -4) kv vercel-kv "@vercel/kv"; do
+            OUT=$(vcli install "$SLUG" --yes 2>&1) && { echo "installed '$SLUG'"; ATTACHED=1; break; } \
+              || echo "install '$SLUG' -> $(echo "$OUT" | tail -1 | cut -c1-200)"
+            OUT=$(vcli integration add "$SLUG" --yes 2>&1) && { echo "integration add '$SLUG' ok"; ATTACHED=1; break; } \
+              || echo "integration add '$SLUG' -> $(echo "$OUT" | tail -1 | cut -c1-200)"
           done
-          KV_URL=$(jq -r '[(.. | strings | select(test("^https?://")))] | first // ""' "$CREATED" 2>/dev/null || true)
-          KV_TOK=$(jq -r '[(.. | strings | select(length > 8 and (test("^https?://") | not)))] | first // ""' "$CREATED" 2>/dev/null || true)
-          echo "connection -> url=${#KV_URL} chars token=${#KV_TOK} chars"
 
-          post_env() {
-            BODY=$(jq -cn --arg k "$1" --arg v "$2" '{key:$k,value:$v,type:"encrypted",target:["production"]}')
-            C=$(curl -s -o /tmp/vercel-env-post.json -w '%{http_code}' -m 30 -X POST -H "$AUTH" \
-              -H "Content-Type: application/json" -d "$BODY" \
-              "https://api.vercel.com/v10/projects/reemco/env$Q" || echo 000)
-            echo "POST env $1 -> HTTP $C msg: $(errmsg /tmp/vercel-env-post.json)"
-          }
-          if [ -n "$KV_URL" ]; then
-            echo "$KEYS" | grep -q KV_REST_API_URL || { [ -n "$U_VAL" ] || post_env KV_REST_API_URL "$KV_URL"; }
-          fi
-          if [ -n "$KV_TOK" ]; then
-            echo "$KEYS" | grep -q KV_REST_API_TOKEN || { [ -n "$T_VAL" ] || post_env KV_REST_API_TOKEN "$KV_TOK"; }
-          fi
-
-          # Verify-before-deploy via per-key GETs (listing may hide values).
-          U_VAL=$(key_value KV_REST_API_URL)
-          T_VAL=$(key_value KV_REST_API_TOKEN)
-          CODE=$(curl -s -o "$ENV_JSON" -w '%{http_code}' -m 30 -H "$AUTH" "$ENV_URL" || echo 000)
-          KEYS=$(env_keys "$ENV_JSON")
-          if echo "$KEYS" | grep -q KV_REST_API_URL && echo "$KEYS" | grep -q KV_REST_API_TOKEN \
-            || { [ -n "$U_VAL" ] && [ -n "$T_VAL" ]; }; then
+          # Attaching a KV store injects KV_REST_API_URL/KV_REST_API_TOKEN on
+          # the platform side; verify names only (values are never echoed).
+          LIST=$(vcli env list production 2>&1 || true)
+          echo "env list after attach: $(echo "$LIST" | tr '\n' ' ' | cut -c1-400)"
+          if has_both "$LIST"; then
             echo "KV binding attached and verified on reemco"
+          elif [ "$ATTACHED" = "1" ]; then
+            echo "::error::KV integration installed but KV_REST_* still missing from the env list above - check connection-string injection under project Storage settings, then rerun."
+            exit 1
           else
-            echo "::error::KV attach incomplete (list HTTP $CODE hidden=$HC keys:${KEYS:-none}; per-key ${#U_VAL}/${#T_VAL} chars) - deploy would ship without the shared collect-job store. Endpoint paths/messages printed above identify this platform's contract; attach the store in project Storage settings if these paths do not exist."
+            echo "::error::KV attach incomplete (discover/install messages above). Attach the KV store under project Storage settings and rerun this workflow. Unblock owner: repo admin (CEO)."
             exit 1
           fi
 
