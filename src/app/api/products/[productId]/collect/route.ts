@@ -34,7 +34,7 @@ export async function POST(
     /* empty body is fine */
   }
 
-  const { job, deduped, servedFromCache } = startCollection(product, { force });
+  const { job, deduped, servedFromCache } = await startCollection(product, { force });
 
   // ?wait=1 — synchronous mode (REEA-85 Vercel finding): on Vercel each API
   // route is a separate serverless function, so the polling GET frequently

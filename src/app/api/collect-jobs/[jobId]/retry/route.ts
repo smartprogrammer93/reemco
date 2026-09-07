@@ -17,7 +17,7 @@ export async function POST(
   ctx: RouteContext<"/api/collect-jobs/[jobId]/retry">,
 ) {
   const { jobId } = await ctx.params;
-  const job = getJob(jobId);
+  const job = await getJob(jobId);
   if (!job) {
     return Response.json({ error: "Unknown collect job" }, { status: 404 });
   }

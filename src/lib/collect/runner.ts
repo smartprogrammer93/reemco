@@ -45,24 +45,26 @@ export interface StartResult {
  * the client's same-tab session snapshot (see useCollection). `force` remains
  * accepted (and is now the default behavior) so older clients keep working.
  */
-export function startCollection(
+export async function startCollection(
   product: NormalizedProduct,
   opts: { force?: boolean } = {},
-): StartResult {
+): Promise<StartResult> {
   void opts; // always-live: `force` is accepted but no longer changes anything
-  // Dedupe rapid repeat clicks on the same product by in-flight job.
-  const inflightId = getInflightJobId(product.productId);
+  // Dedupe rapid repeat clicks on the same product by in-flight job (shared
+  // across instances through the KV store, REEA-92).
+  const inflightId = await getInflightJobId(product.productId);
   if (inflightId) {
-    const existing = getJob(inflightId);
+    const existing = await getJob(inflightId);
     if (existing && existing.status === "collecting") {
       return { job: existing, deduped: true, servedFromCache: false };
     }
   }
 
-  const job = createJob(product.productId);
+  const job = await createJob(product.productId);
   job.subtasks = product.offers.map((o) => subtaskFor(o));
-  // Snapshot before responding so a poll on another warm instance can find it.
-  touchJob(job);
+  // Snapshot before responding so a poll on another instance finds it in the
+  // shared store (REEA-92).
+  await touchJob(job);
   return { job, deduped: false, servedFromCache: false };
 }
 
@@ -105,7 +107,7 @@ export async function runCollection(
     } else {
       sub.status = "done";
     }
-    touchJob(job); // publish subtask progress for the polling endpoint (AC2)
+    await touchJob(job); // publish subtask progress for the polling endpoint (AC2)
     return outcome.offers;
   };
 
@@ -160,7 +162,7 @@ export async function runCollection(
       job.status = "failed";
       job.error = "All retailers failed — no live offers could be collected";
       // Stale-cache fallback link (AC6): surface the last completed collection.
-      const previous = findLastCompleted(job.productId);
+      const previous = await findLastCompleted(job.productId);
       if (previous && previous.jobId !== job.jobId) job.previousJobId = previous.jobId;
     }
     // If the watchdog fired but some fetches are still pending, allSettled is
@@ -172,7 +174,7 @@ export async function runCollection(
       else {
         job.status = "failed";
         job.error = "Collection did not finish within the time budget";
-        const previous = findLastCompleted(job.productId);
+        const previous = await findLastCompleted(job.productId);
         if (previous && previous.jobId !== job.jobId) job.previousJobId = previous.jobId;
       }
     }
@@ -181,8 +183,8 @@ export async function runCollection(
     job.status = "failed";
     job.error = err instanceof Error ? err.message : String(err);
   } finally {
-    finishJob(job);
-    touchJob(job);
+    await finishJob(job);
+    await touchJob(job);
   }
   return job;
 }
@@ -238,13 +240,13 @@ export async function retryRetailer(
   job.status = anySuccess ? "complete" : "failed";
   if (job.status === "failed") {
     job.error = "All retailers failed — no live offers could be collected";
-    const previous = findLastCompleted(job.productId);
+    const previous = await findLastCompleted(job.productId);
     if (previous && previous.jobId !== job.jobId) job.previousJobId = previous.jobId;
   } else {
     job.error = undefined;
   }
-  finishJob(job);
-  touchJob(job);
+  await finishJob(job);
+  await touchJob(job);
   return job;
 }
 

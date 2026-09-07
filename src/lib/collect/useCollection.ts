@@ -82,21 +82,21 @@ export function useCollection(productId: string) {
           return;
         }
         if (res.status === 404) {
-          // Serverless warm-instance miss: the polling instance cannot see the
-          // job created elsewhere. Re-start the collection once — the freshness
-          // rule and dedupe still bound the work (REEA-88 cross-instance note).
+          // Cross-instance miss (REEA-92): with the shared KV store bound, the
+          // polling endpoint reads the job written by ANY instance, so a miss
+          // now only happens when KV is unavailable. Re-start the collection
+          // once — the freshness rule and dedupe still bound the work.
           if (restartsRef.current < 1 && mountedRef.current) {
             restartsRef.current += 1;
             busyRef.current = false;
             void startRef.current?.();
             return;
           }
-          // Restart budget exhausted — the poll function cannot see the job
-          // created by the collect function (on Vercel each API route is a
-          // separate serverless function: no shared memory or /tmp). Fall back
-          // to the synchronous ?wait=1 mode, which runs the collection inside
-          // the POST invocation and returns the terminal snapshot with real
-          // per-retailer subtask states (AC2) — bounded by the 25s budget.
+          // Restart budget exhausted — the shared store could not be read
+          // (KV unavailable or mid-recycling). Fall back to the synchronous
+          // ?wait=1 mode, which runs the collection inside the POST invocation
+          // and returns the terminal snapshot with real per-retailer subtask
+          // states (AC2) — bounded by the 25s budget.
           if (mountedRef.current) {
             try {
               const waitRes = await fetch(`/api/products/${productId}/collect?wait=1`, {
