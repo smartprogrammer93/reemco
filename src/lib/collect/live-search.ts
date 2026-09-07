@@ -61,6 +61,19 @@ interface RetailerCollector {
 const DISCOVERY_TTL_MS = 5 * 60_000;
 const discoveryCache = new Map<string, { values: string[]; expiresAt: number }>();
 
+/**
+ * REEA-152 — allowlists for discovery-hop values scraped from upstream
+ * homepage HTML before they are interpolated (unescaped) into the follow-up
+ * hop-fetch URLs (`https://${appId}-dsn.algolia.net/...`, `...?key=${indexKey}`).
+ * Each alphabet is exactly the character set real Algolia app ids, Algolia
+ * search keys and Constructor index keys use, so legitimate values always
+ * pass; anything else can only shrink the origin suffix `-dsn.algolia.net` /
+ * the query tail, never close the origin or inject a second segment. Values
+ * are checked before entering the cache, so cache reads inherit the guarantee.
+ */
+const APP_ID_ALLOW = /^[a-z0-9-]{1,64}$/;
+const SEARCH_KEY_ALLOW = /^[A-Za-z0-9_-]{8,128}$/;
+
 function readDiscovery(name: string): string[] | null {
   const hit = discoveryCache.get(name);
   if (!hit) return null;
@@ -321,6 +334,11 @@ const COLLECTORS: RetailerCollector[] = [
         appId = html.match(/id="cky"[^>]*value="([^"]+)"/)?.[1];
         searchKey = html.match(/id="srcapk"[^>]*value="([^"]+)"/)?.[1];
         if (!appId || !searchKey) throw new Error("eureka credentials missing");
+        if (!APP_ID_ALLOW.test(appId) || !SEARCH_KEY_ALLOW.test(searchKey)) {
+          // Discovery failure: throw before writeDiscovery so nothing crafted
+          // is cached and the next call re-discovers.
+          throw new Error("eureka discovery credentials failed validation");
+        }
         writeDiscovery("eureka", [appId, searchKey]);
       }
       const res = await fetchChecked(
@@ -394,6 +412,11 @@ const COLLECTORS: RetailerCollector[] = [
         );
         indexKey = extractJarirIndexKey(await page.text()) ?? undefined;
         if (!indexKey) throw new Error("jarir index key missing");
+        if (!SEARCH_KEY_ALLOW.test(indexKey)) {
+          // Same discovery-failure semantics as the eureka hop: throw before
+          // writeDiscovery so a crafted value never reaches cache or URL.
+          throw new Error("jarir index key failed validation");
+        }
         writeDiscovery("jarir", [indexKey]);
       }
       const res = await fetchChecked(

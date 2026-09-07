@@ -200,7 +200,7 @@ describe("collectLiveResults", () => {
           return jsonResponse({ response: { results: [{ data: { url: "p/s26", price: 1499, metadata: { name: "Samsung Galaxy S26 Ultra" } } }] } });
         }
         if (url.endsWith("eureka.com.kw/")) {
-          return new Response('<input id="cky" value="app"><input id="srcapk" value="key">', { headers: { "content-type": "text/html" } });
+          return new Response('<input id="cky" value="app"><input id="srcapk" value="keyA1b2c3">', { headers: { "content-type": "text/html" } });
         }
         if (url.includes("algolia.net")) {
           return jsonResponse({ hits: [{ itmn: "Samsung Galaxy S26 Ultra", objectID: "9001", clprc: 380, avaqt: 2 }] });
@@ -235,7 +235,7 @@ describe("collectLiveResults", () => {
         return new Response('x searchProviderKeys "key_cached01" y', { headers: { "content-type": "text/html" } });
       }
       if (url.endsWith("eureka.com.kw/")) {
-        return new Response('<input id="cky" value="appC"><input id="srcapk" value="keyC">', { headers: { "content-type": "text/html" } });
+        return new Response('<input id="cky" value="appc"><input id="srcapk" value="keyCkeyC1">', { headers: { "content-type": "text/html" } });
       }
       if (url.includes("cnstrc.com")) {
         return jsonResponse({ response: { results: [{ data: { url: "p/s26", price: 1499, metadata: { name: "Samsung Galaxy S26 Ultra" } } }] } });
@@ -258,6 +258,36 @@ describe("collectLiveResults", () => {
     expect(afterFirst).toBeGreaterThan(homeRuns);
     // Offers stay live: every call re-queries each retailer's search endpoint.
     expect(calls.filter((u) => u.includes("cnstrc.com") || u.includes("algolia.net"))).toHaveLength(4);
+  });
+
+  it("fails discovery on crafted credentials and never interpolates them into hop URLs (REEA-152)", async () => {
+    resetDiscoveryCache();
+    const calls: string[] = [];
+    const fetchImpl = async (url: string): Promise<Response> => {
+      calls.push(url);
+      if (url.endsWith("eureka.com.kw/")) {
+        // Crafted homepage: appId carries an origin + query + fragment; the
+        // searchKey is well-formed so only the allowlist check can trip here.
+        return new Response(
+          '<input id="cky" value="evil.example/?a#"><input id="srcapk" value="validkey12">',
+          { headers: { "content-type": "text/html" } },
+        );
+      }
+      if (url.includes("algolia.net")) return jsonResponse({ hits: [] });
+      return jsonResponse({});
+    };
+
+    const first = await collectLiveResults("samsung", { fetchImpl });
+    const second = await collectLiveResults("samsung", { fetchImpl });
+
+    // Discovery failed closed on both calls…
+    expect(first.notes.find((n) => n.merchant === "Eureka")?.error).toBeTruthy();
+    expect(second.notes.find((n) => n.merchant === "Eureka")?.error).toBeTruthy();
+    // …without poisoning the cache: the mismatch skipped writeDiscovery, so
+    // every call re-ran the homepage hop (old code cached after one hop).
+    expect(calls.filter((u) => u.startsWith("https://www.eureka.com.kw/"))).toHaveLength(2);
+    // The crafted value never interpolated into a follow-up fetch URL.
+    expect(calls.filter((u) => u.includes("evil.example"))).toHaveLength(0);
   });
 });
 
