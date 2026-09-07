@@ -4,6 +4,7 @@
  * fetch (one failing retailer must not lose the others' offers).
  */
 import { describe, expect, it } from "vitest";
+import { PER_RETAILER_TIMEOUT_MS } from "@/lib/collect/types";
 import {
   amazonEgHits,
   blinkHits,
@@ -11,7 +12,9 @@ import {
   eurekaHits,
   groupHits,
   jarirHits,
+  LIVE_SEARCH_BUDGET_MS,
   LIVE_SEARCH_HITS_PER_PAGE,
+  LIVE_SEARCH_TIMEOUT_MS,
   resetDiscoveryCache,
   sultanCenterHits,
   xciteHits,
@@ -459,5 +462,16 @@ describe("collectLiveResults page width (REEA-156)", () => {
     // full 12-item page for "airpods pro 2" / "lg gram"); the replacement
     // must stay strictly wider so the depth-of-list fix does not regress.
     expect(LIVE_SEARCH_HITS_PER_PAGE).toBeGreaterThanOrEqual(24);
+  });
+
+  it("holds the fan-out window no stricter than the per-retailer budget", () => {
+    // REEA-156: deployed loads showed retailers answering inside the page's
+    // own ~4 s floor being discarded by a stricter attempt window. The
+    // attempt ceiling must stay at or above the product-page collection
+    // runner's per-retailer budget it is meant to mirror.
+    expect(LIVE_SEARCH_TIMEOUT_MS).toBeGreaterThanOrEqual(PER_RETAILER_TIMEOUT_MS);
+    // Two bounded rounds (parallel fan-out + enriched retry), each at most
+    // the doubled two-step chain — the documented ceiling covers them both.
+    expect(LIVE_SEARCH_BUDGET_MS).toBeGreaterThanOrEqual(LIVE_SEARCH_TIMEOUT_MS * 2 * 2);
   });
 });

@@ -17,10 +17,24 @@ import { extractJarirIndexKey, titleMatchScore, tokenCoverage } from "@/lib/coll
 import type { FetchImpl } from "@/lib/collect/scraper";
 import type { NormalizedProduct, PriceOffer } from "@/types/product";
 
-/** Per-attempt fetch ceiling for the search fan-out (parallel per retailer). */
-export const LIVE_SEARCH_TIMEOUT_MS = 3_500;
-/** Hard ceiling for the whole fan-out, enforced via AbortController below. */
-export const LIVE_SEARCH_BUDGET_MS = 7_500;
+/**
+ * Per-attempt fetch ceiling for the search fan-out (parallel per retailer).
+ * REEA-156: raised from 3.5 s to match PER_RETAILER_TIMEOUT_MS in types.ts —
+ * the live fan-out had been held 0.5 s stricter than the product-page
+ * collection runner's own per-retailer budget with no reason. Measured on the
+ * deployed edge, that half-second decided whole retailers: every page already
+ * waits ~4 s for the slowest collector, so a blink answer arriving at ~3.8 s
+ * — or amazon.eg's second apology-page attempt finishing inside the doubled
+ * window — was being discarded after already arriving.
+ */
+export const LIVE_SEARCH_TIMEOUT_MS = 4_000;
+/**
+ * Ceiling for the whole query-time chain: bounded per-attempt windows above,
+ * one round of parallel collectors plus one bounded enrichment retry for
+ * silent retailers (REEA-149). Each round's slowest hop is the two-step
+ * chain at TIMEOUT×2; two rounds stay inside the results page maxDuration.
+ */
+export const LIVE_SEARCH_BUDGET_MS = 16_000;
 /** Cap of distinct product groups served per query. */
 export const LIVE_SEARCH_MAX_PRODUCTS = 20;
 /**
