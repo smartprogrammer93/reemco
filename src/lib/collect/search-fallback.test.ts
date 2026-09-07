@@ -119,7 +119,7 @@ describe("parseEurekaSearch", () => {
     expect(found?.wasPrice).toBe(126.533);
     expect(found?.inStock).toBe(true);
     expect(found?.url).toBe(
-      "https://www.eureka.com.kw/en/Sony_Wireless_Noise_Cancelling_Headphone_WH1000XM6_Black/275100",
+      "https://www.eureka.com.kw/products/details/275100",
     );
   });
 

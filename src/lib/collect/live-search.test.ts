@@ -48,7 +48,14 @@ describe("hit parsers", () => {
       { hits: [{ itmn: "Samsung Galaxy S26 Ultra", objectID: "9001", clprc: 380, lprc: 410, avaqt: 4 }] },
       "samsung",
     );
-    expect(hits[0]).toMatchObject({ price: 380, wasPrice: 410, inStock: true });
+    // REEA-136 guardrail: canonical store route /products/details/<id>,
+    // not the hard-404-ing /en/<Title>/<id> shape.
+    expect(hits[0]).toMatchObject({
+      price: 380,
+      wasPrice: 410,
+      inStock: true,
+      url: "https://www.eureka.com.kw/products/details/9001",
+    });
   });
 
   it("jarirHits reads Constructor metadata and keeps SAR", () => {

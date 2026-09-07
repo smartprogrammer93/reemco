@@ -114,7 +114,9 @@ export function eurekaHits(payload: unknown, query: string): SearchHit[] {
       merchant: "Eureka",
       price: hit.clprc,
       currency: "KWD",
-      url: `https://www.eureka.com.kw/en/${hit.itmn.trim().replace(/\s+/g, "_")}/${hit.objectID}`,
+      // The store's canonical product route is /products/details/<id>; the
+      // /en/<Title>/<id> variant hard-404s on the live host (REEA-136).
+      url: `https://www.eureka.com.kw/products/details/${hit.objectID}`,
       inStock: typeof hit.avaqt === "number" ? hit.avaqt > 0 : true,
       ...(typeof hit.lprc === "number" && hit.lprc > hit.clprc ? { wasPrice: hit.lprc } : {}),
     });
@@ -424,7 +426,6 @@ export function groupHits(query: string, hits: SearchHit[]): NormalizedProduct[]
         inStock: o.inStock,
         ...(o.wasPrice != null ? { wasPrice: o.wasPrice } : {}),
       }));
-    const best = offers[0];
     return {
       productId: slugify(group.title) || `live-${idx}`,
       title: group.title,

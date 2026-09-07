@@ -138,7 +138,9 @@ export function parseEurekaSearch(payload: unknown, productTitle: string): Found
   return {
     price: hit.clprc as number,
     currency: "KWD",
-    url: `https://www.eureka.com.kw/en/${(hit.itmn as string).trim().replace(/\s+/g, "_")}/${hit.objectID}`,
+    // The store's canonical product route is /products/details/<id>; the
+    // /en/<Title>/<id> variant hard-404s on the live host (REEA-136).
+    url: `https://www.eureka.com.kw/products/details/${hit.objectID}`,
     inStock: typeof hit.avaqt === "number" ? hit.avaqt > 0 : true,
     ...(typeof hit.lprc === "number" && hit.lprc > (hit.clprc as number) ? { wasPrice: hit.lprc } : {}),
   };
