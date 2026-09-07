@@ -16,7 +16,7 @@ import { useCollection, type CollectionPhase } from "@/lib/collect/useCollection
 import type { CollectJob, LiveOffer } from "@/lib/collect/types";
 import { collectedAgoLabel } from "@/lib/collect/types";
 import { filterOffersByCountry, type CountryCode } from "@/lib/country";
-import { formatPrice } from "@/lib/format";
+import { formatPrimaryPrice } from "@/lib/format";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import CollectionPulse, { PulseOfferCascade } from "@/components/CollectionPulse";
 
@@ -33,7 +33,7 @@ function OfferRow({ offer, best }: { offer: LiveOffer; best: boolean }) {
     >
       <div className="flex items-baseline gap-2">
         <strong style={{ fontSize: 20, fontVariantNumeric: "tabular-nums" }}>
-          {formatPrice(offer.price, offer.currency)}
+          {formatPrimaryPrice(offer.price, offer.currency).label}
         </strong>
         {best && (
           <span

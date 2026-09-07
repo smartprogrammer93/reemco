@@ -2,7 +2,7 @@
 
 import type { CollectJob, LiveOffer, RetailerSubtask } from "@/lib/collect/types";
 import { jobProgress } from "@/lib/collect-progress";
-import { effectivePrice, formatPrice } from "@/lib/format";
+import { effectivePrice, formatPrimaryPrice } from "@/lib/format";
 import type { Coupon } from "@/types/product";
 import OfferCard from "@/components/OfferCard";
 
@@ -75,6 +75,9 @@ export function PulseOfferCascade({
     <ul className="mt-4 grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 xl:grid-cols-[repeat(2,minmax(0,1fr))]">
       {offers.map((offer, i) => {
         const eff = effectivePrice(offer, offer.coupon);
+        // REEA-195 AC-4: KWD-primary labels on the cascade cards too; the
+        // count-up animates in the same KWD space it lands on.
+        const hero = formatPrimaryPrice(offer.price, offer.currency);
         return (
           <li
             key={`${offer.merchant}-${offer.url}`}
@@ -84,13 +87,13 @@ export function PulseOfferCascade({
             <OfferCard
               merchant={offer.merchant}
               domain={offer.domain}
-              price={offer.price}
-              currency={offer.currency}
-              priceLabel={formatPrice(offer.price, offer.currency)}
-              effectivePriceLabel={eff !== null ? formatPrice(eff, offer.currency) : undefined}
+              price={hero.value}
+              currency="KWD"
+              priceLabel={hero.label}
+              effectivePriceLabel={eff !== null ? formatPrimaryPrice(eff, offer.currency).label : undefined}
               compareAtLabel={
                 offer.wasPrice != null && offer.wasPrice > offer.price
-                  ? formatPrice(offer.wasPrice, offer.currency)
+                  ? formatPrimaryPrice(offer.wasPrice, offer.currency).label
                   : undefined
               }
               coupon={offer.coupon}
@@ -101,7 +104,7 @@ export function PulseOfferCascade({
               isBest={offer.price === best}
               savings={
                 offer.price === best && worst > best
-                  ? formatPrice(worst - best, offer.currency)
+                  ? formatPrimaryPrice(worst - best, offer.currency).label
                   : null
               }
             />

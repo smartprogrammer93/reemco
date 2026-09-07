@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { Coupon, NormalizedProduct, PriceOffer } from "@/types/product";
 import { buildResultsHref, type CountryCode } from "@/lib/country";
-import { effectivePrice, formatPrice, sortOffers } from "@/lib/format";
+import { effectivePrice, formatPrimaryPrice, sortOffers } from "@/lib/format";
 import { gradeBadgeLabel } from "@/lib/collect/canonical-product";
 import CouponBadge from "@/components/CouponBadge";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
@@ -66,6 +66,10 @@ function PriceBlock({
   // REEA-75: ml-auto keeps the price right-aligned when the row wraps;
   // flex-wrap on the baseline row stops the Best badge clipping (M3).
   const saved = offer.wasPrice != null && offer.wasPrice > offer.price;
+  // REEA-195 AC-4: KWD is the primary currency on every offer card; SAR-only
+  // (and other scraped) figures convert through the reference factor with the
+  // scraped stamp kept beside them.
+  const hero = formatPrimaryPrice(offer.price, offer.currency);
   return (
     // REEA-95 step-5 mobile pass: at narrow widths the price block takes the
     // full row so its chips wrap inside the viewport instead of forcing the
@@ -80,7 +84,7 @@ function PriceBlock({
             textDecoration: oos ? "line-through" : undefined,
           }}
         >
-          {formatPrice(offer.price, offer.currency)}
+          {hero.label}
         </span>
         {/* §5.3: strikethrough compare-at BESIDE the price, savings pill right
             after it — savings emphasis without stealing the price's crown. */}
@@ -89,11 +93,11 @@ function PriceBlock({
             className="tabular"
             style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)", textDecoration: "line-through" }}
           >
-            {formatPrice(offer.wasPrice, offer.currency)}
+            {formatPrimaryPrice(offer.wasPrice, offer.currency).label}
           </span>
         )}
         {saved && offer.wasPrice != null && (
-          <span className="savings-pill">Save {formatPrice(offer.wasPrice - offer.price, offer.currency)}</span>
+          <span className="savings-pill">Save {formatPrimaryPrice(offer.wasPrice - offer.price, offer.currency).label}</span>
         )}
         {isBest && <span className="best-flag">Best price</span>}
       </div>
@@ -102,7 +106,7 @@ function PriceBlock({
         <p className="mt-1" style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)" }}>
           Effective{" "}
           <span className="tabular" style={{ color: "var(--rc-savings)" }}>
-            {formatPrice(eff, offer.currency)}
+            {formatPrimaryPrice(eff, offer.currency).label}
           </span>{" "}
           · incl. coupon {coupon?.code ?? coupon?.discount}
         </p>
@@ -207,7 +211,7 @@ export default function ProductResultCard({
           <span className="tabular">{offers.length}</span>{" "}
           {offers.length === 1 ? "retailer" : "retailers"} · from{" "}
           <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
-            {formatPrice(best.price, best.currency)}
+            {formatPrimaryPrice(best.price, best.currency).label}
           </span>
         </p>
       )}
@@ -270,7 +274,7 @@ export default function ProductResultCard({
                       className="tabular"
                       style={{ font: "var(--rc-text-body)", fontWeight: 600, color: "var(--rc-ink)" }}
                     >
-                      {formatPrice(o.price, o.currency)}
+                      {formatPrimaryPrice(o.price, o.currency).label}
                     </span>
                     {/* REEA-13: render scraped hrefs only through validation;
                         REEA-116: direct retailer product URLs for every
@@ -352,7 +356,7 @@ export default function ProductResultCard({
                   className="tabular ml-auto shrink-0"
                   style={{ font: "var(--rc-text-body)", fontWeight: 600, color: "var(--rc-ink)" }}
                 >
-                  from {formatPrice(a.fromPrice, best?.currency ?? "USD")}
+                  from {formatPrimaryPrice(a.fromPrice, best?.currency ?? "USD").label}
                 </span>
               </li>
             ))}

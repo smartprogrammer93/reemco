@@ -72,7 +72,10 @@ function CountUpPrice({
     const tick = (t: number) => {
       const p = DURATION_MS === 0 ? 1 : Math.min(1, (t - start) / DURATION_MS);
       const eased = reduce ? 1 : 1 - Math.pow(1 - p, 3); // ease-out, lands exactly on price
-      setShown(formatPrice(price * eased, currency));
+      // Intermediate frames animate the numeric part; the final frame lands on
+      // the exact served label (REEA-195: the label can carry the scraped-currency
+      // stamp behind the KWD primary figure).
+      setShown(p === 1 ? priceLabel : formatPrice(price * eased, currency));
       if (p < 1) raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);

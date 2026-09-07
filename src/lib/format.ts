@@ -12,6 +12,45 @@ export function formatPrice(price: number, currency: string): string {
   }
 }
 
+/**
+ * REEA-195 — reference conversion factors into KWD, the primary display
+ * currency of the Kuwait site. These are stable peg-style anchors (the KWD is
+ * itself managed against a basket), not live FX ticks: they exist so a SAR/EGP
+ * offer reads in KD at the same moment it is scraped, with the scraped figure
+ * kept beside it. Unknown codes pass through unconverted.
+ */
+const TO_KWD: Readonly<Record<string, number>> = {
+  SAR: 0.0816,
+  USD: 0.3066,
+  GBP: 0.4051,
+  EUR: 0.3551,
+  AED: 0.0834,
+  EGP: 0.0061,
+};
+
+export interface PrimaryPrice {
+  /** KWD-space numeric (or the raw price when nothing converts). */
+  value: number;
+  /** Primary label: KWD figure for every card; the scraped label rides behind
+   *  it as a stamp when it differs, so nothing is silently rewritten. */
+  label: string;
+}
+
+/**
+ * KWD-primary price label for offer cards (REEA-195 AC-4). A KWD offer keeps
+ * its figure untouched; any other retailer currency is converted with the
+ * reference factor and both stamps render:
+ *   SAR 150.00  →  "KD 12.24 · SAR 150.00"
+ */
+export function formatPrimaryPrice(price: number, currency: string): PrimaryPrice {
+  const code = currency.trim().toUpperCase();
+  if (!code || code === "KWD") return { value: price, label: formatPrice(price, "KWD") };
+  const rate = TO_KWD[code];
+  if (!rate) return { value: price, label: formatPrice(price, code) };
+  const kwd = price * rate;
+  return { value: kwd, label: `${formatPrice(kwd, "KWD")} · ${formatPrice(price, code)}` };
+}
+
 /** Sort offers so in-stock items come first, then cheapest. */
 export function sortOffers(offers: PriceOffer[]): PriceOffer[] {
   return [...offers].sort((a, b) => {
