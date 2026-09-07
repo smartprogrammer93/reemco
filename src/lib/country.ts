@@ -95,12 +95,20 @@ export function filterProductsByCountry(
   });
 }
 
-/** Build the results URL the pills and carry-over links share. */
-export function buildResultsHref(query: string, page: number, country: CountryCode | null): string {
+/** Build the results URL the pills and carry-over links share. REEA-186: the
+ *  optional stock-selection flag rides along so alternatives/pill navigation
+ *  keeps the shopper's "show out-of-stock" choice; unset keeps today's URLs. */
+export function buildResultsHref(
+  query: string,
+  page: number,
+  country: CountryCode | null,
+  showOutOfStock = false,
+): string {
   const params = new URLSearchParams();
   if (query) params.set("q", query);
   if (page > 1) params.set("page", String(page));
   if (country) params.set("c", country);
+  if (showOutOfStock) params.set("oos", "1");
   const qs = params.toString();
   return qs ? `/results?${qs}` : "/results";
 }
