@@ -51,6 +51,14 @@ export const LIVE_SEARCH_MAX_PRODUCTS = 20;
  */
 export const LIVE_SEARCH_HITS_PER_PAGE = 24;
 
+/**
+ * REEA-149 — polite pause between the two bounded amazon.eg attempts. A retry
+ * issued in the same millisecond as an HTTP 503 tends to hit the same rate
+ * limiter; 200 ms is enough for a clean answer on the live host (measured)
+ * while keeping attempt+backoff+attempt inside the TIMEOUT×2 hop window.
+ */
+export const AMAZON_RETRY_BACKOFF_MS = 200;
+
 export interface SearchHit {
   title: string;
   merchant: string;
@@ -462,24 +470,39 @@ const COLLECTORS: RetailerCollector[] = [
   {
     merchant: "Amazon.eg",
     collect: async (query, fetchImpl) => {
-      // Amazon.eg intermittently serves an apology interstitial (HTTP 200, no
-      // cards) that resolves on re-fetch — two bounded attempts (REEA-93).
+      // Amazon.eg answers the edge with two transient shapes: the apology
+      // interstitial (HTTP 200, no cards) and an occasional hard HTTP 503.
+      // The 503 shape used to throw straight out of fetchChecked, skipping
+      // the retry loop entirely — one blip dropped Amazon.eg from the whole
+      // page. Both shapes now retry once after a short polite pause (REEA-93
+      // keeps its two bounded attempts): attempt + backoff + attempt fits the
+      // same TIMEOUT×2 two-step window the jarir/eureka chains use, so the
+      // REEA-156 budget arithmetic is unchanged. When both attempts fail the
+      // last error still surfaces, keeping the per-merchant note diagnosable.
       let hits: SearchHit[] = [];
+      let lastError: unknown;
       for (let attempt = 0; attempt < 2 && hits.length === 0; attempt++) {
-        const res = await fetchChecked(
-          fetchImpl,
-          `https://www.amazon.eg/s?k=${encodeURIComponent(query)}`,
-          {
-            headers: {
-              accept: "text/html,application/xhtml+xml",
-              "accept-language": "en",
-              "user-agent": "Mozilla/5.0",
+        if (attempt > 0) await new Promise((r) => setTimeout(r, AMAZON_RETRY_BACKOFF_MS));
+        try {
+          const res = await fetchChecked(
+            fetchImpl,
+            `https://www.amazon.eg/s?k=${encodeURIComponent(query)}`,
+            {
+              headers: {
+                accept: "text/html,application/xhtml+xml",
+                "accept-language": "en",
+                "user-agent": "Mozilla/5.0",
+              },
             },
-          },
-          AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
-        );
-        hits = amazonEgHits(await res.text(), query);
+            AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
+          );
+          hits = amazonEgHits(await res.text(), query);
+          lastError = undefined;
+        } catch (err) {
+          lastError = err;
+        }
       }
+      if (hits.length === 0 && lastError) throw lastError;
       return hits;
     },
   },

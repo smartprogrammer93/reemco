@@ -295,6 +295,32 @@ describe("collectLiveResults", () => {
     // The crafted value never interpolated into a follow-up fetch URL.
     expect(calls.filter((u) => u.includes("evil.example"))).toHaveLength(0);
   });
+
+  it("survives a transient amazon.eg HTTP 503 with one backed-off retry (REEA-149)", async () => {
+    resetDiscoveryCache();
+    let amazonCalls = 0;
+    const cardsHtml =
+      'data-component-type="s-search-result" <h2 aria-label="LG gram 16 Notebook"></h2>' +
+      '<span class="a-offscreen">EGP 45,900</span><a href="/dp/B1LGGRM">z</a>';
+    const fetchImpl = async (url: string): Promise<Response> => {
+      if (url.includes("amazon.eg")) {
+        amazonCalls++;
+        if (amazonCalls === 1) return new Response("busy", { status: 503 });
+        return new Response(cardsHtml, { headers: { "content-type": "text/html" } });
+      }
+      return jsonResponse({});
+    };
+
+    const { products, notes } = await collectLiveResults("lg gram", { fetchImpl });
+
+    // The 503 no longer throws past the retry loop: exactly one backed-off
+    // retry, and Amazon.eg renders beside the other retailers' pockets.
+    expect(amazonCalls).toBe(2);
+    expect(notes.find((n) => n.merchant === "Amazon.eg")?.error).toBeFalsy();
+    const offers = products.flatMap((p) => p.offers).filter((o) => o.merchant === "Amazon.eg");
+    expect(offers.length).toBeGreaterThanOrEqual(1);
+    expect(offers[0]).toMatchObject({ price: 45900, currency: "EGP" });
+  });
 });
 
 describe("collectLiveResults depth pass (REEA-149)", () => {
