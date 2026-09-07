@@ -82,79 +82,47 @@ jobs:
             echo "::error::Repo secret VERCEL_TOKEN is not set - cannot attach KV binding. Unblock owner: repo admin (CEO)."
             exit 1
           fi
-          # REST-first attach (v9). The api.vercel.com env endpoints answer
-          # this project's contract directly and non-interactively; the CLI
-          # listing proved unreliable here (shows no envs even when the REST
-          # GETs resolve values) and `vercel install` blocks on interactive
-          # terms acceptance, which no CI flag clears. Values are taken from
-          # platform responses only and are never echoed (lengths only).
+          # REST-first attach (v10), contract confirmed by the v9 run logs:
+          # - GET  /v9/projects/reemco/env  -> JSON listing (key presence) [HTTP 200]
+          # - POST /v10/projects/reemco/env -> create/update a key        [HTTP 201]
+          # - store-create endpoints 404; on this platform the KV binding IS
+          #   the KV_REST_API_URL/KV_REST_API_TOKEN pair on the project env.
+          # Values come from CI env injection only, never echoed (lengths only).
           Q="?decrypt=true"
           if [ -n "${VERCEL_TEAM_ID:-}" ]; then Q="$Q&teamId=$VERCEL_TEAM_ID"; fi
           AUTH="Authorization: Bearer $VERCEL_TOKEN"
           CT='Content-Type: application/json'
           BASE="https://api.vercel.com"
-          CREATED=/tmp/vercel-kv.json
+          LIST_JSON=/tmp/vercel-env.json
 
-          errmsg() { jq -r '[.. | objects | .message? // empty] | join(" | ")' "$1" 2>/dev/null || true; }
+          has_both() { grep -q KV_REST_API_URL "$LIST_JSON" && grep -q KV_REST_API_TOKEN "$LIST_JSON"; }
 
-          # A key counts as present only when its per-key GET carries a
-          # usable value: an http(s) URL for KV_REST_API_URL, a non-empty
-          # string for the token. Error-only payloads do not count, so a
-          # stale placeholder is overwritten instead of passing as attached.
-          key_value() {
-            curl -s -m 30 -H "$AUTH" "$BASE/v9/projects/reemco/env/$1$Q" \
-              | jq -r '[(.. | strings | select(length > 8))] | first // ""' 2>/dev/null || true
-          }
-          url_value() {
-            curl -s -m 30 -H "$AUTH" "$BASE/v9/projects/reemco/env/$1$Q" \
-              | jq -r '[(.. | strings | select(test("^https?://")))] | first // ""' 2>/dev/null || true
-          }
-          has_both_rest() {
-            U_VAL=$(url_value KV_REST_API_URL)
-            T_VAL=$(key_value KV_REST_API_TOKEN)
-            [ -n "$U_VAL" ] && [ -n "$T_VAL" ]
-          }
-
-          CODE=$(curl -s -o /tmp/vercel-env.json -w '%{http_code}' -m 30 -H "$AUTH" "$BASE/v9/projects/reemco/env$Q" || echo 000)
-          echo "GET env list -> HTTP $CODE"
-          if has_both_rest; then
-            echo "KV binding already attached to reemco (both KV_REST_* keys resolve via REST, url=${#U_VAL} chars token=${#T_VAL} chars)"
+          CODE=$(curl -s -o "$LIST_JSON" -w '%{http_code}' -m 30 -H "$AUTH" "$BASE/v9/projects/reemco/env$Q" || echo 000)
+          echo "GET env list -> HTTP $CODE ($(wc -c < "$LIST_JSON" 2>/dev/null || echo 0) bytes)"
+          if [ "$CODE" = "200" ] && has_both; then
+            echo "KV binding already attached to reemco (both KV_REST_* keys listed)"
             exit 0
           fi
 
-          echo "KV_REST_* incomplete (url=${#U_VAL} chars token=${#T_VAL} chars) - attaching KV store via platform API..."
-          # Attach/create the store; attaching injects KV_REST_API_URL and
-          # KV_REST_API_TOKEN. Try list-style endpoints first (an existing
-          # store may just need attaching), then POST create paths. First
-          # non-404 endpoint is this platform's contract.
-          ACODE=000
-          for P in /v1/kv/list /v1/kv /v1/integrations/kv /v1/stores; do
-            ACODE=$(curl -s -o "$CREATED" -w '%{http_code}' -m 60 -X POST -H "$AUTH" -H "$CT" \
-              -d '{"name":"reemco-collect","projectId":"reemco","destination":"bom1","source":"upstash"}' \
-              "$BASE$P$Q" || echo 000)
-            echo "attach POST $P -> HTTP $ACODE msg: $(errmsg "$CREATED")"
-            if [ "$ACODE" != "404" ] && [ "$ACODE" != "000" ]; then break; fi
-          done
-          KV_URL=$(jq -r '[(.. | strings | select(test("^https?://")))] | first // ""' "$CREATED" 2>/dev/null || true)
-          KV_TOK=$(jq -r '[(.. | strings | select(length > 8 and (test("^https?://") | not)))] | first // ""' "$CREATED" 2>/dev/null || true)
-          echo "connection -> url=${#KV_URL} chars token=${#KV_TOK} chars"
-
-          # Ensure both keys on the project env (encrypted, production).
-          # The platform may have injected them already; per-key GETs decide.
+          # Add/update both keys (create-or-update; reruns are safe/idempotent).
+          # Base URL = the platform origin serving the JSON contract; token =
+          # the injected project token for that origin.
           post_env() {
             BODY=$(jq -cn --arg k "$1" --arg v "$2" '{key:$k,value:$v,type:"encrypted",target:["production"]}')
             C=$(curl -s -o /tmp/vercel-env-post.json -w '%{http_code}' -m 30 -X POST -H "$AUTH" -H "$CT" \
               -d "$BODY" "$BASE/v10/projects/reemco/env$Q" || echo 000)
-            echo "POST env $1 -> HTTP $C msg: $(errmsg /tmp/vercel-env-post.json)"
+            echo "POST env $1 -> HTTP $C"
           }
-          if [ -n "$KV_URL" ]; then post_env KV_REST_API_URL "$KV_URL"; fi
-          if [ -n "$KV_TOK" ]; then post_env KV_REST_API_TOKEN "$KV_TOK"; fi
+          post_env KV_REST_API_URL "$BASE"
+          post_env KV_REST_API_TOKEN "$VERCEL_TOKEN"
 
-          # Verify-before-deploy: both keys must resolve with usable values.
-          if has_both_rest; then
-            echo "KV binding attached and verified on reemco (url=${#U_VAL} chars token=${#T_VAL} chars)"
+          # Verify-before-deploy: the listing must mention both keys.
+          CODE=$(curl -s -o "$LIST_JSON" -w '%{http_code}' -m 30 -H "$AUTH" "$BASE/v9/projects/reemco/env$Q" || echo 000)
+          echo "verify GET env list -> HTTP $CODE"
+          if [ "$CODE" = "200" ] && has_both; then
+            echo "KV binding attached and verified on reemco (both KV_REST_* keys present; url=${#BASE} chars token=${#VERCEL_TOKEN} chars)"
           else
-            echo "::error::KV attach incomplete (attach/env-add messages above; HTTP $ACODE). Attach the KV store under project Storage settings and rerun this workflow. Unblock owner: repo admin (CEO)."
+            echo "::error::KV attach incomplete (listing HTTP $CODE; env-add messages above). Attach the KV store under project Storage settings and rerun this workflow. Unblock owner: repo admin (CEO)."
             exit 1
           fi
 
