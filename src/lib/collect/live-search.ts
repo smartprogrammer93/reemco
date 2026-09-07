@@ -24,9 +24,12 @@ import type { CountryCode } from "@/lib/country";
 import { canonicalFields, compatibleFields, type CanonicalFields } from "@/lib/collect/canonical-product";
 import {
   arabicBrandIntent,
+  brandIsNamed,
   isAccessoryTitle,
+  isModelExtended,
   matchesQueryToken,
   queryMatchTokens,
+  relevanceTier,
   resolveBrand,
   titleMatchesBrand,
 } from "@/lib/relevance";
@@ -590,12 +593,77 @@ const COLLECTORS: RetailerCollector[] = [
  */
 export function groupHits(query: string, hits: SearchHit[]): NormalizedProduct[] {
   const groups = buildGroups(query, hits);
-  const sorted = [...groups].sort(
-    (a, b) =>
-      b.titleScore - a.titleScore ||
-      Math.min(...a.offers.map((o) => o.price)) - Math.min(...b.offers.map((o) => o.price)),
-  );
-  return finalizeGroups(selectAcrossRetailers(leadWithBrandMatch(sorted, query), LIVE_SEARCH_MAX_PRODUCTS));
+  return finalizeGroups(rankByRelevance(query, groups));
+}
+
+/**
+ * REEA-213 — relevance-first ranking (Bet 1, REEA-211 brief): tier blocks
+ * 1→4 decide the order and are never blended by price; price only breaks
+ * ties inside a block. Inside a block: non-extended model match before
+ * model-extended ("iPhone 17 Pro" before "iPhone 17 Pro Max" on
+ * `iPhone 17 Pro`), named brand before blank/generic, effective price
+ * ascending with only in-stock cards participating unless the whole block is
+ * out of stock, stable adapter arrival order last. The REEA-137 breadth
+ * round-robin and the REEA-195 Arabic brand lead run INSIDE each tier block —
+ * both preserve relative order of their input, so blocks stay contiguous
+ * through the selection and the tier ladder holds.
+ */
+function rankByRelevance(query: string, groups: HitGroup[]): HitGroup[] {
+  type Ranked = {
+    group: HitGroup;
+    arrival: number;
+    tier: number;
+    extended: boolean;
+    named: boolean;
+    stocked: boolean;
+    cheapest: number;
+  };
+  const ranked: Ranked[] = groups.map((group, arrival) => {
+    // A merged card qualifies through ANY of its member titles; the visible
+    // extended-match flag reads the canonical title the card actually shows.
+    const canonical = canonicalGroupTitle(group);
+    const metadata = `${group.brandRaw} ${group.offers.map((o) => o.merchant).join(" ")}`;
+    let tier = Infinity;
+    for (const t of group.titles) tier = Math.min(tier, relevanceTier(query, t, metadata));
+    if (!Number.isFinite(tier)) tier = relevanceTier(query, canonical, metadata);
+    return {
+      group,
+      arrival,
+      tier,
+      extended: isModelExtended(query, canonical),
+      named: brandIsNamed(group.brandRaw || undefined, canonical),
+      stocked: group.offers.some((o) => o.inStock),
+      cheapest: Math.min(...group.offers.map((o) => o.price)),
+    };
+  });
+  const insideTier = (a: Ranked, b: Ranked): number =>
+    Number(a.extended) - Number(b.extended) ||
+    Number(!a.named) - Number(!b.named) ||
+    Number(!a.stocked) - Number(!b.stocked) ||
+    a.cheapest - b.cheapest ||
+    a.arrival - b.arrival;
+
+  const buckets: Ranked[][] = [];
+  for (const r of ranked) {
+    const idx = Math.min(Math.max(r.tier, 1), 4) - 1;
+    (buckets[idx] ??= []).push(r);
+  }
+  const out: HitGroup[] = [];
+  for (const bucket of buckets) {
+    // Empty tier blocks are holes in the buckets array — skip them, the
+    // later blocks still contribute while the slice budget lasts.
+    if (!bucket) continue;
+    if (out.length >= LIVE_SEARCH_MAX_PRODUCTS) break;
+    bucket.sort(insideTier);
+    const block = bucket.map((r) => r.group);
+    out.push(
+      ...selectAcrossRetailers(
+        leadWithBrandMatch(block, query),
+        LIVE_SEARCH_MAX_PRODUCTS - out.length,
+      ),
+    );
+  }
+  return out;
 }
 
 /**
@@ -691,31 +759,35 @@ function buildGroups(query: string, hits: SearchHit[]): HitGroup[] {
   return groups;
 }
 
+/**
+ * Canonical slug selection (REEA-167 §2): the member title with the fewest
+ * tokens, tie-break the alphabetically smallest slug — identical however
+ * the shopper arrived, so every spelling of the same device lands on one
+ * stable view and old links converge instead of forking. Shared by the
+ * ranking pass (the visible card decides the extended-match flag) and the
+ * finalization below.
+ */
+function canonicalGroupTitle(group: HitGroup): string {
+  let title = "";
+  let titleTokens = Infinity;
+  let titleSlug = "";
+  for (const t of group.titles) {
+    const tokens = t.split(/\s+/).length;
+    const slug = slugify(t);
+    if (tokens < titleTokens || (tokens === titleTokens && slug < titleSlug)) {
+      title = t;
+      titleTokens = tokens;
+      titleSlug = slug;
+    }
+  }
+  return title;
+}
+
 function finalizeGroups(selected: HitGroup[]): NormalizedProduct[] {
   const scrapedAt = new Date().toISOString(); // real collection completion time
 
-  // Canonical slug selection (REEA-167 §2): the member title with the fewest
-  // tokens, tie-break the alphabetically smallest slug — identical however
-  // the shopper arrived, so every spelling of the same device lands on one
-  // stable view and old links converge instead of forking.
-  const canonicalTitleOf = (group: HitGroup): string => {
-    let title = "";
-    let titleTokens = Infinity;
-    let titleSlug = "";
-    for (const t of group.titles) {
-      const tokens = t.split(/\s+/).length;
-      const slug = slugify(t);
-      if (tokens < titleTokens || (tokens === titleTokens && slug < titleSlug)) {
-        title = t;
-        titleTokens = tokens;
-        titleSlug = slug;
-      }
-    }
-    return title;
-  };
-
   return selected.map((group, idx) => {
-    const title = canonicalTitleOf(group);
+    const title = canonicalGroupTitle(group);
     const offers: PriceOffer[] = [...group.offers]
       // Cheapest offer first (REEA-167 §2); purchasable offers break ties.
       .sort((a, b) => a.price - b.price || Number(b.inStock) - Number(a.inStock))
@@ -749,7 +821,7 @@ function finalizeGroups(selected: HitGroup[]): NormalizedProduct[] {
         .filter((other) => other !== group)
         .slice(0, 3)
         .map((other) => {
-          const otherTitle = canonicalTitleOf(other);
+          const otherTitle = canonicalGroupTitle(other);
           return {
             productId: slugify(otherTitle),
             title: otherTitle,

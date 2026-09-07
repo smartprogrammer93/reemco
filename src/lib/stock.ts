@@ -87,8 +87,20 @@ export function filterProductsByStock(
   return out;
 }
 
-/* ---- Same-tab remembered selection (existing module-slot pattern). ---- */
+/**
+ * REEA-213 — which card in a FINAL sorted list carries the single "Best
+ * price" badge: the first card that has at least one in-stock offer; when no
+ * card in the list is stocked, the first card. Callers compute it per
+ * rendered block (Devices container, plain list) so the badge never scans
+ * past the top block — cheaper lower-tier cards cannot steal it.
+ */
+export function bestBadgeIndex(products: readonly NormalizedProduct[]): number {
+  const i = products.findIndex((p) => p.offers.some((o) => o.inStock));
+  if (i >= 0) return i;
+  return products.length > 0 ? 0 : -1;
+}
 
+/* ---- Same-tab remembered selection (existing module-slot pattern). ---- */
 let rememberedShowOutOfStock: boolean | null = null;
 
 /** Toggle clicks record the choice for the next search's hidden input. */

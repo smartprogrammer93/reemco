@@ -7,6 +7,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { buildResultsHref } from "@/lib/country";
 import {
+  bestBadgeIndex,
   filterOffersByStock,
   filterProductsByStock,
   offerIsVisible,
@@ -108,6 +109,35 @@ describe("product filtering", () => {
   it("is idempotent — the client pass over already-filtered server data changes nothing", () => {
     const once = filterProductsByStock(products, false);
     expect(filterProductsByStock(once, false)).toEqual(once);
+  });
+});
+
+describe("Best-price badge index (REEA-213)", () => {
+  const withOffers = (
+    id: string,
+    offers: NormalizedProduct["offers"],
+  ): NormalizedProduct => ({
+    productId: id,
+    title: id,
+    brand: "",
+    offers,
+    coupons: [],
+    variations: [],
+    alternatives: [],
+  });
+
+  it("rides the first card that has any in-stock offer", () => {
+    const list = [
+      withOffers("oos-head", [{ merchant: "Xcite", price: 5, currency: "KWD", url: "u", inStock: false }]),
+      withOffers("stocked-next", [{ merchant: "Jarir", price: 9, currency: "SAR", url: "u", inStock: true }]),
+    ];
+    expect(bestBadgeIndex(list)).toBe(1);
+  });
+
+  it("falls back to the first card when nothing is stocked; -1 on an empty list", () => {
+    const allOut = [withOffers("a", [{ merchant: "Xcite", price: 5, currency: "KWD", url: "u", inStock: false }])];
+    expect(bestBadgeIndex(allOut)).toBe(0);
+    expect(bestBadgeIndex([])).toBe(-1);
   });
 });
 

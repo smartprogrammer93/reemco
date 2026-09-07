@@ -8,10 +8,14 @@ import { describe, expect, it } from "vitest";
 import {
   CURATED_BRANDS,
   arabicBrandIntent,
+  brandIsNamed,
   curatedBrandInTitle,
   isAccessoryTitle,
+  isModelExtended,
   matchesQueryToken,
+  normalizeArabicText,
   partitionForQuery,
+  relevanceTier,
   resolveBrand,
   titleHasDeviceIntent,
   titleMatchesBrand,
@@ -151,5 +155,67 @@ describe("Arabic brand-token matching (REEA-195)", () => {
     // the fitted-device brand inside the same title.
     expect(resolveBrand(undefined, "PanzerGlass Urban Fit for Samsung Galaxy S26")).toBe("PanzerGlass");
     expect(resolveBrand("", "PanzerGlass Screen Protector")).toBe("PanzerGlass");
+  });
+});
+
+describe("Arabic normalization (REEA-213)", () => {
+  it("folds tashkeel and tatweel so vowelled and plain spellings meet", () => {
+    expect(normalizeArabicText("غسّالة")).toBe(normalizeArabicText("غسالة"));
+    expect(normalizeArabicText("غــسالة")).toBe(normalizeArabicText("غسالة"));
+    // Fathatan + sukun tails ride the same strip.
+    expect(normalizeArabicText("غسالةً")).toBe(normalizeArabicText("غسالة"));
+  });
+
+  it("keeps the hamza-family fold for the tier scorer", () => {
+    expect(normalizeArabicText("أبل")).toBe(normalizeArabicText("ابل"));
+    expect(normalizeArabicText("إستقبال")).toBe(normalizeArabicText("استقبال"));
+  });
+});
+
+describe("relevance tiers (REEA-213 Bet 1)", () => {
+  it("head-name match beats buried full coverage beats partial coverage", () => {
+    // Query 1 fixtures: the direct phone card, a bundle with the phrase
+    // buried, and a single-token cross-category listing.
+    expect(relevanceTier("iPhone 17 Pro", "Apple iPhone 17 Pro, 256 GB")).toBe(1);
+    expect(relevanceTier("iPhone 17 Pro", "Techpick 4-in-1 Protection Pack for Apple iPhone 17 Pro")).toBe(2);
+    expect(relevanceTier("iPhone 17 Pro", "Razer Viper V4 Pro Wireless Gaming Mouse for iPhone")).toBe(3);
+  });
+
+  it("Arabic head match reads word-containment and brand-field offsets", () => {
+    expect(relevanceTier("غسالة", "غسالة فريش 10 كجم حوض واحد")).toBe(1);
+    // غسالة only inside a descriptive phrase → full coverage but buried.
+    expect(relevanceTier("غسالة", "Marabu Air Top Color آمن للغسل في غسالة الاطباق")).toBe(2);
+  });
+
+  it("metadata-only match lands in the bottom tier", () => {
+    // The title answers no token; only the retailer's brand field does.
+    expect(relevanceTier("Anker PowerCore", "Power Bank 20100mAh Slim", "Anker Anker")).toBe(4);
+  });
+
+  it("zero-match titles stay excluded", () => {
+    expect(relevanceTier("iPhone 17 Pro", "Ceramic Mug White")).toBe(0);
+  });
+
+  it("an empty query keeps a single flat block", () => {
+    expect(relevanceTier("", "Anything at all")).toBe(1);
+  });
+});
+
+describe("model-extension flag (REEA-213)", () => {
+  it("a trailing qualifier extends, a comma/spec boundary does not", () => {
+    expect(isModelExtended("iPhone 17 Pro", "Apple iPhone 17 Pro Max 256GB")).toBe(true);
+    expect(isModelExtended("iPhone 17 Pro", "Apple iPhone 17 Pro, 256 GB")).toBe(false);
+  });
+
+  it("plain category words never extend (Arabic has no Max-suffix ladder)", () => {
+    expect(isModelExtended("غسالة", "غسالة فريش 10 كجم حوض واحد")).toBe(false);
+  });
+});
+
+describe("named-brand signal (REEA-213)", () => {
+  it("branded listings beat blank and generic placeholders", () => {
+    expect(brandIsNamed("Fresh", "غسالة فريش 10 كجم حوض واحد")).toBe(true);
+    expect(brandIsNamed("Non Branded", "غسالة، لعب الاطفال التظاهر")).toBe(false);
+    expect(brandIsNamed(undefined, "Ceramic Mug White")).toBe(false);
   });
 });

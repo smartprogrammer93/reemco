@@ -28,6 +28,7 @@ import {
   gradeBadgeLabel,
 } from "@/lib/collect/canonical-product";
 import { isAccessoryTitle } from "@/lib/relevance";
+import { bestBadgeIndex } from "@/lib/stock";
 
 describe("hit parsers", () => {
   it("xciteHits keeps scored hits with /p product URLs", () => {
@@ -993,5 +994,87 @@ describe("brand chain (REEA-189)", () => {
       { title: "Basket Non-Stick 5L", merchant: "Xcite", country: "KW", price: 9, currency: "KWD", url: "https://www.xcite.com/b/p", inStock: true, brand: "Privacy" },
     ]);
     expect(plain[0].brand).toBe("");
+  });
+});
+
+describe("relevance-first ranking (REEA-213 Bet 1, REEA-211 acceptance)", () => {
+  it("query `iPhone 17 Pro`: phone cards lead, plain Pro before Pro Max, the cheap case sits below", () => {
+    const products = groupHits("iPhone 17 Pro", [
+      hit({ title: "Techpick Bundle Pack for Apple iPhone 17 Pro Series", merchant: "Blink", price: 19.9, url: "https://blink.example/pack", brand: "Techpick" }),
+      hit({ title: "Apple iPhone 17 Pro Max 512GB Black", merchant: "Jarir", country: "SA", currency: "SAR", price: 470, url: "https://jarir.example/17pm", brand: "Apple" }),
+      hit({ title: "Case for iPhone 17 Pro Silicone Cover Black", merchant: "Amazon.eg", country: "EG", currency: "EGP", price: 9.9, url: "https://amazon.example/dp/c1", brand: "RINGKE" }),
+      hit({ title: "Apple iPhone 17 Pro Max 256GB Black", merchant: "Eureka", price: 429.9, url: "https://eureka.example/17pm", brand: "Apple" }),
+      hit({ title: "Apple iPhone 17 Pro, 256 GB Black", merchant: "Xcite", price: 449.9, url: "https://xcite.example/17p", brand: "Apple" }),
+      hit({ title: "Razer Viper V4 Pro Wireless Gaming Mouse for iPhone", merchant: "Blink", price: 29, url: "https://blink.example/mouse", brand: "Razer" }),
+    ]);
+    // Tier 1 (head-name phones) before tier 2 (bundle/case) before tier 3
+    // (single-token cross-category); price never blends the blocks: the 9.9
+    // case outranks nothing above the phone block.
+    expect(products.map((p) => p.title)).toEqual([
+      "Apple iPhone 17 Pro, 256 GB Black",
+      "Apple iPhone 17 Pro Max 256GB Black",
+      "Apple iPhone 17 Pro Max 512GB Black",
+      "Techpick Bundle Pack for Apple iPhone 17 Pro Series",
+      "Case for iPhone 17 Pro Silicone Cover Black",
+      "Razer Viper V4 Pro Wireless Gaming Mouse for iPhone",
+    ]);
+    // Single badge: the first in-stock card of the final order is a phone,
+    // never the cheaper Amazon.eg case card.
+    expect(bestBadgeIndex(products)).toBe(0);
+  });
+
+  it("query `غسالة`: branded washers beat the toy, paint variants last, badge on the washer", () => {
+    const washer = hit({ title: "غسالة فريش 10 كجم حوض واحد", merchant: "Xcite", price: 89, url: "https://xcite.example/w1", brand: "Fresh" });
+    const toy = hit({ title: "غسالة، لعب الاطفال التظاهر", merchant: "Jarir", country: "SA", currency: "SAR", price: 12, url: "https://jarir.example/toy", brand: "Non Branded" });
+    const paint = hit({ title: "Marabu Air Top Color 250ml آمن للغسل في غسالة الاطباق", merchant: "Sultan Center", price: 4, url: "https://sultan.example/p1", brand: "Marabu" });
+    const products = groupHits("غسالة", [paint, toy, washer]);
+    expect(products.map((p) => p.title)).toEqual([
+      "غسالة فريش 10 كجم حوض واحد",
+      "غسالة، لعب الاطفال التظاهر",
+      "Marabu Air Top Color 250ml آمن للغسل في غسالة الاطباق",
+    ]);
+    // Accepted tradeoff: the branded washer keeps the badge though the toy
+    // and the paint are cheaper.
+    expect(bestBadgeIndex(products)).toBe(0);
+  });
+
+  it("query `iPhone 17 Pro Max`: Pro Max phones lead, plain Pro falls below them", () => {
+    const products = groupHits("iPhone 17 Pro Max", [
+      hit({ title: "Clear Case for iPhone 17 Pro Max Silicone", merchant: "Blink", price: 9.9, url: "https://blink.example/c2", brand: "RINGKE" }),
+      hit({ title: "Apple iPhone 17 Pro Max, 512 GB Black", merchant: "Jarir", country: "SA", currency: "SAR", price: 470, url: "https://jarir.example/17pm5", brand: "Apple" }),
+      hit({ title: "Apple iPhone 17 Pro Max 256GB Black", merchant: "Eureka", price: 429.9, url: "https://eureka.example/17pm", brand: "Apple" }),
+      hit({ title: "Apple iPhone 17 Pro, 256 GB Black", merchant: "Xcite", price: 449.9, url: "https://xcite.example/17p", brand: "Apple" }),
+    ]);
+    expect(products.map((p) => p.title)).toEqual([
+      "Apple iPhone 17 Pro Max 256GB Black",
+      "Apple iPhone 17 Pro Max, 512 GB Black",
+      "Clear Case for iPhone 17 Pro Max Silicone",
+      "Apple iPhone 17 Pro, 256 GB Black",
+    ]);
+    expect(bestBadgeIndex(products)).toBe(0);
+  });
+
+  it("query `Case for iPhone 17 Pro`: the ladder flips — case cards lead the phones", () => {
+    const products = groupHits("Case for iPhone 17 Pro", [
+      hit({ title: "Apple iPhone 17 Pro Max, 256 GB Black", merchant: "Jarir", country: "SA", currency: "SAR", price: 470, url: "https://jarir.example/17pm", brand: "Apple" }),
+      hit({ title: "Case for iPhone 17 Pro Silicone Cover Black", merchant: "Amazon.eg", country: "EG", currency: "EGP", price: 9.9, url: "https://amazon.example/dp/c1", brand: "RINGKE" }),
+    ]);
+    expect(products.map((p) => p.title)).toEqual([
+      "Case for iPhone 17 Pro Silicone Cover Black",
+      "Apple iPhone 17 Pro Max, 256 GB Black",
+    ]);
+    expect(bestBadgeIndex(products)).toBe(0);
+  });
+
+  it("query `غسّالة` with shadda returns the identical order of `غسالة`", () => {
+    const fixtures = [
+      hit({ title: "Marabu Air Top Color 250ml آمن للغسل في غسالة الاطباق", merchant: "Sultan Center", price: 4, url: "https://sultan.example/p1", brand: "Marabu" }),
+      hit({ title: "غسالة، لعب الاطفال التظاهر", merchant: "Jarir", country: "SA", currency: "SAR", price: 12, url: "https://jarir.example/toy", brand: "Non Branded" }),
+      hit({ title: "غسالة فريش 10 كجم حوض واحد", merchant: "Xcite", price: 89, url: "https://xcite.example/w1", brand: "Fresh" }),
+    ];
+    const plain = groupHits("غسالة", fixtures);
+    const vowelled = groupHits("غسّالة", fixtures);
+    expect(vowelled.map((p) => p.title)).toEqual(plain.map((p) => p.title));
+    expect(vowelled.length).toBeGreaterThan(0);
   });
 });

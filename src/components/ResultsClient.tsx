@@ -9,6 +9,7 @@ import ProductResultCard from "@/components/ProductResultCard";
 import { searchProducts, suggestProducts } from "@/lib/search";
 import { sanitizePage, sanitizeSearchQuery } from "@/lib/search-params";
 import {
+  bestBadgeIndex,
   filterProductsByStock,
   recallShowOutOfStock,
   sanitizeShowOutOfStock,
@@ -180,6 +181,9 @@ function ResultsGrid({
 }) {
   const tier = partitionForQuery(products);
   if (!tier.tiered) {
+    // REEA-213: exactly one Best-price badge, on the first in-stock card of
+    // the final sorted order (first card when nothing is stocked).
+    const bestAt = bestBadgeIndex(products);
     return (
       <div
         className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]"
@@ -189,7 +193,7 @@ function ResultsGrid({
           <ProductResultCard
             key={p.productId}
             product={p}
-            isBest={i === 0}
+            isBest={i === bestAt}
             query={query}
             rank={(page - 1) * PAGE_SIZE + i}
             country={country}
@@ -199,6 +203,7 @@ function ResultsGrid({
       </div>
     );
   }
+  const bestAt = bestBadgeIndex(tier.devices);
   return (
     <>
       <div aria-label="Devices">
@@ -210,7 +215,7 @@ function ResultsGrid({
             <ProductResultCard
               key={p.productId}
               product={p}
-              isBest={i === 0}
+              isBest={i === bestAt}
               query={query}
               rank={(page - 1) * PAGE_SIZE + i}
               country={country}
@@ -327,6 +332,9 @@ function FlushBlock(props: {
 }) {
   const { label, order, products, bestAt, query, page, country, showOutOfStock } = props;
   if (products.length === 0) return null;
+  // REEA-213: inside a participating block the badge rides the first
+  // in-stock card of the final sorted order, never a later cheaper one.
+  const badgeAt = bestAt < 0 ? -1 : bestBadgeIndex(products);
   return (
     <div aria-label={label} style={{ order }}>
       <div className={GRID_CLASS}>
@@ -334,7 +342,7 @@ function FlushBlock(props: {
           <ProductResultCard
             key={p.productId}
             product={p}
-            isBest={i === bestAt}
+            isBest={i === badgeAt}
             query={query}
             rank={(page - 1) * PAGE_SIZE + i}
             country={country}

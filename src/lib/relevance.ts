@@ -99,9 +99,16 @@ const ARABIC_BRAND_ALIASES: ReadonlyMap<string, string> = new Map([
 ]);
 
 /** Fold the alef family + case so alias keys and storefront spellings meet in
- *  one form ("أبل"/"ابل"/"آبل" all normalize to the same shape). */
+ *  one form ("أبل"/"ابل"/"آبل" all normalize to the same shape). REEA-213:
+ *  tashkeel and tatweel are stripped first so a vowelled spelling ("غسّالة")
+ *  and the plain one ("غسالة") compare equal — diacritics must not change a
+ *  shopper's results (REEA-211 brief, definition of normalization). */
 export function normalizeArabicText(text: string): string {
-  return text.toLowerCase().replace(/[\u0621\u0622\u0623\u0625\u0627\u0671]/g, "ا").trim();
+  return text
+    .toLowerCase()
+    .replace(/[\u0640\u064B-\u065F\u0670]/g, "") // tatweel + tashkeel
+    .replace(/[\u0621\u0622\u0623\u0625\u0627\u0671]/g, "ا")
+    .trim();
 }
 
 /** Split a query into match tokens with the same tokenizer the retailer
@@ -227,6 +234,147 @@ export function isAccessoryTitle(title: string): boolean {
  *  behavior otherwise. */
 export function titleHasDeviceIntent(title: string): boolean {
   return curatedBrandInTitle(title) !== null || MODEL_TOKEN_RE.test(title);
+}
+
+/* ---- REEA-213 — Bet 1 relevance-first ranking (REEA-211 brief). ----
+ *
+ * Four relevance tiers decide the order; price only breaks ties inside a
+ * tier. The scorer is pure so the live-results path (collect/live-search.ts)
+ * can consume it without duplicating the matching rules. */
+
+/** Trim leading/trailing punctuation from a title word; word-boundary class
+ *  mirrors curatedWordRe so digits/letters of any script survive. */
+function trimWord(word: string): string {
+  return word.replace(/^[^\p{L}\p{N}]+|[^\p{N}\p{L}]+$/gu, "");
+}
+
+/** Title → punctuation-trimmed words, whitespace-collapsed. Kept in raw
+ *  casing for the model-suffix check; folding happens per comparison. */
+function titleWords(title: string): string[] {
+  return normalizedTitle(title)
+    .split(" ")
+    .map(trimWord)
+    .filter((w) => w !== "");
+}
+
+/** Query tokens in first-seen order, Arabic-folded so "غسّالة" and "غسالة"
+ *  meet in one form; the coverage-gate tokenizer supplies the base split. */
+export function tierQueryTokens(query: string): string[] {
+  const out: string[] = [];
+  for (const t of queryMatchTokens(query)) {
+    const folded = normalizeArabicText(t);
+    if (folded !== "" && !out.includes(folded)) out.push(folded);
+  }
+  return out;
+}
+
+/** True when one folded title word answers one folded query token: Arabic
+ *  tokens match by word-containment (morphology makes exact equality
+ *  brittle) with the REEA-195 alias bridge applied per word; Latin tokens
+ *  match whole words only, per the brief's matching definition. The alias
+ *  check is deliberately word-scoped — a whole-title substring would let a
+ *  buried Arabic mention pass the head-position check in tier 1. */
+function tokenHitsWord(wordFolded: string, token: string): boolean {
+  if (/[\u0600-\u06FF]/.test(token)) {
+    if (wordFolded === "") return false;
+    if (wordFolded.includes(token) || token.includes(wordFolded)) return true;
+    const entry = ARABIC_BRAND_ALIASES.get(token);
+    return entry !== undefined && entry.toLowerCase().includes(wordFolded);
+  }
+  return wordFolded === token;
+}
+
+/** How many title words a query phrase may start after and still count as a
+ *  head match: 0 by default; one leading brand word is allowed (a word equal
+ *  to the card's brand field or a curated brand name). */
+function leadingBrandOffset(firstWordFolded: string, metadataFolded: string): number {
+  if (firstWordFolded === "") return 0;
+  for (const { re } of CURATED_MATCHES) {
+    if (re.test(firstWordFolded)) return 1;
+  }
+  if (metadataFolded !== "" && metadataFolded.includes(firstWordFolded)) return 1;
+  return 0;
+}
+
+/**
+ * Tier the group of one (title, metadata) pair against the query:
+ *  1 — every token appears and the phrase sits at the head (position 0 or
+ *      immediately after a leading brand word);
+ *  2 — full token coverage buried in the title;
+ *  3 — at least half the tokens (rounded up) match as whole words;
+ *  4 — matched only via brand field / merchant metadata;
+ *  0 — zero token matches (excluded, same as today's behavior).
+ * An empty query treats everything as tier 1 so untouched ordering holds.
+ */
+export function relevanceTier(query: string, title: string, metadata = ""): number {
+  const tokens = tierQueryTokens(query);
+  if (tokens.length === 0) return 1;
+  const wordsFolded = titleWords(title).map((w) => normalizeArabicText(w));
+  const matched = tokens.filter((t) => wordsFolded.some((w) => tokenHitsWord(w, t)));
+  if (matched.length === tokens.length) {
+    const rawWords = titleWords(title);
+    const metadataFolded = normalizeArabicText(metadata).toLowerCase();
+    const offset = leadingBrandOffset(
+      rawWords.length > 0 ? normalizeArabicText(rawWords[0]) : "",
+      metadataFolded,
+    );
+    for (let start = 0; start <= offset; start++) {
+      if (start + tokens.length > wordsFolded.length) break;
+      if (tokens.every((t, i) => tokenHitsWord(wordsFolded[start + i], t))) return 1;
+    }
+    return 2;
+  }
+  // Half the tokens rounded up ⇔ matched * 2 >= tokens.length.
+  if (matched.length * 2 >= tokens.length) return 3;
+  const metaFolded = normalizeArabicText(metadata).toLowerCase();
+  if (metaFolded !== "" && tokens.some((t) => metaFolded.includes(t))) return 4;
+  return 0;
+}
+
+/** Model-suffix qualifiers: short trailing words that extend a model-name
+ *  phrase ("iPhone 17 Pro Max") instead of bounding it. */
+const MODEL_SUFFIX_RE = /^(max|plus|mini|ultra|lite|neo|turbo|one|pro|gt|xr)$/i;
+
+/**
+ * True when, after the matched query phrase, the title continues with another
+ * model qualifier — "iPhone 17 Pro Max" under `iPhone 17 Pro`. Only queries
+ * that carry a model-number shape (any digit) can extend; a plain category
+ * word like "غسالة" has no Max/Mini variants, so every Arabic category match
+ * stays non-extended and the brand rule decides the order inside the tier.
+ */
+export function isModelExtended(query: string, title: string): boolean {
+  if (!/\p{Nd}/u.test(query)) return false;
+  const tokens = tierQueryTokens(query);
+  if (tokens.length === 0) return false;
+  const rawWords = titleWords(title);
+  const wordsFolded = rawWords.map((w) => normalizeArabicText(w));
+  // Greedy scan to the position of the last token the phrase consumes.
+  let k = 0;
+  let endAt = -1;
+  for (let i = 0; i < wordsFolded.length && k < tokens.length; i++) {
+    if (tokenHitsWord(wordsFolded[i], tokens[k])) {
+      endAt = i;
+      k++;
+    }
+  }
+  if (endAt < 0 || endAt + 1 >= rawWords.length) return false;
+  return MODEL_SUFFIX_RE.test(rawWords[endAt + 1]);
+}
+
+/** Values that read as "no brand" even though the field is populated. */
+const GENERIC_BRAND_RE = /^(non[-\s]?branded|unbranded|generic|no[-\s]?brand|n\/a)$/i;
+
+/**
+ * Named-brand signal for inside-tier ordering: a resolved brand that is
+ * neither missing, a Rule-1 stop-value, nor a generic placeholder. This is
+ * what puts a branded washer ("غسالة فريش 10 كجم", brand Fresh) above the
+ * no-name toy card whose brand field is "Non Branded" (accepted tradeoff: a
+ * pricier branded card can outrank a cheaper no-name one).
+ */
+export function brandIsNamed(brandField: string | undefined, title: string): boolean {
+  const brand = resolveBrand(brandField, title);
+  if (brand === "") return false;
+  return !GENERIC_BRAND_RE.test(brand.trim());
 }
 
 /** Split a ranked list for device-intent queries: two stacked containers,
