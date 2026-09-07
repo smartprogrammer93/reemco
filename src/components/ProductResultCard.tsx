@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { Coupon, NormalizedProduct, PriceOffer } from "@/types/product";
+import { buildResultsHref, type CountryCode } from "@/lib/country";
 import { effectivePrice, formatPrice, sortOffers } from "@/lib/format";
 import CouponBadge from "@/components/CouponBadge";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
@@ -115,6 +116,7 @@ export default function ProductResultCard({
   variant = "card",
   query = "",
   rank = -1,
+  country = null,
 }: {
   product: NormalizedProduct;
   /** True when this offer carries the best effective price on the page (§3.3 Von Restorff). */
@@ -123,6 +125,8 @@ export default function ProductResultCard({
   /** REEA-37 funnel context for item_clicked events (-1 = product detail page). */
   query?: string;
   rank?: number;
+  /** REEA-170 active country selection, carried into alternatives queries. */
+  country?: CountryCode | null;
 }) {
   const detail = variant === "detail";
   const offers = sortOffers(product.offers);
@@ -321,7 +325,7 @@ export default function ProductResultCard({
                 className="flex min-h-12 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded px-1 py-1 hover:bg-[var(--rc-canvas)]"
               >
                 <a
-                  href={`/results?q=${encodeURIComponent(a.title)}`}
+                  href={buildResultsHref(a.title, 1, country)}
                   className="min-w-0 hover:underline"
                   style={{ font: "var(--rc-text-body)", fontWeight: 500, color: "var(--rc-ink)" }}
                 >

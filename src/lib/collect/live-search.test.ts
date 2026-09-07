@@ -159,6 +159,7 @@ function hit(over: Partial<SearchHit>): SearchHit {
     currency: "KWD",
     url: "https://xcite.example/p",
     inStock: true,
+    country: "KW",
     ...over,
   };
 }
@@ -499,5 +500,81 @@ describe("collectLiveResults page width (REEA-156)", () => {
     // Two bounded rounds (parallel fan-out + enriched retry), each at most
     // the doubled two-step chain — the documented ceiling covers them both.
     expect(LIVE_SEARCH_BUDGET_MS).toBeGreaterThanOrEqual(LIVE_SEARCH_TIMEOUT_MS * 2 * 2);
+  });
+
+  describe("country filter (REEA-170)", () => {
+    function jsonResponse(body: unknown): Response {
+      return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    }
+
+    it("parsers tag hits with their adapter's storefront country", () => {
+      const xcite = xciteHits(
+        { results: [{ hits: [{ name: "Apple AirPods Pro 2", slug: "app2", price: 74, currency: "KWD", inStock: true }] }] },
+        "airpods",
+      );
+      expect(xcite[0].country).toBe("KW");
+      const jarir = jarirHits(
+        { response: { results: [{ data: { url: "p/ap2", price: 909, metadata: { name: "Apple AirPods Pro 2" } } }] } },
+        "airpods",
+      );
+      expect(jarir[0].country).toBe("SA");
+      const amz = amazonEgHits(
+        'x data-component-type="s-search-result" <h2 aria-label="Apple AirPods Pro 2"></h2><span class="a-offscreen">EGP 11,900</span><a href="/dp/AP1234567">y</a>',
+        "airpods",
+      );
+      expect(amz[0].country).toBe("EG");
+    });
+
+    it("Kuwait selection serves only Kuwait-country hits and skips foreign adapters", async () => {
+      resetDiscoveryCache();
+      const seen: string[] = [];
+      const fetchImpl = async (url: string): Promise<Response> => {
+        seen.push(url);
+        if (url.includes("xcite.com")) {
+          return jsonResponse({ results: [{ hits: [{ name: "Apple AirPods Pro 2", slug: "app2", price: 74, currency: "KWD", inStock: true }] }] });
+        }
+        if (url.includes("sultan-center.com")) {
+          return jsonResponse({ status: "1", products: { product_list: [{ name: "Apple AirPods Pro 2", slug: "app2", price: "69.9000", is_in_stock: "1" }] } });
+        }
+        return new Response("nope");
+      };
+      const { products } = await collectLiveResults("airpods", { fetchImpl, country: "KW" });
+      expect(products).toHaveLength(1);
+      const merchants = products[0].offers.map((o) => o.merchant);
+      expect(merchants).toContain("Xcite");
+      expect(merchants).toContain("Sultan Center");
+      expect(merchants).not.toContain("Jarir");
+      expect(merchants).not.toContain("Amazon.eg");
+      // Rate-limit citizenship: foreign adapters are not even contacted when
+      // their hits could only be filtered out.
+      expect(seen.some((u) => u.includes("cnstrc.com"))).toBe(false);
+      expect(seen.some((u) => u.includes("amazon.eg"))).toBe(false);
+    });
+
+    it("without a selection every adapter keeps serving (default unchanged)", async () => {
+      resetDiscoveryCache();
+      const fetchImpl = async (url: string): Promise<Response> => {
+        if (url.endsWith("jarir.com/")) {
+          return new Response('x searchProviderKeys "key_test123456" y', { headers: { "content-type": "text/html" } });
+        }
+        if (url.includes("cnstrc.com")) {
+          return jsonResponse({ response: { results: [{ data: { url: "p/ap2", price: 909, metadata: { name: "Apple AirPods Pro 2" } } }] } });
+        }
+        if (url.includes("xcite.com")) {
+          return jsonResponse({ results: [{ hits: [{ name: "Apple AirPods Pro 2", slug: "app2", price: 74, currency: "KWD", inStock: true }] }] });
+        }
+        if (url.includes("amazon.eg")) {
+          return new Response('data-component-type="s-search-result" <h2 aria-label="Apple AirPods Pro 2"></h2><span class="a-offscreen">EGP 11,900</span><a href="/dp/AP1234567">y</a>');
+        }
+        return new Response("nope");
+      };
+      const { products } = await collectLiveResults("airpods", { fetchImpl });
+      expect(products).toHaveLength(1);
+      const merchants = products[0].offers.map((o) => o.merchant);
+      // All "All": foreign listings stay on the page, exactly as today.
+      expect(merchants).toContain("Xcite");
+      expect(merchants).toContain("Jarir");
+      expect(merchants).toContain("Amazon.eg");
+    });
   });
 });

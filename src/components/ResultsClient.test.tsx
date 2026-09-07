@@ -15,12 +15,19 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/results",
 }));
 vi.mock("next/link", () => ({
-  default: ({ href, children }: { href: string; children: React.ReactNode }) => (
-    <a href={href}>{children}</a>
+  default: ({
+    href,
+    children,
+    ...rest
+  }: { href: string; children: React.ReactNode; [k: string]: unknown }) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
   ),
 }));
 
 import ResultsClient from "@/components/ResultsClient";
+import HeaderSearch from "@/components/HeaderSearch";
 import type { NormalizedProduct } from "@/types/product";
 
 const beaconCalls: { url: string; body: unknown }[] = [];
@@ -100,5 +107,57 @@ describe("ResultsClient funnel instrumentation", () => {
     expect(evts.some((e) => e.type === "zero_results" && e.query === "zzzqqqnothing")).toBe(true);
     const search = evts.find((e) => e.type === "search_submitted");
     expect(search?.result_count).toBe(0);
+  });
+});
+
+describe("country filter UI (REEA-170)", () => {
+  const MIXED: NormalizedProduct[] = [
+    {
+      productId: "airpods-pro-2",
+      title: "Apple AirPods Pro 2",
+      brand: "Apple",
+      offers: [
+        { merchant: "Xcite", price: 74, currency: "KWD", url: "https://xcite.example/p", inStock: true },
+        { merchant: "Jarir", price: 909, currency: "SAR", url: "https://jarir.example/p", inStock: true },
+      ],
+      coupons: [],
+      variations: [],
+      alternatives: [],
+    },
+  ];
+
+  it("renders the pills and keeps only matching-offer retailers under Kuwait", async () => {
+    searchParams.set("q", "airpods");
+    await act(async () => {
+      render(
+        <ResultsClient query="airpods" page={1} products={MIXED} suggestions={MIXED} country="KW" />,
+      );
+    });
+    const pills = Array.from(document.querySelectorAll('nav[aria-label="Filter offers by country"] a'));
+    expect(pills.map((a) => a.textContent)).toEqual([
+      "All",
+      "Kuwait (KWD)",
+      "Saudi Arabia (SAR)",
+      "Egypt (EGP)",
+    ]);
+    // Pills are plain links: the selection rides the URL for the next request.
+    expect(pills[1].getAttribute("href")).toBe("/results?q=airpods&c=KW");
+    expect(pills[1].getAttribute("aria-current")).toBe("true");
+    expect(pills[0].getAttribute("href")).toBe("/results?q=airpods");
+    // Offer rows honor the selection: the SAR listing is suppressed, the KWD
+    // one stays.
+    const html = document.body.innerHTML;
+    expect(html).toContain("Xcite");
+    expect(html).not.toContain("Jarir");
+  });
+
+  it("the header search carries the active selection into the next query", async () => {
+    searchParams.set("q", "airpods");
+    searchParams.set("c", "KW");
+    await act(async () => {
+      render(<HeaderSearch />);
+    });
+    const hidden = document.querySelector('input[name="c"]');
+    expect((hidden as HTMLInputElement | null)?.value).toBe("KW");
   });
 });

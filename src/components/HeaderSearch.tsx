@@ -10,11 +10,12 @@ export default function HeaderSearch() {
   const searchParams = useSearchParams();
   if (pathname === "/") return null;
   const q = searchParams.get("q") ?? undefined;
+  const c = searchParams.get("c") ?? undefined;
   return (
     /* REEA-75: min-w-0 + flex-1 instead of a fixed maxWidth so the form can
        shrink on narrow viewports; cap width from sm up via CSS. */
     <div className="min-w-0 flex-1 sm:max-w-[360px]">
-      <SearchForm compact defaultValue={q} />
+      <SearchForm compact defaultValue={q} country={c} />
     </div>
   );
 }

@@ -3,6 +3,11 @@ import { notFound } from "next/navigation";
 import ProductResultCard from "@/components/ProductResultCard";
 import CollectionPanel from "@/components/CollectionPanel";
 import { PRODUCTS, resolveProductIdentity } from "@/lib/feed";
+import {
+  buildResultsHref,
+  filterProductsByCountry,
+  sanitizeCountry,
+} from "@/lib/country";
 
 export const metadata = {
   title: "Product — Reemco",
@@ -20,10 +25,19 @@ export function generateStaticParams() {
 
 export default async function ProductPage({
   params,
+  searchParams,
 }: PageProps<"/product/[productId]">) {
   const { productId } = await params;
-  const product = await resolveProductIdentity(productId);
+  // REEA-170: the country selection rides the link from the results list, so
+  // the detail view derives its prices/alternatives from the same filtered
+  // offer set. No param → unchanged behavior.
+  const { c } = await searchParams;
+  const country = sanitizeCountry(c);
+  const product = await resolveProductIdentity(productId, country);
   if (!product) notFound();
+  // Catalog identities carry bundled offers — apply the same selection the
+  // live path applies before grouping (idempotent on live-resolved products).
+  const shown = filterProductsByCountry([product], country)[0];
 
   return (
     <div
@@ -31,17 +45,18 @@ export default async function ProductPage({
       style={{ maxWidth: "var(--rc-layout-max-w)" }}
     >
       {/* Theme v1 §3.4: product hero uses the detail variant (28px price, variations, alternatives). */}
-      <ProductResultCard product={product} isBest variant="detail" />
+      <ProductResultCard product={shown} isBest variant="detail" country={country} />
       {/* REEA-84 W1: live per-product collection with progress UX (T4/T5/T6).
           Client-only — degrades to the catalog card above when the API is
           unavailable, e.g. on the static preview host (AC10). */}
       <CollectionPanel
-        productId={product.productId}
-        currency={product.offers[0]?.currency ?? "KWD"}
+        productId={shown.productId}
+        currency={shown.offers[0]?.currency ?? "KWD"}
+        country={country}
       />
       <p style={{ marginTop: "var(--rc-space-4)" }}>
         <Link
-          href={`/results?q=${encodeURIComponent(product.title)}`}
+          href={buildResultsHref(shown.title, 1, country)}
           className="hover:underline"
           style={{ font: "var(--rc-text-small)", color: "var(--rc-primary)" }}
         >

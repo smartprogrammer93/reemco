@@ -1,5 +1,6 @@
 import ResultsClient from "@/components/ResultsClient";
 import { collectLiveResults } from "@/lib/collect/live-search";
+import { sanitizeCountry } from "@/lib/country";
 import { sanitizeSearchQuery, sanitizePage } from "@/lib/search-params";
 
 export const metadata = {
@@ -27,8 +28,10 @@ export default async function ResultsPage({
   const params = await searchParams;
   const query = sanitizeSearchQuery(params.q) ?? "";
   const page = sanitizePage(params.page);
+  // REEA-170 — optional country selection (`?c=`); null keeps today's behavior.
+  const country = sanitizeCountry(params.c);
 
-  const { products } = await collectLiveResults(query);
+  const { products } = await collectLiveResults(query, { country });
   const results = products;
   let suggestions = products.slice(0, 3);
   if (query && products.length === 0) {
@@ -36,7 +39,7 @@ export default async function ResultsPage({
     // suggests real live titles, not catalog fixtures.
     const relaxed = query.split(/\s+/)[0] ?? query;
     if (relaxed && relaxed !== query) {
-      suggestions = (await collectLiveResults(relaxed)).products.slice(0, 3);
+      suggestions = (await collectLiveResults(relaxed, { country })).products.slice(0, 3);
     }
   }
   const offset = (page - 1) * PAGE_SIZE;

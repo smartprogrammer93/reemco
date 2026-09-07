@@ -3,9 +3,17 @@
 import { Component, Suspense, useEffect, useRef, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import CountryFilter from "@/components/CountryFilter";
 import ProductResultCard from "@/components/ProductResultCard";
 import { searchProducts, suggestProducts } from "@/lib/search";
 import { sanitizePage, sanitizeSearchQuery } from "@/lib/search-params";
+import {
+  buildResultsHref,
+  filterProductsByCountry,
+  recallCountry,
+  sanitizeCountry,
+  type CountryCode,
+} from "@/lib/country";
 import { trackEvents } from "@/lib/telemetry";
 import { PRODUCTS } from "@/lib/feed";
 import type { NormalizedProduct } from "@/types/product";
@@ -99,9 +107,11 @@ const EXAMPLES = ["iPhone 17 Pro", "WH-1000XM6", "Scope II keyboard"];
 function EmptyState({
   query,
   suggestions,
+  country,
 }: {
   query: string;
   suggestions: NormalizedProduct[];
+  country: CountryCode | null;
 }) {
   const pills = suggestions.slice(0, 3).map((p) => p.title);
   while (pills.length < EXAMPLES.length && pills.length < 3) pills.push(EXAMPLES[pills.length]);
@@ -116,11 +126,7 @@ function EmptyState({
       </p>
       <div className="mt-4 flex flex-wrap gap-2">
         {pills.map((q) => (
-          <Link
-            key={q}
-            href={`/results?q=${encodeURIComponent(q)}`}
-            className="query-pill query-pill-on-light"
-          >
+          <Link key={q} href={buildResultsHref(q, 1, country)} className="query-pill query-pill-on-light">
             {q}
           </Link>
         ))}
@@ -143,6 +149,8 @@ export default function ResultsClient(props: {
   page?: number;
   products?: NormalizedProduct[];
   suggestions?: NormalizedProduct[];
+  /** REEA-170 country selection resolved server-side from `?c=` (null = All). */
+  country?: CountryCode | null;
 }) {
   return (
     <Suspense fallback={<LoadingFallback />}>
@@ -156,21 +164,34 @@ function ResultsInner(props: {
   page?: number;
   products?: NormalizedProduct[];
   suggestions?: NormalizedProduct[];
+  country?: CountryCode | null;
 }) {
   const searchParams = useSearchParams();
   // AC-U4 (REEA-13): malformed/oversized params degrade safely before use.
   const query = props.query ?? sanitizeSearchQuery(searchParams.get("q")) ?? "";
   const page = props.page ?? sanitizePage(searchParams.get("page"));
+  // REEA-170: the server-resolved selection wins; otherwise read the URL, then
+  // the same-tab remembered choice so a returning tab keeps its filter
+  // without re-selecting. null = "All" = unchanged default behavior.
+  const country =
+    props.country ?? sanitizeCountry(searchParams.get("c")) ?? recallCountry() ?? null;
   const matched = props.products ? [] : query ? searchProducts(query, PRODUCTS) : [];
-  const matchCount = props.products ? props.products.length : matched.length;
   const allProducts =
     props.products ?? (matched.length > 0 ? matched.map((m) => m.product) : PRODUCTS);
-  const products = props.products
+  const served = props.products
     ? allProducts // server already paginated
     : allProducts.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  // The server path filters offers BEFORE grouping, so everything derived
+  // (counts, cheapest-first, alternatives) already honors the selection; this
+  // pass is idempotent there and is the whole filter on the static-host
+  // catalog fallback.
+  const products = filterProductsByCountry(served, country);
+  const matchCount = products.length;
   const zero = query.length > 0 && matchCount === 0;
-  const suggestions =
-    props.suggestions ?? suggestProducts(query, PRODUCTS).map((m) => m.product);
+  const suggestions = filterProductsByCountry(
+    props.suggestions ?? suggestProducts(query, PRODUCTS).map((m) => m.product),
+    country,
+  );
   // REEA-37: funnel instrumentation — search_submitted (+ zero_results) and
   // result_impressed fire once per (query, page, result-set). Dedup key is
   // component-local memory only; nothing is persisted client-side.
@@ -194,8 +215,13 @@ function ResultsInner(props: {
 
   return (
     <ResultsErrorBoundary>
+      {/* REEA-170: country pills above the list — same control for both the
+          result list and the empty state, active choice echoed from the URL. */}
+      <div style={{ marginBottom: "var(--rc-space-4)" }}>
+        <CountryFilter query={query} country={country} />
+      </div>
       {zero ? (
-        <EmptyState query={query} suggestions={suggestions} />
+        <EmptyState query={query} suggestions={suggestions} country={country} />
       ) : (
         <>
           {/* Theme v1 §4: display-scale H1, tabular count */}
@@ -217,6 +243,7 @@ function ResultsInner(props: {
                 isBest={i === 0}
                 query={query}
                 rank={(page - 1) * PAGE_SIZE + i}
+                country={country}
               />
             ))}
           </div>

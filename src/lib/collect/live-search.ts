@@ -15,6 +15,7 @@
  */
 import { extractJarirIndexKey, titleMatchScore, tokenCoverage } from "@/lib/collect/search-fallback";
 import type { FetchImpl } from "@/lib/collect/scraper";
+import type { CountryCode } from "@/lib/country";
 import type { NormalizedProduct, PriceOffer } from "@/types/product";
 
 /**
@@ -67,6 +68,12 @@ export interface SearchHit {
   url: string;
   inStock: boolean;
   wasPrice?: number;
+  /**
+   * REEA-170 — country tag stamped by the retailer adapter that produced the
+   * hit (each adapter is scoped to one storefront's country). The results-page
+   * country filter matches on this tag; offers stay fetched live.
+   */
+  country: CountryCode;
 }
 
 /**
@@ -79,6 +86,8 @@ const MIN_SCORE = 0.25;
 
 interface RetailerCollector {
   merchant: string;
+  /** REEA-170 — storefront country this adapter answers from. */
+  country: CountryCode;
   collect: (query: string, fetchImpl: FetchImpl) => Promise<SearchHit[]>;
 }
 
@@ -158,6 +167,7 @@ export function xciteHits(payload: unknown, query: string): SearchHit[] {
     out.push({
       title,
       merchant: "Xcite",
+      country: "KW",
       price,
       currency: typeof hit.currency === "string" ? hit.currency : "KWD",
       url: `https://www.xcite.com/${slug}/p`,
@@ -181,6 +191,7 @@ export function blinkHits(payload: unknown, query: string): SearchHit[] {
     out.push({
       title: p.title,
       merchant: "Blink",
+      country: "KW",
       price,
       currency: "KWD",
       url: `https://blink.com.kw/products/${p.handle}`,
@@ -201,6 +212,7 @@ export function eurekaHits(payload: unknown, query: string): SearchHit[] {
     out.push({
       title: hit.itmn,
       merchant: "Eureka",
+      country: "KW",
       price: hit.clprc,
       currency: "KWD",
       // The store's canonical product route is /products/details/<id>; the
@@ -233,6 +245,7 @@ export function sultanCenterHits(payload: unknown, query: string): SearchHit[] {
     out.push({
       title,
       merchant: "Sultan Center",
+      country: "KW",
       price,
       // Grocery prices on this storefront are quoted in KD (= KWD).
       currency: item.currencysymbol && item.currencysymbol !== "KD" ? item.currencysymbol : "KWD",
@@ -264,6 +277,7 @@ export function jarirHits(payload: unknown, query: string): SearchHit[] {
     out.push({
       title,
       merchant: "Jarir",
+      country: "SA",
       price,
       // Constructor hits on jarir.com carry SAR; rendered as scraped (REEA-60 §7.1).
       currency: "SAR",
@@ -309,6 +323,7 @@ export function amazonEgHits(html: string, query: string): SearchHit[] {
     out.push({
       title,
       merchant: "Amazon.eg",
+      country: "EG",
       price,
       currency: "EGP",
       url: `https://www.amazon.eg/dp/${asin}`,
@@ -323,6 +338,7 @@ export function amazonEgHits(html: string, query: string): SearchHit[] {
 const COLLECTORS: RetailerCollector[] = [
   {
     merchant: "Xcite",
+    country: "KW",
     collect: async (query, fetchImpl) => {
       const res = await fetchChecked(
         fetchImpl,
@@ -343,6 +359,7 @@ const COLLECTORS: RetailerCollector[] = [
   },
   {
     merchant: "Blink",
+    country: "KW",
     collect: async (query, fetchImpl) => {
       const res = await fetchChecked(
         fetchImpl,
@@ -355,6 +372,7 @@ const COLLECTORS: RetailerCollector[] = [
   },
   {
     merchant: "Eureka",
+    country: "KW",
     collect: async (query, fetchImpl) => {
       const signal = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
       let appId, searchKey;
@@ -395,6 +413,7 @@ const COLLECTORS: RetailerCollector[] = [
   },
   {
     merchant: "Sultan Center",
+    country: "KW",
     collect: async (query, fetchImpl) => {
       // Documented contract (captured live 2026-09-07 from the storefront's
       // own SPA): POST mobile/api/search with the store-scoped payload below;
@@ -438,6 +457,7 @@ const COLLECTORS: RetailerCollector[] = [
   },
   {
     merchant: "Jarir",
+    country: "SA",
     collect: async (query, fetchImpl) => {
       const signal = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
       let indexKey = readDiscovery("jarir")?.[0];
@@ -469,6 +489,7 @@ const COLLECTORS: RetailerCollector[] = [
   },
   {
     merchant: "Amazon.eg",
+    country: "EG",
     collect: async (query, fetchImpl) => {
       // Amazon.eg answers the edge with two transient shapes: the apology
       // interstitial (HTTP 200, no cards) and an occasional hard HTTP 503.
@@ -666,15 +687,27 @@ export function enrichedQuery(hits: SearchHit[], query: string): string {
  * merchants that already answered are never re-fetched. Returns products
  * ranked by title relevance, cheapest first inside each group. Never reads
  * seed files or caches — every call re-collects live.
+ *
+ * REEA-170 — the optional `country` selection scopes the fan-out to the
+ * adapters tagged for that country (still fetched live, per adapter, with the
+ * same budgets; unselected retailers are not fetched, staying polite to
+ * retailer endpoints), and hits are matched on their adapter's country tag
+ * BEFORE grouping so every derived figure — main price rows, availability,
+ * best-price flags, retailer counts, cheaper alternatives' fromPrice — comes
+ * from the filtered offer set. With no selection the path is unchanged.
  */
 export async function collectLiveResults(
   query: string,
-  opts: { fetchImpl?: FetchImpl } = {},
+  opts: { fetchImpl?: FetchImpl; country?: CountryCode | null } = {},
 ): Promise<LiveSearchResult> {
   const fetchImpl: FetchImpl = opts.fetchImpl ?? ((u, init) => fetch(u, init));
   const q = query.trim();
+  const country = opts.country ?? null;
+  const collectors = country
+    ? COLLECTORS.filter((c) => c.country === country)
+    : COLLECTORS;
   const settled = await Promise.all(
-    COLLECTORS.map(async (c): Promise<{ merchant: string; hits: SearchHit[]; error?: string }> => {
+    collectors.map(async (c): Promise<{ merchant: string; hits: SearchHit[]; error?: string }> => {
       try {
         return { merchant: c.merchant, hits: await c.collect(q, fetchImpl) };
       } catch (err) {
@@ -718,8 +751,11 @@ export async function collectLiveResults(
   const hits: SearchHit[] = [];
   const notes: LiveSearchResult["notes"] = [];
   for (const s of settled) {
-    hits.push(...s.hits);
-    notes.push({ merchant: s.merchant, hits: s.hits.length, ...(s.error ? { error: s.error } : {}) });
+    // Defensive second match on the adapter tag (parsers are injectable in
+    // tests); with scoped collectors this is already a tautology.
+    const kept = country ? s.hits.filter((h) => h.country === country) : s.hits;
+    hits.push(...kept);
+    notes.push({ merchant: s.merchant, hits: kept.length, ...(s.error ? { error: s.error } : {}) });
   }
   return { products: groupHits(q, hits), notes };
 }

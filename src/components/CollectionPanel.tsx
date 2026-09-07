@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { useCollection, type CollectionPhase } from "@/lib/collect/useCollection";
 import type { CollectJob, LiveOffer } from "@/lib/collect/types";
 import { collectedAgoLabel } from "@/lib/collect/types";
+import { filterOffersByCountry, type CountryCode } from "@/lib/country";
 import { formatPrice } from "@/lib/format";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import CollectionPulse, { PulseOfferCascade } from "@/components/CollectionPulse";
@@ -75,9 +76,12 @@ function sortOffers(offers: LiveOffer[]): LiveOffer[] {
 export default function CollectionPanel({
   productId,
   currency,
+  country = null,
 }: {
   productId: string;
   currency: string;
+  /** REEA-170 active country selection; LiveOffer rows carry their currency. */
+  country?: CountryCode | null;
 }) {
   const { state, cachedNoticeAt, start, retryRetailer } = useCollection(productId);
   const [staleFallback, setStaleFallback] = useState<CollectJob | null>(null);
@@ -162,7 +166,9 @@ export default function CollectionPanel({
         />
       )}
 
-      {job && job.offers.length > 0 && <PulseOfferCascade offers={sortOffers(job.offers)} />}
+      {job && job.offers.length > 0 && (
+        <PulseOfferCascade offers={filterOffersByCountry(sortOffers(job.offers), country)} />
+      )}
 
       {/* Full-failure error state with retry CTA (AC6) — never a silent empty state. */}
       {job && job.status === "failed" && (
@@ -200,7 +206,7 @@ export default function CollectionPanel({
                 (stale)
               </p>
               <ul style={{ listStyle: "none", padding: 0 }}>
-                {sortOffers(staleFallback.offers).map((offer, i) => (
+                {filterOffersByCountry(sortOffers(staleFallback.offers), country).map((offer, i) => (
                   <OfferRow
                     key={`${offer.merchant}-stale`}
                     offer={{ ...offer, method: "cache" }}
