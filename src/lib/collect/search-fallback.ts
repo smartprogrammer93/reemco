@@ -15,8 +15,11 @@
  *    hard-coded).
  *  - jarir.com: Nuxt SSR payload carries the Constructor.io index key
  *    (`"key_..."`, en preferred); query ac.cnstrc.com/search directly.
+ *  - sultan-center.com: Vue SPA storefront; POST mobile/api/search with the
+ *    store-scoped payload the SPA itself sends (store 1, substore 45); hits
+ *    arrive under products.product_list with slug-based /product/<slug> PDPs.
  *  - amazon.eg: no JSON contract — parse the `/s?k=` results HTML cards.
- * All five are documented retailer contracts (docs/RATE-LIMITS-AND-ROBOTS.md).
+ * All six are documented retailer contracts (docs/RATE-LIMITS-AND-ROBOTS.md).
  * Search endpoints only — small page sizes, one call per retailer per run.
  */
 import type { FetchImpl } from "@/lib/collect/scraper";
@@ -268,6 +271,42 @@ export function parseAmazonEgSearch(html: string, productTitle: string): FoundOf
   };
 }
 
+interface SultanCenterItem {
+  name?: string;
+  slug?: string;
+  price?: string;
+  spclprice?: string;
+  is_in_stock?: string;
+  currencysymbol?: string;
+}
+
+/** Parse a sultan-center.com mobile/api/search response (product_list). */
+export function parseSultanCenterSearch(payload: unknown, productTitle: string): FoundOffer | null {
+  const list =
+    (payload as { products?: { product_list?: SultanCenterItem[] } })?.products?.product_list ?? [];
+  let best: { item: SultanCenterItem; score: number } | null = null;
+  for (const item of list) {
+    const price = Number(item?.price);
+    if (!item?.name || !item.slug || !Number.isFinite(price) || price <= 0) continue;
+    const score = titleMatchScore(item.name, productTitle);
+    if (score > 0.3 && (!best || score > best.score)) best = { item, score };
+  }
+  const item = best?.item;
+  if (!item) return null;
+  const regular = Number(item.price);
+  const special = item.spclprice ? Number(item.spclprice) : NaN;
+  const promo = Number.isFinite(special) && special > 0 && special < regular;
+  return {
+    price: promo ? special : regular,
+    // Grocery prices on this storefront are quoted in KD (= KWD).
+    currency: item.currencysymbol && item.currencysymbol !== "KD" ? item.currencysymbol : "KWD",
+    url: `https://www.sultan-center.com/product/${item.slug}`,
+    // Listed-with-price implies purchasable (same rule as extractInStock).
+    inStock: item.is_in_stock === undefined ? true : Number(item.is_in_stock) > 0,
+    ...(promo ? { wasPrice: regular } : {}),
+  };
+}
+
 /** fetch with a hard timeout, returning the raw Response. */
 async function fetchResponse(
   fetchImpl: FetchImpl,
@@ -350,6 +389,36 @@ export async function searchRetailerFallback(
     );
     const found = parseEurekaSearch(payload, productTitle);
     if (!found) throw new Error("No matching product found on eureka search");
+    return found;
+  }
+  if (host.endsWith("sultan-center.com")) {
+    // Store-scoped payload exactly as the storefront's own SPA sends it
+    // (captured live 2026-09-07): store 1 / substore 45 answers for every
+    // Kuwait area; the store front renders product pages under /product/<slug>.
+    const payload = await postJson(fetchImpl, "https://www.sultan-center.com/mobile/api/search", {
+      customerId: "",
+      delivery_type: "home_delivery",
+      currentpage: 1,
+      filters: [],
+      sortType: "position",
+      currency: "KD",
+      version: "eyJ2ZXJzaW9uX25hbWUiOiI3LjciLCJwbGF0Zm9ybSI6IklvcyJ9",
+      substoreId: "45",
+      store: 1,
+      sortOrder: "asc",
+      search_data: productTitle,
+      pagesize: 8,
+      area: "",
+      uid: null,
+      deviceId: "reemco-web",
+      is_web: 1,
+      store_type: "ecom",
+      latitude: "",
+      longitude: "",
+      isDesktop: "Desktop",
+    });
+    const found = parseSultanCenterSearch(payload, productTitle);
+    if (!found) throw new Error("No matching product found on sultan-center search");
     return found;
   }
   if (host.endsWith("jarir.com")) {

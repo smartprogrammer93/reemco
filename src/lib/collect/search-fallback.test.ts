@@ -10,6 +10,7 @@ import {
   parseEurekaSearch,
   parseJarirSearch,
   parseShopifyProducts,
+  parseSultanCenterSearch,
   parseXciteSearch,
   searchRetailerFallback,
   titleMatchScore,
@@ -212,6 +213,42 @@ describe("parseAmazonEgSearch", () => {
   });
 });
 
+describe("parseSultanCenterSearch", () => {
+  // Fixture trimmed from the live mobile/api/search answer (2026-09-07).
+  const fixture = {
+    status: "1",
+    products: {
+      product_list: [
+        {
+          name: "Sony WH-1000XM6 Wireless Noise Cancelling Headphones",
+          slug: "sony-wh-1000xm6-wireless-noise-cancelling-headphones",
+          price: "44.9000",
+          spclprice: "",
+          is_in_stock: "1",
+          stock_quantity: "6",
+          currencysymbol: "KD",
+        },
+        { name: "Air Freshener", slug: "air-freshener", price: "1.0000", is_in_stock: "1" },
+      ],
+    },
+  };
+
+  it("maps the best product_list row to a direct store URL", () => {
+    const found = parseSultanCenterSearch(fixture, PRODUCT);
+    expect(found?.price).toBeCloseTo(44.9);
+    expect(found?.currency).toBe("KWD");
+    expect(found?.url).toBe(
+      "https://www.sultan-center.com/product/sony-wh-1000xm6-wireless-noise-cancelling-headphones",
+    );
+    expect(found?.inStock).toBe(true);
+  });
+
+  it("returns null when no row clears the relevance bar", () => {
+    expect(parseSultanCenterSearch({ products: { product_list: [] } }, PRODUCT)).toBeNull();
+    expect(parseSultanCenterSearch(null, PRODUCT)).toBeNull();
+  });
+});
+
 describe("searchRetailerFallback dispatch", () => {
   it("resolves jarir.com via homepage key + Constructor query", async () => {
     const fetchImpl = async (url: string): Promise<Response> => {
@@ -231,6 +268,26 @@ describe("searchRetailerFallback dispatch", () => {
     const found = await searchRetailerFallback("jarir.com", "ASUS ROG Strix Scope II", fetchImpl);
     expect(found.price).toBe(499);
     expect(found.currency).toBe("SAR");
+  });
+
+  it("resolves sultan-center.com via the store-scoped mobile search API", async () => {
+    const sent: string[] = [];
+    const fetchImpl = async (_url: string, init?: RequestInit): Promise<Response> => {
+      sent.push(String(init?.body));
+      return new Response(
+        JSON.stringify({
+          status: "1",
+          products: { product_list: [{ name: "Sony WH-1000XM6 Headphones", slug: "sony-xm6", price: "44.9000", is_in_stock: "1", currencysymbol: "KD" }] },
+        }),
+      );
+    };
+    const found = await searchRetailerFallback("sultan-center.com", "Sony WH-1000XM6 Headphones", fetchImpl);
+    const body = JSON.parse(sent[0] ?? "{}") as Record<string, unknown>;
+    expect(body.search_data).toBe("Sony WH-1000XM6 Headphones");
+    expect(body.store_type).toBe("ecom");
+    expect(found.url).toBe("https://www.sultan-center.com/product/sony-xm6");
+    expect(found.price).toBeCloseTo(44.9);
+    expect(found.currency).toBe("KWD");
   });
 
   it("resolves amazon.eg from the /s results page", async () => {
