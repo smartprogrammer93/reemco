@@ -50,7 +50,15 @@ export interface FoundOffer {
   wasPrice?: number;
 }
 
-/** Parse xcite's Algolia-proxy multi-query response (hits[].price/slug). */
+/**
+ * Parse xcite's Algolia-proxy multi-query response (hits[].price/slug).
+ *
+ * REEA-115: xcite PDPs live under `/{slug}/p` (categories use `/c`) — the
+ * storefront's own SSR payload links exactly that shape. A bare `/{slug}`
+ * answers HTTP 200 with the branded "404: Page Not Found" shell, so the URL
+ * built here must carry the `/p` suffix. The slug comes from the search hit,
+ * never guessed, so it matches the live index.
+ */
 export function parseXciteSearch(payload: unknown, productTitle: string): FoundOffer | null {
   const hits =
     (payload as { results?: { hits?: Record<string, unknown>[] }[] })?.results?.[0]?.hits ?? [];
@@ -69,7 +77,7 @@ export function parseXciteSearch(payload: unknown, productTitle: string): FoundO
   return {
     price: hit.price as number,
     currency: typeof hit.currency === "string" ? hit.currency : "KWD",
-    url: `https://www.xcite.com/${hit.slug}`,
+    url: `https://www.xcite.com/${hit.slug}/p`,
     inStock: hit.inStock === true || hit.status_key === "InStock",
     ...(typeof unmodified === "number" && unmodified > (hit.price as number)
       ? { wasPrice: unmodified }

@@ -252,8 +252,9 @@ export default function ProductResultCard({
                       {formatPrice(o.price, o.currency)}
                     </span>
                     {/* REEA-13: render scraped hrefs only through validation;
-                        REEA-25: stale scraped URLs fall back to a working
-                        merchant search URL (resolveOfferUrl), or hide the link. */}
+                        REEA-116: direct retailer product URLs for every
+                        adapter host; Bing search only when no URL captured
+                        (resolveOfferUrl). */}
                     {o.inStock && href ? (
                       <TrackedOutboundLink
                         href={href}

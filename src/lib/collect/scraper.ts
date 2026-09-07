@@ -83,6 +83,17 @@ export async function fetchWithTimeout(
 }
 
 /**
+ * Soft-not-found detection (REEA-115). xcite answers stale/guessed slugs with
+ * HTTP 200 plus a branded shell whose document title is "404: Page Not Found …",
+ * so a status-code check alone is not enough: treat that title as a miss and let
+ * the search fallback re-discover the live product URL by title.
+ */
+export function isSoftNotFound(html: string): boolean {
+  const title = html.match(/<title[^>]*>([^<]+?)\s*<\/title>/i)?.[1] ?? "";
+  return /^(?:404\b|page not found\b)/i.test(title.trim());
+}
+
+/**
  * Scrape one retailer offer URL. Enforces the per-retailer timeout server-side
  * (AC7); a timeout is reported distinctly so the UI can show "timed out".
  */
@@ -141,6 +152,7 @@ async function tryDirectFetch(
     }
     return null; // transient HTTP/network error — caller tries search fallback
   }
+  if (isSoftNotFound(html)) return null; // branded soft-404 shell — re-discover via search
   const price = extractPrice(html);
   if (price == null) return null; // unparseable/client-rendered — try fallback
   return {

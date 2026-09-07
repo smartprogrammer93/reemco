@@ -19,21 +19,32 @@ describe("resolveOfferUrl", () => {
     ).toBe("https://www.xcite.com/sony-wh-1000xm6");
   });
 
-  it("falls back to a search URL for known-dead scraped URLs", () => {
-    const href = resolveOfferUrl(
+  it("keeps direct retailer product URLs for every adapter host (REEA-116)", () => {
+    for (const offer of [
       {
         merchant: "Jarir Bookstore Kuwait",
-        url: "https://www.jarir.com/kw/asus-rog-strix-scope-ii",
+        url: "https://www.jarir.com/?q=ASUS%20ROG%20Strix%20Scope%20II",
       },
-      "ASUS ROG Strix Scope II",
-    );
-    expect(href?.startsWith("https://www.bing.com/search?q=")).toBe(true);
-    expect(href).toContain("Jarir");
+      {
+        merchant: "Amazon.eg (ships to KW)",
+        url: "https://www.amazon.eg/s?k=ASUS%20ROG%20Strix%20Scope%20II",
+      },
+      { merchant: "Talabat", url: "https://www.talabat.com/en/kuwait" },
+    ]) {
+      const href = resolveOfferUrl(offer, "ASUS ROG Strix Scope II");
+      expect(href.startsWith("https://www.bing.com/search")).toBe(false);
+      expect(href).toBe(offer.url);
+    }
   });
 
-  it("returns null for implausible URLs so the link is hidden", () => {
-    expect(resolveOfferUrl({ merchant: "X", url: "" }, "T")).toBeNull();
-    expect(resolveOfferUrl({ merchant: "X", url: "nope" }, "T")).toBeNull();
-    expect(resolveOfferUrl({ merchant: "X", url: "javascript:alert(1)" }, "T")).toBeNull();
+  it("falls back to a search URL only when no product URL was captured", () => {
+    for (const url of ["", "nope", "javascript:alert(1)"]) {
+      const href = resolveOfferUrl(
+        { merchant: "Jarir Bookstore Kuwait", url },
+        "ASUS ROG Strix Scope II",
+      );
+      expect(href.startsWith("https://www.bing.com/search?q=")).toBe(true);
+      expect(href).toContain("Jarir");
+    }
   });
 });

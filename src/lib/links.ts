@@ -2,42 +2,39 @@ import type { PriceOffer } from "@/types/product";
 import { safeHref } from "@/lib/safe-url";
 
 /**
- * Merchant link resolution (REEA-25).
+ * Merchant link resolution (REEA-25, revised by REEA-116).
  *
- * Scraped merchant URLs go stale: product pages get delisted (404) or whole
- * merchant domains die. Probing every URL in the seed catalog (see REEA-25
- * evidence) showed jarir.com product URLs 404 and berry.com.kw /
- * techmart.talabat.com unreachable, while xcite.com resolves 200.
+ * Every adapter — seeded catalog entries and the live retailer-search
+ * fallbacks in collect/search-fallback.ts alike — emits the retailer's own
+ * product URL (xcite.com, jarir.com, amazon.eg, talabat.com, berry hosts).
+ * Render that URL directly: the "Go to store" link must land on the matching
+ * retailer page so the shopper can compare title + price there. The old rule
+ * (host allowlist of xcite only, everything else rewritten to a Bing SERP)
+ * sent non-Xcite shoppers through an extra search hop instead of the store.
  *
- * Strategy: keep the scraped URL when the merchant host is verified healthy;
- * otherwise fall back to a web search for "<merchant> <product title>", which
- * always resolves and lands the user on the right merchant/product. Offers
- * whose URL fails safeHref validation get no buy link at all.
+ * The Bing search URL survives only as the last-resort fallback for offers
+ * where no product URL was captured at all (missing/unparseable url field).
  */
-
-/** Hosts verified to serve their scraped product URLs (HTTP 200). */
-const HEALTHY_HOSTS = new Set(["www.xcite.com", "xcite.com"]);
 
 const SEARCH_BASE = "https://www.bing.com/search?q=";
 
-/** Working search URL for a merchant + product, used when the scraped URL is dead. */
+/** Working search URL for a merchant + product, used when no URL was captured. */
 export function merchantSearchUrl(merchant: string, productTitle: string): string {
   return `${SEARCH_BASE}${encodeURIComponent(`${merchant} ${productTitle}`)}`;
 }
 
 /**
- * Resolve the href for an offer's buy link, or null when the offer has no
- * usable destination (caller should hide the link). All rendered hrefs pass
- * through safeHref (REEA-13) — this is the single render path for offer links.
+ * Resolve the href for an offer's buy link. Scraped URLs pass through
+ * safeHref (REEA-13) — this is the single render path for offer links.
+ * When the offer carries no usable product URL, fall back to a merchant +
+ * title search URL so the link still reaches the right retailer/product.
  */
 export function resolveOfferUrl(
   offer: Pick<PriceOffer, "merchant" | "url">,
   productTitle: string,
-): string | null {
+): string {
   const safe = safeHref(offer.url);
-  if (!safe) return null;
-  const host = new URL(safe).hostname;
-  if (HEALTHY_HOSTS.has(host)) return safe;
-  // Unverified or known-dead scraped URL: fall back to a working search URL.
+  if (safe) return safe;
+  // No product URL captured: fall back to a working search URL.
   return merchantSearchUrl(offer.merchant, productTitle);
 }
