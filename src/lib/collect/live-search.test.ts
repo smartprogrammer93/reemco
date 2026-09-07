@@ -27,6 +27,7 @@ import {
   compatibleFields,
   gradeBadgeLabel,
 } from "@/lib/collect/canonical-product";
+import { isAccessoryTitle } from "@/lib/relevance";
 
 describe("hit parsers", () => {
   it("xciteHits keeps scored hits with /p product URLs", () => {
@@ -218,12 +219,59 @@ describe("groupHits", () => {
     // live listings of one device, one merged view.
     expect(products).toHaveLength(1);
     const fold = products[0];
-    // Union preservation: every distinct listing keeps its row, cheapest on top.
-    expect(fold.offers.map((o) => o.price)).toEqual([429.9, 494.9, 7699]);
-    expect(fold.offers.map((o) => o.merchant)).toEqual(["Xcite", "Xcite", "Jarir"]);
+    // REEA-192: one row per retailer at that retailer's best matched-product
+    // offer — Xcite's two listings fold into its cheapest one.
+    expect(fold.offers.map((o) => o.price)).toEqual([429.9, 7699]);
+    expect(fold.offers.map((o) => o.merchant)).toEqual(["Xcite", "Jarir"]);
     // Canonical title = member title with the fewest tokens → stable slug.
     expect(fold.title).toBe("Samsung Galaxy Z Fold7 Phone - Silver");
     expect(fold.productId).toBe("samsung-galaxy-z-fold7-phone-silver");
+  });
+
+  it("REEA-192: fold7 live case — device card carries phone offers only, badge row cheapest phone offer, accessory cards own their rows", () => {
+    // Mirrors the live q=fold7 answers: three phone listings across
+    // Xcite/Eureka/Jarir plus accessory-class listings that previously folded
+    // into the phone card and pushed the SAR 69 case price under the badge.
+    const products = groupHits("fold7", [
+      hit({ title: "Samsung Galaxy Z Fold7 Phone Black", merchant: "Xcite", price: 429.9, url: "https://xcite.example/fold7-black" }),
+      hit({ title: "Samsung Galaxy Z Fold7 Phone", merchant: "Eureka", price: 494.9, url: "https://eureka.example/fold7" }),
+      hit({ title: "Samsung Galaxy Z Fold7 256GB 12GB Ram 5G Black", merchant: "Jarir", price: 7699, currency: "SAR", url: "https://jarir.example/fold7" }),
+      hit({ title: "Araree Aero Flex Electronic Gadgets Cases For Samsung Galaxy Z Fold7", merchant: "Jarir", price: 69, currency: "SAR", url: "https://jarir.example/aero-case" }),
+      hit({ title: "OtterBox Defender Series XT Cases For Samsung Galaxy Z Fold7", merchant: "Jarir", price: 99, currency: "SAR", url: "https://jarir.example/otter-case" }),
+      hit({ title: "Panzerglass Screen Protector Film For Galaxy Z Fold7 PG68903", merchant: "Amazon.eg", price: 149, currency: "EGP", url: "https://amazon.example/dp/x1" }),
+    ]);
+    const device = products.find((p) => !isAccessoryTitle(p.title))!;
+    // Phone-class offers only; one row per retailer at its best phone price;
+    // cheapest phone offer first is what the LOWEST LISTED PRICE badge reads.
+    expect(device.offers.map((o) => o.price)).toEqual([429.9, 494.9, 7699]);
+    expect(device.offers.map((o) => o.merchant)).toEqual(["Xcite", "Eureka", "Jarir"]);
+    // Accessory listings keep their own cards (REEA-180 Rule 2 tiering puts
+    // them under the devices container); the case never dilutes the phone set.
+    const accessories = products.filter((p) => isAccessoryTitle(p.title));
+    expect(accessories.length).toBeGreaterThan(0);
+    expect(accessories.every((p) => p.offers.every((o) => o.price < Math.min(...device.offers.map((x) => x.price))))).toBe(true);
+  });
+
+  it("REEA-192: Arabic accessory markers classify the same way (كفر / جراب)", () => {
+    const products = groupHits("fold7", [
+      hit({ title: "Samsung Galaxy Z Fold7 Phone Black", merchant: "Xcite", price: 429.9, url: "https://xcite.example/fold7-black" }),
+      hit({ title: "جراب سامسونج جلاكسي Z Fold7", merchant: "Jarir", price: 59, currency: "SAR", url: "https://jarir.example/jirab" }),
+    ]);
+    expect(products).toHaveLength(2);
+    const device = products.find((p) => !isAccessoryTitle(p.title))!;
+    const cover = products.find((p) => isAccessoryTitle(p.title))!;
+    expect(device.offers.map((o) => o.price)).toEqual([429.9]);
+    expect(cover.offers.map((o) => o.price)).toEqual([59]);
+  });
+
+  it("REEA-192: one row per retailer at its best matched-product offer", () => {
+    const products = groupHits("fold7", [
+      hit({ title: "Samsung Galaxy Z Fold7 Phone Black", merchant: "Xcite", price: 429.9, url: "https://xcite.example/a" }),
+      hit({ title: "Samsung Galaxy Z Fold7 Phone Black", merchant: "Xcite", price: 460, url: "https://xcite.example/b" }),
+      hit({ title: "Samsung Galaxy Z Fold7 Phone Black", merchant: "Jarir", price: 455, currency: "SAR", url: "https://jarir.example/c" }),
+    ]);
+    expect(products).toHaveLength(1);
+    expect(products[0].offers.map((o) => `${o.merchant}:${o.price}`)).toEqual(["Xcite:429.9", "Jarir:455"]);
   });
 
   it("REEA-168: both example spellings reduce to one canonical key", () => {
@@ -811,5 +859,46 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     const blocking = await collectLiveResults("samsung", { fetchImpl: mixedSpeedFetch(), country: "KW" });
     const shape = (s: typeof staged) => s.products.map((p) => [p.productId, p.offers.map((o) => `${o.merchant}:${o.price}`)]);
     expect(shape(staged)).toEqual(shape(blocking));
+  });
+});
+
+describe("brand chain (REEA-189)", () => {
+  it("reads the retailer brand field into hits when the contract carries one", () => {
+    const hits = xciteHits(
+      { results: [{ hits: [{ name: "Sony WH-1000XM6 Wireless Headphones", slug: "xm6", price: 120, currency: "KWD", inStock: true, brand: "SONY" }] }] },
+      "wh-1000xm6",
+    );
+    expect(hits[0].brand).toBe("SONY");
+  });
+
+  it("Shopify vendor rides into the hit brand", () => {
+    const hits = blinkHits(
+      { products: [{ title: "Bose QuietComfort Ultra Earbuds", handle: "qcues", vendor: "Bose", variants: [{ price: "89.00", available: true }] }] },
+      "bose quietcomfort",
+    );
+    expect(hits[0].brand).toBe("Bose");
+  });
+
+  it("a retailer without a brand field inherits the merged group's first brand", () => {
+    const products = groupHits("bose qc", [
+      { title: "Bose QuietComfort Ultra Earbuds", merchant: "Xcite", country: "KW", price: 90, currency: "KWD", url: "https://www.xcite.com/qc/p", inStock: true, brand: "BOSE" },
+      { title: "Bose QuietComfort Ultra Earbuds Black", merchant: "Eureka", country: "KW", price: 85, currency: "KWD", url: "https://www.eureka.com.kw/qc", inStock: true },
+    ]);
+    const card = products.find((p) => p.offers.some((o) => o.merchant === "Eureka"));
+    expect(card?.brand).toBe("Bose");
+  });
+
+  it("artifact stop-values and missing fields fall back to the curated title match, never a first word", () => {
+    const products = groupHits("compatible airfryer", [
+      { title: "Airfryer XL Basket Non-Stick", merchant: "Xcite", country: "KW", price: 25, currency: "KWD", url: "https://www.xcite.com/af/p", inStock: true, brand: "Case" },
+      { title: "Compatible with Philips Airfryer XL", merchant: "Eureka", country: "KW", price: 22, currency: "KWD", url: "https://www.eureka.com.kw/af", inStock: true },
+    ]);
+    // "Case"/missing brand → curated whole-word match on the title, not the first word.
+    expect(products.find((p) => p.title.startsWith("Compatible"))?.brand).toBe("Philips");
+    // No curated brand anywhere and a stop-value field → honest "no brand line".
+    const plain = groupHits("basket", [
+      { title: "Basket Non-Stick 5L", merchant: "Xcite", country: "KW", price: 9, currency: "KWD", url: "https://www.xcite.com/b/p", inStock: true, brand: "Privacy" },
+    ]);
+    expect(plain[0].brand).toBe("");
   });
 });

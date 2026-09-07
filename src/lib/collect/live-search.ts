@@ -17,6 +17,8 @@ import { extractJarirIndexKey, titleMatchScore, tokenCoverage } from "@/lib/coll
 import type { FetchImpl } from "@/lib/collect/scraper";
 import type { CountryCode } from "@/lib/country";
 import { canonicalFields, compatibleFields, type CanonicalFields } from "@/lib/collect/canonical-product";
+import { isAccessoryTitle } from "@/lib/relevance";
+import { resolveBrand } from "@/lib/relevance";
 import type { NormalizedProduct, PriceOffer } from "@/types/product";
 
 /**
@@ -64,6 +66,12 @@ export const AMAZON_RETRY_BACKOFF_MS = 200;
 export interface SearchHit {
   title: string;
   merchant: string;
+  /**
+   * REEA-189 — the retailer's own brand field for this listing, kept verbatim
+   * from the payload (casing/stop-value handling lives in resolveBrand).
+   * Absent when the retailer contract carries no brand attribute.
+   */
+  brand?: string;
   price: number;
   currency: string;
   url: string;
@@ -154,6 +162,21 @@ async function fetchChecked(
 
 /* ---- Per-retailer hit extraction (documented contracts only). ---- */
 
+/**
+ * REEA-189 — symmetric brand pickup: every JSON adapter reads its brand with
+ * the same candidate chain (payloads name it `brand`, `brand_name`, Shopify's
+ * `vendor`, `manufacturer`). The value is kept verbatim; Rule 1 hygiene
+ * (stop-values, curated casing) runs later in resolveBrand so each adapter
+ * stays a thin contract mapping.
+ */
+function pickBrand(hit: Record<string, unknown>): string | undefined {
+  for (const key of ["brand", "Brand", "brand_name", "brandName", "vendor", "manufacturer"]) {
+    const v = hit[key];
+    if (typeof v === "string" && v.trim() !== "") return v.trim();
+  }
+  return undefined;
+}
+
 export function xciteHits(payload: unknown, query: string): SearchHit[] {
   const hits =
     (payload as { results?: { hits?: Record<string, unknown>[] }[] })?.results?.[0]?.hits ?? [];
@@ -165,10 +188,12 @@ export function xciteHits(payload: unknown, query: string): SearchHit[] {
     if (!title || !Number.isFinite(price) || price <= 0 || !slug) continue;
     if (tokenCoverage(title, query) < MIN_SCORE) continue;
     const unmodified = typeof hit.unmodifiedPrice === "number" ? hit.unmodifiedPrice : undefined;
+    const brand = pickBrand(hit);
     out.push({
       title,
       merchant: "Xcite",
       country: "KW",
+      ...(brand ? { brand } : {}),
       price,
       currency: typeof hit.currency === "string" ? hit.currency : "KWD",
       url: `https://www.xcite.com/${slug}/p`,
@@ -181,7 +206,7 @@ export function xciteHits(payload: unknown, query: string): SearchHit[] {
 
 export function blinkHits(payload: unknown, query: string): SearchHit[] {
   const products =
-    (payload as { products?: { title?: string; handle?: string; variants?: { price?: string; available?: boolean }[] }[] })
+    (payload as { products?: { title?: string; handle?: string; vendor?: string; variants?: { price?: string; available?: boolean }[] }[] })
       ?.products ?? [];
   const out: SearchHit[] = [];
   for (const p of products) {
@@ -189,10 +214,12 @@ export function blinkHits(payload: unknown, query: string): SearchHit[] {
     const price = variant?.price != null ? Number(variant.price) : NaN;
     if (!p.title || !p.handle || !Number.isFinite(price) || price <= 0) continue;
     if (tokenCoverage(p.title, query) < MIN_SCORE) continue;
+    const brand = pickBrand(p as unknown as Record<string, unknown>);
     out.push({
       title: p.title,
       merchant: "Blink",
       country: "KW",
+      ...(brand ? { brand } : {}),
       price,
       currency: "KWD",
       url: `https://blink.com.kw/products/${p.handle}`,
@@ -204,16 +231,18 @@ export function blinkHits(payload: unknown, query: string): SearchHit[] {
 
 export function eurekaHits(payload: unknown, query: string): SearchHit[] {
   const hits =
-    (payload as { hits?: { itmn?: string; objectID?: string; lprc?: number; clprc?: number; avaqt?: number }[] })
+    (payload as { hits?: { itmn?: string; objectID?: string; lprc?: number; clprc?: number; avaqt?: number; brand?: string }[] })
       ?.hits ?? [];
   const out: SearchHit[] = [];
   for (const hit of hits) {
     if (!hit.itmn || !hit.objectID || typeof hit.clprc !== "number" || hit.clprc <= 0) continue;
     if (tokenCoverage(hit.itmn, query) < MIN_SCORE) continue;
+    const brand = pickBrand(hit as unknown as Record<string, unknown>);
     out.push({
       title: hit.itmn,
       merchant: "Eureka",
       country: "KW",
+      ...(brand ? { brand } : {}),
       price: hit.clprc,
       currency: "KWD",
       // The store's canonical product route is /products/details/<id>; the
@@ -228,7 +257,7 @@ export function eurekaHits(payload: unknown, query: string): SearchHit[] {
 
 export function sultanCenterHits(payload: unknown, query: string): SearchHit[] {
   const list =
-    (payload as { products?: { product_list?: { name?: string; slug?: string; price?: string; spclprice?: string; is_in_stock?: string; currencysymbol?: string }[] } })
+    (payload as { products?: { product_list?: { name?: string; slug?: string; price?: string; spclprice?: string; is_in_stock?: string; currencysymbol?: string; brand?: string }[] } })
       ?.products?.product_list ?? [];
   const out: SearchHit[] = [];
   for (const item of list) {
@@ -243,10 +272,12 @@ export function sultanCenterHits(payload: unknown, query: string): SearchHit[] {
     const price = promo ? special : regular;
     if (!Number.isFinite(price) || price <= 0) continue;
     if (tokenCoverage(title, query) < MIN_SCORE) continue;
+    const brand = pickBrand(item as unknown as Record<string, unknown>);
     out.push({
       title,
       merchant: "Sultan Center",
       country: "KW",
+      ...(brand ? { brand } : {}),
       price,
       // Grocery prices on this storefront are quoted in KD (= KWD).
       currency: item.currencysymbol && item.currencysymbol !== "KD" ? item.currencysymbol : "KWD",
@@ -262,7 +293,7 @@ export function sultanCenterHits(payload: unknown, query: string): SearchHit[] {
 
 export function jarirHits(payload: unknown, query: string): SearchHit[] {
   const results =
-    (payload as { response?: { results?: { data?: { url?: string; price?: number | string; metadata?: { name?: string; price?: string } } }[] } })
+    (payload as { response?: { results?: { data?: { url?: string; price?: number | string; metadata?: { name?: string; price?: string; brand?: string } } }[] } })
       ?.response?.results ?? [];
   const out: SearchHit[] = [];
   for (const item of results) {
@@ -571,16 +602,27 @@ function buildGroups(query: string, hits: SearchHit[]): HitGroup[] {
     const title = hit.title.trim();
     if (!title) continue;
     const fields = canonicalFields(title);
+    // REEA-192 — product-class gate: an accessory-class title (case / cover /
+    // protector / tempered glass / film / skin; كفر، جراب، واقي، غطاء) never
+    // folds into the device's card. Accessory nouns often sit BEFORE the brand
+    // token, where the model-line scan never sees them, so the field tuple
+    // alone lets a case merge into the phone it fits — the badge then lands
+    // on the accessory price while the phone rows sit below it. The class
+    // rides the group and gates every merge; accessory hits form their own
+    // groups and reach their own tier through partitionForQuery (REEA-180
+    // Rule 2 tiering, shipped by REEA-189).
+    const accessory = isAccessoryTitle(title);
     // Partial-match rule: every candidate group whose non-empty fields agree
     // is eligible; join the one holding the lowest-priced offer so the best
-    // effective price always wins the merge.
+    // effective price always wins the merge. Same-class groups only.
     let chosen: HitGroup | undefined;
     for (const g of groups) {
+      if (g.accessory !== accessory) continue;
       if (!compatibleFields(g.fields, fields)) continue;
       if (!chosen || cheapestOf(g) < cheapestOf(chosen)) chosen = g;
     }
     if (!chosen) {
-      chosen = { fields, titleScore: 0, titles: new Set<string>(), offers: [] };
+      chosen = { fields, accessory, titleScore: 0, titles: new Set<string>(), offers: [], brandRaw: hit.brand ?? "" };
       groups.push(chosen);
     } else {
       // REEA-168 follow-up (board note on REEA-169): seed the group's missing
@@ -592,6 +634,10 @@ function buildGroups(query: string, hits: SearchHit[]): HitGroup[] {
       if (f.modelLine === "") f.modelLine = fields.modelLine;
       if (f.storage === "") f.storage = fields.storage;
       if (f.color === "") f.color = fields.color;
+      // REEA-189: same seed rule for the retailer brand field — first non-empty
+      // wins so a retailer that ships brands fills the card chip even when the
+      // cheapest-hit retailer's payload carries none.
+      if (chosen.brandRaw === "" && hit.brand) chosen.brandRaw = hit.brand;
     }
     const score = titleMatchScore(title, query);
     if (score > chosen.titleScore) chosen.titleScore = score;
@@ -637,6 +683,13 @@ function finalizeGroups(selected: HitGroup[]): NormalizedProduct[] {
     const offers: PriceOffer[] = [...group.offers]
       // Cheapest offer first (REEA-167 §2); purchasable offers break ties.
       .sort((a, b) => a.price - b.price || Number(b.inStock) - Number(a.inStock))
+      // REEA-192 — one row per retailer in the card: the sorted-first offer
+      // is that retailer's best matched-product price; further listings from
+      // the same merchant are variants of one comparison row, not new rows,
+      // and stacking them buries the badge under repeated merchants.
+      .filter(
+        (o, i, arr) => arr.findIndex((x) => x.merchant === o.merchant) === i,
+      )
       .map((o) => {
         const grade = canonicalFields(o.title).grade;
         return {
@@ -652,7 +705,7 @@ function finalizeGroups(selected: HitGroup[]): NormalizedProduct[] {
     return {
       productId: slugify(title) || `live-${idx}`,
       title,
-      brand: brandOf(title),
+      brand: resolveBrand(group.brandRaw, title),
       offers,
       coupons: [],
       variations: [],
@@ -672,7 +725,7 @@ function finalizeGroups(selected: HitGroup[]): NormalizedProduct[] {
   });
 }
 
-type HitGroup = { fields: CanonicalFields; titleScore: number; titles: Set<string>; offers: SearchHit[] };
+type HitGroup = { fields: CanonicalFields; accessory: boolean; titleScore: number; titles: Set<string>; offers: SearchHit[]; brandRaw: string };
 
 /**
  * REEA-137 — fill the served slice round-robin across retailers instead of a
@@ -723,11 +776,6 @@ function slugify(title: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-}
-
-function brandOf(title: string): string {
-  // First token of the scraped title is a good enough brand chip.
-  return title.trim().split(/\s+/)[0] ?? title;
 }
 
 export interface LiveSearchResult {

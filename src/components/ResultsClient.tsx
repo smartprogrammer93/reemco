@@ -22,6 +22,7 @@ import {
 } from "@/lib/country";
 import { trackEvents } from "@/lib/telemetry";
 import { PRODUCTS } from "@/lib/feed";
+import { isAccessoryTitle, partitionForQuery } from "@/lib/relevance";
 import type { LiveSearchResult } from "@/lib/collect/live-search";
 import type { NormalizedProduct } from "@/types/product";
 
@@ -160,7 +161,10 @@ function EmptyState({
 /* Design v3 §5.2 grid: single-column list, two columns only ≥1280px.
    minmax(0,1fr) tracks keep long product titles from widening the grid past
    the viewport at 375px (smoke step 5). Shared by the staged and plain paths
-   so both converge on identical markup. */
+   so both converge on identical markup.
+   REEA-189 Rule 2 — device-intent queries render TWO STACKED grids (Devices
+   above Accessories, each keeping the incoming rank order inside it); every
+   other query keeps the plain single grid. */
 function ResultsGrid({
   products,
   query,
@@ -174,23 +178,68 @@ function ResultsGrid({
   country: CountryCode | null;
   showOutOfStock: boolean;
 }) {
+  const tier = partitionForQuery(products);
+  if (!tier.tiered) {
+    return (
+      <div
+        className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]"
+        style={{ marginTop: "var(--rc-space-8)" }}
+      >
+        {products.map((p, i) => (
+          <ProductResultCard
+            key={p.productId}
+            product={p}
+            isBest={i === 0}
+            query={query}
+            rank={(page - 1) * PAGE_SIZE + i}
+            country={country}
+            showOutOfStock={showOutOfStock}
+          />
+        ))}
+      </div>
+    );
+  }
   return (
-    <div
-      className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]"
-      style={{ marginTop: "var(--rc-space-8)" }}
-    >
-      {products.map((p, i) => (
-        <ProductResultCard
-          key={p.productId}
-          product={p}
-          isBest={i === 0}
-          query={query}
-          rank={(page - 1) * PAGE_SIZE + i}
-          country={country}
-          showOutOfStock={showOutOfStock}
-        />
-      ))}
-    </div>
+    <>
+      <div aria-label="Devices">
+        <div
+          className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]"
+          style={{ marginTop: "var(--rc-space-8)" }}
+        >
+          {tier.devices.map((p, i) => (
+            <ProductResultCard
+              key={p.productId}
+              product={p}
+              isBest={i === 0}
+              query={query}
+              rank={(page - 1) * PAGE_SIZE + i}
+              country={country}
+              showOutOfStock={showOutOfStock}
+            />
+          ))}
+        </div>
+      </div>
+      {tier.accessories.length > 0 && (
+        <div aria-label="Accessories">
+          <div
+            className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]"
+            style={{ marginTop: "var(--rc-space-4)" }}
+          >
+            {tier.accessories.map((p, i) => (
+              <ProductResultCard
+                key={p.productId}
+                product={p}
+                isBest={false}
+                query={query}
+                rank={(page - 1) * PAGE_SIZE + tier.devices.length + i}
+                country={country}
+                showOutOfStock={showOutOfStock}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -262,11 +311,52 @@ function stagedSuggestions(
   );
 }
 
+/* Design v3 grid inside one streaming block (see StageAppend). */
+const GRID_CLASS =
+  "grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]";
+
+function FlushBlock(props: {
+  label?: string;
+  order: number;
+  products: NormalizedProduct[];
+  bestAt: number;
+  query: string;
+  page: number;
+  country: CountryCode | null;
+  showOutOfStock: boolean;
+}) {
+  const { label, order, products, bestAt, query, page, country, showOutOfStock } = props;
+  if (products.length === 0) return null;
+  return (
+    <div aria-label={label} style={{ order }}>
+      <div className={GRID_CLASS}>
+        {products.map((p, i) => (
+          <ProductResultCard
+            key={p.productId}
+            product={p}
+            isBest={i === bestAt}
+            query={query}
+            rank={(page - 1) * PAGE_SIZE + i}
+            country={country}
+            showOutOfStock={showOutOfStock}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* One boundary per adapter flush: renders only the cards NEW in this snapshot.
    A card whose id already appeared in the immediately-prior snapshot keeps its
    slot and is not re-rendered (append-only over cumulative snapshots, AC-2).
    All values derive purely from the snapshot pair — no mutable accumulators —
-   so flush order, hydration, and re-renders land on identical markup. */
+   so flush order, hydration, and re-renders land on identical markup.
+
+   REEA-189 Rule 2: under device intent each flush lands inside the Devices /
+   Accessories stacked containers. `order` (Devices 1, Accessories 2) makes the
+   stacking hold ACROSS flushes too — a device arriving late still stacks above
+   accessories from earlier flushes — while every card keeps its slot inside
+   its own container. Non-device queries keep the plain single block. */
 function StageAppend(props: {
   stages: Promise<LiveSearchResult>[];
   index: number;
@@ -286,24 +376,37 @@ function StageAppend(props: {
     stagedView(prevSnap, page, country, showOutOfStock).map((p) => p.productId),
   );
   const fresh = index === 0 ? visible : visible.filter((p) => !prevIds.has(p.productId));
+  // The tier gate reads the FULL matched set (cumulative snapshot), so the
+  // decision only ever flips toward tiering as more retailers answer.
+  const tiered = partitionForQuery(visible).tiered;
+  const next = index + 1 < stages.length ? (
+    <Suspense fallback={null}>
+      <StageAppend {...props} index={index + 1} />
+    </Suspense>
+  ) : null;
+
+  if (!tiered) {
+    return (
+      <>
+        <FlushBlock order={1} products={fresh} bestAt={index === 0 ? 0 : -1} {...props} />
+        {next}
+      </>
+    );
+  }
+  const devices = fresh.filter((p) => !isAccessoryTitle(p.title));
+  const accessories = fresh.filter((p) => isAccessoryTitle(p.title));
   return (
     <>
-      {fresh.map((p, i) => (
-        <ProductResultCard
-          key={p.productId}
-          product={p}
-          isBest={index === 0 && i === 0}
-          query={query}
-          rank={(page - 1) * PAGE_SIZE + i}
-          country={country}
-          showOutOfStock={showOutOfStock}
-        />
-      ))}
-      {index + 1 < stages.length ? (
-        <Suspense fallback={null}>
-          <StageAppend {...props} index={index + 1} />
-        </Suspense>
-      ) : null}
+      <FlushBlock
+        label="Devices"
+        order={1}
+        
+        products={devices}
+        bestAt={index === 0 ? 0 : -1}
+        {...props}
+      />
+      <FlushBlock label="Accessories" order={2}  products={accessories} bestAt={-1} {...props} />
+      {next}
     </>
   );
 }
@@ -388,13 +491,13 @@ function StagedResults(props: {
 
   // Streaming view: append-only flushes; count/empty state wait for the
   // converged snapshot so a partial arrival never reads as "no results".
+  // REEA-189: the container is a flex column so flush blocks stack full-width
+  // and the block `order` values (Devices 1 / Accessories 2) hold across
+  // flushes — late devices still stack above earlier accessories.
   return (
     <ResultsErrorBoundary>
       <SelectionRow query={query} country={country} showOutOfStock={showOutOfStock} />
-      <div
-        className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]"
-        style={{ marginTop: "var(--rc-space-8)" }}
-      >
+      <div className="flex min-w-0 flex-col items-stretch gap-4" style={{ marginTop: "var(--rc-space-8)" }}>
         <Suspense fallback={null}>
           <StageAppend
             stages={stages}

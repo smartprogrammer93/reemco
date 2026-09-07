@@ -145,7 +145,9 @@ export default function ProductResultCard({
           feed-served results list (the detail view's freshness comes from the
           live job instead — realtime AC-1). */}
       <div className="flex flex-wrap items-center gap-2">
-        <RetailerChip>{product.brand}</RetailerChip>
+        {/* REEA-189 Rule 1 step 3: an unresolved brand renders NO brand line —
+            an empty chip is itself an artifact. */}
+        {product.brand ? <RetailerChip>{product.brand}</RetailerChip> : null}
         {!detail && best && <StockDot state={best.inStock ? "in" : "out"} />}
         {!detail && <FreshnessBadge scrapedAt={product.scrapedAt} />}
       </div>

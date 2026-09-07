@@ -309,3 +309,79 @@ describe("staged progressive results (REEA-178)", () => {
     expect(search?.result_count).toBe(2);
   });
 });
+
+describe("relevance tiering + brand hygiene (REEA-189)", () => {
+  const DEVICE_A: NormalizedProduct = {
+    productId: "galaxy-buds3-pro",
+    title: "Samsung Galaxy Buds3 Pro",
+    brand: "Samsung",
+    offers: [{ merchant: "Xcite", price: 60, currency: "KWD", url: "https://xcite.example/buds3", inStock: true }],
+    coupons: [],
+    variations: [],
+    alternatives: [],
+    scrapedAt: "2026-09-07T00:00:00.000Z",
+  };
+  const DEVICE_B: NormalizedProduct = {
+    productId: "galaxy-buds-fe",
+    title: "Samsung Galaxy Buds FE",
+    brand: "Samsung",
+    offers: [{ merchant: "Jarir", price: 45, currency: "SAR", url: "https://jarir.example/budsfe", inStock: true }],
+    coupons: [],
+    variations: [],
+    alternatives: [],
+    scrapedAt: "2026-09-07T00:00:00.000Z",
+  };
+  const ACCESSORY: NormalizedProduct = {
+    productId: "ringke-case",
+    title: "RINGKE Onyx Earbuds Case",
+    brand: "RINGKE",
+    offers: [{ merchant: "Xcite", price: 8, currency: "KWD", url: "https://xcite.example/ringke", inStock: true }],
+    coupons: [],
+    variations: [],
+    alternatives: [],
+    scrapedAt: "2026-09-07T00:00:00.000Z",
+  };
+
+  it("stacks devices above accessories on device-intent queries", async () => {
+    searchParams.set("q", "samsung galaxy buds");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    await act(async () => {
+      render(
+        <ResultsClient query="samsung galaxy buds" page={1} products={[DEVICE_A, ACCESSORY, DEVICE_B]} suggestions={[]} />,
+      );
+    });
+    const html = document.body.innerHTML;
+    expect(html).toContain('aria-label="Devices"');
+    expect(html).toContain('aria-label="Accessories"');
+    // AC-1: every device card sits above the accessory block.
+    expect(html.indexOf("Galaxy Buds FE")).toBeLessThan(html.indexOf("RINGKE Onyx"));
+    const devices = document.querySelector('[aria-label="Devices"]');
+    const accessories = document.querySelector('[aria-label="Accessories"]');
+    expect(devices?.textContent).toContain("Galaxy Buds3 Pro");
+    expect(devices?.textContent).toContain("Galaxy Buds FE");
+    expect(accessories?.textContent).toContain("RINGKE Onyx Earbuds Case");
+  });
+
+  it("keeps the plain single list for non-device queries", async () => {
+    searchParams.set("q", "ceramic mug");
+    await act(async () => {
+      render(
+        <ResultsClient query="ceramic mug" page={1} products={[{ ...DEVICE_A, productId: "mug", title: "Ceramic Mug White" }]} suggestions={[]} />,
+      );
+    });
+    expect(document.querySelector('[aria-label="Devices"]')).toBeNull();
+    expect(document.body.innerHTML).toContain("Ceramic Mug White");
+  });
+
+  it("renders no brand chip when resolution leaves the brand empty", async () => {
+    searchParams.set("q", "sony");
+    await act(async () => {
+      render(
+        <ResultsClient query="sony" page={1} products={[{ ...DEVICE_A, brand: "" }]} suggestions={[]} />,
+      );
+    });
+    expect(document.body.innerHTML).toContain("Galaxy Buds3 Pro");
+    expect((document.body.innerHTML.match(/label-token inline-flex/g) ?? []).length).toBe(0);
+  });
+});
