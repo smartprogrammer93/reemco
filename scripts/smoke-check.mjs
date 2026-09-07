@@ -40,8 +40,12 @@ function step(n, name, fn) {
 
 // @sparticuz/chromium bundles its shared libraries (libnspr4 etc.) in
 // al2023.tar.br but only wires them up on Amazon Linux. Extract them and point
-// LD_LIBRARY_PATH at the result before spawning the browser.
+// LD_LIBRARY_PATH at the result before spawning the browser. The tarball is
+// not self-sufficient on minimal glibc containers: NSS also dlopens
+// libsqlite3.so.0 and the libnssckbi.so root-cert module, so scripts/vendor/
+// ships those extras (plus the musl loader the Alpine-built ckbi/sqlite need).
 const LIB_DIR = "/tmp/al2023/lib";
+const VENDOR_DIR = new URL("./vendor/", import.meta.url);
 if (!existsSync(LIB_DIR)) {
   try {
     const tarPath = "/tmp/al2023.tar";
@@ -55,12 +59,27 @@ if (!existsSync(LIB_DIR)) {
   }
 }
 if (existsSync(LIB_DIR)) {
+  try {
+    for (const f of ["libsqlite3.so.0", "libc.musl-x86_64.so.1", "libnssckbi.so"]) {
+      const src = new URL(f, VENDOR_DIR);
+      if (existsSync(src)) execSync(`cp -f ${decodeURIComponent(src.pathname)} ${LIB_DIR}/`);
+    }
+  } catch {
+    // Vendored extras are optional when the host already provides equivalents.
+  }
   process.env.LD_LIBRARY_PATH = process.env.LD_LIBRARY_PATH
     ? `${LIB_DIR}:${process.env.LD_LIBRARY_PATH}`
     : LIB_DIR;
 }
 
-const browser = await pw.launch({ executablePath: await chromium.executablePath(), args: chromium.args, headless: true });
+// @sparticuz' default arg set (--single-process + swiftshader GL stack) crashes
+// this chromium build inside minimal containers ("Target page ... closed" on
+// first navigation). A minimal headless flag set boots reliably everywhere.
+const browser = await pw.launch({
+  executablePath: await chromium.executablePath(),
+  args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+  headless: true,
+});
 const page = await browser.newPage();
 page.setDefaultTimeout(30000);
 
