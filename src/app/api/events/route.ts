@@ -50,7 +50,7 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   const { accepted, rejected } = validateEventBatch(body);
   try {
-    if (accepted.length > 0) appendEvents(accepted);
+    if (accepted.length > 0) await appendEvents(accepted);
   } catch (err) {
     // e.g. read-only filesystem: fail loudly rather than silently dropping events.
     console.error("event store write failed", err);

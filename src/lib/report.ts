@@ -8,8 +8,19 @@
  * - click-out rate  = item_clicked events / search_submitted events
  * - zero-result rate = zero_results events / search_submitted events
  * - top queries = most frequent non-empty search queries in the window
+ *
+ * REEA-216 §3 add-on (REEA-233): click_rank_histogram buckets item_clicked
+ * events by their card rank so position-1 click-out share and mean clicked
+ * position are derivable straight from the report payload. Existing fields
+ * are unchanged. Rank -1 marks product-detail-page clicks (see
+ * ProductResultCard); result-card positions start at 0.
  */
 import type { FunnelEvent } from "@/lib/events";
+
+export interface RankBucket {
+  rank: number;
+  count: number;
+}
 
 export interface WeeklyReport {
   window_days: number;
@@ -20,6 +31,8 @@ export interface WeeklyReport {
   zero_results: number;
   zero_result_rate: number | null;
   top_queries: { query: string; count: number }[];
+  /** item_clicked counts per card position, ascending by rank (REEA-233). */
+  click_rank_histogram: RankBucket[];
 }
 
 export function inWindow(events: FunnelEvent[], now: number, windowDays: number): FunnelEvent[] {
@@ -43,6 +56,7 @@ export function aggregateWeekly(
   let clickOuts = 0;
   let zeroResults = 0;
   const queryCounts = new Map<string, number>();
+  const rankCounts = new Map<number, number>();
 
   for (const e of win) {
     if (e.type === "search_submitted") {
@@ -54,8 +68,19 @@ export function aggregateWeekly(
       zeroResults += 1;
     } else if (e.type === "item_clicked") {
       clickOuts += 1;
+      // Schema guarantees rank on item_clicked; guard anyway so hand-written
+      // legacy lines without one still count toward click_outs (unchanged
+      // meaning), just without a histogram bucket.
+      if (typeof e.rank === "number" && Number.isFinite(e.rank)) {
+        const rank = Math.trunc(e.rank);
+        rankCounts.set(rank, (rankCounts.get(rank) ?? 0) + 1);
+      }
     }
   }
+
+  const histogram: RankBucket[] = [...rankCounts.entries()]
+    .map(([rank, count]) => ({ rank, count }))
+    .sort((a, b) => a.rank - b.rank);
 
   const topQueries = [...queryCounts.entries()]
     .map(([query, count]) => ({ query, count }))
@@ -71,5 +96,6 @@ export function aggregateWeekly(
     zero_results: zeroResults,
     zero_result_rate: searches > 0 ? Math.min(1, zeroResults / searches) : null,
     top_queries: topQueries,
+    click_rank_histogram: histogram,
   };
 }
