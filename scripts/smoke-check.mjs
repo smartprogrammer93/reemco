@@ -149,10 +149,14 @@ await step(4, "results surface last-verified freshness (REEA-65)", async () => {
   await page.goto(`${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`, { waitUntil: "load" });
   await page.waitForSelector(".result-card", { timeout: 25000 });
   const html = await page.content();
-  const chip = "(?:Verified|updated)[ ]*(?:<!--[ ]-->)?[ ]*(?:\\d+[hd] ago|minutes ago)";
-  const fresh = (html.match(new RegExp(chip, "g")) || []).length;
-  const stale = (html.match(/may be outdated/g) || []).length;
-  const unknown = (html.match(/(?:updated|Verification) date unknown/g) || []).length;
+  // REEA-283/REEA-254 chip copy renders uppercase with the minute figure inside:
+  // "UPDATED {n} MINUTES AGO" / "UPDATED DATE UNKNOWN". Match case-insensitively
+  // and allow the digit before MINUTES AGO, alongside the legacy
+  // "updated <!-- -->minutes ago" and "Verified 2d ago" spellings.
+  const chip = "(?:Verified|updated)[ ]*(?:<!--[ ]-->)?[ ]*(?:\\d+[hd] ago|\\d+ minutes ago|minutes ago)";
+  const fresh = (html.match(new RegExp(chip, "gi")) || []).length;
+  const stale = (html.match(/may be outdated/gi) || []).length;
+  const unknown = (html.match(/(?:updated|Verification) date unknown/gi) || []).length;
   if (fresh + stale + unknown === 0) {
     throw new Error("no freshness badge on any result card (expected 'updated … ago' / 'may be outdated' / 'updated date unknown')");
   }
