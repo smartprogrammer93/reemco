@@ -249,13 +249,15 @@ export default function ProductResultCard({
                   className="flex flex-col justify-between gap-1 py-1 sm:flex-row sm:items-center sm:gap-x-2"
                   style={{ borderTop: "1px solid var(--rc-line)" }}
                 >
-                  {/* REEA-203: the label column absorbs its own wraps (chips
-                      drop under the merchant name as whole units); REEA-224
-                      item 1: a 160px floor keeps the column wide enough for
-                      the one-line chip (~156px at 12px mono), so at the 1280
-                      two-column grid every row in a card sits at one height
-                      (~52–53px) instead of rhythm-stepping on chip wraps. */}
-                  <span className="flex min-w-[160px] flex-wrap items-center gap-2">
+                  {/* REEA-224 item 1 (measured on the deployed shell): the
+                      merchant name and its chips are ONE inline unit. With
+                      flex-wrap the column stacked the ~156px chip under the
+                      name at 1280 (row grew 53 -> ~62px), breaking the
+                      equal-height rhythm. Name + one-line chips (each
+                      whitespace-nowrap) ride inline; the design-pass 160px
+                      floor keeps the column at least chip-wide; chips shrink
+                      as whole units, never half-wrap their own text. */}
+                  <span className="flex min-w-[160px] items-center gap-2">
                     <span style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
                       {o.merchant}
                     </span>
@@ -279,17 +281,19 @@ export default function ProductResultCard({
                       </span>
                     )}
                   </span>
-                  {/* REEA-75 (M2): flex-wrap keeps the Go to store CTA inside
-                      the card at narrow widths instead of overflowing the
-                      viewport; from sm the cluster keeps its intrinsic width so
-                      every row (chip or not) shares one inline structure.
-                      REEA-224 item 3 (dual-currency rows at ~480): the button is
-                      pinned (shrink-0) on the row right-side flex line so every row
-                      keeps one right-edge x; the combined KWD-stamp span takes
-                      min-width: 0 and wraps within the cluster; items-center keeps
-                      the button vertically centered against the wrapped price
-                      block; button min-height stays 44px (min-h-11). */}
-                  <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-3 sm:shrink-0">
+                  {/* REEA-224 item 3 (measured on the deployed shell): the
+                      cluster stays a single nowrap flex line — with flex-wrap
+                      the dot+price block stacked on its own line ABOVE the
+                      button at ~480 (cluster grew to ~80px), so the button
+                      sat bottom-aligned instead of centered against the
+                      wrapped price block. Without wrap the combined
+                      KWD-stamp span (min-w-0) wraps within its own box while
+                      the shrink-0 button (min-h-11) stays pinned at the row's
+                      right edge; items-center centers it against the wrapped
+                      price block. Overflow at narrow widths is absorbed by
+                      the min-w-0 price span, keeping the CTA inside the card
+                      (REEA-75 M2 intent). */}
+                  <span className="ml-auto flex min-w-0 items-center justify-end gap-3 sm:shrink-0">
                     <StockDot state={o.inStock ? "in" : "out"} />
                     <span
                       className="tabular min-w-0"
