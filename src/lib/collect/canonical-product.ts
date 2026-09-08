@@ -132,7 +132,7 @@ const NOISE = new Set([
  *  restatement word stays recognized after the join pass. Plain model codes
  *  keep discriminating — `air11` is not noise because "air" is not either. */
 function noised(token: string): boolean {
-  return NOISE.has(token) || (/^\p{L}+\d+$/.test(token) && NOISE.has(token.replace(/\d+$/g, "")));
+  return NOISE.has(token) || (/^\p{L}+\d+$/u.test(token) && NOISE.has(token.replace(/\d+$/g, "")));
 }
 
 const STORAGE_RE = /^(\d+(?:\.\d+)?)(gb|tb)$/;
