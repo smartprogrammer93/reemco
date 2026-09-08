@@ -627,3 +627,55 @@ describe("coverage line (REEA-290)", () => {
     expect(document.body.innerHTML).not.toContain("did not respond");
   });
 });
+
+describe("empty-state hint line (REEA-332 item 2)", () => {
+  const HINT = "No matches — try a shorter phrase.";
+
+  it("shows one hint line under the count heading when the answer is empty", async () => {
+    searchParams.set("q", "zzxwq kvqpl");
+    await act(async () => {
+      render(
+        <ResultsClient query="zzxwq kvqpl" page={1} products={[]} suggestions={[]} />,
+      );
+    });
+    const heading = document.querySelector("h1");
+    expect(heading?.textContent).toContain("zzxwq kvqpl");
+    // The hint rides DIRECTLY under the count heading…
+    const hint = heading?.nextElementSibling;
+    expect(hint?.tagName).toBe("P");
+    expect(hint?.textContent).toBe(HINT);
+    // …in the stated treatment: small text, muted colour.
+    expect(hint?.getAttribute("style")).toContain("font: var(--rc-text-small)");
+    expect(hint?.getAttribute("style")).toContain("color: var(--rc-muted)");
+  });
+
+  it("keeps heading + hint through staged convergence — one heading, hint under it", async () => {
+    searchParams.set("q", "zzxwq");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    const emptySnap: LiveSearchResult = { products: [], notes: [], suggestions: [] };
+    await act(async () => {
+      render(
+        <ResultsClient query="zzxwq" page={1} country={null} stages={[Promise.resolve(emptySnap), Promise.resolve(emptySnap)]} />,
+      );
+    });
+    // Converged: the heading from the streamed shell stays (REEA-224 geometry),
+    // exactly one h1, hint line beneath it, then the empty-state card.
+    const headings = document.querySelectorAll("h1");
+    expect(headings).toHaveLength(1);
+    expect(headings[0].textContent).toContain("zzxwq");
+    expect(headings[0].nextElementSibling?.textContent).toBe(HINT);
+    expect(document.body.textContent).toContain("No matches for “zzxwq” yet");
+  });
+
+  it("shows no hint once the query matched something", async () => {
+    searchParams.set("q", "sony");
+    await act(async () => {
+      render(
+        <ResultsClient query="sony" page={1} products={SAMPLE_PRODUCTS} suggestions={SAMPLE_PRODUCTS} />,
+      );
+    });
+    expect(document.body.textContent).toContain("1 result for");
+    expect(document.body.textContent).not.toContain(HINT);
+  });
+});

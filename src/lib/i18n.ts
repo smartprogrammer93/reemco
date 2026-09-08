@@ -123,6 +123,8 @@ const en = {
   emptyTitle: "No matches for “{q}” yet",
   emptyBody:
     "We check live stores — spelling matters. Try a suggested search below; your query stays in the box.",
+  // REEA-332: the one hint line under the count heading when the answer is empty.
+  emptyHint: "No matches — try a shorter phrase.",
   resultsOne: "result",
   resultsMany: "results",
   resultsForWord: "for",
@@ -250,6 +252,7 @@ const ar: typeof en = {
   emptyTitle: "لا توجد نتائج مطابقة لـ «{q}» بعد",
   emptyBody:
     "نتفقد المتاجر مباشرة — دقة الكتابة مهمة. جرّب إحدى عمليات البحث المقترحة أدناه، وسيبقى نص بحثك في الحقل.",
+  emptyHint: "لا توجد نتائج — جرّب عبارة أقصر.",
   resultsOne: "نتيجة",
   resultsMany: "نتائج",
   resultsForWord: "عن",

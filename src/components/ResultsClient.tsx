@@ -483,6 +483,29 @@ function StageAppend(props: {
   );
 }
 
+/* REEA-332 item 2 — the count heading carries one hint line whenever its own
+   count reads zero for a real query: "No matches — try a shorter phrase.",
+   small text in the muted colour. Deriving the hint from the SAME count the
+   heading renders keeps every view (streamed shell, converged staged view,
+   plain fallback) on one rule — the hint appears exactly when the heading
+   says zero, and one shared component keeps the markup identical across the
+   three sites so hydration never forks. */
+function CountHeading({ count, query, locale }: { count: number; query: string; locale?: Locale }) {
+  const t = getStrings(locale ?? clientLocale());
+  return (
+    <>
+      {/* Theme v1 §4: display-scale H1, tabular count */}
+      <h1 style={{ font: "var(--rc-text-display)", color: "var(--rc-ink)" }}>
+        <span className="tabular">{count}</span>{" "}
+        {count === 1 ? t.resultsOne : t.resultsMany} {t.resultsForWord} &ldquo;{query || t.allProducts}&rdquo;
+      </h1>
+      {count === 0 && query ? (
+        <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>{t.emptyHint}</p>
+      ) : null}
+    </>
+  );
+}
+
 /* REEA-224 item 2 — the `N results for …` h1 must be part of the initial
    server shell, not something that appears only when the view converges:
    without it the late heading pushes the footer down between first paint and
@@ -498,14 +521,8 @@ function ResultsHeading(props: {
   locale?: Locale;
 }) {
   const snap = use(props.stage);
-  const t = getStrings(props.locale ?? clientLocale());
   const visible = stagedView(snap, props.page, props.country, props.showOutOfStock);
-  return (
-    <h1 style={{ font: "var(--rc-text-display)", color: "var(--rc-ink)" }}>
-      <span className="tabular">{visible.length}</span>{" "}
-      {visible.length === 1 ? t.resultsOne : t.resultsMany} {t.resultsForWord} &ldquo;{props.query || t.allProducts}&rdquo;
-    </h1>
-  );
+  return <CountHeading count={visible.length} query={props.query} locale={props.locale} />;
 }
 
 /* REEA-290 — per-query coverage line: which retailers answered this search
@@ -546,7 +563,6 @@ function StagedResults(props: {
   locale?: Locale;
 }) {
   const { stages, query, page, country, showOutOfStock, onSelectCountry, onToggleStock, onRefresh, locale } = props;
-  const t = getStrings(locale ?? clientLocale());
   const finalPromise = stages[stages.length - 1];
   const [finalSnap, setFinalSnap] = useState<LiveSearchResult | null>(null);
 
@@ -592,9 +608,13 @@ function StagedResults(props: {
 
   if (finalSnap && products) {
     // Converged view: full count + empty state, identical to the blocking path.
+    // REEA-332 item 2: the count heading rides BOTH branches, so the zero case
+    // keeps its heading + hint line exactly where the streamed shell put them —
+    // only the body below changes.
     return (
       <ResultsErrorBoundary locale={locale}>
         <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
+        <CountHeading count={products.length} query={query} locale={locale} />
         {products.length === 0 && query.length > 0 ? (
           <>
             <EmptyState query={query} suggestions={stagedSuggestions(finalSnap, country, showOutOfStock)} country={country} locale={locale} />
@@ -602,11 +622,6 @@ function StagedResults(props: {
           </>
         ) : (
           <>
-            {/* Theme v1 §4: display-scale H1, tabular count */}
-            <h1 style={{ font: "var(--rc-text-display)", color: "var(--rc-ink)" }}>
-              <span className="tabular">{products.length}</span>{" "}
-              {products.length === 1 ? t.resultsOne : t.resultsMany} {t.resultsForWord} &ldquo;{query || t.allProducts}&rdquo;
-            </h1>
             <CoverageLine notes={finalSnap.notes} locale={locale} />
             <ResultsGrid
               products={products}
@@ -678,7 +693,6 @@ function ResultsInner(props: {
   // the client chain (cookie → browser hint → "en"); every child receives
   // this value explicitly, so SSR markup and hydration always agree.
   const locale = props.locale ?? clientLocale();
-  const t = getStrings(locale);
   const router = useRouter();
   // AC-U4 (REEA-13): malformed/oversized params degrade safely before use.
   const query = props.query ?? sanitizeSearchQuery(searchParams.get("q")) ?? "";
@@ -817,24 +831,19 @@ function ResultsInner(props: {
   return (
     <ResultsErrorBoundary locale={locale}>
       <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
+      {/* REEA-332 item 2: same heading + hint rule as the staged paths. */}
+      <CountHeading count={products.length} query={query} locale={locale} />
       {zero ? (
         <EmptyState query={query} suggestions={suggestions} country={country} locale={locale} />
       ) : (
-        <>
-          {/* Theme v1 §4: display-scale H1, tabular count */}
-          <h1 style={{ font: "var(--rc-text-display)", color: "var(--rc-ink)" }}>
-            <span className="tabular">{products.length}</span>{" "}
-            {products.length === 1 ? t.resultsOne : t.resultsMany} {t.resultsForWord} &ldquo;{query || t.allProducts}&rdquo;
-          </h1>
-          <ResultsGrid
-            products={products}
-            query={query}
-            page={page}
-            country={country}
-            showOutOfStock={showOutOfStock} locale={locale}
-            renderStartMs={props.renderStartMs}
-          />
-        </>
+        <ResultsGrid
+          products={products}
+          query={query}
+          page={page}
+          country={country}
+          showOutOfStock={showOutOfStock} locale={locale}
+          renderStartMs={props.renderStartMs}
+        />
       )}
     </ResultsErrorBoundary>
   );
