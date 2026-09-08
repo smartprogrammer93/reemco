@@ -53,7 +53,7 @@ export default function StockToggle({
       >
         ✓
       </span>
-      Show out-of-stock items
+      {t.showOutOfStock}
     </button>
   );
 }

@@ -429,7 +429,7 @@ function StageAppend(props: {
   renderStartMs?: number;
   locale?: Locale;
 }) {
-  const { stages, index, query, page, country, showOutOfStock } = props;
+  const { stages, index, page, country, showOutOfStock } = props;
   const t = getStrings(props.locale ?? clientLocale());
   const snap = use(stages[index]);
   const visible = stagedView(snap, page, country, showOutOfStock);
@@ -802,6 +802,9 @@ function ResultsInner(props: {
         page={page}
         country={country}
         showOutOfStock={showOutOfStock} locale={locale}
+        onSelectCountry={onSelectCountry}
+        onToggleStock={onToggleStock}
+        onRefresh={onRefresh}
         renderStartMs={props.renderStartMs}
       />
     );

@@ -2,11 +2,12 @@ import Link from "next/link";
 import Image from "next/image";
 import type { Coupon, NormalizedProduct, PriceOffer } from "@/types/product";
 import { buildResultsHref, type CountryCode } from "@/lib/country";
-import { effectivePrice, formatCountryPrice, formatPrimaryPrice, sortOffers } from "@/lib/format";
+import { effectivePrice, formatCountryPrice, formatPrimaryPrice, sortOffers, toKwdNumeric } from "@/lib/format";
 import { gradeBadgeLabel } from "@/lib/collect/canonical-product";
 import CouponBadge from "@/components/CouponBadge";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import { resolveOfferUrl } from "@/lib/links";
+import type { Locale } from "@/lib/i18n";
 import FreshnessBadge from "@/components/FreshnessBadge";
 
 /**
@@ -188,13 +189,17 @@ export default function ProductResultCard({
   showOutOfStock?: boolean;
   /** REEA-283 server-render clock for the freshness chip (hydration-reused). */
   renderStartMs?: number;
+  /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
+  locale?: Locale;
 }) {
   const detail = variant === "detail";
   const offers = sortOffers(product.offers);
   const best = offers[0];
-  // Base figure for the swatch chips (REEA-254): the cheapest listed price on
-  // the card — the same base the server used for each swatch's priceDelta.
-  const cheapestListed = offers.length > 0 ? Math.min(...offers.map((o) => o.price)) : 0;
+  // Base figure for the swatch chips (REEA-254): the cheapest listed price in
+  // KWD-space — the same base the server used for each swatch's priceDelta
+  // (toKwdNumeric), so mixed-currency cards keep one unit on the chips.
+  const cheapestListed =
+    offers.length > 0 ? Math.min(...offers.map((o) => toKwdNumeric(o.price, o.currency))) : 0;
   const oos = best != null && !best.inStock;
   const primaryCoupon = product.coupons[0];
   const extraCoupons = product.coupons.length - 1;
@@ -302,7 +307,7 @@ export default function ProductResultCard({
             >
               {v.label}
               <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
-                {formatCountryPrice(cheapestListed + v.priceDelta, best.currency, country).primary}
+                {formatCountryPrice(cheapestListed + v.priceDelta, "KWD", country).primary}
               </span>
             </span>
           ))}
@@ -481,7 +486,7 @@ export default function ProductResultCard({
                   className="tabular ml-auto shrink-0"
                   style={{ font: "var(--rc-text-body)", fontWeight: 600, color: "var(--rc-ink)" }}
                 >
-                  from {formatPrimaryPrice(a.fromPrice, best?.currency ?? "USD").label}
+                  from {formatPrimaryPrice(a.fromPrice, "KWD").label}
                 </span>
               </li>
             ))}
