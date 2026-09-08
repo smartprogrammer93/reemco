@@ -1,4 +1,6 @@
 import StaticPage, { StaticSection } from "@/components/StaticPage";
+import { getStrings } from "@/lib/i18n";
+import { resolveRequestLocale } from "@/lib/i18n-server";
 
 /* REEA-181 — plain-language privacy summary; copy is final per the accepted
    design spec. */
@@ -7,23 +9,22 @@ export const metadata = {
   description: "What Reemco records, and why — in plain language.",
 };
 
-export default function PrivacyPage() {
+export default async function PrivacyPage() {
+  const locale = await resolveRequestLocale();
+  const t = getStrings(locale);
   return (
-    <StaticPage title="Privacy">
+    <StaticPage title={t.privacyTitle}>
       <p style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
-        In plain language: what Reemco records, and why.
+        {t.privacyLead}
       </p>
-      <StaticSection label="WHAT WE RECORD">
-        Which product was searched, which offers were opened, and which retailer link was
-        clicked. Records are anonymous counts and click-outs — no names, no personal
-        profiles.
+      <StaticSection label={t.privacyRecordLabel}>
+        {t.privacyRecordBody}
       </StaticSection>
-      <StaticSection label="WHY">
-        It tells us which searches return good matches and where our results need fixing.
+      <StaticSection label={t.privacyWhyLabel}>
+        {t.privacyWhyBody}
       </StaticSection>
-      <StaticSection label="WHEN YOU LEAVE">
-        Clicking through opens the retailer&apos;s own site. From that click on, the
-        retailer&apos;s own privacy policy applies.
+      <StaticSection label={t.privacyLeaveLabel}>
+        {t.privacyLeaveBody}
       </StaticSection>
     </StaticPage>
   );

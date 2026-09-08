@@ -22,7 +22,13 @@ function SkeletonCard() {
   );
 }
 
-export default function ResultsLoading() {
+import { getStrings } from "@/lib/i18n";
+import { resolveRequestLocale } from "@/lib/i18n-server";
+
+export default async function ResultsLoading() {
+  // REEA-279 — the loading stamp is chrome: it comes from the table too.
+  const locale = await resolveRequestLocale();
+  const t = getStrings(locale);
   return (
     <div
       className="mx-auto w-full space-y-4 px-6 py-6"
@@ -32,7 +38,7 @@ export default function ResultsLoading() {
         <div className="pulse-bar-fill" style={{ width: "100%" }} />
       </div>
       <p className="meta-stamp" style={{ color: "var(--rc-muted)" }}>
-        Checking live stores…
+        {t.checkingStores}
       </p>
       {/* Heading slot at the h1's own display height (same clamp math as
           --rc-text-display × line-height 1.05) so the settled heading lands

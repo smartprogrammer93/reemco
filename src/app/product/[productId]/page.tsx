@@ -8,6 +8,8 @@ import {
   filterProductsByCountry,
   sanitizeCountry,
 } from "@/lib/country";
+import { getStrings } from "@/lib/i18n";
+import { resolveRequestLocale } from "@/lib/i18n-server";
 
 export const metadata = {
   title: "Product — Reemco",
@@ -33,6 +35,10 @@ export default async function ProductPage({
   // offer set. No param → unchanged behavior.
   const { c } = await searchParams;
   const country = sanitizeCountry(c);
+  // REEA-279 — chrome locale for the detail card, the live panel and the
+  // back link; cookie → Accept-Language hint → "en".
+  const locale = await resolveRequestLocale();
+  const t = getStrings(locale);
   const product = await resolveProductIdentity(productId, country);
   if (!product) notFound();
   // Catalog identities carry bundled offers — apply the same selection the
@@ -45,7 +51,7 @@ export default async function ProductPage({
       style={{ maxWidth: "var(--rc-layout-max-w)" }}
     >
       {/* Theme v1 §3.4: product hero uses the detail variant (28px price, variations, alternatives). */}
-      <ProductResultCard product={shown} isBest variant="detail" country={country} />
+      <ProductResultCard product={shown} isBest variant="detail" country={country} locale={locale} />
       {/* REEA-84 W1: live per-product collection with progress UX (T4/T5/T6).
           Client-only — degrades to the catalog card above when the API is
           unavailable, e.g. on the static preview host (AC10). */}
@@ -53,6 +59,7 @@ export default async function ProductPage({
         productId={shown.productId}
         currency={shown.offers[0]?.currency ?? "KWD"}
         country={country}
+        locale={locale}
       />
       <p style={{ marginTop: "var(--rc-space-4)" }}>
         <Link
@@ -60,7 +67,7 @@ export default async function ProductPage({
           className="hover:underline"
           style={{ font: "var(--rc-text-small)", color: "var(--rc-primary)" }}
         >
-          ← All offers for this product
+          {t.allOffersLead}
         </Link>
       </p>
     </div>

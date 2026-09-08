@@ -33,8 +33,8 @@ import FooterNav from "@/components/FooterNav";
 afterEach(cleanup);
 
 describe("static trust pages (REEA-181)", () => {
-  it("/about server-renders its h1 and all three labeled blocks", () => {
-    render(<AboutPage />);
+  it("/about server-renders its h1 and all three labeled blocks", async () => {
+    render(await AboutPage());
     expect(screen.getByRole("heading", { name: "About Reemco" })).toBeTruthy();
     expect(screen.getByText(/price-comparison site for shopping in Kuwait/)).toBeTruthy();
     expect(
@@ -45,15 +45,15 @@ describe("static trust pages (REEA-181)", () => {
     expect(screen.getByText(/fetched live from each retailer/)).toBeTruthy();
   });
 
-  it("/privacy server-renders its h1, lead line and blocks", () => {
-    render(<PrivacyPage />);
+  it("/privacy server-renders its h1, lead line and blocks", async () => {
+    render(await PrivacyPage());
     expect(screen.getByRole("heading", { name: "Privacy" })).toBeTruthy();
     expect(screen.getByText(/what Reemco records, and why/)).toBeTruthy();
     expect(screen.getByText(/anonymous counts and click-outs/)).toBeTruthy();
   });
 
-  it("/contact server-renders its h1, mailto link and supporting lines", () => {
-    render(<ContactPage />);
+  it("/contact server-renders its h1, mailto link and supporting lines", async () => {
+    render(await ContactPage());
     expect(screen.getByRole("heading", { name: "Contact" })).toBeTruthy();
     const mail = screen.getByRole("link", { name: "support@reemco.example" });
     expect(mail.getAttribute("href")).toBe("mailto:support@reemco.example");

@@ -1,4 +1,6 @@
 import StaticPage from "@/components/StaticPage";
+import { getStrings } from "@/lib/i18n";
+import { resolveRequestLocale } from "@/lib/i18n-server";
 
 /* REEA-181 — single-screen contact page. overflow-wrap:anywhere keeps the
    email inside the gutter at 375px. */
@@ -7,11 +9,13 @@ export const metadata = {
   description: "Questions, corrections, or a retailer we should add — email us.",
 };
 
-export default function ContactPage() {
+export default async function ContactPage() {
+  const locale = await resolveRequestLocale();
+  const t = getStrings(locale);
   return (
-    <StaticPage title="Contact">
+    <StaticPage title={t.contactTitle}>
       <p style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
-        Questions, corrections, or a retailer we should add? Email us.
+        {t.contactLead}
       </p>
       <p>
         <a
@@ -24,10 +28,10 @@ export default function ContactPage() {
       </p>
       <div className="flex flex-col" style={{ gap: "var(--rc-space-2)" }}>
         <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
-          We aim to reply within one business day.
+          {t.contactReply}
         </p>
         <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
-          Include the product name and the retailer you saw.
+          {t.contactInclude}
         </p>
       </div>
     </StaticPage>

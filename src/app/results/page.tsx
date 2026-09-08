@@ -1,6 +1,7 @@
 import ResultsClient from "@/components/ResultsClient";
 import { collectLiveResultsStaged } from "@/lib/collect/live-search";
 import { MARKET_COOKIE, resolveCountrySelection } from "@/lib/country";
+import { LOCALE_COOKIE, resolveUiLocale } from "@/lib/i18n";
 import { isRefreshSignal, REFRESH_COOKIE } from "@/lib/query-cache";
 import { sanitizeSearchQuery, sanitizePage } from "@/lib/search-params";
 import { sanitizeShowOutOfStock } from "@/lib/stock";
@@ -34,6 +35,7 @@ export const maxDuration = 20;
  *  pre-feature "All" default instead of failing the shell render. */
 async function readPreferenceHint(): Promise<{
   cookie: string | undefined;
+  localeCookie: string | undefined;
   acceptLanguage: string | null;
   refresh: boolean;
 }> {
@@ -42,13 +44,14 @@ async function readPreferenceHint(): Promise<{
     const headersList = await headers();
     return {
       cookie: cookieStore.get(MARKET_COOKIE)?.value,
+      localeCookie: cookieStore.get(LOCALE_COOKIE)?.value,
       acceptLanguage: headersList.get("accept-language"),
       // REEA-291 AC4 — the one-shot Refresh signal rides the same request-time
       // cookie read: this render re-collects live instead of taking the memo.
       refresh: isRefreshSignal(cookieStore.get(REFRESH_COOKIE)?.value),
     };
   } catch {
-    return { cookie: undefined, acceptLanguage: null, refresh: false };
+    return { cookie: undefined, localeCookie: undefined, acceptLanguage: null, refresh: false };
   }
 }
 
@@ -73,6 +76,9 @@ export default async function ResultsPage({
   // pill overwrites the hint and persists across sessions.
   const hint = await readPreferenceHint();
   const country = resolveCountrySelection(params.c, hint.cookie, hint.acceptLanguage);
+  // REEA-279 — the same request-time read resolves the chrome locale: the
+  // rc_locale cookie wins, then the coarse Accept-Language hint, then "en".
+  const locale = resolveUiLocale(hint.localeCookie, hint.acceptLanguage);
   // REEA-186 — stock selection (`?oos=1` shows out-of-stock listings).
   // Default hides them; the ResultsClient view applies it BEFORE slicing each
   // staged snapshot so counts and pages match the visible set. Offers stay
@@ -101,6 +107,7 @@ export default async function ResultsPage({
         page={page}
         country={country}
         showOutOfStock={showOutOfStock}
+        locale={locale}
         stages={staged.stages}
         renderStartMs={renderStartMs}
       />
