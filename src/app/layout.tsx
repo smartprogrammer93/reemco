@@ -5,7 +5,8 @@ import Link from "next/link";
 import HeaderSearch from "@/components/HeaderSearch";
 import FooterNav from "@/components/FooterNav";
 import LocaleToggle from "@/components/LocaleToggle";
-import { getStrings, localeDir, resolveRequestLocale } from "@/lib/i18n";
+import { getStrings, localeDir } from "@/lib/i18n";
+import { resolveRequestLocale } from "@/lib/i18n-server";
 import "./globals.css";
 
 /* Theme v1 §6: Inter 400/500/600/700, display swap; fallback stack in --rc-font-body. */

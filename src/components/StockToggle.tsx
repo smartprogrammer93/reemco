@@ -1,6 +1,7 @@
 "use client";
 
 import { rememberShowOutOfStock } from "@/lib/stock";
+import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
 
 /**
  * REEA-186 — "Show out-of-stock items" checkbox on the results surface. Same
@@ -18,11 +19,15 @@ import { rememberShowOutOfStock } from "@/lib/stock";
 export default function StockToggle({
   showOutOfStock,
   onToggle,
+  locale,
 }: {
   showOutOfStock: boolean;
   /** Applied to the loaded payload immediately (AC4). */
   onToggle: (next: boolean) => void;
+  /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
+  locale?: Locale;
 }) {
+  const t = getStrings(locale ?? clientLocale());
   const next = !showOutOfStock;
   return (
     <button

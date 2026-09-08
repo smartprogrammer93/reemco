@@ -26,6 +26,7 @@ import { trackEvents } from "@/lib/telemetry";
 import { PRODUCTS } from "@/lib/feed";
 import { isAccessoryTitle, partitionForQuery } from "@/lib/relevance";
 import { coverageLine, type LiveSearchResult } from "@/lib/collect/live-search";
+import { clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
 import type { NormalizedProduct } from "@/types/product";
 
 /**
@@ -50,7 +51,7 @@ const PAGE_SIZE = 20;
    boundary below — keep the markup identical to the former in-component
    versions (Theme v1 §3.5, Brief v4). */
 class ResultsErrorBoundary extends Component<
-  { children: ReactNode },
+  { children: ReactNode; locale?: Locale },
   { failed: boolean }
 > {
   state = { failed: false };
@@ -61,6 +62,7 @@ class ResultsErrorBoundary extends Component<
 
   render() {
     if (this.state.failed) {
+      const t = getStrings(this.props.locale ?? clientLocale());
       return (
         <div
           className="result-card"
@@ -68,17 +70,17 @@ class ResultsErrorBoundary extends Component<
           style={{ borderLeft: "3px solid var(--rc-error)", background: "var(--rc-error-bg)" }}
         >
           <h2 style={{ font: "var(--rc-text-title)", color: "var(--rc-ink)" }}>
-            Something went wrong
+            {t.errorTitle}
           </h2>
           <p className="mt-1" style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
-            We couldn&apos;t load the results. Check your connection and try again.
+            {t.errorBodyShort}
           </p>
           <button
             type="button"
             onClick={() => window.location.reload()}
             className="btn-primary focusable mt-4 min-h-11 px-4"
           >
-            Retry
+            {t.retry}
           </button>
         </div>
       );
@@ -103,14 +105,15 @@ function SkeletonCard() {
   );
 }
 
-export function LoadingFallback() {
+export function LoadingFallback({ locale }: { locale?: Locale }) {
+  const t = getStrings(locale ?? clientLocale());
   return (
     <div className="space-y-4">
       <div className="pulse-bar" aria-hidden>
         <div className="pulse-bar-fill" style={{ width: "100%" }} />
       </div>
       <p className="meta-stamp" style={{ color: "var(--rc-muted)" }}>
-        Checking live stores…
+        {t.checkingStores}
       </p>
       {/* Heading slot at the h1's own display height (same clamp math as
           --rc-text-display × line-height 1.05) so the settled heading lands
@@ -132,32 +135,35 @@ export function LoadingFallback() {
    broad category stays useful whatever was being searched). Live suggestion
    pills ride FIRST when the collection found anything; categories follow,
    deduped against them. */
-const CATEGORY_LINKS = ["Smartphones", "Fragrances", "Kitchen appliances"];
-
+/* REEA-279: the three category pills read their labels from the locale table
+   so the AR shell offers Arabic queries (Arabic queries match Arabic
+   retailer titles exactly like English ones — same live path). */
 function EmptyState({
   query,
   suggestions,
   country,
+  locale,
 }: {
   query: string;
   suggestions: NormalizedProduct[];
   country: CountryCode | null;
+  locale?: Locale;
 }) {
+  const t = getStrings(locale ?? clientLocale());
   const pills = suggestions.slice(0, 3).map((p) => p.title);
   // AC-3 floor: the three category links ride in whatever the live
   // collection returned — deduped so a category that IS the suggestion is
   // not repeated, but never fewer than the three broad onward paths.
-  for (const c of CATEGORY_LINKS) {
+  for (const c of [t.catPhones, t.catFragrances, t.catKitchen]) {
     if (!pills.includes(c)) pills.push(c);
   }
   return (
     <div className="result-card mx-auto w-full max-w-xl">
       <h2 style={{ font: "var(--rc-text-h2)", color: "var(--rc-ink)" }}>
-        No matches for &ldquo;{query}&rdquo; yet
+        {fill(t.emptyTitle, { q: query })}
       </h2>
       <p className="mt-2" style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
-        We check live stores — spelling matters. Try a suggested search below; your query stays
-        in the box.
+        {t.emptyBody}
       </p>
       <div className="mt-4 flex flex-wrap gap-2">
         {pills.map((q) => (
@@ -171,7 +177,7 @@ function EmptyState({
         onClick={() => window.location.reload()}
         className="btn-primary focusable mt-4 h-11 px-5"
       >
-        Retry
+        {t.retry}
       </button>
     </div>
   );
@@ -191,6 +197,7 @@ function ResultsGrid({
   country,
   showOutOfStock,
   renderStartMs,
+  locale,
 }: {
   products: NormalizedProduct[];
   query: string;
@@ -198,7 +205,9 @@ function ResultsGrid({
   country: CountryCode | null;
   showOutOfStock: boolean;
   renderStartMs?: number;
+  locale?: Locale;
 }) {
+  const t = getStrings(locale ?? clientLocale());
   const tier = partitionForQuery(products);
   if (!tier.tiered) {
     // REEA-213: exactly one Best-price badge, on the first in-stock card of
@@ -217,7 +226,7 @@ function ResultsGrid({
             query={query}
             rank={(page - 1) * PAGE_SIZE + i}
             country={country}
-            showOutOfStock={showOutOfStock}
+            showOutOfStock={showOutOfStock} locale={locale}
             renderStartMs={renderStartMs}
           />
         ))}
@@ -227,7 +236,7 @@ function ResultsGrid({
   const bestAt = bestBadgeIndex(tier.devices);
   return (
     <>
-      <div aria-label="Devices">
+      <div aria-label={t.devicesLabel}>
         <div
           className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]"
           style={{ marginTop: "var(--rc-space-8)" }}
@@ -240,14 +249,14 @@ function ResultsGrid({
               query={query}
               rank={(page - 1) * PAGE_SIZE + i}
               country={country}
-              showOutOfStock={showOutOfStock}
+              showOutOfStock={showOutOfStock} locale={locale}
               renderStartMs={renderStartMs}
             />
           ))}
         </div>
       </div>
       {tier.accessories.length > 0 && (
-        <div aria-label="Accessories">
+        <div aria-label={t.accessoriesLabel}>
           <div
             className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]"
             style={{ marginTop: "var(--rc-space-4)" }}
@@ -260,7 +269,7 @@ function ResultsGrid({
                 query={query}
                 rank={(page - 1) * PAGE_SIZE + tier.devices.length + i}
                 country={country}
-                showOutOfStock={showOutOfStock}
+                showOutOfStock={showOutOfStock} locale={locale}
                 renderStartMs={renderStartMs}
               />
             ))}
@@ -288,9 +297,11 @@ export default function ResultsClient(props: {
    *  hydration reuses the SAME value the SSR freshness digit was computed
    *  from — no Date.now() recompute on either pass, no mismatch. */
   renderStartMs?: number;
+  /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
+  locale?: Locale;
 }) {
   return (
-    <Suspense fallback={<LoadingFallback />}>
+    <Suspense fallback={<LoadingFallback locale={props.locale} />}>
       <ResultsInner {...props} />
     </Suspense>
   );
@@ -302,13 +313,16 @@ function SelectionRow({
   onSelectCountry,
   onToggleStock,
   onRefresh,
+  locale,
 }: {
   country: CountryCode | null;
   showOutOfStock: boolean;
   onSelectCountry: (code: CountryCode | null) => void;
   onToggleStock: (next: boolean) => void;
   onRefresh: () => void;
+  locale?: Locale;
 }) {
+  const t = getStrings(locale ?? clientLocale());
   return (
     /* REEA-170: country pills above the list — same control for both the
        result list and the empty state, active choice echoed from the URL.
@@ -318,10 +332,10 @@ function SelectionRow({
        payload IN PLACE (ResultsClient state); the Refresh button is the one
        explicit action that re-runs the live collection server-side. */
     <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: "var(--rc-space-4)" }}>
-      <CountryFilter country={country} onSelect={onSelectCountry} />
-      <StockToggle showOutOfStock={showOutOfStock} onToggle={onToggleStock} />
+      <CountryFilter country={country} onSelect={onSelectCountry} locale={locale} />
+      <StockToggle showOutOfStock={showOutOfStock} locale={locale} onToggle={onToggleStock} />
       <button type="button" onClick={onRefresh} className="query-pill query-pill-on-light focusable">
-        Refresh
+        {t.refresh}
       </button>
     </div>
   );
@@ -367,8 +381,9 @@ function FlushBlock(props: {
   country: CountryCode | null;
   showOutOfStock: boolean;
   renderStartMs?: number;
+  locale?: Locale;
 }) {
-  const { label, order, products, bestAt, query, page, country, showOutOfStock, renderStartMs } = props;
+  const { label, order, products, bestAt, query, page, country, showOutOfStock, renderStartMs, locale } = props;
   if (products.length === 0) return null;
   // REEA-213: inside a participating block the badge rides the first
   // in-stock card of the final sorted order, never a later cheaper one.
@@ -384,7 +399,7 @@ function FlushBlock(props: {
             query={query}
             rank={(page - 1) * PAGE_SIZE + i}
             country={country}
-            showOutOfStock={showOutOfStock}
+            showOutOfStock={showOutOfStock} locale={locale}
             renderStartMs={renderStartMs}
           />
         ))}
@@ -412,8 +427,10 @@ function StageAppend(props: {
   country: CountryCode | null;
   showOutOfStock: boolean;
   renderStartMs?: number;
+  locale?: Locale;
 }) {
   const { stages, index, query, page, country, showOutOfStock } = props;
+  const t = getStrings(props.locale ?? clientLocale());
   const snap = use(stages[index]);
   const visible = stagedView(snap, page, country, showOutOfStock);
   // Snapshots are cumulative, so comparing against the adjacent prior stage is
@@ -452,14 +469,14 @@ function StageAppend(props: {
   return (
     <>
       <FlushBlock
-        label="Devices"
+        label={t.devicesLabel}
         order={1}
         
         products={devices}
         bestAt={badgeOwner ? 0 : -1}
         {...props}
       />
-      <FlushBlock label="Accessories" order={2} products={accessories} bestAt={badgeOwner && devices.length === 0 ? 0 : -1} {...props} />
+      <FlushBlock label={t.accessoriesLabel} order={2} products={accessories} bestAt={badgeOwner && devices.length === 0 ? 0 : -1} {...props} />
       {next}
     </>
   );
@@ -477,13 +494,15 @@ function ResultsHeading(props: {
   page: number;
   country: CountryCode | null;
   showOutOfStock: boolean;
+  locale?: Locale;
 }) {
   const snap = use(props.stage);
+  const t = getStrings(props.locale ?? clientLocale());
   const visible = stagedView(snap, props.page, props.country, props.showOutOfStock);
   return (
     <h1 style={{ font: "var(--rc-text-display)", color: "var(--rc-ink)" }}>
       <span className="tabular">{visible.length}</span>{" "}
-      {visible.length === 1 ? "result" : "results"} for &ldquo;{props.query || "all products"}&rdquo;
+      {visible.length === 1 ? t.resultsOne : t.resultsMany} {t.resultsForWord} &ldquo;{props.query || t.allProducts}&rdquo;
     </h1>
   );
 }
@@ -498,8 +517,8 @@ function ResultsHeading(props: {
    where every in-scope retailer has settled), so the sentence describes the
    whole collection while earlier retailers' offers are already painted — a
    late or failed retailer only deepens the line, it never blanks the grid. */
-function CoverageLine({ notes }: { notes: LiveSearchResult["notes"] }) {
-  const text = coverageLine(notes);
+function CoverageLine({ notes, locale }: { notes: LiveSearchResult["notes"]; locale?: Locale }) {
+  const text = coverageLine(notes, locale);
   if (!text) return null;
   return (
     <p className="meta-stamp" style={{ color: "var(--rc-muted)" }}>
@@ -508,9 +527,9 @@ function CoverageLine({ notes }: { notes: LiveSearchResult["notes"] }) {
   );
 }
 
-function StageCoverage(props: { stage: Promise<LiveSearchResult> }) {
+function StageCoverage(props: { stage: Promise<LiveSearchResult>; locale?: Locale }) {
   const snap = use(props.stage);
-  return <CoverageLine notes={snap.notes} />;
+  return <CoverageLine notes={snap.notes} locale={props.locale} />;
 }
 
 function StagedResults(props: {
@@ -523,8 +542,10 @@ function StagedResults(props: {
   onToggleStock: (next: boolean) => void;
   onRefresh: () => void;
   renderStartMs?: number;
+  locale?: Locale;
 }) {
-  const { stages, query, page, country, showOutOfStock, onSelectCountry, onToggleStock, onRefresh } = props;
+  const { stages, query, page, country, showOutOfStock, onSelectCountry, onToggleStock, onRefresh, locale } = props;
+  const t = getStrings(locale ?? clientLocale());
   const finalPromise = stages[stages.length - 1];
   const [finalSnap, setFinalSnap] = useState<LiveSearchResult | null>(null);
 
@@ -571,27 +592,27 @@ function StagedResults(props: {
   if (finalSnap && products) {
     // Converged view: full count + empty state, identical to the blocking path.
     return (
-      <ResultsErrorBoundary>
-        <SelectionRow country={country} showOutOfStock={showOutOfStock} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
+      <ResultsErrorBoundary locale={locale}>
+        <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
         {products.length === 0 && query.length > 0 ? (
           <>
-            <EmptyState query={query} suggestions={stagedSuggestions(finalSnap, country, showOutOfStock)} country={country} />
-            <CoverageLine notes={finalSnap.notes} />
+            <EmptyState query={query} suggestions={stagedSuggestions(finalSnap, country, showOutOfStock)} country={country} locale={locale} />
+            <CoverageLine notes={finalSnap.notes} locale={locale} />
           </>
         ) : (
           <>
             {/* Theme v1 §4: display-scale H1, tabular count */}
             <h1 style={{ font: "var(--rc-text-display)", color: "var(--rc-ink)" }}>
               <span className="tabular">{products.length}</span>{" "}
-              {products.length === 1 ? "result" : "results"} for &ldquo;{query || "all products"}&rdquo;
+              {products.length === 1 ? t.resultsOne : t.resultsMany} {t.resultsForWord} &ldquo;{query || t.allProducts}&rdquo;
             </h1>
-            <CoverageLine notes={finalSnap.notes} />
+            <CoverageLine notes={finalSnap.notes} locale={locale} />
             <ResultsGrid
               products={products}
               query={query}
               page={page}
               country={country}
-              showOutOfStock={showOutOfStock}
+              showOutOfStock={showOutOfStock} locale={locale}
               renderStartMs={props.renderStartMs}
             />
           </>
@@ -609,19 +630,19 @@ function StagedResults(props: {
   // and the block `order` values (Devices 1 / Accessories 2) hold across
   // flushes — late devices still stack above earlier accessories.
   return (
-    <ResultsErrorBoundary>
-      <SelectionRow country={country} showOutOfStock={showOutOfStock} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
+    <ResultsErrorBoundary locale={locale}>
+      <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
       <Suspense fallback={null}>
         <ResultsHeading
           stage={stages[0]}
           query={query}
           page={page}
           country={country}
-          showOutOfStock={showOutOfStock}
+          showOutOfStock={showOutOfStock} locale={locale}
         />
       </Suspense>
       <Suspense fallback={null}>
-        <StageCoverage stage={finalPromise} />
+        <StageCoverage stage={finalPromise} locale={locale} />
       </Suspense>
       <div className="flex min-w-0 flex-col items-stretch gap-4" style={{ marginTop: "var(--rc-space-8)" }}>
         <Suspense fallback={null}>
@@ -631,7 +652,7 @@ function StagedResults(props: {
             query={query}
             page={page}
             country={country}
-            showOutOfStock={showOutOfStock}
+            showOutOfStock={showOutOfStock} locale={locale}
             renderStartMs={props.renderStartMs}
           />
         </Suspense>
@@ -649,8 +670,14 @@ function ResultsInner(props: {
   showOutOfStock?: boolean;
   stages?: Promise<LiveSearchResult>[];
   renderStartMs?: number;
+  locale?: Locale;
 }) {
   const searchParams = useSearchParams();
+  // REEA-279: one resolution per view — prop first (server-resolved), then
+  // the client chain (cookie → browser hint → "en"); every child receives
+  // this value explicitly, so SSR markup and hydration always agree.
+  const locale = props.locale ?? clientLocale();
+  const t = getStrings(locale);
   const router = useRouter();
   // AC-U4 (REEA-13): malformed/oversized params degrade safely before use.
   const query = props.query ?? sanitizeSearchQuery(searchParams.get("q")) ?? "";
@@ -774,30 +801,30 @@ function ResultsInner(props: {
         query={query}
         page={page}
         country={country}
-        showOutOfStock={showOutOfStock}
+        showOutOfStock={showOutOfStock} locale={locale}
         renderStartMs={props.renderStartMs}
       />
     );
   }
 
   return (
-    <ResultsErrorBoundary>
-      <SelectionRow country={country} showOutOfStock={showOutOfStock} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
+    <ResultsErrorBoundary locale={locale}>
+      <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
       {zero ? (
-        <EmptyState query={query} suggestions={suggestions} country={country} />
+        <EmptyState query={query} suggestions={suggestions} country={country} locale={locale} />
       ) : (
         <>
           {/* Theme v1 §4: display-scale H1, tabular count */}
           <h1 style={{ font: "var(--rc-text-display)", color: "var(--rc-ink)" }}>
             <span className="tabular">{products.length}</span>{" "}
-            {products.length === 1 ? "result" : "results"} for &ldquo;{query || "all products"}&rdquo;
+            {products.length === 1 ? t.resultsOne : t.resultsMany} {t.resultsForWord} &ldquo;{query || t.allProducts}&rdquo;
           </h1>
           <ResultsGrid
             products={products}
             query={query}
             page={page}
             country={country}
-            showOutOfStock={showOutOfStock}
+            showOutOfStock={showOutOfStock} locale={locale}
             renderStartMs={props.renderStartMs}
           />
         </>

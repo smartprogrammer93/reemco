@@ -31,6 +31,7 @@ import { defaultQueryCache, queryCacheKey, type QueryCache } from "@/lib/query-c
 import type { FetchImpl } from "@/lib/collect/scraper";
 import type { CountryCode } from "@/lib/country";
 import { sanitizeExternalUrl } from "@/lib/safe-url";
+import { toKwdNumeric } from "@/lib/format";
 import { canonicalFields, compatibleFields, type CanonicalFields } from "@/lib/collect/canonical-product";
 import {
   arabicBrandIntent,
@@ -880,7 +881,9 @@ function rankByRelevance(query: string, groups: HitGroup[]): HitGroup[] {
       extended: isModelExtended(query, canonical),
       named: brandIsNamed(group.brandRaw || undefined, canonical),
       stocked: group.offers.some((o) => o.inStock),
-      cheapest: Math.min(...group.offers.map((o) => o.price)),
+      // REEA-254 item B/D: best effective price of the card — KWD-space so
+      // mixed-currency cards rank on one scale.
+      cheapest: Math.min(...group.offers.map((o) => toKwdNumeric(o.price, o.currency))),
     };
   });
   const insideTier = (a: Ranked, b: Ranked): number =>
@@ -977,7 +980,10 @@ function mergeCompatible(a: CanonicalFields, b: CanonicalFields): boolean {
 
 function buildGroups(query: string, hits: SearchHit[]): HitGroup[] {
   const groups: HitGroup[] = [];
-  const cheapestOf = (g: HitGroup): number => Math.min(...g.offers.map((o) => o.price));
+  // REEA-254 item B — every cheapest comparison runs in KWD-space: a SAR
+  // listing and a KWD listing on one card must compete on the same scale.
+  const cheapestOf = (g: HitGroup): number =>
+    Math.min(...g.offers.map((o) => toKwdNumeric(o.price, o.currency)));
 
   for (const hit of orderByAdapter(hits)) {
     const title = hit.title.trim();
@@ -1105,7 +1111,11 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean): Nor
       m = {
         productId: slugify(otherTitle),
         title: otherTitle,
-        fromPrice: Math.min(...g.offers.map((o) => o.price)),
+        // KWD-space numeric (REEA-254 item B): alternatives rows render this
+        // through formatPrimaryPrice(x, "KWD"), so mixed-currency groups show
+        // the cheapest-after-conversion figure, not whichever raw numeric is
+        // smallest.
+        fromPrice: Math.min(...g.offers.map((o) => toKwdNumeric(o.price, o.currency))),
       };
       metas.set(g, m);
     }
@@ -1122,8 +1132,14 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean): Nor
   return selected.map((group, idx) => {
     const title = canonicalGroupTitle(group);
     const offers: PriceOffer[] = [...group.offers]
-      // Cheapest offer first (REEA-167 §2); purchasable offers break ties.
-      .sort((a, b) => a.price - b.price || Number(b.inStock) - Number(a.inStock))
+      // Cheapest offer first in KWD-space (REEA-167 §2 + REEA-254 item B);
+      // purchasable offers break ties. Within one currency the order is the
+      // scraped order — the conversion only aligns figures ACROSS currencies.
+      .sort(
+        (a, b) =>
+          toKwdNumeric(a.price, a.currency) - toKwdNumeric(b.price, b.currency) ||
+          Number(b.inStock) - Number(a.inStock),
+      )
       // REEA-192 — one row per retailer in the card: the sorted-first offer
       // is that retailer's best matched-product price; further listings from
       // the same merchant are variants of one comparison row, not new rows,
@@ -1237,7 +1253,7 @@ export interface LiveSearchResult {
  * an error land on the "did not respond" side. An empty notes list (nothing
  * collected yet) yields an empty string: no line, no flicker.
  */
-export function coverageLine(notes: LiveSearchResult["notes"]): string {
+export function coverageLine(notes: LiveSearchResult["notes"], locale?: "en" | "ar"): string {
   const ordered = [...notes].sort(
     (a, b) => adapterRank(a.merchant) - adapterRank(b.merchant),
   );
@@ -1246,16 +1262,21 @@ export function coverageLine(notes: LiveSearchResult["notes"]): string {
   for (const n of ordered) {
     (n.error ? failed : answered).push(n.merchant);
   }
+  // REEA-279: the two sentence shapes live in the static table so the stamp
+  // matches the shell language; EN keeps the exact figures it had before.
+  const ar = locale === "ar";
   const parts: string[] = [];
-  if (failed.length > 0) parts.push(`${joinNames(failed)} did not respond on this search.`);
-  if (answered.length > 0) parts.push(`Prices from ${joinNames(answered)}.`);
+  if (failed.length > 0)
+    parts.push(ar ? `${joinNames(failed, ar)} لم يستجب لهذا البحث.` : `${joinNames(failed)} did not respond on this search.`);
+  if (answered.length > 0)
+    parts.push(ar ? `أسعار من ${joinNames(answered, ar)}.` : `Prices from ${joinNames(answered)}.`);
   return parts.join(" ");
 }
 
 /** Plain-text name list: "Xcite" / "Xcite and Blink" / "Xcite, Blink and Eureka". */
-function joinNames(names: string[]): string {
+function joinNames(names: string[], ar = false): string {
   if (names.length <= 1) return names.join("");
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return `${names.slice(0, -1).join(", ")}${ar ? " و" : " and "}${names[names.length - 1]}`;
 }
 
 /**
@@ -1462,7 +1483,10 @@ export function collectLiveResultsStaged(
     ? COLLECTORS.filter((c) => c.country === country)
     : COLLECTORS;
   const cache = opts.cache ?? (opts.fetchImpl ? NO_CACHE : defaultQueryCache);
-  const cacheKey = queryCacheKey(q, country);
+  // REEA-291 AC5 — memo identity is the NORMALIZED QUERY STRING ONLY: the
+  // collected answer is per query; viewer-side selections filter the loaded
+  // payload at render time (ResultsClient), never fork the memo.
+  const cacheKey = queryCacheKey(q);
 
   // REEA-277 AC-2 — stale-while-revalidate in front of the fan-out. Entries
   // only ever hold responses a live fan-out produced (scrapedAt and the

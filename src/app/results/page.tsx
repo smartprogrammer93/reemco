@@ -75,7 +75,14 @@ export default async function ResultsPage({
   const showOutOfStock = sanitizeShowOutOfStock(params.oos) ?? false;
 
   // Fan-out starts here; rendering does not wait for the slowest adapter.
-  const staged = collectLiveResultsStaged(query, { country });
+  // REEA-291 AC4/AC5 — the collection is the FULL live answer for the query;
+  // the country/stock selections are applied by ResultsClient as render-time
+  // filters over this already-loaded payload, so changing a toggle needs no
+  // second round-trip. That also makes the memoized answer per QUERY exactly
+  // right: one live fan-out serves every market view, so the response cache
+  // keys on the normalized query string only and never forks on viewer-side
+  // signals. Coverage notes describe the whole fan-out the page actually ran.
+  const staged = collectLiveResultsStaged(query);
 
   return (
     <div

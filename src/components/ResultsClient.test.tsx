@@ -5,14 +5,16 @@
  * transport, asserting search_submitted + result_impressed (+ zero_results)
  * fire with the correct fields once per query/page.
  */
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const searchParams = new URLSearchParams();
+const refreshSpy = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({
   useSearchParams: () => searchParams,
   usePathname: () => "/results",
+  useRouter: () => ({ refresh: refreshSpy }),
 }));
 vi.mock("next/link", () => ({
   default: ({
@@ -135,22 +137,41 @@ describe("country filter UI (REEA-170)", () => {
         <ResultsClient query="airpods" page={1} products={MIXED} suggestions={MIXED} country="KW" />,
       );
     });
-    const pills = Array.from(document.querySelectorAll('nav[aria-label="Filter offers by country"] a'));
-    expect(pills.map((a) => a.textContent)).toEqual([
+    const pills = Array.from(
+      document.querySelectorAll('nav[aria-label="Filter offers by country"] button'),
+    );
+    expect(pills.map((b) => b.textContent)).toEqual([
       "All",
       "Kuwait (KWD)",
       "Saudi Arabia (SAR)",
       "Egypt (EGP)",
     ]);
-    // Pills are plain links: the selection rides the URL for the next request.
-    expect(pills[1].getAttribute("href")).toBe("/results?q=airpods&c=KW");
+    // REEA-291 AC4: pills are in-place controls — the active one is marked,
+    // no link navigation involved. Clicking another pill filters the loaded
+    // payload on the client without any navigation.
     expect(pills[1].getAttribute("aria-current")).toBe("true");
-    expect(pills[0].getAttribute("href")).toBe("/results?q=airpods");
+    const html = document.body.innerHTML;
     // Offer rows honor the selection: the SAR listing is suppressed, the KWD
     // one stays.
-    const html = document.body.innerHTML;
     expect(html).toContain("Xcite");
     expect(html).not.toContain("Jarir");
+    await act(async () => {
+      fireEvent.click(pills[2]); // Saudi Arabia (SAR)
+    });
+    // Same-document filtering: the SAR-only view renders in place, the pill
+    // moves its marker, and the URL echo follows without navigation.
+    expect(document.body.innerHTML).toContain("Jarir");
+    expect(document.body.innerHTML).not.toContain("Xcite");
+    const pillsAfter = Array.from(
+      document.querySelectorAll('nav[aria-label="Filter offers by country"] button'),
+    );
+    expect(pillsAfter[2].getAttribute("aria-current")).toBe("true");
+    expect(window.location.search).toContain("c=SA");
+    await act(async () => {
+      fireEvent.click(pillsAfter[0]); // All
+    });
+    expect(document.body.innerHTML).toContain("Xcite");
+    expect(document.body.innerHTML).toContain("Jarir");
   });
 
   it("the header search carries the active selection into the next query", async () => {
@@ -197,12 +218,24 @@ describe("stock selection UI (REEA-186)", () => {
     const html = document.body.innerHTML;
     expect(html).toContain("Xcite");
     expect(html).not.toContain("Jarir");
-    // Visible checkbox-style toggle, unchecked, linking to the opt-in state.
+    // Visible checkbox-style toggle, unchecked, in-place (REEA-291 AC4).
     const toggle = document.querySelector('[role="checkbox"]');
     expect(toggle).not.toBeNull();
     expect(toggle?.textContent).toContain("Show out-of-stock items");
     expect(toggle?.getAttribute("aria-checked")).toBe("false");
-    expect(toggle?.getAttribute("href")).toBe("/results?q=xm6&oos=1");
+    // REEA-291 AC4: clicking flips the view against the loaded payload on the
+    // client — no navigation, no refetch behind the selection change.
+    await act(async () => {
+      fireEvent.click(toggle as HTMLElement);
+    });
+    expect(document.querySelector('[role="checkbox"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(document.body.innerHTML).toContain("Jarir");
+    expect(window.location.search).toContain("oos=1");
+    await act(async () => {
+      fireEvent.click(document.querySelector('[role="checkbox"]') as HTMLElement);
+    });
+    expect(document.querySelector('[role="checkbox"]')?.getAttribute("aria-checked")).toBe("false");
+    expect(document.body.innerHTML).not.toContain("Jarir");
   });
 
   it("shows every listing while the toggle is checked, and unchecked hides again", async () => {
@@ -218,8 +251,13 @@ describe("stock selection UI (REEA-186)", () => {
     expect(html).toContain("Jarir");
     const toggle = document.querySelector('[role="checkbox"]');
     expect(toggle?.getAttribute("aria-checked")).toBe("true");
-    // Unchecking drops the flag — the next request is back to default-hide.
-    expect(toggle?.getAttribute("href")).toBe("/results?q=xm6");
+    // Unchecking filters the SAME loaded payload again — the hidden listings
+    // drop without any request.
+    await act(async () => {
+      fireEvent.click(toggle as HTMLElement);
+    });
+    expect(document.querySelector('[role="checkbox"]')?.getAttribute("aria-checked")).toBe("false");
+    expect(document.body.innerHTML).not.toContain("Jarir");
   });
 
   it("the header search carries the stock selection into the next query", async () => {
@@ -230,6 +268,49 @@ describe("stock selection UI (REEA-186)", () => {
     });
     const hidden = document.querySelector('input[name="oos"]');
     expect((hidden as HTMLInputElement | null)?.value).toBe("1");
+  });
+});
+
+describe("refresh action (REEA-291 AC4)", () => {
+  const REFRESH_PRODUCTS: NormalizedProduct[] = [
+    {
+      productId: "sony-wh-1000xm6",
+      title: "Sony WH-1000XM6",
+      brand: "Sony",
+      offers: [
+        { merchant: "Xcite", price: 74, currency: "KWD", url: "https://xcite.example/p", inStock: true },
+      ],
+      coupons: [],
+      variations: [],
+      alternatives: [],
+    },
+  ];
+
+  beforeEach(() => {
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    refreshSpy.mockClear();
+  });
+
+  it("the Refresh button re-runs the live collection; toggles stay in-place", async () => {
+    searchParams.set("q", "xm6");
+    await act(async () => {
+      render(<ResultsClient query="xm6" page={1} products={REFRESH_PRODUCTS} suggestions={[]} />);
+    });
+    const refresh = Array.from(document.querySelectorAll("button")).find(
+      (b) => b.textContent === "Refresh",
+    );
+    expect(refresh).toBeDefined();
+    await act(async () => {
+      fireEvent.click(refresh as HTMLElement);
+    });
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    // Selection changes on the same view never go through the router either.
+    const toggle = document.querySelector('[role="checkbox"]') as HTMLElement;
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
   });
 });
 

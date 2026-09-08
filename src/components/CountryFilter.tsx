@@ -24,24 +24,26 @@ const NAME_KEYS = { KW: "countryKW", SA: "countrySA", EG: "countryEG" } as const
  * the filtered set is a different result set.
  */
 export default function CountryFilter({
-  query,
   country,
   onSelect,
+  locale,
 }: {
-  query: string;
   country: CountryCode | null;
   /** Applied to the loaded payload immediately (AC4). */
   onSelect: (code: CountryCode | null) => void;
+  /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
+  locale?: Locale;
 }) {
+  const t = getStrings(locale ?? clientLocale());
   const items: { code: CountryCode | null; label: string }[] = [
-    { code: null, label: "All" },
+    { code: null, label: t.filterAll },
     ...COUNTRY_OPTIONS.map((o) => ({
       code: o.code as CountryCode,
-      label: `${o.label} (${o.currency})`,
+      label: `${t[NAME_KEYS[o.code]]} (${o.currency})`,
     })),
   ];
   return (
-    <nav aria-label="Filter offers by country" className="flex flex-wrap items-center gap-2">
+    <nav aria-label={t.filterCountryAria} className="flex flex-wrap items-center gap-2">
       {items.map(({ code, label }) => {
         const active = code === country;
         return (
