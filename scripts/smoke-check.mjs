@@ -18,10 +18,17 @@ import { brotliDecompressSync } from "node:zlib";
 import { execSync } from "node:child_process";
 import { chromium as pw } from "playwright-core";
 import chromium from "@sparticuz/chromium";
+import { measureResultsTimings } from "./smoke-timings.mjs";
 
 const BASE = (process.env.SMOKE_BASE_URL || "https://reemco.vercel.app").replace(/\/$/, "");
 // Stable fixture: "sony" matches seeded catalog products deterministically.
 const FIXTURE_QUERY = process.env.SMOKE_FIXTURE_QUERY || "sony";
+
+// REEA-274: per-run report on the fixed REEA-255 query set — time to the first
+// real offer card and to full results, graded report-only against
+// p50<=1500ms / p95<=3000ms. Runs first so timings print even when a functional
+// step later fails; measureResultsTimings itself never throws.
+for (const line of await measureResultsTimings(BASE)) console.log(line);
 
 const results = [];
 function step(n, name, fn) {
