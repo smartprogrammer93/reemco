@@ -13,11 +13,20 @@
  * Persistence follows the app's existing preference/store mechanism (REEA-84
  * same-tab pattern in useCollection.ts): the ACTIVE choice rides on the URL
  * (`/results?q=…&c=KW`) and the remembered choice lives in a module-level
- * slot that survives client-side navigations within the tab session — no
- * cookies / localStorage / cross-session ids, matching the telemetry and
- * collection-cache conventions. A new search picks the value up through the
- * hidden input in SearchForm, so the selection carries over without being
- * re-selected.
+ * slot that survives client-side navigations within the tab session. A new
+ * search picks the value up through the hidden input in SearchForm, so the
+ * selection carries over without being re-selected.
+ *
+ * REEA-280 layers two things on top of that contract:
+ *  - a DEFAULT market derived from the coarse Accept-Language hint when the
+ *    shopper has stated nothing else (ar-KW/en-KW → Kuwait/KWD; ar-SA →
+ *    Saudi/SAR; ar-EG/en-EG → Egypt/EGP). Unmapped locales keep the old
+ *    "All" behavior — the hint only picks among the three existing tabs;
+ *  - the one-tap pill choice persists across sessions through a SINGLE
+ *    language-preference cookie (`rc_market`) — the only persistent storage
+ *    the app keeps; it holds nothing but the shopper's own market pick
+ *    (or an explicit "ALL" for the All tab).
+ * Resolution order everywhere: explicit `?c=` → the cookie → the header hint.
  *
  * Graceful degradation: with no selection (null) every offer matches and
  * behavior is identical to the pre-feature page.
@@ -37,6 +46,87 @@ export function sanitizeCountry(raw: unknown): CountryCode | null {
   if (typeof raw !== "string") return null;
   const v = raw.trim().toUpperCase();
   return COUNTRY_OPTIONS.find((o) => o.code === v)?.code ?? null;
+}
+
+/** Country selection → its currency code — the lead figure's space on price
+ *  rows (REEA-283): SA→SAR, KW→KWD, EG→EGP. */
+export function currencyForCountry(code: CountryCode): string {
+  return COUNTRY_OPTIONS.find((o) => o.code === code)?.currency ?? "KWD";
+}
+
+/* ---- REEA-280 — locale-aware market default + one persisted preference. ---- */
+
+/** The single language-preference cookie. No other persistent storage. */
+export const MARKET_COOKIE = "rc_market";
+/** A year: a deliberate market pick outlives the session it was made in. */
+const MARKET_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
+
+/**
+ * Normalize the cookie value. `ALL` is the explicit All-tab choice — it
+ * reads back as the plain null ("match every offer") selection; unknown or
+ * absent values read as null so the next hint layer still applies.
+ */
+export function normalizeMarketCookie(raw: unknown): CountryCode | "ALL" | null {
+  if (typeof raw !== "string") return null;
+  const v = raw.trim().toUpperCase();
+  if (v === "ALL") return "ALL";
+  return sanitizeCountry(v);
+}
+
+/** Region-subtag → tab map. Coarse on purpose (AC-2): only the region
+ *  decides, and only the three served markets map. */
+const REGION_COUNTRY: Record<string, CountryCode> = { KW: "KW", SA: "SA", EG: "EG" };
+
+/**
+ * Coarse Accept-Language hint (REEA-280 AC-2): walk the header's locales in
+ * weight order (q descending, stable on equal q, exactly as RFC 9110 orders
+ * them) and take the first region subtag that maps to a served market. A
+ * language-only tag ("ar", "en") carries no market signal and is skipped —
+ * guessing past the explicit region would be profiling, not a hint. No match
+ * keeps today's "All" behavior.
+ */
+export function countryFromAcceptLanguage(header: string | null | undefined): CountryCode | null {
+  if (!header) return null;
+  const entries: { country: CountryCode | null; q: number; order: number }[] = [];
+  header.split(",").forEach((part, order) => {
+    const segments = part.trim().split(";");
+    const locale = segments[0]?.trim();
+    if (!locale) return;
+    let q = 1;
+    for (const p of segments.slice(1)) {
+      const m = /^q=(\d(?:\.\d+)?)$/i.exec(p.trim());
+      if (m) q = Number(m[1]);
+    }
+    const region = locale.split("-")[1]?.toUpperCase();
+    entries.push({
+      country: region ? REGION_COUNTRY[region] ?? null : null,
+      q: Number.isFinite(q) ? q : 1,
+      order,
+    });
+  });
+  entries.sort((a, b) => b.q - a.q || a.order - b.order);
+  for (const e of entries) if (e.country) return e.country;
+  return null;
+}
+
+/**
+ * The one resolution chain every surface shares (REEA-280): explicit `?c=`
+ * wins (it is the shopper's stated choice for THIS view — even `c=all`
+ * counts, dropping to the unfiltered list); otherwise the persisted pill
+ * choice from the language-preference cookie; otherwise the coarse header
+ * hint. Unset at every layer keeps the pre-feature "All" behavior.
+ */
+export function resolveCountrySelection(
+  rawParam: unknown,
+  cookieRaw: unknown,
+  acceptLanguage: string | null | undefined,
+): CountryCode | null {
+  const param = Array.isArray(rawParam) ? rawParam[0] : rawParam;
+  if (typeof param === "string" && param.trim() !== "") return sanitizeCountry(param);
+  const cookie = normalizeMarketCookie(cookieRaw);
+  if (cookie === "ALL") return null;
+  if (cookie) return cookie;
+  return countryFromAcceptLanguage(acceptLanguage);
 }
 
 /**
@@ -113,20 +203,41 @@ export function buildResultsHref(
   return qs ? `/results?${qs}` : "/results";
 }
 
-/* ---- Same-tab remembered selection (existing module-slot pattern). ---- */
+/* ---- Remembered selection: same-tab slot + the one preference cookie. ---- */
 
 let rememberedCountry: CountryCode | null = null;
 
-/** Pill clicks record the choice for the next search's hidden input. */
+/** Pill clicks record the choice for the next search's hidden input AND for
+ *  the next visit: the same write lands in the single language-preference
+ *  cookie (REEA-280 AC-2 — a one-tap SAR/EGP switch persists; clicking All
+ *  persists the explicit unfiltered choice as `ALL`). The cookie write is
+ *  guarded so non-browser hosts (vitest node env, prerender) stay on the
+ *  module slot alone. */
 export function rememberCountry(code: CountryCode | null): void {
   rememberedCountry = code;
+  if (typeof document !== "undefined") {
+    document.cookie = `${MARKET_COOKIE}=${code ?? "ALL"}; path=/; max-age=${MARKET_COOKIE_MAX_AGE}; SameSite=Lax`;
+  }
+}
+
+/** The cookie read behind the same-tab slot: a returning tab (or a fresh
+ *  page-load on the static-host fallback) picks the persisted choice up
+ *  without re-selecting. */
+export function readMarketCookie(): CountryCode | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${MARKET_COOKIE}=([^;]*)`));
+  const value = normalizeMarketCookie(match?.[1]);
+  return value === "ALL" ? null : value;
 }
 
 export function recallCountry(): CountryCode | null {
-  return rememberedCountry;
+  return rememberedCountry ?? readMarketCookie();
 }
 
 /** Test support: deterministic starting point across cases. */
 export function resetCountryPrefs(): void {
   rememberedCountry = null;
+  if (typeof document !== "undefined") {
+    document.cookie = `${MARKET_COOKIE}=; path=/; max-age=0`;
+  }
 }

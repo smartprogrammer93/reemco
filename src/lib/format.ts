@@ -1,3 +1,4 @@
+import { currencyForCountry, type CountryCode } from "@/lib/country";
 import type { PriceOffer } from "@/types/product";
 
 /** Format a price with its currency, e.g. "89.99 USD" -> "$89.99". */
@@ -36,11 +37,29 @@ export interface PrimaryPrice {
   label: string;
 }
 
+/** Converted-side render of a reference conversion: at most two decimals —
+ *  the exact fils precision belongs to KWD-native figures only (REEA-281 AC-2),
+ *  a derived number must not read like a third decimal was measured. */
+function formatConverted(value: number, code: string): string {
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: code,
+      maximumFractionDigits: 2,
+    }).format(value);
+  } catch {
+    return `${code} ${value.toFixed(2)}`;
+  }
+}
+
 /**
  * KWD-primary price label for offer cards (REEA-195 AC-4). A KWD offer keeps
  * its figure untouched; any other retailer currency is converted with the
  * reference factor and both stamps render:
- *   SAR 150.00  →  "KD 12.24 · SAR 150.00"
+ *   SAR 150.00  →  "≈KD 12.24 · SAR 150.00"
+ * REEA-281 AC-2: the CONVERTED side is a reference figure — ≤2 decimals and
+ * prefixed with ≈ — while the scraped stamp and every KWD-native figure keep
+ * their exact rendered precision (fils included) unchanged.
  */
 export function formatPrimaryPrice(price: number, currency: string): PrimaryPrice {
   const code = currency.trim().toUpperCase();
@@ -48,7 +67,67 @@ export function formatPrimaryPrice(price: number, currency: string): PrimaryPric
   const rate = TO_KWD[code];
   if (!rate) return { value: price, label: formatPrice(price, code) };
   const kwd = price * rate;
-  return { value: kwd, label: `${formatPrice(kwd, "KWD")} · ${formatPrice(price, code)}` };
+  return { value: kwd, label: `≈${formatConverted(kwd, "KWD")} · ${formatPrice(price, code)}` };
+}
+
+export interface CountryPrice {
+  /** Numeric value of the LEAD figure, in the lead currency's space. */
+  value: number;
+  /** Lead figure: the selected country's currency; with no selection the
+   *  offer's native figure leads and nothing is rewritten. */
+  primary: string;
+  /** Secondary converted figure (muted `.price-alt` stamp), null when the
+   *  lead figure already carries every currency on the row. */
+  alt: string | null;
+}
+
+/** Reference factor into KWD-space; KWD itself anchors the table at 1. */
+function toKwdFactor(code: string): number | undefined {
+  if (code === "KWD") return 1;
+  return TO_KWD[code];
+}
+
+/**
+ * REEA-283 — country-led price rows for the results surface. With a country
+ * selection the lead figure reads in that country's currency (SA→SAR, KW→KWD,
+ * EG→EGP) and the offer's scraped figure rides behind it as the muted stamp;
+ * with no selection the offer-native figure leads and the KWD-space conversion
+ * follows (the same pair formatPrimaryPrice produces, native-first now). A
+ * KWD-native offer under a KW selection is one exact figure — no stamp. When
+ * neither side shares a factor, the scraped figure passes through unconverted
+ * (REEA-195 rule), never invented. Derived sides keep the REEA-281 ≈ + ≤2
+ * decimals treatment; scraped figures keep their exact rendered precision.
+ */
+export function formatCountryPrice(
+  price: number,
+  currency: string,
+  country: CountryCode | null,
+): CountryPrice {
+  const native = currency.trim().toUpperCase();
+  const lead = country ? currencyForCountry(country) : native;
+
+  // Lead is the native figure itself: keep it exact, convert only the stamp.
+  if (!lead || lead === native) {
+    const nativeRate = native ? toKwdFactor(native) : undefined;
+    const alt =
+      native && native !== "KWD" && nativeRate != null
+        ? `≈${formatConverted(price * nativeRate, "KWD")}`
+        : null;
+    return { value: price, primary: formatPrice(price, lead || native || "KWD"), alt };
+  }
+
+  // Lead differs from native: bridge through KWD-space on the reference table.
+  const nativeRate = native ? toKwdFactor(native) : undefined;
+  const leadRate = toKwdFactor(lead);
+  if (nativeRate == null || leadRate == null) {
+    return { value: price, primary: formatPrice(price, native || lead), alt: null };
+  }
+  const converted = (price * nativeRate) / leadRate;
+  return {
+    value: converted,
+    primary: `≈${formatConverted(converted, lead)}`,
+    alt: formatPrice(price, native),
+  };
 }
 
 /** Sort offers so in-stock items come first, then cheapest. */

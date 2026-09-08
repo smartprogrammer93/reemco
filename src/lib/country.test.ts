@@ -5,16 +5,20 @@
  * the pills and carry-over links, and the same-tab preference slot that lets
  * the choice survive a new search without re-selecting.
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   buildResultsHref,
+  countryFromAcceptLanguage,
   countryForCurrency,
   filterOffersByCountry,
   filterProductsByCountry,
   matchesCountry,
+  normalizeMarketCookie,
+  readMarketCookie,
   recallCountry,
   rememberCountry,
   resetCountryPrefs,
+  resolveCountrySelection,
   sanitizeCountry,
 } from "@/lib/country";
 import type { NormalizedProduct } from "@/types/product";
@@ -116,5 +120,102 @@ describe("same-tab preference slot", () => {
     expect(recallCountry()).toBe("KW");
     rememberCountry(null);
     expect(recallCountry()).toBeNull();
+  });
+});
+
+describe("normalizeMarketCookie", () => {
+  it("reads back the persisted pick, the explicit ALL, or unset", () => {
+    expect(normalizeMarketCookie("sa")).toBe("SA");
+    expect(normalizeMarketCookie(" EG ")).toBe("EG");
+    expect(normalizeMarketCookie("all")).toBe("ALL");
+    expect(normalizeMarketCookie("en-US")).toBeNull();
+    expect(normalizeMarketCookie(undefined)).toBeNull();
+  });
+});
+
+describe("countryFromAcceptLanguage", () => {
+  it("maps a coarse region hint to the matching market tab", () => {
+    expect(countryFromAcceptLanguage("ar-KW")).toBe("KW");
+    expect(countryFromAcceptLanguage("en-KW,en;q=0.9")).toBe("KW");
+    expect(countryFromAcceptLanguage("ar-SA")).toBe("SA");
+    expect(countryFromAcceptLanguage("ar-EG,en-EG;q=0.8")).toBe("EG");
+    expect(countryFromAcceptLanguage("ar-kw")).toBe("KW");
+  });
+
+  it("honors q-weight order, then first appearance", () => {
+    // The higher-weighted locale decides even when it lists second.
+    expect(countryFromAcceptLanguage("en-GB;q=0.8,ar-SA;q=0.9")).toBe("SA");
+    // Equal weights keep document order.
+    expect(countryFromAcceptLanguage("ar-EG,ar-KW;q=1.0")).toBe("EG");
+  });
+
+  it("unmapped locales and bare language tags keep the All default", () => {
+    expect(countryFromAcceptLanguage("en-GB,en;q=0.9")).toBeNull();
+    expect(countryFromAcceptLanguage("ar,en;q=0.9")).toBeNull();
+    expect(countryFromAcceptLanguage("")).toBeNull();
+    expect(countryFromAcceptLanguage(null)).toBeNull();
+    expect(countryFromAcceptLanguage(undefined)).toBeNull();
+  });
+});
+
+describe("resolveCountrySelection", () => {
+  it("prefers the explicit ?c= over cookie and header layers", () => {
+    expect(resolveCountrySelection("EG", "KW", "ar-KW")).toBe("EG");
+    // An arrayed param reads its first value, like the page params contract.
+    expect(resolveCountrySelection(["SA", "EG"], "KW", null)).toBe("SA");
+  });
+
+  it("an explicit All in the URL beats a persisted market", () => {
+    expect(resolveCountrySelection("all", "KW", "ar-KW")).toBeNull();
+    expect(resolveCountrySelection("ALL", undefined, "ar-EG")).toBeNull();
+  });
+
+  it("the persisted pill choice beats the header hint", () => {
+    expect(resolveCountrySelection(undefined, "EG", "ar-KW")).toBe("EG");
+    // Clicking All persists ALL — the unfiltered list survives the hint.
+    expect(resolveCountrySelection(undefined, "ALL", "ar-KW")).toBeNull();
+    expect(resolveCountrySelection("", "SA", "ar-KW")).toBe("SA");
+  });
+
+  it("falls to the header hint, then to the unfiltered default", () => {
+    expect(resolveCountrySelection(undefined, undefined, "ar-KW")).toBe("KW");
+    expect(resolveCountrySelection(undefined, "", "en-EG")).toBe("EG");
+    expect(resolveCountrySelection(undefined, undefined, "en-GB")).toBeNull();
+    expect(resolveCountrySelection(undefined, undefined, undefined)).toBeNull();
+  });
+});
+
+describe("rememberCountry persistence (REEA-280)", () => {
+  // A minimal document stub — the guard in country.ts only needs `.cookie`.
+  const stubDocument = { cookie: "" };
+  const saved = Object.getOwnPropertyDescriptor(globalThis, "document");
+  beforeAll(() => {
+    Object.defineProperty(globalThis, "document", { value: stubDocument, configurable: true, writable: true });
+  });
+  afterAll(() => {
+    if (saved) Object.defineProperty(globalThis, "document", saved);
+    else delete (globalThis as { document?: unknown }).document;
+  });
+
+  it("one pill tap writes the single rc_market cookie", () => {
+    resetCountryPrefs();
+    rememberCountry("SA");
+    expect(stubDocument.cookie).toContain("rc_market=SA");
+    expect(stubDocument.cookie).toContain("SameSite=Lax");
+    // The All pill persists the explicit unfiltered choice.
+    rememberCountry(null);
+    expect(stubDocument.cookie).toContain("rc_market=ALL");
+    expect(readMarketCookie()).toBeNull();
+    resetCountryPrefs();
+  });
+
+  it("a fresh tab recalls the persisted pick from the cookie alone", () => {
+    // Fresh tab: the module slot is empty, only the stored cookie speaks.
+    resetCountryPrefs();
+    stubDocument.cookie = "other=1; rc_market=EG";
+    expect(readMarketCookie()).toBe("EG");
+    expect(recallCountry()).toBe("EG");
+    resetCountryPrefs();
+    expect(readMarketCookie()).toBeNull();
   });
 });

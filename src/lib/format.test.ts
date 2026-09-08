@@ -7,22 +7,34 @@
 import { describe, expect, it } from "vitest";
 import { formatPrimaryPrice } from "@/lib/format";
 
-describe("formatPrimaryPrice (REEA-195 AC-4)", () => {
-  it("KWD offers keep their figure and stamp untouched", () => {
+describe("formatPrimaryPrice (REEA-195 AC-4 / REEA-281 AC-2)", () => {
+  it("KWD offers keep their figure and stamp untouched — full fils precision", () => {
     const p = formatPrimaryPrice(34.9, "KWD");
     expect(p.value).toBe(34.9);
     expect(p.label.startsWith("KWD")).toBe(true);
     expect(p.label).toContain("34.9");
+    // REEA-281 AC-2 scopes the rounding rule to CONVERTED figures: a
+    // KWD-native amount keeps its exact fils precision, no ≈ prefix.
+    expect(formatPrimaryPrice(40.718, "KWD").label).toContain("40.718");
   });
 
-  it("SAR-only retailers convert, and the scraped figure keeps its stamp beside the KD one", () => {
+  it("SAR-only retailers convert ≈, and the scraped figure keeps its stamp beside the KD one", () => {
     const p = formatPrimaryPrice(150, "SAR");
     expect(p.value).toBeCloseTo(150 * 0.0816, 3);
     const parts = p.label.split(" · ");
-    expect(parts[0].startsWith("KWD")).toBe(true);
+    // REEA-281 AC-2: the converted side is a reference figure — marked ≈ and
+    // rounded to ≤2 decimals — so it never reads as an exact scraped amount.
+    expect(parts[0].startsWith("≈KWD")).toBe(true);
+    expect(parts[0]).toMatch(/\.\d{1,2}(?![\d])/);
     // Intl inserts its narrow no-break space between code and figure — the
     // stamp must carry the scraped code and figure regardless of the gap.
     expect(parts[1].replace(/\s+/g, " ")).toBe("SAR 150.00");
+  });
+
+  it("converted figures round to ≤2 decimals (499 SAR → ≈KWD 40.72, not 40.718)", () => {
+    // 499 × 0.0816 = 40.7184: the third decimal must not leak through the
+    // reference conversion into the rendered label.
+    expect(formatPrimaryPrice(499, "SAR").label.replace(/\s+/g, " ").startsWith("≈KWD 40.72")).toBe(true);
   });
 
   it("counts and stock flags are unaffected: only the label space converts", () => {
@@ -30,7 +42,7 @@ describe("formatPrimaryPrice (REEA-195 AC-4)", () => {
     // land on the same figure (OfferCard receives {value,"KWD"} together).
     const p = formatPrimaryPrice(829, "SAR");
     expect(p.value).toBeLessThan(829);
-    expect(p.label.startsWith("KWD")).toBe(true);
+    expect(p.label.startsWith("≈KWD")).toBe(true);
   });
 
   it("unknown currency codes pass through with their own stamp", () => {
