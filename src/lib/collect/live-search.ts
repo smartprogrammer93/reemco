@@ -848,8 +848,10 @@ const COLLECTORS: RetailerCollector[] = [
       try {
         const cached = await fetchImpl(apiUrl, {
           headers: { ...VERIFIED_BOT_HEADERS, accept: "application/json" },
+          cache: "force-cache",
+          next: { revalidate: 300 },
           signal: AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
-        });
+        } as RequestInit);
         if (cached.ok) return pcKuwaitApiHits(JSON.parse(await cached.text()), query);
       } catch {
         // Cache-first miss (or a squeezed window) — the uncached chain below
