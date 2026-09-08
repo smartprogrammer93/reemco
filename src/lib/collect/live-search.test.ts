@@ -34,6 +34,7 @@ import {
 } from "@/lib/collect/canonical-product";
 import { isAccessoryTitle } from "@/lib/relevance";
 import { bestBadgeIndex } from "@/lib/stock";
+import { toKwdNumeric } from "@/lib/format";
 import { createQueryCache, QUERY_CACHE_FRESH_MS } from "@/lib/query-cache";
 
 describe("hit parsers", () => {
@@ -451,7 +452,10 @@ describe("groupHits", () => {
     expect(cards).toHaveLength(2);
     const shared = cards.find((p) => p.offers.length === 2)!;
     // Cheapest offer leads the merged card; both spellings ride inside it.
-    expect(shared.offers.map((o) => o.price)).toEqual([349, 799]);
+    // REEA-254 item B: the SAR figure wins on effective price — SAR 799 is
+    // ≈KD 65.2 against the KWD 349 row, so the converted comparison leads
+    // with it (raw numerics read the other way round).
+    expect(shared.offers.map((o) => o.price)).toEqual([799, 349]);
     // The distinct storage tier keeps its own card.
     const solo = cards.find((p) => p.offers.length === 1)!;
     expect(solo.offers[0].merchant).toBe("Eureka");
@@ -500,7 +504,9 @@ describe("groupHits", () => {
       hit({ title: "Samsung Galaxy Z Fold7 Phone Black", merchant: "Jarir", price: 455, currency: "SAR", url: "https://jarir.example/c" }),
     ]);
     expect(products).toHaveLength(1);
-    expect(products[0].offers.map((o) => `${o.merchant}:${o.price}`)).toEqual(["Xcite:429.9", "Jarir:455"]);
+    // REEA-254 item B — Jarir's SAR 455 is ≈KD 37.1 against Xcite's KWD
+    // 429.9, so the converted-best row leads the card.
+    expect(products[0].offers.map((o) => `${o.merchant}:${o.price}`)).toEqual(["Jarir:455", "Xcite:429.9"]);
   });
 
   it("REEA-168: both example spellings reduce to one canonical key", () => {
@@ -649,8 +655,7 @@ describe("groupHits", () => {
       { id: "black", label: "Black", priceDelta: 25.1 },
     ]);
     // Jet Black collapses to base black without polluting the model line.
-    expect(canonicalFields("Samsung Galaxy Z Fold7 Phone Jet Black").modelLine).toBe("galaxy z fold7");
-    // Accessory listings stay out of the device's offer list (REEA-169 f1):
+    expect(canonicalFields("Samsung Galaxy Z Fold7 Phone Jet Black").modelLine).toBe("galaxy z fold7");    // Accessory listings stay out of the device's offer list (REEA-169 f1):
     // the accessory noun keeps the variant label distinct.
     expect(
       compatibleFields(
@@ -658,6 +663,26 @@ describe("groupHits", () => {
         canonicalFields("Samsung Galaxy Z Fold7 Case"),
       ),
     ).toBe(false);
+  });
+
+  it("REEA-254: swatch bests compare in KWD-space across currencies (item B)", () => {
+    // Live QA case reproduced: one card carries a KWD listing and a SAR
+    // listing; the swatch chips must read in one unit. Raw numerics would
+    // put black first (140 < 1500) and bridge the SAR figure straight into
+    // the delta; converted, silver's SAR 1500 is ≈KD 122.4 and leads.
+    const products = groupHits("iphone 17 pro", [
+      hit({ title: "Apple iPhone 17 Pro 256GB Silver", merchant: "Jarir", currency: "SAR", price: 1500, url: "https://jarir.example/256-s" }),
+      hit({ title: "Apple iPhone 17 Pro 256GB Black", merchant: "Xcite", price: 140, url: "https://xcite.example/256-b" }),
+    ]);
+    expect(products).toHaveLength(1);
+    const card = products[0];
+    // Converted-cheapest colour leads; deltas are KWD-space cents.
+    expect(card.variations).toEqual([
+      { id: "silver", label: "Silver", priceDelta: 0 },
+      { id: "black", label: "Black", priceDelta: Math.round((140 - 1500 * 0.0816) * 100) / 100 },
+    ]);
+    // The card header base follows the same comparison: silver's row leads.
+    expect(card.offers.map((o) => o.merchant)).toEqual(["Jarir", "Xcite"]);
   });
 
   it("REEA-254: storage tiers still split; a single colour keeps the plain card", () => {
@@ -669,13 +694,18 @@ describe("groupHits", () => {
     ]);
     expect(products).toHaveLength(2);
     const pro256 = products.find((p) => p.title.includes("6.3"))!;
-    // Both spellings of the 256GB tier collapse into the merged card…
-    expect(pro256.offers.map((o) => o.merchant)).toEqual(["Xcite", "Jarir"]);
+    // Both spellings of the 256GB tier collapse into the merged card — and
+    // the converted-cheapest SAR row leads it (REEA-254 item B: SAR 1500 is
+    // ≈KD 122.4 against the KWD 429.9 row).
+    expect(pro256.offers.map((o) => o.merchant)).toEqual(["Jarir", "Xcite"]);
     // …one colour only → no swatches (plain single-price card).
     expect(pro256.variations).toEqual([]);
-    // The cheapest offer of each tier sits inside its own collapsed card.
-    expect(products[0].offers[0].price).toBeLessThanOrEqual(
-      Math.min(...products.flatMap((p) => p.offers.map((o) => o.price))),
+    // The cheapest offer of each tier sits inside its own collapsed card —
+    // compared in KWD-space (REEA-254 item B), the card-leading row is the
+    // converted-cheapest one across the whole result set.
+    const lead = products[0].offers[0];
+    expect(toKwdNumeric(lead.price, lead.currency)).toBeLessThanOrEqual(
+      Math.min(...products.flatMap((p) => p.offers.map((o) => toKwdNumeric(o.price, o.currency)))),
     );
   });
 
@@ -690,7 +720,8 @@ describe("groupHits", () => {
       hit({ title: "Apple iPhone 17 Pro Max, 256 GB, Deep Blue, 5G, Apple A19 Pro", merchant: "Jarir", currency: "SAR", price: 1549, url: "https://jarir.example/max" }),
     ]);
     expect(products).toHaveLength(1);
-    expect(products[0].offers.map((o) => o.merchant)).toEqual(["Xcite", "Jarir"]);
+    // Converted-cheapest first: Jarir SAR 1549 ≈KD 126.4 < Xcite KWD 379.9.
+    expect(products[0].offers.map((o) => o.merchant)).toEqual(["Jarir", "Xcite"]);
     // An empty brand field does not turn everything into one merge — storage
     // still discriminates across tiers.
     const tiers = groupHits("iphone 17 pro max", [
@@ -710,7 +741,8 @@ describe("groupHits", () => {
       hit({ title: "Apple iPhone 17 Pro (256 GB) - Silver with Face ID | Tax Paid | 2 Years Official Warranty", merchant: "Jarir", currency: "SAR", price: 1500, url: "https://jarir.example/256s" }),
     ]);
     expect(products).toHaveLength(1);
-    expect(products[0].offers.map((o) => o.price)).toEqual([339.9, 1500]);
+    // Converted-cheapest leads: Jarir SAR 1500 ≈KD 122.4 < Xcite KWD 339.9.
+    expect(products[0].offers.map((o) => o.price)).toEqual([1500, 339.9]);
     // The bracketed capacity still discriminates the tier after normalization.
     expect(canonicalFields("Apple iPhone 17 Pro (256 GB)").storage).toBe("256gb");
     // Cosmic Orange closes on the colour through the widened vocabulary.
@@ -736,8 +768,10 @@ describe("groupHits", () => {
     expect(shape(second)).toBe(shape(first));
     // The spec pair merges: verbose and short spellings of one device.
     expect(first).toHaveLength(1);
-    // Swatch colours differ → both ride the single card.
-    expect(first[0].variations.map((v) => v.id)).toEqual(["blue", "silver"]);
+    // Swatch colours differ → both ride the single card, cheapest in
+    // KWD-space first (Jarir SAR 1500 ≈KD 122.4 silver beats Eureka's
+    // KWD 375 blue).
+    expect(first[0].variations.map((v) => v.id)).toEqual(["silver", "blue"]);
   });
 
   it("REEA-254: staged flushes skip the repeated alternatives arrays", async () => {

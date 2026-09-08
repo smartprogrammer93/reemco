@@ -1071,24 +1071,31 @@ function canonicalGroupTitle(group: HitGroup): string {
  *  color, each color gets its own best-price chip. The color's best minus the
  *  card's best rides in `priceDelta` so the card renders the absolute figure;
  *  one color (or none) keeps the plain single-price card. Sorted cheapest
- *  first, color name as the alphabetical tie-break. */
+ *  first, color name as the alphabetical tie-break.
+ *  REEA-254 item B: every comparison here runs on KWD-space numerics
+ *  (toKwdNumeric), so a colour whose only listing is SAR-priced is compared —
+ *  and its delta computed — on the same scale as the KWD listings. Raw
+ *  numerics bridged straight into `priceDelta` made a SAR figure read as a
+ *  KWD figure on the chip (live QA case: Blue/Silver "KWD 6,199.000" beside
+ *  Cosmic "KWD 419.900" on one card). */
 function colorSwatches(group: HitGroup, offers: PriceOffer[]): ProductVariation[] {
   const colorBest = new Map<string, number>();
   for (const o of group.offers) {
     const color = canonicalFields(o.title).color;
     if (color === "") continue;
+    const value = toKwdNumeric(o.price, o.currency);
     const prev = colorBest.get(color);
-    if (prev === undefined || o.price < prev) colorBest.set(color, o.price);
+    if (prev === undefined || value < prev) colorBest.set(color, value);
   }
   if (colorBest.size < 2) return [];
-  const cardBest = Math.min(...offers.map((o) => o.price));
+  const cardBest = Math.min(...offers.map((o) => toKwdNumeric(o.price, o.currency)));
   return [...colorBest.entries()]
     .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))
     .map(([color, price]) => ({
       id: color,
       label: color.charAt(0).toUpperCase() + color.slice(1),
-      // Cent-rounded difference: currency arithmetic stays readable on the
-      // wire (25.1, not the float-sum 25.100000000000023).
+      // Cent-rounded KWD-space difference: currency arithmetic stays readable
+      // on the wire (25.1, not the float-sum 25.100000000000023).
       priceDelta: Math.round((price - cardBest) * 100) / 100,
     }));
 }
@@ -1454,6 +1461,10 @@ export interface StagedCollectOptions {
   signal?: AbortSignal;
   /** Response-cache override for this run (tests, diagnostics). */
   cache?: QueryCache;
+  /** REEA-291 AC4 — explicit Refresh: never take the fresh-window shortcut.
+   *  A cached answer still serves as the first flush (stale path), but the
+   *  live fan-out always re-runs behind it so collection timestamps update. */
+  refresh?: boolean;
 }
 
 /** Always-miss cache used when the caller injects its own fetchImpl: a

@@ -37,6 +37,21 @@ export interface PrimaryPrice {
   label: string;
 }
 
+/**
+ * REEA-254 — KWD-space numeric of an offer figure. Every cross-retailer
+ * COMPARISON (cheapest-of-card, ranking, colour-swatch best, row order) must
+ * happen after this conversion: SAR 5,199 is cheaper than KWD 429.9 even
+ * though the raw numerics read the other way round. Display paths keep using
+ * the native figure via formatPrimaryPrice/formatCountryPrice; unknown codes
+ * pass through unconverted (REEA-195 rule).
+ */
+export function toKwdNumeric(price: number, currency: string): number {
+  const code = currency.trim().toUpperCase();
+  if (!code || code === "KWD") return price;
+  const rate = TO_KWD[code];
+  return rate ? price * rate : price;
+}
+
 /** Converted-side render of a reference conversion: at most two decimals —
  *  the exact fils precision belongs to KWD-native figures only (REEA-281 AC-2),
  *  a derived number must not read like a third decimal was measured. */
@@ -66,7 +81,7 @@ export function formatPrimaryPrice(price: number, currency: string): PrimaryPric
   if (!code || code === "KWD") return { value: price, label: formatPrice(price, "KWD") };
   const rate = TO_KWD[code];
   if (!rate) return { value: price, label: formatPrice(price, code) };
-  const kwd = price * rate;
+  const kwd = toKwdNumeric(price, currency);
   return { value: kwd, label: `≈${formatConverted(kwd, "KWD")} · ${formatPrice(price, code)}` };
 }
 
@@ -130,11 +145,13 @@ export function formatCountryPrice(
   };
 }
 
-/** Sort offers so in-stock items come first, then cheapest. */
+/** Sort offers so in-stock items come first, then cheapest. REEA-254: the
+ *  cheapest comparison runs in KWD-space (toKwdNumeric) so a SAR listing is
+ *  compared against KWD listings on the same scale, not on raw numerics. */
 export function sortOffers(offers: PriceOffer[]): PriceOffer[] {
   return [...offers].sort((a, b) => {
     if (a.inStock !== b.inStock) return a.inStock ? -1 : 1;
-    return a.price - b.price;
+    return toKwdNumeric(a.price, a.currency) - toKwdNumeric(b.price, b.currency);
   });
 }
 
