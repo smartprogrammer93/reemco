@@ -2,14 +2,24 @@
 
 import { useRef, useState } from "react";
 import type { Coupon } from "@/types/product";
+import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
 
 /**
  * Design v3 §5.4 coupon pill: amber, coupon VALUE only ("5 KWD off",
  * "FREE ship"). One coupon per card; the code + copy affordance stay for
  * usability, rendered inside the pill at small size. Label-only text — no
- * countdowns, no fake urgency.
+ * countdowns, no fake urgency. REEA-279: the chrome labels come from the
+ * static string table via the resolved locale.
  */
-export default function CouponBadge({ coupon }: { coupon: Coupon }) {
+export default function CouponBadge({
+  coupon,
+  locale,
+}: {
+  coupon: Coupon;
+  /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
+  locale?: Locale;
+}) {
+  const t = getStrings(locale ?? clientLocale());
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -39,14 +49,14 @@ export default function CouponBadge({ coupon }: { coupon: Coupon }) {
           <button
             type="button"
             onClick={copyCode}
-            aria-label={`Copy coupon code ${coupon.code}`}
+            aria-label={`${t.copyAriaLead} ${coupon.code}`}
             className="focusable flex h-8 w-8 items-center justify-center rounded border"
             style={{ borderColor: "var(--rc-fresh)", color: "var(--rc-fresh)" }}
           >
             {copied ? (
               <span style={{ font: "var(--rc-text-small)" }}>✓</span>
             ) : (
-              <span style={{ font: "var(--rc-text-small)" }}>Copy</span>
+              <span style={{ font: "var(--rc-text-small)" }}>{t.copyLabel}</span>
             )}
           </button>
         </>

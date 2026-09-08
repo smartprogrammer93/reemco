@@ -9,23 +9,29 @@
  * explicit "may be outdated" suffix. Missing metadata renders "updated date
  * unknown" — never a fabricated date.
  */
+import { clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
+
 export default function FreshnessBadge({
   scrapedAt,
   now,
   renderStartMs,
+  locale,
 }: {
   scrapedAt?: string;
   /** Injectable clock for deterministic tests; defaults to render time. */
   now?: number;
   /** REEA-283 server-render clock, serialized with the streamed props. */
   renderStartMs?: number;
+  /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
+  locale?: Locale;
 }) {
+  const t = getStrings(locale ?? clientLocale());
   const stampMs = scrapedAt ? Date.parse(scrapedAt) : NaN;
   if (!scrapedAt || Number.isNaN(stampMs)) {
     return (
       <span className="fresh-chip">
         <span className="fresh-dot is-late" aria-hidden />
-        UPDATED DATE UNKNOWN
+        {t.freshUnknown}
       </span>
     );
   }
@@ -40,13 +46,11 @@ export default function FreshnessBadge({
   return (
     <span
       className="fresh-chip"
-      title={
-        stale ? "Last verified more than 7 days ago — the price may be outdated." : undefined
-      }
+      title={stale ? t.staleTitle : undefined}
     >
       <span className={`fresh-dot${late ? " is-late" : ""}`} aria-hidden />
-      UPDATED {mins} MINUTES AGO
-      {stale ? " · may be outdated" : ""}
+      {fill(t.freshUpdatedMinutes, { n: mins })}
+      {stale ? t.staleSuffix : ""}
     </span>
   );
 }
