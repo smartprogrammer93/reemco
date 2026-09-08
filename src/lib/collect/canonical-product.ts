@@ -175,7 +175,7 @@ export function canonicalTokens(title: string): string[] {
 }
 
 /** Compute the spec §1 tuple from any live title (or slug-decoded query). */
-export function canonicalFields(title: string): CanonicalFields {
+function computeCanonicalFields(title: string): CanonicalFields {
   const tokens = canonicalTokens(title);
 
   let brandIdx = tokens.findIndex((t) => BRANDS.has(t));
@@ -267,6 +267,31 @@ export function canonicalFields(title: string): CanonicalFields {
     color: color || pendingColorWord,
     grade: gradeParts.join("-") || "new",
   };
+}
+
+/**
+ * REEA-254 — title → tuple mapping cache. The same live title is re-read on
+ * every merge comparison and per color swatch within one query; a bounded
+ * insertion-ordered map makes the mapping a stable function for the whole
+ * query, so consecutive loads of one fetched set converge on the identical
+ * merge. Entries are frozen at compute time — callers copy the tuple before
+ * seeding group fields (see buildGroups), so a cached value is never mutated.
+ */
+const FIELD_CACHE_MAX = 256;
+const fieldCache = new Map<string, CanonicalFields>();
+
+export function canonicalFields(title: string): CanonicalFields {
+  const cached = fieldCache.get(title);
+  if (cached !== undefined) return cached;
+  const fields = computeCanonicalFields(title);
+  if (fieldCache.size >= FIELD_CACHE_MAX) {
+    // Oldest-first eviction keeps the window on the titles the live fan-out
+    // actually carries; a miss just recomputes — nothing is bundled.
+    const oldest = fieldCache.keys().next();
+    if (!oldest.done) fieldCache.delete(oldest.value);
+  }
+  fieldCache.set(title, fields);
+  return fields;
 }
 
 /** Join non-empty fields with `|` (spec §1 step 4). */

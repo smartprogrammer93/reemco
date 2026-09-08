@@ -139,6 +139,9 @@ export default function ProductResultCard({
   const detail = variant === "detail";
   const offers = sortOffers(product.offers);
   const best = offers[0];
+  // Base figure for the swatch chips (REEA-254): the cheapest listed price on
+  // the card — the same base the server used for each swatch's priceDelta.
+  const cheapestListed = offers.length > 0 ? Math.min(...offers.map((o) => o.price)) : 0;
   const oos = best != null && !best.inStock;
   const primaryCoupon = product.coupons[0];
   const extraCoupons = product.coupons.length - 1;
@@ -214,6 +217,36 @@ export default function ProductResultCard({
             {formatPrimaryPrice(best.price, best.currency).label}
           </span>
         </p>
+      )}
+
+      {/* REEA-254: colour swatches inside one model+storage card — each chip
+          carries that colour's best listed price (effective = listed here:
+          live offers carry no coupon), computed off the same cheapest-row
+          figure the server used for `priceDelta`. Rendered only when the
+          merged card actually spans more than one colour; a single-colour
+          card keeps the plain price treatment above. */}
+      {!detail && best && product.variations.length > 0 && (
+        <section
+          aria-label="Colour options"
+          className="mt-3 flex flex-wrap items-center gap-2"
+        >
+          {product.variations.map((v) => (
+            <span
+              key={v.id}
+              className="label-token inline-flex items-center gap-1 rounded px-2 py-0.5"
+              style={{
+                color: "var(--rc-body-text)",
+                background: "var(--rc-canvas)",
+                border: "1px solid var(--rc-line)",
+              }}
+            >
+              {v.label}
+              <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
+                {formatPrimaryPrice(cheapestListed + v.priceDelta, best.currency).label}
+              </span>
+            </span>
+          ))}
+        </section>
       )}
 
       {/* Offers: one row per retailer — listed price as scraped
