@@ -21,12 +21,15 @@ name: Scheduled live-site smoke check
 # (uptime.yml on a */5 cron had multi-hour gaps; the smoke check's 13:17Z and
 # 14:17Z ticks produced no run). Mitigation: fire on several cron lines per hour
 # and dedupe with a guard step that no-ops unless the last completed run is
-# older than 75 minutes. Missed ticks self-heal on the next one (Idempotency);
-# runner cost stays ~hourly because of the guard.
+# older than 150 minutes. Missed ticks self-heal on the next one (Idempotency);
+# runner cost stays ~every-3h because of the guard (REEA-337 cadence cut).
 on:
   schedule:
-    - cron: "17 * * * *" # hourly anchor, off the :00 spike
-    - cron: "47 * * * *" # second chance each hour when a tick is skipped
+    # REEA-337 cadence cut (CEO directive): hourly -> every 3h to fit the Hobby
+    # ~2,000 min/month Actions allowance. Two anchors per window keep the
+    # missed-tick self-heal; the guard dedupes to one full tick per window.
+    - cron: "17 */3 * * *" # primary anchor, off the :00 spike
+    - cron: "47 */3 * * *" # second chance when the primary tick is skipped
   workflow_dispatch:
 
 
@@ -46,9 +49,9 @@ jobs:
     timeout-minutes: 10
     steps:
       # REEA-71 dedupe guard: with multiple cron lines, most ticks are redundant.
-      # Only run the smoke check if the last completed run is >= 75 min old
-      # ( hourly cadence + slack for cron delay). Manual dispatches always run.
-      - name: Guard — skip if last completed run is under 75 min old
+      # Only run the smoke check if the last completed run is >= 150 min old
+      # (3h cadence minus slack). Manual dispatches always run.
+      - name: Guard — skip if last completed run is under 150 min old
         id: guard
         if: github.event_name == 'schedule'
         env:
@@ -59,8 +62,8 @@ jobs:
           if [ -z "$LAST" ]; then
             echo "No previous completed run — due."
             echo "due=true" >> "$GITHUB_OUTPUT"
-          elif [ $(( $(date -u +%s) - $(date -u -d "$LAST" +%s) )) -lt 4500 ]; then
-            echo "Last completed run $LAST is <75min old — not due; skipping tick."
+          elif [ $(( $(date -u +%s) - $(date -u -d "$LAST" +%s) )) -lt 9000 ]; then
+            echo "Last completed run $LAST is <150min old — not due; skipping tick."
             echo "due=false" >> "$GITHUB_OUTPUT"
           else
             echo "Last completed run $LAST is stale — due (missed-tick self-heal)."
