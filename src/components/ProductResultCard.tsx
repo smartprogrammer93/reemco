@@ -249,11 +249,13 @@ export default function ProductResultCard({
                   className="flex flex-col justify-between gap-1 py-1 sm:flex-row sm:items-center sm:gap-x-2"
                   style={{ borderTop: "1px solid var(--rc-line)" }}
                 >
-                  {/* REEA-203: the label column absorbs its own wraps (min-w-0
-                      lets the Lowest-listed chip drop under the merchant name);
-                      the action cluster keeps one identical inline structure and
-                      baseline in every row, chip or not. */}
-                  <span className="flex min-w-0 flex-wrap items-center gap-2">
+                  {/* REEA-203: the label column absorbs its own wraps (chips
+                      drop under the merchant name as whole units); REEA-224
+                      item 1: a 160px floor keeps the column wide enough for
+                      the one-line chip (~156px at 12px mono), so at the 1280
+                      two-column grid every row in a card sits at one height
+                      (~52–53px) instead of rhythm-stepping on chip wraps. */}
+                  <span className="flex min-w-[160px] flex-wrap items-center gap-2">
                     <span style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
                       {o.merchant}
                     </span>
@@ -262,7 +264,7 @@ export default function ProductResultCard({
                         blended into the new-condition price list. */}
                     {o.grade && gradeBadgeLabel(o.grade) ? (
                       <span
-                        className="label-token rounded px-2 py-0.5"
+                        className="label-token whitespace-nowrap rounded px-2 py-0.5"
                         style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px solid var(--rc-line)" }}
                       >
                         {gradeBadgeLabel(o.grade)}
@@ -270,7 +272,7 @@ export default function ProductResultCard({
                     ) : null}
                     {isLowest && (
                       <span
-                        className="label-token rounded px-2 py-0.5"
+                        className="label-token whitespace-nowrap rounded px-2 py-0.5"
                         style={{ background: "var(--rc-savings-bg)", color: "var(--rc-savings)" }}
                       >
                         Lowest listed price
@@ -280,11 +282,17 @@ export default function ProductResultCard({
                   {/* REEA-75 (M2): flex-wrap keeps the Go to store CTA inside
                       the card at narrow widths instead of overflowing the
                       viewport; from sm the cluster keeps its intrinsic width so
-                      every row (chip or not) shares one inline structure. */}
+                      every row (chip or not) shares one inline structure.
+                      REEA-224 item 3 (dual-currency rows at ~480): the button is
+                      pinned (shrink-0) on the row right-side flex line so every row
+                      keeps one right-edge x; the combined KWD-stamp span takes
+                      min-width: 0 and wraps within the cluster; items-center keeps
+                      the button vertically centered against the wrapped price
+                      block; button min-height stays 44px (min-h-11). */}
                   <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-3 sm:shrink-0">
                     <StockDot state={o.inStock ? "in" : "out"} />
                     <span
-                      className="tabular"
+                      className="tabular min-w-0"
                       style={{ font: "var(--rc-text-body)", fontWeight: 600, color: "var(--rc-ink)" }}
                     >
                       {formatPrimaryPrice(o.price, o.currency).label}
@@ -299,7 +307,7 @@ export default function ProductResultCard({
                         query={query}
                         rank={rank}
                         itemId={product.productId}
-                        className="btn-primary focusable min-h-11 px-4"
+                        className="btn-primary focusable min-h-11 shrink-0 px-4"
                       >
                         Go to store
                       </TrackedOutboundLink>
