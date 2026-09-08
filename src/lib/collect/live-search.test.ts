@@ -1078,3 +1078,43 @@ describe("relevance-first ranking (REEA-213 Bet 1, REEA-211 acceptance)", () => 
     expect(vowelled.length).toBeGreaterThan(0);
   });
 });
+
+describe("whole-chain budget signal (REEA-224 F4)", () => {
+  it("threads a signal into every hop fetch of the blocking path", async () => {
+    const signals: unknown[] = [];
+    const fetchImpl = async (_url: string, init?: RequestInit): Promise<Response> => {
+      signals.push(init?.signal);
+      return new Response("<html>no cards</html>");
+    };
+    await collectLiveResults("airpods", { fetchImpl, country: "EG" });
+    expect(signals.length).toBeGreaterThan(0);
+    // Every hop carried the joined budget|attempt signal — the abort path
+    // exists end to end, not just on the per-attempt windows.
+    expect(signals.every((s) => s instanceof AbortSignal)).toBe(true);
+  });
+
+  it("cuts a stalled retailer at the bounded hop window instead of hanging", async () => {
+    resetDiscoveryCache();
+    // Stall-until-abort fixture: the promise only settles when the threaded
+    // signal fires. Without budget threading through fetchChecked there is no
+    // event at all and this call would hang until the harness timeout.
+    const stalled = (_url: string, init?: RequestInit): Promise<Response> =>
+      new Promise<Response>((resolve) => {
+        const signal = init?.signal;
+        const settle = () => resolve(new Response(JSON.stringify({ hits: [], products: [], results: [] })));
+        if (!signal) return;
+        if (signal.aborted) settle();
+        else signal.addEventListener("abort", settle, { once: true });
+      });
+    const t0 = Date.now();
+    const { notes } = await collectLiveResults("samsung", { fetchImpl: stalled, country: "KW" });
+    const elapsed = Date.now() - t0;
+    // The slowest bounded hop is the two-step chain at TIMEOUT×2 (~8 s); the
+    // whole run must settle there — measured "~7.5 s" on the edge — and never
+    // drift past the documented LIVE_SEARCH_BUDGET_MS ceiling.
+    expect(elapsed).toBeGreaterThanOrEqual(LIVE_SEARCH_TIMEOUT_MS * 2 - 1_500);
+    expect(elapsed).toBeLessThan(LIVE_SEARCH_BUDGET_MS + 2_000);
+    // Graceful degradation: every silent retailer is still reported.
+    expect(notes).toHaveLength(4);
+  }, 25_000);
+});

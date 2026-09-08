@@ -14,6 +14,8 @@
  * in production but surfaced in tests via the returned diagnostics.
  */
 import {
+  APP_ID_ALLOW,
+  SEARCH_KEY_ALLOW,
   brandAwareCoverage,
   extractJarirIndexKey,
   jarirIndexLang,
@@ -51,6 +53,10 @@ export const LIVE_SEARCH_TIMEOUT_MS = 4_000;
  * one round of parallel collectors plus one bounded enrichment retry for
  * silent retailers (REEA-149). Each round's slowest hop is the two-step
  * chain at TIMEOUT×2; two rounds stay inside the results page maxDuration.
+ * REEA-224 F4: the ceiling is enforced, not just documented — collectLiveResults
+ * wraps the chain in AbortSignal.timeout(LIVE_SEARCH_BUDGET_MS) and threads the
+ * signal through every fetchChecked hop (joinSignals lets the sooner of budget
+ * / per-attempt window decide).
  */
 export const LIVE_SEARCH_BUDGET_MS = 16_000;
 /** Cap of distinct product groups served per query. */
@@ -129,20 +135,12 @@ const DISCOVERY_TTL_MS = 5 * 60_000;
 const discoveryCache = new Map<string, { values: string[]; expiresAt: number }>();
 
 /**
- * REEA-152 — allowlists for discovery-hop values scraped from upstream
- * homepage HTML before they are interpolated (unescaped) into the follow-up
- * hop-fetch URLs (`https://${appId}-dsn.algolia.net/...`, `...?key=${indexKey}`).
- * Each alphabet is exactly the character set real Algolia app ids, Algolia
- * search keys and Constructor index keys use, so legitimate values always
- * pass; anything else can only shrink the origin suffix `-dsn.algolia.net` /
- * the query tail, never close the origin or inject a second segment. Values
- * are checked before entering the cache, so cache reads inherit the guarantee.
+ * REEA-152 allowlists (REEA-224 F3: shared single source now lives in
+ * search-fallback.ts so both discovery-hop paths — this cached collector
+ * chain and the per-product fallbacks — validate with the exact same
+ * alphabets). Values are checked before entering the cache, so cache reads
+ * inherit the guarantee.
  */
-// Real Algolia app ids carry upper-case letters (eureka.com.kw ships
-// "5GPHMAA239"), so the alphabet must include upper-case like SEARCH_KEY_ALLOW
-// does; still only characters safe for interpolation into the hop-fetch URL.
-const APP_ID_ALLOW = /^[A-Za-z0-9-]{1,64}$/;
-const SEARCH_KEY_ALLOW = /^[A-Za-z0-9_-]{8,128}$/;
 
 function readDiscovery(name: string): string[] | null {
   const hit = discoveryCache.get(name);
@@ -161,6 +159,25 @@ function writeDiscovery(name: string, values: string[]): void {
 /** Test support: make discovery counts deterministic across test cases. */
 export function resetDiscoveryCache(): void {
   discoveryCache.clear();
+}
+
+/**
+ * REEA-224 F4 — combine the overall budget signal with a per-attempt window:
+ * the joined signal aborts when EITHER source does — AbortSignal.any where
+ * available, mirrored listeners otherwise — so budget threading works on any
+ * runtime while each hop keeps its own tighter attempt ceiling.
+ */
+function joinSignals(budget: AbortSignal, attempt: AbortSignal | undefined): AbortSignal {
+  if (!attempt) return budget;
+  if (typeof AbortSignal.any === "function") return AbortSignal.any([budget, attempt]);
+  const ctl = new AbortController();
+  const abort = () => ctl.abort();
+  if (budget.aborted || attempt.aborted) abort();
+  else {
+    budget.addEventListener("abort", abort, { once: true });
+    attempt.addEventListener("abort", abort, { once: true });
+  }
+  return ctl.signal;
 }
 
 async function fetchChecked(
@@ -1012,9 +1029,15 @@ async function finalSnapshot(
 
 export function collectLiveResultsStaged(
   query: string,
-  opts: { fetchImpl?: FetchImpl; country?: CountryCode | null } = {},
+  opts: { fetchImpl?: FetchImpl; country?: CountryCode | null; signal?: AbortSignal } = {},
 ): LiveSearchStages {
-  const fetchImpl: FetchImpl = opts.fetchImpl ?? ((u, init) => fetch(u, init));
+  const baseFetch: FetchImpl = opts.fetchImpl ?? ((u, init) => fetch(u, init));
+  // REEA-224 F4 — thread the overall budget signal into every hop: each hop
+  // still carries its own attempt window, whichever expires first aborts.
+  const budget = opts.signal;
+  const fetchImpl: FetchImpl = budget
+    ? (u, init) => baseFetch(u, { ...init, signal: joinSignals(budget, init?.signal ?? undefined) })
+    : baseFetch;
   const q = query.trim();
   const country = opts.country ?? null;
   const collectors = country
@@ -1067,9 +1090,16 @@ export function collectLiveResultsStaged(
  */
 export async function collectLiveResults(
   query: string,
-  opts: { fetchImpl?: FetchImpl; country?: CountryCode | null } = {},
+  opts: { fetchImpl?: FetchImpl; country?: CountryCode | null; signal?: AbortSignal } = {},
 ): Promise<LiveSearchResult> {
-  return await collectLiveResultsStaged(query, opts).final;
+  // REEA-224 F4 — enforce the documented LIVE_SEARCH_BUDGET_MS ceiling on the
+  // whole chain: the signal is threaded through every fetchChecked hop, so a
+  // slow retailer is cut off at the bounded hop window / overall budget
+  // instead of leaving the chain waiting on a stalled connection.
+  return await collectLiveResultsStaged(query, {
+    ...opts,
+    signal: opts.signal ?? AbortSignal.timeout(LIVE_SEARCH_BUDGET_MS),
+  }).final;
 }
 
 /**
