@@ -1,0 +1,10 @@
+import { chromium as pw } from "playwright-core";
+process.env.HOME = "/tmp";
+process.env.FONTCONFIG_PATH = "/tmp/fonts";
+process.env.LD_LIBRARY_PATH = "/tmp/lib/lib:/tmp:" + (process.env.LD_LIBRARY_PATH || "");
+const browser = await pw.launch({ executablePath: "/tmp/chromium", args: ["--no-sandbox"] });
+const ctx = await browser.newContext({ viewport: { width: 360, height: 800 } });
+const page = await ctx.newPage();
+await page.setContent("<h1>hi</h1>", { timeout: 30000 });
+console.log("setContent-ok", await page.evaluate(() => document.querySelector("h1").textContent));
+await browser.close();

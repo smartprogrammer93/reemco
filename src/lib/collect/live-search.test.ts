@@ -19,6 +19,7 @@ import {
   LIVE_SEARCH_HITS_PER_PAGE,
   LIVE_SEARCH_TIMEOUT_MS,
   nextStoreHits,
+  pcKuwaitApiHits,
   pcKuwaitHits,
   quadraHits,
   resetDiscoveryCache,
@@ -162,6 +163,38 @@ describe("hit parsers", () => {
       wasPrice: 13,
       currency: "KWD",
       url: "https://pckuwait.com/shop/logitech-m330-silent-plus/",
+      inStock: true,
+    });
+  });
+
+  it("pcKuwaitApiHits reads Store API JSON with minor-unit prices (REEA-272)", () => {
+    // Trimmed from the captured `/wp-json/wc/store/v1/products` payload
+    // (2026-09-08): prices are minor-unit strings, KD uses three decimals.
+    const payload = [
+      {
+        name: "Logitech M330 Silent Plus Mouse",
+        permalink: "https://pckuwait.com/product/logitech-m330-silent-plus/",
+        is_in_stock: true,
+        images: [{ src: "https://pckuwait.com/wp-content/uploads/m330.jpg" }],
+        prices: {
+          price: "11500",
+          regular_price: "13000",
+          currency_code: "KWD",
+          currency_minor_unit: 3,
+        },
+      },
+      { name: "No Price Keyboard", prices: {} },
+    ];
+    const hits = pcKuwaitApiHits(payload, "logitech mouse");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({
+      merchant: "PC Kuwait",
+      title: "Logitech M330 Silent Plus Mouse",
+      price: 11.5,
+      wasPrice: 13,
+      currency: "KWD",
+      url: "https://pckuwait.com/product/logitech-m330-silent-plus/",
+      image: "https://pckuwait.com/wp-content/uploads/m330.jpg",
       inStock: true,
     });
   });

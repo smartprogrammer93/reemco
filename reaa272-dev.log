@@ -1,0 +1,40 @@
+▲ Next.js 16.3.4 (Turbopack)
+- Local:         http://localhost:3777
+- Network:       http://172.17.0.12:3777
+✓ Ready in 213ms
+✓ Running next.config.ts took 19ms
+⚠ Turbopack's filesystem cache has been deleted because we previously detected an internal error in Turbopack. Builds or page loads may be slower as a result.
+
+⨯ ./src/lib/i18n.ts:24:1
+Error: You're importing a module that depends on "next/headers". This API is only available in Server Components in the App Router, but you are using it in the Pages Router.
+    Learn more: https://nextjs.org/docs/app/building-your-application/rendering/server-components
+  [90m22 |[0m  * fallback [36mfor[0m hosts without server resolution ([36mstatic[0m [36mexport[0m, tests).
+  [90m23 |[0m  */
+[31m[1m>[0m [90m24 |[0m [36mimport[0m { cookies, headers } [36mfrom[0m [32m"next/headers"[0m;
+  [90m   |[0m [31m[1m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  [90m25 |[0m
+  [90m26 |[0m [36mexport[0m [36mtype[0m [33mLocale[0m = [32m"en"[0m | [32m"ar"[0m;
+  [90m27 |[0m
+
+Ecmascript file had an error
+
+Import traces:
+  Server Component:
+    ./src/lib/i18n.ts
+    ./src/app/layout.tsx
+
+  Client Component Browser:
+    ./src/lib/i18n.ts [Client Component Browser]
+    ./src/components/LocaleToggle.tsx [Client Component Browser]
+    ./src/components/LocaleToggle.tsx [Server Component]
+    ./src/app/layout.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/lib/i18n.ts [Client Component SSR]
+    ./src/components/LocaleToggle.tsx [Client Component SSR]
+    ./src/components/LocaleToggle.tsx [Server Component]
+    ./src/app/layout.tsx [Server Component]
+
+
+ GET /results?q=samsung 500 in 2.9s (next.js: 2.8s, proxy.ts: 105ms, application-code: 58ms)
+[?25h

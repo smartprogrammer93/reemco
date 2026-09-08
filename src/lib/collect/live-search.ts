@@ -521,6 +521,48 @@ export function pcKuwaitHits(html: string, query: string): SearchHit[] {
   return out;
 }
 
+/**
+ * PC Kuwait WooCommerce Store API v1 (`/wp-json/wc/store/v1/products`) JSON →
+ * hits (REEA-272). The Store API is the challenge-tolerant endpoint for this
+ * hop: it answers scripted requests on the first attempt without the CF
+ * managed challenge, so the handshake is a fallback here rather than the
+ * default. Prices arrive as minor-unit strings; `currency_minor_unit` is the
+ * exponent that turns them into a decimal KWD amount.
+ */
+export function pcKuwaitApiHits(payload: unknown, query: string): SearchHit[] {
+  const items = Array.isArray(payload) ? payload : [];
+  const out: SearchHit[] = [];
+  for (const item of items as Record<string, unknown>[]) {
+    const title = typeof item.name === "string" ? item.name : "";
+    if (!title || brandAwareCoverage(title, query) < MIN_SCORE) continue;
+    const prices = (item.prices ?? {}) as Record<string, unknown>;
+    const exponent = Number(prices.currency_minor_unit);
+    const minor = Number.isFinite(exponent) ? exponent : 2;
+    const fromMinor = (raw: unknown): number | null => {
+      const value = Number(raw);
+      return Number.isFinite(value) ? value / 10 ** minor : null;
+    };
+    const price = fromMinor(prices.price);
+    if (price == null) continue;
+    const wasPrice = fromMinor(prices.regular_price);
+    const images = Array.isArray(item.images) ? item.images : [];
+    const firstImage = images[0] as Record<string, unknown> | undefined;
+    const image = typeof firstImage?.src === "string" ? firstImage.src : undefined;
+    out.push({
+      title,
+      merchant: "PC Kuwait",
+      country: "KW",
+      price,
+      currency: typeof prices.currency_code === "string" ? prices.currency_code : "KWD",
+      url: typeof item.permalink === "string" ? item.permalink : "https://pckuwait.com/",
+      inStock: item.is_in_stock !== false,
+      ...(wasPrice != null && wasPrice > price ? { wasPrice } : {}),
+      ...(image ? { image } : {}),
+    });
+  }
+  return out;
+}
+
 /** Lulu Hypermarket Kuwait: JSON-LD Product records off its SSR search page. */
 export function luluHits(html: string, query: string): SearchHit[] {
   const out: SearchHit[] = [];
@@ -785,14 +827,29 @@ const COLLECTORS: RetailerCollector[] = [
     merchant: "PC Kuwait",
     country: "KW",
     collect: async (query, fetchImpl) => {
-      // post_type=product lands on the WooCommerce archive (prices + stock);
-      // the plain blog search view carries neither. REEA-272: the hop rides
-      // fetchThroughChallenge's identity-alternating handshake (verified-bot
-      // first, browser-shaped fallback on odd attempts) — matching the other
-      // CF-fronted stores; a bare accept-only request left a standing HTTP
-      // 403 note on the deployed path while browsers reached the site. The
-      // doubled attempt window gives the handshake the same room the Next
-      // Store / Lulu chains get.
+      // REEA-272: lead with the WooCommerce Store API JSON (`/wp-json/wc/
+      // store/v1/products`) — the challenge-tolerant endpoint the brief calls
+      // for. It answers scripted requests on the first attempt without the CF
+      // managed challenge (verified live 2026-09-08 from datacenter egress),
+      // while the HTML archive still needed the handshake. If the JSON hop
+      // can't answer, fall back to the `post_type=product` archive page
+      // (prices + stock; the plain blog search view carries neither) over the
+      // same identity-alternating handshake the other CF-fronted stores get —
+      // a bare accept-only request left a standing HTTP 403 note there while
+      // browsers reached the site, so the fallback keeps the doubled window.
+      const apiUrl = `https://pckuwait.com/wp-json/wc/store/v1/products?search=${encodeURIComponent(query)}&per_page=${LIVE_SEARCH_HITS_PER_PAGE}`;
+      try {
+        const jsonRes = await fetchThroughChallenge(
+          fetchImpl,
+          apiUrl,
+          {},
+          AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
+        );
+        if (jsonRes.ok) return pcKuwaitApiHits(JSON.parse(await jsonRes.text()), query);
+      } catch {
+        // Malformed JSON or a squeezed attempt window — the archive page
+        // below answers with the same data shape.
+      }
       const res = await fetchThroughChallenge(
         fetchImpl,
         `https://pckuwait.com/?s=${encodeURIComponent(query)}&post_type=product`,

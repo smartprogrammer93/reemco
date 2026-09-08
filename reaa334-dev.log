@@ -1,0 +1,14 @@
+
+> reemco-price-compare@0.1.0 dev
+> next dev
+
+▲ Next.js 16.3.4 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://172.17.0.11:3000
+✓ Ready in 215ms
+✓ Running next.config.ts took 20ms
+
+ GET / 200 in 255ms (next.js: 54ms, proxy.ts: 86ms, application-code: 116ms)
+ GET /results?q=ASUS+ROG+Strix+Scope+II+X 200 in 8.9s (next.js: 12ms, proxy.ts: 3ms, application-code: 8.8s)
+ GET /results?q=zzxwq+kvqpl 200 in 7.9s (next.js: 2.0ms, proxy.ts: 2ms, application-code: 7.9s)
+[?25h
