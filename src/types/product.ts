@@ -17,6 +17,12 @@ export interface PriceOffer {
    * visible badges and their own prices; never averaged into the new set.
    */
   grade?: string;
+  /**
+   * REEA-281 AC-1 — the retailer's own product image for THIS listing, when
+   * its contract carries one. Absent when the feed carries no image; result
+   * rows then render text-only (the graceful fallback), never a placeholder.
+   */
+  image?: string;
 }
 
 export interface Coupon {

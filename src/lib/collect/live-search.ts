@@ -22,12 +22,15 @@ import {
   extractJsonLdProducts,
   fetchThroughChallenge,
   jarirIndexLang,
+  normalizeShopifyProducts,
   scanNextStoreCards,
   scanWooCards,
   titleMatchScore,
 } from "@/lib/collect/search-fallback";
+import { defaultQueryCache, queryCacheKey, type QueryCache } from "@/lib/query-cache";
 import type { FetchImpl } from "@/lib/collect/scraper";
 import type { CountryCode } from "@/lib/country";
+import { sanitizeExternalUrl } from "@/lib/safe-url";
 import { canonicalFields, compatibleFields, type CanonicalFields } from "@/lib/collect/canonical-product";
 import {
   arabicBrandIntent,
@@ -102,6 +105,12 @@ export interface SearchHit {
   url: string;
   inStock: boolean;
   wasPrice?: number;
+  /**
+   * REEA-281 AC-1 — the retailer's product image for this listing, picked up
+   * by the same symmetric candidate chain as the brand field. Absent when the
+   * retailer contract carries no image; the row then renders without one.
+   */
+  image?: string;
   /**
    * REEA-170 — country tag stamped by the retailer adapter that produced the
    * hit (each adapter is scoped to one storefront's country). The results-page
@@ -213,6 +222,32 @@ function pickBrand(hit: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
+/**
+ * REEA-281 AC-1 — symmetric image pickup, the same candidate-chain shape as
+ * pickBrand: every JSON adapter reads its listing photo through this shared
+ * helper (contract key names differ per retailer; the chain covers them all).
+ * Shopify-style payloads carry the photo as an object (`url`/`src` field);
+ * plain-string variants pass through. Validated through the same render-time
+ * allowlist as every other scraped URL (REEA-13). Absent keys stay absent —
+ * the card renders its text-only fallback rather than invent a placeholder.
+ */
+function pickImage(hit: Record<string, unknown>): string | undefined {
+  for (const key of ["image", "imageUrl", "image_url", "image_path", "imagepath", "featured_image", "thumbnail", "picture"]) {
+    const v = hit[key];
+    const raw =
+      typeof v === "string"
+        ? v
+        : v && typeof v === "object"
+          ? ((v as { url?: unknown; src?: unknown }).url ??
+            (v as { url?: unknown; src?: unknown }).src)
+          : undefined;
+    if (typeof raw !== "string") continue;
+    const src = sanitizeExternalUrl(raw.trim());
+    if (src) return src;
+  }
+  return undefined;
+}
+
 export function xciteHits(payload: unknown, query: string): SearchHit[] {
   const hits =
     (payload as { results?: { hits?: Record<string, unknown>[] }[] })?.results?.[0]?.hits ?? [];
@@ -225,6 +260,7 @@ export function xciteHits(payload: unknown, query: string): SearchHit[] {
     if (brandAwareCoverage(title, query) < MIN_SCORE) continue;
     const unmodified = typeof hit.unmodifiedPrice === "number" ? hit.unmodifiedPrice : undefined;
     const brand = pickBrand(hit);
+    const img = pickImage(hit);
     out.push({
       title,
       merchant: "Xcite",
@@ -235,15 +271,16 @@ export function xciteHits(payload: unknown, query: string): SearchHit[] {
       url: `https://www.xcite.com/${slug}/p`,
       inStock: hit.inStock === true || hit.status_key === "InStock",
       ...(unmodified != null && unmodified > price ? { wasPrice: unmodified } : {}),
+      ...(img ? { image: img } : {}),
     });
   }
   return out;
 }
 
 export function blinkHits(payload: unknown, query: string): SearchHit[] {
-  const products =
-    (payload as { products?: { title?: string; handle?: string; vendor?: string; variants?: { price?: string; available?: boolean }[] }[] })
-      ?.products ?? [];
+  // The live hop answers the suggest.json envelope; older products.json
+  // fixtures stay readable — normalizeShopifyProducts folds both shapes.
+  const products = normalizeShopifyProducts(payload);
   const out: SearchHit[] = [];
   for (const p of products) {
     const variant = p.variants?.[0];
@@ -251,6 +288,7 @@ export function blinkHits(payload: unknown, query: string): SearchHit[] {
     if (!p.title || !p.handle || !Number.isFinite(price) || price <= 0) continue;
     if (brandAwareCoverage(p.title, query) < MIN_SCORE) continue;
     const brand = pickBrand(p as unknown as Record<string, unknown>);
+    const img = pickImage(p);
     out.push({
       title: p.title,
       merchant: "Blink",
@@ -260,6 +298,7 @@ export function blinkHits(payload: unknown, query: string): SearchHit[] {
       currency: "KWD",
       url: `https://blink.com.kw/products/${p.handle}`,
       inStock: variant?.available ?? true,
+      ...(img ? { image: img } : {}),
     });
   }
   return out;
@@ -274,6 +313,7 @@ export function eurekaHits(payload: unknown, query: string): SearchHit[] {
     if (!hit.itmn || !hit.objectID || typeof hit.clprc !== "number" || hit.clprc <= 0) continue;
     if (brandAwareCoverage(hit.itmn, query) < MIN_SCORE) continue;
     const brand = pickBrand(hit as unknown as Record<string, unknown>);
+    const img = pickImage(hit as unknown as Record<string, unknown>);
     out.push({
       title: hit.itmn,
       merchant: "Eureka",
@@ -286,6 +326,7 @@ export function eurekaHits(payload: unknown, query: string): SearchHit[] {
       url: `https://www.eureka.com.kw/products/details/${hit.objectID}`,
       inStock: typeof hit.avaqt === "number" ? hit.avaqt > 0 : true,
       ...(typeof hit.lprc === "number" && hit.lprc > hit.clprc ? { wasPrice: hit.lprc } : {}),
+      ...(img ? { image: img } : {}),
     });
   }
   return out;
@@ -309,6 +350,7 @@ export function sultanCenterHits(payload: unknown, query: string): SearchHit[] {
     if (!Number.isFinite(price) || price <= 0) continue;
     if (brandAwareCoverage(title, query) < MIN_SCORE) continue;
     const brand = pickBrand(item as unknown as Record<string, unknown>);
+    const img = pickImage(item as unknown as Record<string, unknown>);
     out.push({
       title,
       merchant: "Sultan Center",
@@ -322,6 +364,7 @@ export function sultanCenterHits(payload: unknown, query: string): SearchHit[] {
       // is_in_stock "0" is the explicit negative case.
       inStock: item.is_in_stock === undefined ? true : Number(item.is_in_stock) > 0,
       ...(promo ? { wasPrice: regular } : {}),
+      ...(img ? { image: img } : {}),
     });
   }
   return out;
@@ -347,6 +390,7 @@ export function jarirHits(payload: unknown, query: string): SearchHit[] {
     // Arabic index ships it populated ("Apple") — the Arabic path must not
     // lose the brand line just because the field sits in metadata.
     const brand = pickBrand((data?.metadata ?? {}) as Record<string, unknown>);
+    const img = pickImage((data?.metadata ?? {}) as Record<string, unknown>);
     out.push({
       title,
       merchant: "Jarir",
@@ -358,6 +402,7 @@ export function jarirHits(payload: unknown, query: string): SearchHit[] {
       url: `https://www.jarir.com/${slug}`,
       // Listed-with-price implies purchasable (same rule as extractInStock).
       inStock: true,
+      ...(img ? { image: img } : {}),
     });
   }
   return out;
@@ -402,7 +447,7 @@ export function amazonEgHits(html: string, query: string): SearchHit[] {
 }
 
 /**
- * Quadra Stores (quadrastores.com) ships the same Shopify /products.json
+ * Quadra Stores (quadrastores.com) ships the same Shopify suggest.json
  * contract as blink, with one difference worth mapping: its variant option1
  * carries the manufacturer ("ASUS") while the product-level vendor holds the
  * store's own name — option1 wins the brand line, vendor is only the backup.
@@ -410,9 +455,7 @@ export function amazonEgHits(html: string, query: string): SearchHit[] {
  * old price.
  */
 export function quadraHits(payload: unknown, query: string): SearchHit[] {
-  const products =
-    (payload as { products?: { title?: string; handle?: string; vendor?: string; variants?: { price?: string; compare_at_price?: string | null; available?: boolean; option1?: string }[] }[] })
-      ?.products ?? [];
+  const products = normalizeShopifyProducts(payload);
   const out: SearchHit[] = [];
   for (const p of products) {
     const variant = p.variants?.[0];
@@ -420,6 +463,7 @@ export function quadraHits(payload: unknown, query: string): SearchHit[] {
     if (!p.title || !p.handle || !Number.isFinite(price) || price <= 0) continue;
     if (brandAwareCoverage(p.title, query) < MIN_SCORE) continue;
     const brand = variant?.option1?.trim() || pickBrand(p as unknown as Record<string, unknown>);
+    const img = pickImage(p);
     const compare = variant?.compare_at_price != null ? Number(variant.compare_at_price) : NaN;
     out.push({
       title: p.title,
@@ -431,6 +475,7 @@ export function quadraHits(payload: unknown, query: string): SearchHit[] {
       url: `https://quadrastores.com/products/${p.handle}`,
       inStock: variant?.available ?? true,
       ...(Number.isFinite(compare) && compare > price ? { wasPrice: compare } : {}),
+      ...(img ? { image: img } : {}),
     });
   }
   return out;
@@ -480,6 +525,9 @@ export function luluHits(html: string, query: string): SearchHit[] {
   const out: SearchHit[] = [];
   for (const item of extractJsonLdProducts(html)) {
     if (brandAwareCoverage(item.title, query) < MIN_SCORE) continue;
+    // The JSON-LD photo already rides `image` (normalized in the extractor);
+    // it still passes the shared URL allowlist here like every scraped src.
+    const img = pickImage(item as Record<string, unknown>);
     out.push({
       title: item.title,
       merchant: "Lulu Hypermarket",
@@ -489,6 +537,7 @@ export function luluHits(html: string, query: string): SearchHit[] {
       url: item.url.startsWith("http") ? item.url : `https://www.luluhypermarket.com${item.url}`,
       inStock: item.inStock,
       ...(item.wasPrice != null ? { wasPrice: item.wasPrice } : {}),
+      ...(img ? { image: img } : {}),
     });
   }
   return out;
@@ -522,9 +571,12 @@ const COLLECTORS: RetailerCollector[] = [
     merchant: "Blink",
     country: "KW",
     collect: async (query, fetchImpl) => {
+      // suggest.json is the filter-aware Shopify hop: products.json ignores
+      // its title parameter (answers a generic newest-products page), which
+      // is what left blink/quadra coverage at 0–5 hits. Same hop for quadra.
       const res = await fetchChecked(
         fetchImpl,
-        `https://blink.com.kw/products.json?title=${encodeURIComponent(query)}&limit=${LIVE_SEARCH_HITS_PER_PAGE}`,
+        `https://blink.com.kw/search/suggest.json?q=${encodeURIComponent(query)}&resources[type]=product&resources[limit]=${LIVE_SEARCH_HITS_PER_PAGE}`,
         { headers: { accept: "application/json" } },
         AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
       );
@@ -701,7 +753,7 @@ const COLLECTORS: RetailerCollector[] = [
       // Shopify contract, same shape as blink's hop (verified live 2026-09-08).
       const res = await fetchChecked(
         fetchImpl,
-        `https://quadrastores.com/products.json?title=${encodeURIComponent(query)}&limit=${LIVE_SEARCH_HITS_PER_PAGE}`,
+        `https://quadrastores.com/search/suggest.json?q=${encodeURIComponent(query)}&resources[type]=product&resources[limit]=${LIVE_SEARCH_HITS_PER_PAGE}`,
         { headers: { accept: "application/json" } },
         AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
       );
@@ -1083,12 +1135,20 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean): Nor
           inStock: o.inStock,
           ...(o.wasPrice != null ? { wasPrice: o.wasPrice } : {}),
           ...(grade !== "new" ? { grade } : {}),
+          // REEA-281 AC-1: each retailer's own listing photo rides its row;
+          // rows whose contract carries no photo simply have none (the card
+          // then renders its text-only fallback).
+          ...(o.image ? { image: o.image } : {}),
         };
       });
+    // REEA-281 AC-1: the card thumbnail is the FIRST member listing that
+    // actually carries a photo — live hits only, never invented.
+    const photo = offers.find((o) => o.image)?.image;
     return {
       productId: slugify(title) || `live-${idx}`,
       title,
       brand: resolveBrand(group.brandRaw, title),
+      ...(photo ? { image: photo } : {}),
       offers,
       coupons: [],
       variations: colorSwatches(group, offers),
@@ -1167,6 +1227,20 @@ export interface LiveSearchResult {
  * stage deepens silent merchants first (REEA-149 round two) and then serves
  * the exact full-ranked snapshot the blocking path produces — both paths
  * share one finish, one live fetch per adapter, no bundled snapshots.
+ *
+ * REEA-277 — two changes on top of that shape:
+ *  - the arrival gate is per retailer again (stage k opens as the (k+1)-th
+ *    adapter answers) instead of REEA-244's whole-round-one hold, so the
+ *    first price lands with the FIRST answer instead of behind the slowest
+ *    hop. Every flush still renders the full tier ladder over everything
+ *    answered so far (stagedSnapshot), and the converged final stage carries
+ *    the same full-ranked view the blocking path produces,
+ *  - a per-query short-TTL response cache (src/lib/query-cache.ts) fronts
+ *    the run: repeat identical queries inside the window serve the LAST LIVE
+ *    answer as fully-settled stages, with one bounded refresh running behind
+ *    the response in the stale window (stale-while-revalidate). Entries only
+ *    ever hold responses a live fan-out just produced — scrapedAt rides
+ *    along, so freshness chips keep showing the true collection time.
  */
 export interface LiveSearchStages {
   stages: Promise<LiveSearchResult>[];

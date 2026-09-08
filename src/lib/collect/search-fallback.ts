@@ -9,13 +9,15 @@
  * Endpoints verified live 2026-09-05:
  *  - xcite.com: POST /api/algolia/proxy (Algolia multi-query, index
  *    xcite_prod_kw_en_main) — hits carry name/slug/price/currency/inStock.
- *  - blink.com.kw: Shopify /products.json?title= (variants[].price/available).
+ *  - blink.com.kw: Shopify /search/suggest.json (resources.results.products;
+ *    products.json ignores its title filter, so the suggest hop is the one
+ *    that actually answers the query — see normalizeShopifyProducts).
  *  - eureka.com.kw: Algolia index instant_records; app/search keys injected
  *    into every page as hidden inputs #cky/#srcapk (read at runtime, never
  *    hard-coded).
  *  - jarir.com: Nuxt SSR payload carries the Constructor.io index key
  *    (`"key_..."`, en preferred); query ac.cnstrc.com/search directly.
- *  - quadrastores.com: Shopify /products.json contract, same shape as blink.
+ *  - quadrastores.com: Shopify suggest.json contract, same shape as blink.
  *  - nextstore.com.kw: Magento SSR search page — scan the result cards.
  *  - pckuwait.com: WooCommerce archive (`?s=…&post_type=product`) — scan the
  *    loop cards; the plain blog search view carries no prices.
@@ -27,6 +29,7 @@
 
 import { matchesQueryToken, queryMatchTokens } from "@/lib/relevance";
 import type { FetchImpl } from "@/lib/collect/scraper";
+import { getSharedKv } from "@/lib/collect/kv";
 
 
 const FALLBACK_TIMEOUT_MS = 8_000;
@@ -121,20 +124,87 @@ export function parseXciteSearch(payload: unknown, productTitle: string): FoundO
   };
 }
 
-interface ShopifyProduct {
-  title?: string;
-  handle?: string;
-  variants?: { price?: string; available?: boolean }[];
+export interface ShopifyVariant {
+  price?: string;
+  available?: boolean;
+  /** Quadra's variants carry the manufacturer in option1 — see quadraHits. */
+  option1?: string;
+  /** Running-sale old price: products.json compare_at_price / suggest compare_at_price_min. */
+  compare_at_price?: string | null;
 }
 
+export interface ShopifyProduct {
+  title?: string;
+  handle?: string;
+  vendor?: string;
+  variants?: ShopifyVariant[];
+  /**
+   * REEA-281 AC-1 — the listing photo, kept in the envelope's own shape
+   * (suggest.json ships `image: {url}`, products.json may carry a plain
+   * string); the symmetric pickImage chain in live-search.ts reads it. The
+   * suggest fold must not drop it — that is where blink/Quadra photos ride.
+   */
+  image?: unknown;
+}
 
-/** Parse a Shopify /products.json response (blink.com.kw, quadrastores.com). */
+/**
+ * Shopify ships two list envelopes (verified live 2026-09-08): the classic
+ * /products.json shape ({products:[{variants:[…]}]}) and the
+ * /search/suggest.json shape ({resources:{results:{products:[…]}}}), where the
+ * price/inStock/compare_at_price_min sit on the product itself and `variants`
+ * can be null. Both blink and Quadra ride the suggest.json hop: products.json
+ * ignores its `title` filter parameter entirely and answers a generic newest-
+ * products page, which leaves most queries with near-zero coverage, while
+ * suggest.json filters server-side. Fold either envelope into the classic
+ * shape so every downstream reader sees one shape whichever envelope the hop
+ * used.
+ */
+export function normalizeShopifyProducts(payload: unknown): ShopifyProduct[] {
+  const root = payload as { products?: ShopifyProduct[]; resources?: { results?: { products?: unknown[] } } } | null;
+  const legacy = root?.products;
+  if (Array.isArray(legacy)) return legacy;
+  const suggest = root?.resources?.results?.products;
+  if (!Array.isArray(suggest)) return [];
+  const out: ShopifyProduct[] = [];
+  for (const raw of suggest) {
+    const p = raw as {
+      title?: string;
+      handle?: string;
+      vendor?: string;
+      price?: string;
+      available?: boolean;
+      compare_at_price_min?: string | null;
+      variants?: { option1?: string }[] | null;
+      image?: { url?: string } | string;
+    } | null;
+    if (!p || typeof p.title !== "string") continue;
+    out.push({
+      title: p.title,
+      ...(typeof p.handle === "string" ? { handle: p.handle } : {}),
+      ...(typeof p.vendor === "string" ? { vendor: p.vendor } : {}),
+      // REEA-281 AC-1: the listing photo rides the suggest envelope untouched
+      // (its own {url} shape) — pickImage in the adapter reads the field.
+      ...(p.image != null ? { image: p.image } : {}),
+      variants: [
+        {
+          ...(p.price != null ? { price: String(p.price) } : {}),
+          available: p.available ?? true,
+          ...(p.compare_at_price_min != null ? { compare_at_price: p.compare_at_price_min } : {}),
+          ...(p.variants?.[0]?.option1 != null ? { option1: String(p.variants[0].option1) } : {}),
+        },
+      ],
+    });
+  }
+  return out;
+}
+
+/** Parse a Shopify suggest/products response (blink.com.kw, quadrastores.com). */
 export function parseShopifyProducts(
   payload: unknown,
   productTitle: string,
   base = "https://blink.com.kw",
 ): FoundOffer | null {
-  const products = (payload as { products?: ShopifyProduct[] })?.products ?? [];
+  const products = normalizeShopifyProducts(payload);
   let best: { p: ShopifyProduct; score: number } | null = null;
   for (const p of products) {
     const variant = p.variants?.[0];
@@ -517,6 +587,8 @@ export interface JsonLdProduct {
   currency?: string;
   wasPrice?: number;
   inStock: boolean;
+  /** REEA-281 AC-1 — schema.org Product.image when the record carries one. */
+  image?: string;
 }
 
 /**
@@ -553,12 +625,26 @@ export function extractJsonLdProducts(html: string): JsonLdProduct[] {
               ? record["@id"]
               : "";
       const wasRaw = Number(offer.strikethroughPrice ?? offer.oldPrice ?? offer.compareAtPrice);
+      // REEA-281 AC-1: schema.org Product.image arrives as a string, a list,
+      // or a {url} object depending on the feed — normalize to the plain
+      // string now so every downstream reader sees one shape. Validation of
+      // the URL itself stays at the shared pickImage/render-time gates.
+      const imageRaw = record.image;
+      const image =
+        typeof imageRaw === "string"
+          ? imageRaw
+          : Array.isArray(imageRaw) && typeof imageRaw[0] === "string"
+            ? imageRaw[0]
+            : imageRaw && typeof imageRaw === "object" && typeof (imageRaw as { url?: unknown }).url === "string"
+              ? (imageRaw as { url: string }).url
+              : undefined;
       out.push({
         title,
         url,
         price,
         ...(currency ? { currency } : {}),
         ...(Number.isFinite(wasRaw) && wasRaw > price ? { wasPrice: wasRaw } : {}),
+        ...(image ? { image } : {}),
         // Absent availability reads as purchasable (listed-with-price rule);
         // the explicit OutOfStock tail is the only negative case — everything
         // else (InStock, Discontinued still listed) keeps the offer live.
@@ -655,7 +741,18 @@ export const CHALLENGE_HEADERS = {
  * handshake per TTL window, not one per query. When no attempt succeeds the
  * caller still gets its HTTP note (graceful degradation unchanged).
  */
+// REEA-276 — two tiers for the cleared jar. Tier 1 is this per-process Map;
+// tier 2 is the shared KV store (REEA-143 binding, see kv.ts). On Vercel a
+// follow-up query often lands on a recycled/cold instance whose Map is
+// empty, so the clearance from the last handshake died with the previous
+// process and every cold query re-paid the full challenge handshake — which
+// is exactly the standing HTTP 403 note QA saw. A cleared jar is mirrored to
+// KV under `cf-clearance:<host>` with the same TTL so ANY instance replays
+// the existing clearance on its first attempt; KV misses (no binding, down,
+// expired) fall back to the old memory-only handshake. Both tiers stay
+// best-effort: a KV hiccup never fails the hop.
 const CHALLENGE_COOKIE_TTL_MS = 10 * 60_000;
+const CF_JAR_KEY_PREFIX = "cf-clearance:";
 const challengeCookies = new Map<string, { header: string; expiresAt: number }>();
 
 export function fetchThroughChallenge(
@@ -764,7 +861,7 @@ export async function searchRetailerFallback(
   if (host.endsWith("blink.com.kw")) {
     const res = await fetchResponse(
       fetchImpl,
-      `https://blink.com.kw/products.json?title=${encodeURIComponent(productTitle)}&limit=8`,
+      `https://blink.com.kw/search/suggest.json?q=${encodeURIComponent(productTitle)}&resources[type]=product&resources[limit]=8`,
       { headers: { accept: "application/json" } },
     );
     if (!res.ok) throw new Error(`blink search HTTP ${res.status}`);
@@ -891,7 +988,7 @@ export async function searchRetailerFallback(
     // Same Shopify contract as blink — one GET, shared parser.
     const res = await fetchResponse(
       fetchImpl,
-      `https://quadrastores.com/products.json?title=${encodeURIComponent(productTitle)}&limit=8`,
+      `https://quadrastores.com/search/suggest.json?q=${encodeURIComponent(productTitle)}&resources[type]=product&resources[limit]=8`,
       { headers: { accept: "application/json" } },
     );
     if (!res.ok) throw new Error(`quadra search HTTP ${res.status}`);
