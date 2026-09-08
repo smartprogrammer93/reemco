@@ -15,9 +15,13 @@ import {
  * to the same query under `?c=`, so the selection rides in the URL and every
  * derived figure (prices, availability, alternatives) re-collects live under
  * it; "All" drops the param and behaves exactly as before. Clicking also
- * records the choice in the same-tab preference slot so a later search from
- * the hero/header form carries it without re-selecting. Country changes reset
- * to page 1 — the filtered set is a different result set.
+ * records the choice — one tap is enough: rememberCountry writes the same-tab
+ * preference slot AND the single REEA-280 language-preference cookie
+ * (`rc_market`) before navigation, so a returning visit starts on that
+ * market (or on the explicit All choice) without re-selecting; the derived
+ * Accept-Language default only applies while nothing has been chosen yet.
+ * Country changes reset to page 1 — the filtered set is a different result
+ * set.
  */
 export default function CountryFilter({
   query,

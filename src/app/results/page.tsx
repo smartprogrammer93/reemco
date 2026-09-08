@@ -1,8 +1,9 @@
 import ResultsClient from "@/components/ResultsClient";
 import { collectLiveResultsStaged } from "@/lib/collect/live-search";
-import { sanitizeCountry } from "@/lib/country";
+import { MARKET_COOKIE, resolveCountrySelection } from "@/lib/country";
 import { sanitizeSearchQuery, sanitizePage } from "@/lib/search-params";
 import { sanitizeShowOutOfStock } from "@/lib/stock";
+import { cookies, headers } from "next/headers";
 
 export const metadata = {
   title: "Results — Reemco",
@@ -27,16 +28,45 @@ export const dynamic = "force-dynamic";
 // Headroom above the collector's bounded window on slow cold starts.
 export const maxDuration = 20;
 
+/** Request-time preference layers (REEA-280). Both reads are request-time
+ *  APIs, so on a prerendered/static host they fall back silently to the
+ *  pre-feature "All" default instead of failing the shell render. */
+async function readPreferenceHint(): Promise<{
+  cookie: string | undefined;
+  acceptLanguage: string | null;
+}> {
+  try {
+    const cookieStore = await cookies();
+    const headersList = await headers();
+    return {
+      cookie: cookieStore.get(MARKET_COOKIE)?.value,
+      acceptLanguage: headersList.get("accept-language"),
+    };
+  } catch {
+    return { cookie: undefined, acceptLanguage: null };
+  }
+}
+
 export default async function ResultsPage({
   searchParams,
 }: {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
   const params = await searchParams;
+  // REEA-283 — one clock reading per server render. It rides the streamed
+  // props and hydration reuses the serialized value, so the freshness chip's
+  // minute figure is identical in the served HTML and after hydration.
+  const renderStartMs = Date.now();
   const query = sanitizeSearchQuery(params.q) ?? "";
   const page = sanitizePage(params.page);
   // REEA-170 — optional country selection (`?c=`); null keeps today's behavior.
-  const country = sanitizeCountry(params.c);
+  // REEA-280 — with no explicit param the default is the persisted market
+  // choice from the language-preference cookie, then the coarse
+  // Accept-Language hint (ar-KW/en-KW → KW), so a Kuwait shopper lands on
+  // KWD-first local offers instead of a mixed KWD/SAR/EGP list. One tap on a
+  // pill overwrites the hint and persists across sessions.
+  const hint = await readPreferenceHint();
+  const country = resolveCountrySelection(params.c, hint.cookie, hint.acceptLanguage);
   // REEA-186 — stock selection (`?oos=1` shows out-of-stock listings).
   // Default hides them; the ResultsClient view applies it BEFORE slicing each
   // staged snapshot so counts and pages match the visible set. Offers stay
@@ -57,6 +87,7 @@ export default async function ResultsPage({
         country={country}
         showOutOfStock={showOutOfStock}
         stages={staged.stages}
+        renderStartMs={renderStartMs}
       />
     </div>
   );

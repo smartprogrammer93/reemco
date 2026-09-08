@@ -16,6 +16,7 @@ import {
 } from "@/lib/stock";
 import {
   buildResultsHref,
+  countryFromAcceptLanguage,
   filterProductsByCountry,
   recallCountry,
   sanitizeCountry,
@@ -124,8 +125,12 @@ export function LoadingFallback() {
 
 /* Brief v4 empty state: single card echoing the query, suggested-query pills
    from the relaxed live collection, Retry. The query lives in the URL, so
-   Retry never loses it. */
-const EXAMPLES = ["iPhone 17 Pro", "WH-1000XM6", "Scope II keyboard"];
+   Retry never loses it.
+   REEA-281 AC-3: padding entries are CATEGORY links, not one-off product
+   examples — the zero-result state must always hand the shopper at least
+   THREE clickable ways onward (live suggestion pills first, then categories),
+   and a broad category stays useful whatever was actually being searched. */
+const CATEGORY_LINKS = ["Smartphones", "Fragrances", "Kitchen appliances"];
 
 function EmptyState({
   query,
@@ -137,7 +142,10 @@ function EmptyState({
   country: CountryCode | null;
 }) {
   const pills = suggestions.slice(0, 3).map((p) => p.title);
-  while (pills.length < EXAMPLES.length && pills.length < 3) pills.push(EXAMPLES[pills.length]);
+  for (const c of CATEGORY_LINKS) {
+    if (pills.length >= 3) break;
+    if (!pills.includes(c)) pills.push(c);
+  }
   return (
     <div className="result-card mx-auto w-full max-w-xl">
       <h2 style={{ font: "var(--rc-text-h2)", color: "var(--rc-ink)" }}>
@@ -178,12 +186,14 @@ function ResultsGrid({
   page,
   country,
   showOutOfStock,
+  renderStartMs,
 }: {
   products: NormalizedProduct[];
   query: string;
   page: number;
   country: CountryCode | null;
   showOutOfStock: boolean;
+  renderStartMs?: number;
 }) {
   const tier = partitionForQuery(products);
   if (!tier.tiered) {
@@ -204,6 +214,7 @@ function ResultsGrid({
             rank={(page - 1) * PAGE_SIZE + i}
             country={country}
             showOutOfStock={showOutOfStock}
+            renderStartMs={renderStartMs}
           />
         ))}
       </div>
@@ -226,6 +237,7 @@ function ResultsGrid({
               rank={(page - 1) * PAGE_SIZE + i}
               country={country}
               showOutOfStock={showOutOfStock}
+              renderStartMs={renderStartMs}
             />
           ))}
         </div>
@@ -245,6 +257,7 @@ function ResultsGrid({
                 rank={(page - 1) * PAGE_SIZE + tier.devices.length + i}
                 country={country}
                 showOutOfStock={showOutOfStock}
+                renderStartMs={renderStartMs}
               />
             ))}
           </div>
@@ -267,6 +280,10 @@ export default function ResultsClient(props: {
   showOutOfStock?: boolean;
   /** REEA-178 staged live collection — one promise per adapter flush. */
   stages?: Promise<LiveSearchResult>[];
+  /** REEA-283 server-render clock. Serialized into the streamed props so
+   *  hydration reuses the SAME value the SSR freshness digit was computed
+   *  from — no Date.now() recompute on either pass, no mismatch. */
+  renderStartMs?: number;
 }) {
   return (
     <Suspense fallback={<LoadingFallback />}>
@@ -335,8 +352,9 @@ function FlushBlock(props: {
   page: number;
   country: CountryCode | null;
   showOutOfStock: boolean;
+  renderStartMs?: number;
 }) {
-  const { label, order, products, bestAt, query, page, country, showOutOfStock } = props;
+  const { label, order, products, bestAt, query, page, country, showOutOfStock, renderStartMs } = props;
   if (products.length === 0) return null;
   // REEA-213: inside a participating block the badge rides the first
   // in-stock card of the final sorted order, never a later cheaper one.
@@ -353,6 +371,7 @@ function FlushBlock(props: {
             rank={(page - 1) * PAGE_SIZE + i}
             country={country}
             showOutOfStock={showOutOfStock}
+            renderStartMs={renderStartMs}
           />
         ))}
       </div>
@@ -378,6 +397,7 @@ function StageAppend(props: {
   page: number;
   country: CountryCode | null;
   showOutOfStock: boolean;
+  renderStartMs?: number;
 }) {
   const { stages, index, query, page, country, showOutOfStock } = props;
   const snap = use(stages[index]);
@@ -460,6 +480,7 @@ function StagedResults(props: {
   page: number;
   country: CountryCode | null;
   showOutOfStock: boolean;
+  renderStartMs?: number;
 }) {
   const { stages, query, page, country, showOutOfStock } = props;
   const finalPromise = stages[stages.length - 1];
@@ -525,6 +546,7 @@ function StagedResults(props: {
               page={page}
               country={country}
               showOutOfStock={showOutOfStock}
+              renderStartMs={props.renderStartMs}
             />
           </>
         )}
@@ -561,6 +583,7 @@ function StagedResults(props: {
             page={page}
             country={country}
             showOutOfStock={showOutOfStock}
+            renderStartMs={props.renderStartMs}
           />
         </Suspense>
       </div>
@@ -576,16 +599,25 @@ function ResultsInner(props: {
   country?: CountryCode | null;
   showOutOfStock?: boolean;
   stages?: Promise<LiveSearchResult>[];
+  renderStartMs?: number;
 }) {
   const searchParams = useSearchParams();
   // AC-U4 (REEA-13): malformed/oversized params degrade safely before use.
   const query = props.query ?? sanitizeSearchQuery(searchParams.get("q")) ?? "";
   const page = props.page ?? sanitizePage(searchParams.get("page"));
   // REEA-170: the server-resolved selection wins; otherwise read the URL, then
-  // the same-tab remembered choice so a returning tab keeps its filter
-  // without re-selecting. null = "All" = unchanged default behavior.
+  // the remembered choice (same-tab slot, then the REEA-280 preference cookie)
+  // so a returning tab keeps its filter without re-selecting.
+  // REEA-280: the last layer is the coarse browser-language hint — it mirrors
+  // what the server derives from Accept-Language on the live path, so the
+  // static-host fallback starts on the same market default. A null default
+  // still means "All" = unchanged behavior.
+  const browserHint =
+    typeof navigator === "undefined"
+      ? null
+      : countryFromAcceptLanguage(navigator.language ?? undefined);
   const country =
-    props.country ?? sanitizeCountry(searchParams.get("c")) ?? recallCountry() ?? null;
+    props.country ?? sanitizeCountry(searchParams.get("c")) ?? recallCountry() ?? browserHint ?? null;
   // REEA-186: same resolution chain as the country selection — server-resolved
   // value wins, then the URL, then the same-tab remembered choice; default is
   // hide out-of-stock listings (checkbox unchecked).
@@ -655,6 +687,7 @@ function ResultsInner(props: {
         page={page}
         country={country}
         showOutOfStock={showOutOfStock}
+        renderStartMs={props.renderStartMs}
       />
     );
   }
@@ -677,6 +710,7 @@ function ResultsInner(props: {
             page={page}
             country={country}
             showOutOfStock={showOutOfStock}
+            renderStartMs={props.renderStartMs}
           />
         </>
       )}

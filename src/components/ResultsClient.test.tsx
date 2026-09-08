@@ -435,3 +435,31 @@ describe("relevance tiering + brand hygiene (REEA-189)", () => {
     expect((document.body.innerHTML.match(/label-token inline-flex/g) ?? []).length).toBe(0);
   });
 });
+
+describe("zero-result state category links (REEA-281 AC-3)", () => {
+  it("shows at least 3 clickable category links with no suggestions at all", async () => {
+    searchParams.set("q", "zzzqqqnothing");
+    await act(async () => {
+      render(
+        <ResultsClient query="zzzqqqnothing" page={1} products={[]} suggestions={[]} />,
+      );
+    });
+    const links = Array.from(document.querySelectorAll<HTMLAnchorElement>("div.result-card a.query-pill"));
+    expect(links.length).toBeGreaterThanOrEqual(3);
+    // Every pill is a working onward path: a results query link.
+    for (const a of links) expect(a.getAttribute("href")).toMatch(/^\/results\?q=/);
+  });
+
+  it("still reaches 3 links when the relaxed collection returns one suggestion", async () => {
+    searchParams.set("q", "zzzqqqnothing");
+    await act(async () => {
+      render(
+        <ResultsClient query="zzzqqqnothing" page={1} products={[]} suggestions={[SAMPLE_PRODUCTS[0]]} />,
+      );
+    });
+    const links = Array.from(document.querySelectorAll<HTMLAnchorElement>("div.result-card a.query-pill"));
+    expect(links.length).toBeGreaterThanOrEqual(3);
+    // The live suggestion leads; categories pad the rest.
+    expect(links[0].textContent).toBe(SAMPLE_PRODUCTS[0].title);
+  });
+});
