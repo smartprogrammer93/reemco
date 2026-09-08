@@ -6,6 +6,15 @@ name: Deploy site
 # every check below verifies reemco.vercel.app itself. PRs are validated by
 # ci.yml (lint/test/build); only main pushes deploy.
 #
+# REEA-314 budget: automatic deploys ride Vercel's own git-connected project
+# build (Project settings → Git → "Connected" + Production Branch: main),
+# which runs on Vercel compute and consumes zero GitHub Actions minutes.
+# This workflow stays as the VERIFIED manual path: rollback via rollback_sha,
+# KV re-attach, or re-deploying a known-good commit — run it from Actions >
+# Deploy site > Run workflow. It no longer triggers on every push, so the
+# repo's hosted-minutes footprint stays inside the ~2,000 min/month free
+# allowance (per-push CI+deploy pairs measured ~15,000 min/month).
+#
 # Required repo secret (Settings > Secrets > Actions, env injection only):
 #   VERCEL_TOKEN (+ optional VERCEL_TEAM_ID for --scope)
 #
@@ -13,10 +22,9 @@ name: Deploy site
 # to the previous known-good commit. The rollback run checks out that exact
 # SHA and passes through the same verification steps (commit stamp, headers,
 # funnel smoke), so a rollback is verified the same way a deploy is. Rollback
-# = redeploy of the prior artifact.
+# = redeploy of the prior artifact. Equivalently: Vercel dashboard →
+# Promote Previous Deployment.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       rollback_sha:
@@ -50,14 +58,10 @@ concurrency:
 
 jobs:
   deploy:
-    # REEA-314: heavy install/lint/test/build + vercel CLI minutes go to the
-    # org's self-hosted runner — self-hosted usage does not draw down GitHub's
-    # included hosted minutes (this repo's deploy cadence alone far exceeds the
-    # ~2,000 min/month free allowance). Monitoring jobs (uptime.yml,
-    # smoke-scheduled.yml) stay GitHub-hosted on purpose: they keep probing the
-    # site even when the self-hosted runner is offline.
-    # Timeout keeps a queued job bounded while the runner is starting up.
-    runs-on: self-hosted
+    # GitHub-hosted so the manual/rollback path works without extra infra.
+    # With auto-deploy on Vercel's side, this job runs only on deliberate
+    # dispatches (rollback, KV re-attach), so its minute cost is negligible.
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
