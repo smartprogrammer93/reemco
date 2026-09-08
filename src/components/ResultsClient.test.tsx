@@ -489,3 +489,56 @@ describe("zero-result state category links (REEA-281 AC-3)", () => {
     expect(links.length).toBeGreaterThanOrEqual(3);
   });
 });
+
+describe("coverage line (REEA-290)", () => {
+  it("names the missing retailer in plain text while other retailers' offers keep rendering", async () => {
+    searchParams.set("q", "sony");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    const PRODUCT: NormalizedProduct = {
+      productId: "sony-wh-1000xm6",
+      title: "Sony WH-1000XM6",
+      brand: "Sony",
+      offers: [
+        { merchant: "Xcite", price: 74, currency: "KWD", url: "https://xcite.example/p", inStock: true },
+      ],
+      coupons: [],
+      variations: [],
+      alternatives: [],
+      scrapedAt: "2026-09-08T00:00:00.000Z",
+    };
+    const snap: LiveSearchResult = {
+      products: [PRODUCT],
+      notes: [
+        { merchant: "Xcite", hits: 2 },
+        { merchant: "Jarir", hits: 0, error: "HTTP 403" },
+      ],
+      suggestions: [PRODUCT],
+    };
+    await act(async () => {
+      render(
+        <ResultsClient query="sony" page={1} country={null} stages={[Promise.resolve(snap), Promise.resolve(snap)]} />,
+      );
+    });
+    const html = document.body.innerHTML;
+    // The failing retailer is named on the page…
+    expect(html).toContain("Jarir did not respond on this search.");
+    // …while the responding retailer's live offer still renders beside it.
+    expect(html).toContain("Prices from Xcite.");
+    expect(html).toContain("Sony WH-1000XM6");
+  });
+
+  it("keeps the coverage line out of an all-answered plain snapshot only when notes are empty", async () => {
+    searchParams.set("q", "sony");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    const snap: LiveSearchResult = { products: SAMPLE_PRODUCTS, notes: [], suggestions: SAMPLE_PRODUCTS };
+    await act(async () => {
+      render(
+        <ResultsClient query="sony" page={1} country={null} stages={[Promise.resolve(snap)]} />,
+      );
+    });
+    // Nothing collected yet is not a coverage story — no empty stamp lands.
+    expect(document.body.innerHTML).not.toContain("did not respond");
+  });
+});

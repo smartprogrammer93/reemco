@@ -25,7 +25,7 @@ import {
 import { trackEvents } from "@/lib/telemetry";
 import { PRODUCTS } from "@/lib/feed";
 import { isAccessoryTitle, partitionForQuery } from "@/lib/relevance";
-import type { LiveSearchResult } from "@/lib/collect/live-search";
+import { coverageLine, type LiveSearchResult } from "@/lib/collect/live-search";
 import type { NormalizedProduct } from "@/types/product";
 
 /**
@@ -478,6 +478,31 @@ function ResultsHeading(props: {
   );
 }
 
+/* REEA-290 — per-query coverage line: which retailers answered this search
+   and which did not, stated in plain text right on the results page. The
+   sentence derives from the SAME live notes that produced the visible offers
+   (coverageLine), so a retailer named as missing is traceable to its own
+   failed live fetch — never a static registry. Reads as a plain meta stamp
+   like the loading label; spacing/typography polish belongs to the Graphic
+   Designer. The streaming boundary rides the FINAL stage (the only snapshot
+   where every in-scope retailer has settled), so the sentence describes the
+   whole collection while earlier retailers' offers are already painted — a
+   late or failed retailer only deepens the line, it never blanks the grid. */
+function CoverageLine({ notes }: { notes: LiveSearchResult["notes"] }) {
+  const text = coverageLine(notes);
+  if (!text) return null;
+  return (
+    <p className="meta-stamp" style={{ color: "var(--rc-muted)" }}>
+      {text}
+    </p>
+  );
+}
+
+function StageCoverage(props: { stage: Promise<LiveSearchResult> }) {
+  const snap = use(props.stage);
+  return <CoverageLine notes={snap.notes} />;
+}
+
 function StagedResults(props: {
   stages: Promise<LiveSearchResult>[];
   query: string;
@@ -536,7 +561,10 @@ function StagedResults(props: {
       <ResultsErrorBoundary>
         <SelectionRow query={query} country={country} showOutOfStock={showOutOfStock} />
         {products.length === 0 && query.length > 0 ? (
-          <EmptyState query={query} suggestions={stagedSuggestions(finalSnap, country, showOutOfStock)} country={country} />
+          <>
+            <EmptyState query={query} suggestions={stagedSuggestions(finalSnap, country, showOutOfStock)} country={country} />
+            <CoverageLine notes={finalSnap.notes} />
+          </>
         ) : (
           <>
             {/* Theme v1 §4: display-scale H1, tabular count */}
@@ -544,6 +572,7 @@ function StagedResults(props: {
               <span className="tabular">{products.length}</span>{" "}
               {products.length === 1 ? "result" : "results"} for &ldquo;{query || "all products"}&rdquo;
             </h1>
+            <CoverageLine notes={finalSnap.notes} />
             <ResultsGrid
               products={products}
               query={query}
@@ -577,6 +606,9 @@ function StagedResults(props: {
           country={country}
           showOutOfStock={showOutOfStock}
         />
+      </Suspense>
+      <Suspense fallback={null}>
+        <StageCoverage stage={finalPromise} />
       </Suspense>
       <div className="flex min-w-0 flex-col items-stretch gap-4" style={{ marginTop: "var(--rc-space-8)" }}>
         <Suspense fallback={null}>
