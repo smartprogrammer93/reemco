@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
+import { safeHref } from "@/lib/safe-url";
 import { isTenMinutesOld, relativeAge } from "@/lib/relative-time";
 import { formatPrice } from "@/lib/format";
 import type { Coupon } from "@/types/product";
@@ -127,6 +128,10 @@ export default function OfferCard({
   isBest,
   savings,
 }: OfferCardProps) {
+  // REEA-224 F2 — same render-time sanitization ProductResultCard applies via
+  // resolveOfferUrl (REEA-13 allowlist): a crafted scheme lands as an empty
+  // href instead of an inline-JavaScript anchor.
+  const href = safeHref(url) ?? "";
   return (
     <article className={`result-card${isBest ? " is-best" : ""}`}>
       {/* Retailer name first, calm (§5.3 order) */}
@@ -182,7 +187,7 @@ export default function OfferCard({
       <FreshnessChip collectedAt={collectedAt} method={method} merchant={merchant} />
 
       <TrackedOutboundLink
-        href={url}
+        href={href}
         query=""
         rank={0}
         itemId={merchant}
