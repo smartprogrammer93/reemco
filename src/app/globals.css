@@ -243,7 +243,9 @@ a:focus-visible {
 }
 
 /* Freshness / provenance stamp: mono uppercase, dot + relative time, never
-   omitted. */
+   omitted. REEA-283: nowrap + a min-width sized to the 'UPDATED {n} MINUTES
+   AGO' copy — the chip keeps one line and its width no longer jiggle-shifts
+   the row when the digit grows from one to two characters. */
 .fresh-chip {
   display: inline-flex;
   align-items: center;
@@ -252,6 +254,8 @@ a:focus-visible {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--rc-muted);
+  white-space: nowrap;
+  min-width: 110px;
 }
 
 .fresh-dot {
@@ -263,6 +267,16 @@ a:focus-visible {
 
 .fresh-dot.is-late {
   background: var(--rc-fresh); /* ≥ 10 min — amber */
+}
+
+/* REEA-283 price rows: the LEAD figure carries the row's own treatment
+   inline on .price-cur (hero: --rc-text-price/--rc-savings; retailer rows:
+   font-weight 600/--rc-ink). The converted side rides beside it on the same
+   baseline — small muted stamp, never wrapping inside the row. */
+.price-alt {
+  font: var(--rc-text-small);
+  color: var(--rc-muted);
+  white-space: nowrap;
 }
 
 /* Primary action (Search / Go to store / Retry) */
@@ -378,13 +392,26 @@ a:focus-visible {
 }
 
 /* Ghost card for the results streaming skeleton (REEA-224 item 2): real card
-   geometry — radius 14px, card padding, one gutter between ghosts — in the
-   skeleton tones above, so the footer sits at the same height from first
-   paint through the settled grid. */
+   geometry — radius 14px, card padding, one gutter between ghosts — so the
+   footer sits at the same height from first paint through the settled grid.
+   REEA-283 footprint pass: the ghost reserves the CARD HEIGHT itself
+   (~300px desktop rows, 432px at ≤640px where cards stack taller), sits on
+   the canvas with a hairline border instead of a flat fill block, and keeps
+   the grid gutter below it — so streamed cards land inside their ghosts
+   instead of nudging the page while slower retailers answer. */
 .skeleton-card {
-  background: var(--rc-skeleton-bg);
+  background: var(--rc-canvas);
+  border: 1px solid var(--rc-line);
   border-radius: var(--rc-radius-card);
   padding: var(--rc-space-6);
+  min-height: 300px;
+  margin-bottom: var(--rc-space-4);
+}
+
+@media (max-width: 640px) {
+  .skeleton-card {
+    min-height: 432px;
+  }
 }
 
 /* Skeleton fill bars: 12px tall on the deeper skeleton tone (REEA-224 item
