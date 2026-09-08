@@ -227,6 +227,29 @@ jobs:
           CODE=$(curl -s -o "$LIST_JSON" -w '%{http_code}' -m 30 -H "$AUTH" "$BASE/v9/projects/reemco/env$Q" || echo 000)
           echo "verify GET env list after attach -> HTTP $CODE"
           echo "KV binding listed on reemco: $(has_both && echo yes || echo no)"
+      # REEA-314 finisher: make Vercel rebuild on every push itself, so
+      # automatic deploys stop needing this workflow (and any Actions minutes)
+      # at all. Idempotent: when already connected the CLI reports the existing
+      # link; either way a bounded, non-fatal step - the deploy below works
+      # with or without it. Token comes from repo secrets via env injection
+      # only; never echoed (CLI prints masked output).
+      - name: Enable push-triggered Vercel builds (REEA-314)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+        run: |
+          set -u
+          export VERCEL_TELEMETRY_DISABLED=1
+          [ -z "${VERCEL_TOKEN:-}" ] && { echo "VERCEL_TOKEN unset - skipping git connect"; exit 0; }
+          SCOPE_ARGS=""
+          if [ -n "${VERCEL_TEAM_ID:-}" ]; then SCOPE_ARGS="--scope $VERCEL_TEAM_ID"; fi
+          timeout --signal=INT 3m npx -y vercel@59.11.7 git connect \
+            --cwd "$GITHUB_WORKSPACE" --token "$VERCEL_TOKEN" $SCOPE_ARGS \
+            2>&1 | tail -5 || echo "git connect returned non-zero (already-connected is fine)"
+          timeout --signal=INT 2m npx -y vercel@59.11.7 git inspect \
+            --cwd "$GITHUB_WORKSPACE" --token "$VERCEL_TOKEN" $SCOPE_ARGS \
+            2>&1 | tail -6 || echo "git inspect unavailable"
+
       - name: Deploy to Vercel production (reemco.vercel.app)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
