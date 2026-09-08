@@ -52,6 +52,17 @@ matched to a GitHub account", the culprit is a commit with the wrong identity.
 
 Canonical production host: **https://reemco.vercel.app** — Next.js server build on Vercel. Merge to `main` deploys automatically via `.github/workflows/deploy.yml`, no manual steps. Required repo Actions secret: `VERCEL_TOKEN` (+ optional `VERCEL_TEAM_ID` for `--scope`), injected as environment secrets only. Rollback: Actions > Deploy site > Run workflow with `rollback_sha` = previous known-good commit; the rollback run goes through the same verification steps. The post-deploy funnel smoke check (home → search → click-out) runs against reemco.vercel.app on every deploy. PRs are validated by `ci.yml` without deploying. The shared KV binding for the collect-job store (REEA-92) is ensured by the pipeline itself: the Attach KV step attaches the KV store to the `reemco` project before deploying when `KV_REST_API_URL` / `KV_REST_API_TOKEN` are missing from the project environment (REEA-143). Values come from the platform response at attach time — never committed.
 
+### Vercel build gates & cron cadence (REEA-314)
+
+`vercel.json` gates every Vercel build with lint + test and stamps
+`public/__commit.txt` with the built SHA (REEA-243 parity check below). The
+`crons` entry hits `/api/health` hourly as the funnel liveness check; on the
+Hobby plan the cron tick lands once/day, and hourly cadence is carried by the
+guarded GitHub-hosted smoke job instead, so monitoring never depends on paid
+plans. Keep `vercel.json` to schema-approved keys only — Vercel validates it
+with `additionalProperties: false`, so free-text notes belong here in the
+README, not in the JSON file.
+
 ### Deploy parity check — after EVERY production deploy (REEA-296)
 
 1. `curl -fsS https://reemco.vercel.app/__commit.txt` — prints the SHA the live artifact was stamped with at build time.

@@ -1,6 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "description": "REEA-314: build gates lint+test and stamps /__commit.txt (REEA-243 parity) on every Vercel build. Cron = hourly /api/health funnel check; on Hobby the tick lands once/day and the hourly cadence comes from the guarded GitHub-hosted smoke job, so monitoring never depends on paid plans.",
   "framework": "nextjs",
   "buildCommand": "echo \"${VERCEL_GIT_COMMIT_SHA:-$(git rev-parse HEAD)}\" > public/__commit.txt && npm run lint && npm run test && next build",
   "crons": [
