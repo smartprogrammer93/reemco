@@ -36,7 +36,7 @@ export default function Home() {
       <div className="mx-auto w-full px-6" style={{ maxWidth: "var(--rc-layout-max-w)" }}>
         <p className="mt-4" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
           Live collection starts as soon as you pick a product — first offers usually land
-          within about two seconds, and every price shows when it was collected and by whom.
+          within half a second, and every price shows when it was collected and by whom.
         </p>
       </div>
     </>

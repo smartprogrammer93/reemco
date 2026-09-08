@@ -133,7 +133,7 @@ const en = {
   heroSub:
     "Prices, coupons and stock, collected live from every retailer the moment you open a product — compared honestly, never from a stale snapshot.",
   heroCaption:
-    "Live collection starts as soon as you pick a product — first offers usually land within about two seconds, and every price shows when it was collected and by whom.",
+    "Live collection starts as soon as you pick a product — first offers usually land within half a second, and every price shows when it was collected and by whom.",
   catPhones: "Smartphones",
   catFragrances: "Fragrances",
   catKitchen: "Kitchen appliances",
