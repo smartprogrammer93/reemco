@@ -305,6 +305,10 @@ describe("refresh action (REEA-291 AC4)", () => {
       fireEvent.click(refresh as HTMLElement);
     });
     expect(refreshSpy).toHaveBeenCalledTimes(1);
+    // The one-shot refresh signal rides the very next request (REEA-291 AC4):
+    // stamped at click so the server render re-collects live inside the
+    // memo window and the collection timestamps move.
+    expect(document.cookie).toContain("rc_refresh=1");
     // Selection changes on the same view never go through the router either.
     const toggle = document.querySelector('[role="checkbox"]') as HTMLElement;
     await act(async () => {
