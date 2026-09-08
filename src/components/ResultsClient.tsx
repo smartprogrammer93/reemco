@@ -126,10 +126,12 @@ export function LoadingFallback() {
 /* Brief v4 empty state: single card echoing the query, suggested-query pills
    from the relaxed live collection, Retry. The query lives in the URL, so
    Retry never loses it.
-   REEA-281 AC-3: padding entries are CATEGORY links, not one-off product
-   examples — the zero-result state must always hand the shopper at least
-   THREE clickable ways onward (live suggestion pills first, then categories),
-   and a broad category stays useful whatever was actually being searched. */
+   REEA-281 AC-3: the zero-result state ALWAYS carries the three CATEGORY
+   links — not one-off product examples — so the shopper has at least THREE
+   clickable ways onward whatever the relaxed live collection returned (a
+   broad category stays useful whatever was being searched). Live suggestion
+   pills ride FIRST when the collection found anything; categories follow,
+   deduped against them. */
 const CATEGORY_LINKS = ["Smartphones", "Fragrances", "Kitchen appliances"];
 
 function EmptyState({
@@ -142,8 +144,10 @@ function EmptyState({
   country: CountryCode | null;
 }) {
   const pills = suggestions.slice(0, 3).map((p) => p.title);
+  // AC-3 floor: the three category links ride in whatever the live
+  // collection returned — deduped so a category that IS the suggestion is
+  // not repeated, but never fewer than the three broad onward paths.
   for (const c of CATEGORY_LINKS) {
-    if (pills.length >= 3) break;
     if (!pills.includes(c)) pills.push(c);
   }
   return (

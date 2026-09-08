@@ -461,5 +461,31 @@ describe("zero-result state category links (REEA-281 AC-3)", () => {
     expect(links.length).toBeGreaterThanOrEqual(3);
     // The live suggestion leads; categories pad the rest.
     expect(links[0].textContent).toBe(SAMPLE_PRODUCTS[0].title);
+    for (const c of ["Smartphones", "Fragrances", "Kitchen appliances"]) {
+      expect(links.some((a) => a.textContent === c)).toBe(true);
+    }
+  });
+
+  it("keeps all 3 category links even when the relaxed collection returns a full pill row", async () => {
+    // AC-3 is a floor on CATEGORY links, not just pills: a query that
+    // zeroed out but still yielded live suggestions must not trade the
+    // broad onward paths away for product-title pills.
+    searchParams.set("q", "zzzqqqnothing");
+    const many = ["Sony WH-1000XM6", "Anker PowerCore", "JBL Tune 720BT"].map(
+      (title, i): NormalizedProduct => ({ ...SAMPLE_PRODUCTS[0], productId: `s${i}`, title }),
+    );
+    await act(async () => {
+      render(
+        <ResultsClient query="zzzqqqnothing" page={1} products={[]} suggestions={many} />,
+      );
+    });
+    const links = Array.from(document.querySelectorAll<HTMLAnchorElement>("div.result-card a.query-pill"));
+    // Suggestions ride first, then the three category links — deduped.
+    expect(links[0].textContent).toBe("Sony WH-1000XM6");
+    const texts = links.map((a) => a.textContent);
+    for (const c of ["Smartphones", "Fragrances", "Kitchen appliances"]) {
+      expect(texts.filter((t) => t === c)).toHaveLength(1);
+    }
+    expect(links.length).toBeGreaterThanOrEqual(3);
   });
 });
