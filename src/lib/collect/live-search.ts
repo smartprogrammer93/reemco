@@ -15,10 +15,15 @@
  */
 import {
   APP_ID_ALLOW,
+  CHALLENGE_HEADERS,
   SEARCH_KEY_ALLOW,
   brandAwareCoverage,
   extractJarirIndexKey,
+  extractJsonLdProducts,
+  fetchThroughChallenge,
   jarirIndexLang,
+  scanNextStoreCards,
+  scanWooCards,
   titleMatchScore,
 } from "@/lib/collect/search-fallback";
 import type { FetchImpl } from "@/lib/collect/scraper";
@@ -396,6 +401,99 @@ export function amazonEgHits(html: string, query: string): SearchHit[] {
   return out;
 }
 
+/**
+ * Quadra Stores (quadrastores.com) ships the same Shopify /products.json
+ * contract as blink, with one difference worth mapping: its variant option1
+ * carries the manufacturer ("ASUS") while the product-level vendor holds the
+ * store's own name — option1 wins the brand line, vendor is only the backup.
+ * compare_at_price, when above the selling price, is the running discount's
+ * old price.
+ */
+export function quadraHits(payload: unknown, query: string): SearchHit[] {
+  const products =
+    (payload as { products?: { title?: string; handle?: string; vendor?: string; variants?: { price?: string; compare_at_price?: string | null; available?: boolean; option1?: string }[] }[] })
+      ?.products ?? [];
+  const out: SearchHit[] = [];
+  for (const p of products) {
+    const variant = p.variants?.[0];
+    const price = variant?.price != null ? Number(variant.price) : NaN;
+    if (!p.title || !p.handle || !Number.isFinite(price) || price <= 0) continue;
+    if (brandAwareCoverage(p.title, query) < MIN_SCORE) continue;
+    const brand = variant?.option1?.trim() || pickBrand(p as unknown as Record<string, unknown>);
+    const compare = variant?.compare_at_price != null ? Number(variant.compare_at_price) : NaN;
+    out.push({
+      title: p.title,
+      merchant: "Quadra Stores",
+      country: "KW",
+      ...(brand ? { brand } : {}),
+      price,
+      currency: "KWD",
+      url: `https://quadrastores.com/products/${p.handle}`,
+      inStock: variant?.available ?? true,
+      ...(Number.isFinite(compare) && compare > price ? { wasPrice: compare } : {}),
+    });
+  }
+  return out;
+}
+
+/** Next Store (Magento SSR) cards → hits via the shared search-side scanner. */
+export function nextStoreHits(html: string, query: string): SearchHit[] {
+  const out: SearchHit[] = [];
+  for (const card of scanNextStoreCards(html)) {
+    if (brandAwareCoverage(card.title, query) < MIN_SCORE) continue;
+    out.push({
+      title: card.title,
+      merchant: "Next Store",
+      country: "KW",
+      ...(card.brand ? { brand: card.brand } : {}),
+      price: card.price,
+      currency: "KWD",
+      url: card.url,
+      inStock: card.inStock,
+      ...(card.wasPrice != null ? { wasPrice: card.wasPrice } : {}),
+    });
+  }
+  return out;
+}
+
+/** PC Kuwait (WooCommerce archive) cards → hits via the shared scanner. */
+export function pcKuwaitHits(html: string, query: string): SearchHit[] {
+  const out: SearchHit[] = [];
+  for (const card of scanWooCards(html)) {
+    if (brandAwareCoverage(card.title, query) < MIN_SCORE) continue;
+    out.push({
+      title: card.title,
+      merchant: "PC Kuwait",
+      country: "KW",
+      price: card.price,
+      currency: card.currency,
+      url: card.url,
+      inStock: card.inStock,
+      ...(card.wasPrice != null ? { wasPrice: card.wasPrice } : {}),
+    });
+  }
+  return out;
+}
+
+/** Lulu Hypermarket Kuwait: JSON-LD Product records off its SSR search page. */
+export function luluHits(html: string, query: string): SearchHit[] {
+  const out: SearchHit[] = [];
+  for (const item of extractJsonLdProducts(html)) {
+    if (brandAwareCoverage(item.title, query) < MIN_SCORE) continue;
+    out.push({
+      title: item.title,
+      merchant: "Lulu Hypermarket",
+      country: "KW",
+      price: item.price,
+      currency: item.currency ?? "KWD",
+      url: item.url.startsWith("http") ? item.url : `https://www.luluhypermarket.com${item.url}`,
+      inStock: item.inStock,
+      ...(item.wasPrice != null ? { wasPrice: item.wasPrice } : {}),
+    });
+  }
+  return out;
+}
+
 /* ---- Fetch orchestration, one collector per documented retailer endpoint. ---- */
 
 const COLLECTORS: RetailerCollector[] = [
@@ -594,6 +692,72 @@ const COLLECTORS: RetailerCollector[] = [
       }
       if (hits.length === 0 && lastError) throw lastError;
       return hits;
+    },
+  },
+  {
+    merchant: "Quadra Stores",
+    country: "KW",
+    collect: async (query, fetchImpl) => {
+      // Shopify contract, same shape as blink's hop (verified live 2026-09-08).
+      const res = await fetchChecked(
+        fetchImpl,
+        `https://quadrastores.com/products.json?title=${encodeURIComponent(query)}&limit=${LIVE_SEARCH_HITS_PER_PAGE}`,
+        { headers: { accept: "application/json" } },
+        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
+      );
+      return quadraHits(await res.json(), query);
+    },
+  },
+  {
+    merchant: "Next Store",
+    country: "KW",
+    collect: async (query, fetchImpl) => {
+      // Magento SSR search page behind a Cloudflare managed challenge (verified
+      // live 2026-09-08): the interstitial steps aside for the browser-shaped
+      // header set once the visitor cookie it seeds is replayed, so this hop
+      // rides fetchThroughChallenge's bounded cookie-carry retry. The attempt
+      // window mirrors eureka's two-step hop — the challenge handshake needs
+      // a little more room than a plain API answer.
+      const res = await fetchThroughChallenge(
+        fetchImpl,
+        `https://www.nextstore.com.kw/catalogsearch/result/index/?q=${encodeURIComponent(query)}`,
+        { headers: { ...CHALLENGE_HEADERS } },
+        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
+      );
+      return nextStoreHits(await res.text(), query);
+    },
+  },
+  {
+    merchant: "PC Kuwait",
+    country: "KW",
+    collect: async (query, fetchImpl) => {
+      // post_type=product lands on the WooCommerce archive (prices + stock);
+      // the plain blog search view carries neither.
+      const res = await fetchChecked(
+        fetchImpl,
+        `https://pckuwait.com/?s=${encodeURIComponent(query)}&post_type=product`,
+        { headers: { accept: "text/html,application/xhtml+xml", "accept-language": "en" } },
+        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
+      );
+      return pcKuwaitHits(await res.text(), query);
+    },
+  },
+  {
+    merchant: "Lulu Hypermarket",
+    country: "KW",
+    collect: async (query, fetchImpl) => {
+      // Kuwait storefront — luluwebstore.com is a plain 301 onto this host,
+      // so this is the one that answers Kuwait prices. JSON-LD comes off the
+      // SSR search page; same managed-challenge retry as the Next Store hop
+      // (verified live 2026-09-08), and on a still-blocked answer the note
+      // explains the gap while the other retailers serve (graceful degradation).
+      const res = await fetchThroughChallenge(
+        fetchImpl,
+        `https://www.luluhypermarket.com/en/search?query=${encodeURIComponent(query)}`,
+        { headers: { ...CHALLENGE_HEADERS } },
+        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
+      );
+      return luluHits(await res.text(), query);
     },
   },
 ];

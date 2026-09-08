@@ -15,13 +15,16 @@
  *    hard-coded).
  *  - jarir.com: Nuxt SSR payload carries the Constructor.io index key
  *    (`"key_..."`, en preferred); query ac.cnstrc.com/search directly.
- *  - sultan-center.com: Vue SPA storefront; POST mobile/api/search with the
- *    store-scoped payload the SPA itself sends (store 1, substore 45); hits
- *    arrive under products.product_list with slug-based /product/<slug> PDPs.
- *  - amazon.eg: no JSON contract — parse the `/s?k=` results HTML cards.
- * All six are documented retailer contracts (docs/RATE-LIMITS-AND-ROBOTS.md).
+ *  - quadrastores.com: Shopify /products.json contract, same shape as blink.
+ *  - nextstore.com.kw: Magento SSR search page — scan the result cards.
+ *  - pckuwait.com: WooCommerce archive (`?s=…&post_type=product`) — scan the
+ *    loop cards; the plain blog search view carries no prices.
+ *  - luluhypermarket.com: Akinon SSR search page — read the JSON-LD Product
+ *    records embedded in it.
+ * All nine are documented retailer contracts (docs/RATE-LIMITS-AND-ROBOTS.md).
  * Search endpoints only — small page sizes, one call per retailer per run.
  */
+
 import { matchesQueryToken, queryMatchTokens } from "@/lib/relevance";
 import type { FetchImpl } from "@/lib/collect/scraper";
 
@@ -124,8 +127,13 @@ interface ShopifyProduct {
   variants?: { price?: string; available?: boolean }[];
 }
 
-/** Parse a Shopify /products.json response (blink.com.kw). */
-export function parseShopifyProducts(payload: unknown, productTitle: string): FoundOffer | null {
+
+/** Parse a Shopify /products.json response (blink.com.kw, quadrastores.com). */
+export function parseShopifyProducts(
+  payload: unknown,
+  productTitle: string,
+  base = "https://blink.com.kw",
+): FoundOffer | null {
   const products = (payload as { products?: ShopifyProduct[] })?.products ?? [];
   let best: { p: ShopifyProduct; score: number } | null = null;
   for (const p of products) {
@@ -142,7 +150,7 @@ export function parseShopifyProducts(payload: unknown, productTitle: string): Fo
   return {
     price: Number(variant.price),
     currency: "KWD",
-    url: `https://blink.com.kw/products/${p.handle}`,
+    url: `${base}/products/${p.handle}`,
     inStock: variant.available ?? true,
   };
 }
@@ -377,6 +385,329 @@ export function parseSultanCenterSearch(payload: unknown, productTitle: string):
   };
 }
 
+/** Decode the numeric/named HTML entities retailer titles actually ship. */
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Normalize "1,234.500" price text to a number. */
+function priceNumber(raw: string | undefined): number {
+  if (!raw) return NaN;
+  return Number.parseFloat(raw.replace(/,/g, "").trim());
+}
+
+export interface NextStoreCard {
+  title: string;
+  url: string;
+  brand?: string;
+  price: number;
+  currency: string;
+  wasPrice?: number;
+  inStock: boolean;
+}
+
+/**
+ * Scan a Magento catalogsearch results page into product cards. Cards carry
+ * the link anchor inside `<strong class="product name product-item-name">`,
+ * the brand anchor right after it, and a price-box whose spans expose
+ * `data-price-amount` with `data-price-type` finalPrice / oldPrice — the same
+ * two amounts the storefront itself renders as sale/reg price. Shared by the
+ * live collector (live-search.ts) and the per-product fallback below.
+ */
+export function scanNextStoreCards(html: string): NextStoreCard[] {
+  const out: NextStoreCard[] = [];
+  const segments = html.split('class="product-item-link"').slice(1);
+  for (const seg of segments) {
+    const attrTitle = decodeEntities(seg.match(/title="([^"]+)"/)?.[1] ?? "");
+    const innerTitle = decodeEntities(seg.match(/^[^>]*>([^<]+)</)?.[1] ?? "");
+    const title = attrTitle || innerTitle;
+    const url = seg.match(/href="([^"]+)"/)?.[1] ?? "";
+    if (!title || !url) continue;
+    let price = NaN;
+    let wasPrice: number | undefined;
+    for (const m of seg.matchAll(/data-price-amount="([\d.,]+)"[^>]*data-price-type="(finalPrice|oldPrice)"/g)) {
+      const value = priceNumber(m[1]);
+      if (!Number.isFinite(value) || value <= 0) continue;
+      if (m[2] === "finalPrice") price = value;
+      else wasPrice = value;
+    }
+    if (!Number.isFinite(price) || price <= 0) {
+      const plain = seg.match(/class="price">KD? ?([\d.,]+)/);
+      price = priceNumber(plain?.[1]);
+      if (!Number.isFinite(price) || price <= 0) continue;
+    }
+    const brand = decodeEntities(seg.match(/class="product-item-brand"[^>]*>([^<]+)</)?.[1] ?? "");
+    out.push({
+      title,
+      url,
+      ...(brand ? { brand } : {}),
+      price,
+      currency: "KWD",
+      ...(wasPrice != null && wasPrice > price ? { wasPrice } : {}),
+      // Listed-with-price implies purchasable unless the card says otherwise.
+      inStock: !/out of stock/i.test(seg),
+    });
+  }
+  return out;
+}
+
+export interface WooCard {
+  title: string;
+  url: string;
+  price: number;
+  currency: string;
+  wasPrice?: number;
+  inStock: boolean;
+}
+
+/**
+ * Scan a WooCommerce/Electro-style archive page into product cards. Each card
+ * links via `woocommerce-loop-product__link` onto an h2 title, then renders
+ * prices as `<ins>` (sale price) around `<del>` (regular price) bdi amounts —
+ * a lone price span when no promo runs. Currency symbol arrives inline ("KD");
+ * KD is the local spelling of KWD. Shared by the live collector and the
+ * per-product fallback below.
+ */
+export function scanWooCards(html: string): WooCard[] {
+  const out: WooCard[] = [];
+  const titleRe = /class="woocommerce-loop-product__title"[^>]*>([\s\S]{0,400}?)<\/h2>/g;
+  for (const m of html.matchAll(titleRe)) {
+    const title = decodeEntities(m[1].replace(/<[^>]+>/g, " "));
+    if (!title) continue;
+    const before = html.slice(Math.max(0, (m.index ?? 0) - 400), m.index);
+    const url = [...before.matchAll(/href="([^"]+)"/g)].pop()?.[1] ?? "";
+    if (!url) continue;
+    const nextTitle = html.indexOf('class="woocommerce-loop-product__title"', (m.index ?? 0) + 1);
+    const windowHtml = html.slice(
+      m.index ?? 0,
+      nextTitle < 0 ? (m.index ?? 0) + 4000 : Math.min(nextTitle, (m.index ?? 0) + 4000),
+    );
+    const amountRe = /woocommerce-Price-currencySymbol[^>]*>([^<]*)<\/span>&nbsp;([\d.,]+)/;
+    const ins = windowHtml.match(/<ins>[\s\S]*?<\/ins>/)?.[0];
+    const del = windowHtml.match(/<del>[\s\S]*?<\/del>/)?.[0];
+    const current = priceNumber(ins?.match(amountRe)?.[2] ?? windowHtml.match(amountRe)?.[2]);
+    if (!Number.isFinite(current) || current <= 0) continue;
+    const was = priceNumber(del?.match(amountRe)?.[2]);
+    const symbol = ins?.match(amountRe)?.[1] ?? windowHtml.match(amountRe)?.[1] ?? "";
+    const trimmed = symbol.trim();
+    const currency = trimmed === "" || trimmed.toUpperCase() === "KD" ? "KWD" : trimmed.toUpperCase();
+    out.push({
+      title,
+      url,
+      price: current,
+      currency,
+      ...(Number.isFinite(was) && was > current ? { wasPrice: was } : {}),
+      inStock: !/out of stock/i.test(windowHtml),
+    });
+  }
+  return out;
+}
+
+export interface JsonLdProduct {
+  title: string;
+  url: string;
+  price: number;
+  currency?: string;
+  wasPrice?: number;
+  inStock: boolean;
+}
+
+/**
+ * Read JSON-LD Product records out of an SSR page (luluhypermarket.com ships
+ * them in its search results). Walks ItemList/@graph/array wrappers, keeps
+ * the first priced offer per product; availability follows the schema.org
+ * InStock/OutOfStock vocabulary. Shared by the live collector and the
+ * per-product fallback below.
+ */
+export function extractJsonLdProducts(html: string): JsonLdProduct[] {
+  const out: JsonLdProduct[] = [];
+  for (const block of html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(block[1]);
+    } catch {
+      continue;
+    }
+    for (const record of jsonLdProducts(parsed)) {
+      const title = typeof record.name === "string" ? decodeEntities(record.name) : "";
+      if (!title) continue;
+      const offers = Array.isArray(record.offers) ? record.offers[0] : record.offers;
+      const offer = (offers ?? {}) as Record<string, unknown>;
+      const price = Number(offer.price ?? record.price);
+      if (!Number.isFinite(price) || price <= 0) continue;
+      const currency = typeof offer.priceCurrency === "string" ? offer.priceCurrency : undefined;
+      const availability = typeof offer.availability === "string" ? offer.availability : "";
+      const url =
+        typeof offer.url === "string" && offer.url
+          ? offer.url
+          : typeof record.url === "string"
+            ? record.url
+            : typeof record["@id"] === "string"
+              ? record["@id"]
+              : "";
+      const wasRaw = Number(offer.strikethroughPrice ?? offer.oldPrice ?? offer.compareAtPrice);
+      out.push({
+        title,
+        url,
+        price,
+        ...(currency ? { currency } : {}),
+        ...(Number.isFinite(wasRaw) && wasRaw > price ? { wasPrice: wasRaw } : {}),
+        // Absent availability reads as purchasable (listed-with-price rule);
+        // the explicit OutOfStock tail is the only negative case — everything
+        // else (InStock, Discontinued still listed) keeps the offer live.
+        inStock: availability === "" ? true : !availability.endsWith("OutOfStock"),
+      });
+    }
+  }
+  return out;
+}
+
+function jsonLdProducts(node: unknown): Record<string, unknown>[] {
+  if (Array.isArray(node)) return node.flatMap(jsonLdProducts);
+  if (!node || typeof node !== "object") return [];
+  const record = node as Record<string, unknown>;
+  if (typeof record["@type"] === "string" && /\bProduct\b/.test(record["@type"])) return [record];
+  const children: unknown[] = [];
+  if (record["@graph"]) children.push(record["@graph"]);
+  if (record.itemListElement) children.push(record.itemListElement);
+  if (record.item) children.push(record.item);
+  return children.flatMap(jsonLdProducts);
+}
+
+/** Pick the best-covering card as the single fallback offer. */
+function bestFromCards(
+  cards: { title: string; url: string; price: number; currency: string; wasPrice?: number; inStock: boolean }[],
+  productTitle: string,
+): FoundOffer | null {
+  if (cards.length === 0) return null;
+  const scored = cards.filter((c) => tokenCoverage(c.title, productTitle) >= MIN_TOKEN_COVERAGE);
+  const pool = scored.length > 0 ? scored : cards;
+  let bestIdx = 0;
+  let bestScore = -1;
+  pool.forEach((c, i) => {
+    const s = titleMatchScore(c.title, productTitle);
+    if (s > bestScore) {
+      bestScore = s;
+      bestIdx = i;
+    }
+  });
+  const chosen = pool.find((c) => !c.inStock && bestScore < MIN_TOKEN_COVERAGE) ?? pool[bestIdx];
+  return {
+    price: chosen.price,
+    currency: chosen.currency,
+    url: chosen.url,
+    inStock: chosen.inStock,
+    ...(chosen.wasPrice != null ? { wasPrice: chosen.wasPrice } : {}),
+  };
+}
+
+/** Parse a nextstore.com.kw catalogsearch page into the best offer. */
+export function parseNextStoreSearch(html: string, productTitle: string): FoundOffer | null {
+  return bestFromCards(scanNextStoreCards(html), productTitle);
+}
+
+/** Parse a pckuwait.com product-archive page into the best offer. */
+export function parsePcKuwaitSearch(html: string, productTitle: string): FoundOffer | null {
+  return bestFromCards(scanWooCards(html), productTitle);
+}
+
+/** Parse a luluhypermarket.com SSR page JSON-LD into the best offer. */
+export function parseLuluSearch(html: string, productTitle: string): FoundOffer | null {
+  const cards = extractJsonLdProducts(html).map((item) => ({
+    title: item.title,
+    url: item.url.startsWith("http") ? item.url : `https://www.luluhypermarket.com${item.url}`,
+    price: item.price,
+    currency: item.currency ?? "KWD",
+    inStock: item.inStock,
+    ...(item.wasPrice != null ? { wasPrice: item.wasPrice } : {}),
+  }));
+  return bestFromCards(cards, productTitle);
+}
+
+/**
+ * Browser-shaped header set for the two Cloudflare-fronted hops (verified
+ * live 2026-09-08): the managed challenge only steps aside for a coherent
+ * browser header combination — a bare bot UA stays pinned on the
+ * interstitial. Shared by the live collectors and the fallback dispatch so
+ * both paths present the same identity.
+ */
+export const CHALLENGE_HEADERS = {
+  accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "accept-language": "en-US,en;q=0.9",
+  "user-agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+};
+
+/**
+ * Challenge-tolerant GET for the Cloudflare-fronted retailers: the first
+ * hits answer with a challenge interstitial while seeding the visitor
+ * cookie; replaying that cookie on a bounded retry lands on the real SSR
+ * page within seconds. Attempts are bounded to what fits the hop window
+ * (~250ms apart), and the seeded cookie is kept per host afterwards, so a
+ * warm server answers its very first attempt — each retailer gets one
+ * handshake per TTL window, not one per query. When no attempt succeeds the
+ * caller still gets its HTTP note (graceful degradation unchanged).
+ */
+const CHALLENGE_COOKIE_TTL_MS = 10 * 60_000;
+const challengeCookies = new Map<string, { header: string; expiresAt: number }>();
+
+export function fetchThroughChallenge(
+  fetchImpl: FetchImpl,
+  url: string,
+  init: RequestInit,
+  signal: AbortSignal,
+): Promise<Response> {
+  return runAttempts(fetchImpl, url, init, signal);
+}
+
+async function runAttempts(
+  fetchImpl: FetchImpl,
+  url: string,
+  init: RequestInit,
+  signal: AbortSignal,
+): Promise<Response> {
+  const host = new URL(url).host;
+  let warm = challengeCookies.get(host);
+  if (warm && warm.expiresAt < Date.now()) {
+    challengeCookies.delete(host);
+    warm = undefined;
+  }
+  const jar = new Map<string, string>();
+  if (warm) for (const kv of warm.header.split("; ")) {
+    const i = kv.indexOf("=");
+    if (i > 0) jar.set(kv.slice(0, i), kv.slice(i + 1));
+  }
+  let lastStatus = 0;
+  for (let attempt = 0; attempt < 6 && !signal.aborted; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 250));
+    if (signal.aborted) break;
+    const headers = new Headers(init.headers);
+    if (jar.size > 0) headers.set("cookie", [...jar].map(([k, v]) => `${k}=${v}`).join("; "));
+    const res = await fetchImpl(url, { ...init, headers, cache: "no-store", signal });
+    lastStatus = res.status;
+    for (const sc of res.headers.getSetCookie?.() ?? []) {
+      const kv = sc.split(";")[0];
+      const i = kv.indexOf("=");
+      if (i > 0) jar.set(kv.slice(0, i).trim(), kv.slice(i + 1).trim());
+    }
+    if (jar.size > 0) {
+      challengeCookies.set(host, {
+        header: [...jar].map(([k, v]) => `${k}=${v}`).join("; "),
+        expiresAt: Date.now() + CHALLENGE_COOKIE_TTL_MS,
+      });
+    }
+    if (res.ok) return res;
+  }
+  throw new Error(`HTTP ${lastStatus}`);
+}
+
 /** fetch with a hard timeout, returning the raw Response. */
 async function fetchResponse(
   fetchImpl: FetchImpl,
@@ -555,6 +886,57 @@ export async function searchRetailerFallback(
       await new Promise((r) => setTimeout(r, 300));
     }
     throw new Error(lastError);
+  }
+  if (host.endsWith("quadrastores.com")) {
+    // Same Shopify contract as blink — one GET, shared parser.
+    const res = await fetchResponse(
+      fetchImpl,
+      `https://quadrastores.com/products.json?title=${encodeURIComponent(productTitle)}&limit=8`,
+      { headers: { accept: "application/json" } },
+    );
+    if (!res.ok) throw new Error(`quadra search HTTP ${res.status}`);
+    const found = parseShopifyProducts(await res.json(), productTitle, "https://quadrastores.com");
+    if (!found) throw new Error("No matching product found on Quadra Stores search");
+    return found;
+  }
+  if (host.endsWith("nextstore.com.kw")) {
+    // Magento SSR results page behind a Cloudflare managed challenge; the
+    // bounded cookie-carry retry in fetchThroughChallenge lands the SSR HTML.
+    const res = await fetchThroughChallenge(
+      fetchImpl,
+      `https://www.nextstore.com.kw/catalogsearch/result/index/?q=${encodeURIComponent(productTitle)}`,
+      { headers: { ...CHALLENGE_HEADERS } },
+      AbortSignal.timeout(FALLBACK_TIMEOUT_MS),
+    );
+    const found = parseNextStoreSearch(await res.text(), productTitle);
+    if (!found) throw new Error("No matching product found on Next Store search");
+    return found;
+  }
+  if (host.endsWith("pckuwait.com")) {
+    // post_type=product lands on the WooCommerce archive — the plain blog
+    // search view carries no prices.
+    const res = await fetchResponse(
+      fetchImpl,
+      `https://pckuwait.com/?s=${encodeURIComponent(productTitle)}&post_type=product`,
+      { headers: { accept: "text/html,application/xhtml+xml", "accept-language": "en" } },
+    );
+    if (!res.ok) throw new Error(`pckuwait search HTTP ${res.status}`);
+    const found = parsePcKuwaitSearch(await res.text(), productTitle);
+    if (!found) throw new Error("No matching product found on PC Kuwait search");
+    return found;
+  }
+  if (host.endsWith("luluhypermarket.com")) {
+    // Akinon SSR search page on the same Cloudflare managed-challenge setup
+    // as nextstore — same bounded retry and browser header set.
+    const res = await fetchThroughChallenge(
+      fetchImpl,
+      `https://www.luluhypermarket.com/en/search?query=${encodeURIComponent(productTitle)}`,
+      { headers: { ...CHALLENGE_HEADERS } },
+      AbortSignal.timeout(FALLBACK_TIMEOUT_MS),
+    );
+    const found = parseLuluSearch(await res.text(), productTitle);
+    if (!found) throw new Error("No matching product found on lulu search");
+    return found;
   }
   throw new Error(`No search fallback for ${host}`);
 }

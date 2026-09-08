@@ -17,7 +17,8 @@ export default function AboutPage() {
         list.
       </StaticSection>
       <StaticSection label="WHO WE COMPARE">
-        Xcite · Jarir · Eureka · Sultan Center.
+        Xcite · Jarir · Eureka · Sultan Center · Blink · Lulu Hypermarket · Quadra Stores ·
+        Next Store · PC Kuwait.
       </StaticSection>
       <StaticSection label="HOW FRESH PRICES ARE">
         Offers are fetched live from each retailer the moment you search, not from a stale
