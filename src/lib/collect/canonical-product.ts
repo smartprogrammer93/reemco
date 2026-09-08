@@ -80,6 +80,11 @@ const NOISE = new Set([
   // Official Warranty") restate warranty/setup marketing, never a product
   // attribute — same role as the spec restatements above.
   "face", "id", "tax", "paid", "warranty", "years", "official",
+  // REEA-280: Apple-store-style tails ("Apple Intelligence") join the same
+  // marketing class — the chip/features restatements above. They ride AFTER
+  // the model line and split one SKU into two cards when a retailer omits
+  // them and the Apple-store listing carries them.
+  "intelligence",
 ]);
 
 const STORAGE_RE = /^(\d+(?:\.\d+)?)(gb|tb)$/;
@@ -256,7 +261,10 @@ function computeCanonicalFields(title: string): CanonicalFields {
     // integer model numbers ride on their word ("fold7"), sizes restate the
     // display ("6.9", REEA-205 — quoted or spelled, like RAM/CPU restatements
     // above). Capacity tokens keep discriminating through STORAGE_RE.
-    if (NOISE.has(t) || /^\d+(?:\.\d+)?$/.test(t)) continue;
+    // REEA-280: a repeated brand word inside one title ("iPad Air … Apple
+    // Intelligence …") restates the brand field the same way — the role is
+    // evidence once (REEA-254), echoes carry no model-line information.
+    if (NOISE.has(t) || BRANDS.has(t) || /^\d+(?:\.\d+)?$/.test(t)) continue;
 
     if (!stopped) {
       // Single-letter model-line parts ("Galaxy Z Fold7") stay in the line;

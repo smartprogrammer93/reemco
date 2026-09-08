@@ -1,8 +1,11 @@
 /**
- * REEA-277 — per-query response-cache unit tests: the fresh/stale/max-age
- * windows behind stale-while-revalidate, the bounded entry set, the TTL
- * ceiling the acceptance criteria demand (≤ 15 min), and the cache-key
- * identity rules (case folding + per-country views).
+ * REEA-277 / REEA-291 AC5 — per-query response-cache unit tests: the single
+ * 90-second memoization window behind the repeat-query fix (entries inside it
+ * serve immediately, entries past it are dropped and re-collected live), the
+ * bounded entry set, the TTL ceiling the acceptance criteria demand
+ * (≤ 15 min, aged ≤ 2 min), and the cache-key identity rules: the NORMALIZED
+ * QUERY STRING ONLY — case folds together and viewer-side signals (country,
+ * cookie, language hint) never fork the memo.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -23,54 +26,46 @@ function fakeClock() {
   };
 }
 
-describe("query cache windows (REEA-277)", () => {
-  it("fresh entries serve without a revalidation flag", () => {
+describe("query cache window (REEA-277 / REEA-291 AC5)", () => {
+  it("inside the window entries serve immediately, flagged fresh", () => {
     const clock = fakeClock();
     const cache = createQueryCache(clock.now);
-    cache.write("kw|sony", { products: [{ scrapedAt: "t0" }] });
+    cache.write("sony", { products: [{ scrapedAt: "t0" }] });
 
-    const hit = cache.read<{ products: { scrapedAt: string }[] }>("kw|sony");
+    const hit = cache.read<{ products: { scrapedAt: string }[] }>("sony");
     expect(hit).not.toBeNull();
     expect(hit!.stale).toBe(false);
     expect(hit!.value.products[0].scrapedAt).toBe("t0");
 
+    // The window's own edge still serves fresh (≤ 90 s age is the AC5 bar).
     clock.advance(QUERY_CACHE_FRESH_MS);
-    expect(cache.read("kw|sony")!.stale).toBe(false);
-  });
-
-  it("inside the stale window the entry still serves AND asks for revalidation (SWR)", () => {
-    const clock = fakeClock();
-    const cache = createQueryCache(clock.now);
-    cache.write("kw|sony", "last-live-answer");
-    clock.advance(QUERY_CACHE_FRESH_MS + 1);
-
-    const hit = cache.read<string>("kw|sony");
-    expect(hit).not.toBeNull();
-    expect(hit!.value).toBe("last-live-answer");
-    expect(hit!.stale).toBe(true);
+    const edge = cache.read<{ products: { scrapedAt: string }[] }>("sony");
+    expect(edge).not.toBeNull();
+    expect(edge!.stale).toBe(false);
   });
 
   it("past the ceiling the entry is dropped — never served (AC-3)", () => {
     const clock = fakeClock();
     const cache = createQueryCache(clock.now);
-    cache.write("kw|sony", "answer");
+    cache.write("sony", "answer");
     clock.advance(QUERY_CACHE_MAX_AGE_MS + 1);
 
-    expect(cache.read("kw|sony")).toBeNull();
+    expect(cache.read("sony")).toBeNull();
     expect(cache.size()).toBe(0);
   });
 
-  it("the ceiling stays at or below the 15-minute AC-3 budget", () => {
+  it("the ceiling stays at or below the 15-minute budget, aged ≤ 2 min", () => {
     expect(QUERY_CACHE_MAX_AGE_MS).toBeLessThanOrEqual(15 * 60_000);
-    expect(QUERY_CACHE_FRESH_MS).toBeLessThan(QUERY_CACHE_MAX_AGE_MS);
+    // The served-age ceiling is the memoization window itself.
+    expect(QUERY_CACHE_FRESH_MS).toBeLessThanOrEqual(QUERY_CACHE_MAX_AGE_MS);
   });
 
-  it("repeats inside a 5-minute horizon always HIT (AC-2)", () => {
+  it("a repeat inside the window HITs without a second fan-out (AC5)", () => {
     const clock = fakeClock();
     const cache = createQueryCache(clock.now);
-    cache.write("kw|sony", "answer");
-    clock.advance(5 * 60_000); // the AC-2 repeat horizon
-    expect(cache.read("kw|sony")).not.toBeNull();
+    cache.write("sony", "answer");
+    clock.advance(QUERY_CACHE_FRESH_MS - 1); // inside the 90 s window
+    expect(cache.read("sony")).not.toBeNull();
   });
 
   it("evicts oldest-first when the entry budget is full", () => {
@@ -94,21 +89,23 @@ describe("query cache windows (REEA-277)", () => {
   it("re-writing a key refreshes the entry in place", () => {
     const clock = fakeClock();
     const cache = createQueryCache(clock.now);
-    cache.write("kw|sony", "old");
-    clock.advance(QUERY_CACHE_FRESH_MS + 1);
-    cache.write("kw|sony", "new");
-    expect(cache.read<string>("kw|sony")).toEqual({ value: "new", stale: false });
+    cache.write("sony", "old");
+    clock.advance(QUERY_CACHE_FRESH_MS - 1);
+    cache.write("sony", "new");
+    expect(cache.read<string>("sony")).toEqual({ value: "new", stale: false });
     expect(cache.size()).toBe(1);
   });
 });
 
-describe("query cache keys (REEA-277)", () => {
+describe("query cache keys (REEA-291 AC5)", () => {
   it("folds case and surrounding whitespace into one identity", () => {
-    expect(queryCacheKey("iPhone ", null)).toBe(queryCacheKey("iphone", null));
+    expect(queryCacheKey("iPhone ")).toBe(queryCacheKey("iphone"));
   });
 
-  it("keeps country-scoped views separate (different adapter sets answer)", () => {
-    expect(queryCacheKey("sony", "KW")).not.toBe(queryCacheKey("sony", null));
-    expect(queryCacheKey("sony", "KW")).not.toBe(queryCacheKey("sony", "EG"));
+  it("is the query alone — viewer-side selections never fork the memo", () => {
+    // One live answer per query serves every shopper; the country/stock
+    // selections filter the loaded payload at render time (ResultsClient),
+    // so the key carries only the normalized query.
+    expect(queryCacheKey("  Sony XM6  ")).toBe("sony xm6");
   });
 });
