@@ -1,11 +1,6 @@
 name: Uptime check
 
-# Basic availability monitoring for the public site (REEA-27 item 3).
-# Runs every 5 minutes; any failure opens a GitHub issue labeled `uptime-alert`
-# (deduped) so downtime surfaces in the repo notification stream immediately.
-on:
-  schedule:
-    - cron: "*/5 * * * *"
+
   workflow_dispatch:
 
 permissions:
