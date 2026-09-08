@@ -26,6 +26,7 @@ import { trackEvents } from "@/lib/telemetry";
 import { PRODUCTS } from "@/lib/feed";
 import { isAccessoryTitle, partitionForQuery } from "@/lib/relevance";
 import { coverageLine, type LiveSearchResult } from "@/lib/collect/live-search";
+import { markLiveRefresh } from "@/lib/query-cache";
 import { clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
 import type { NormalizedProduct } from "@/types/product";
 
@@ -736,11 +737,14 @@ function ResultsInner(props: {
   };
   const onSelectCountry = (code: CountryCode | null) => applySelection(code, showOutOfStock);
   const onToggleStock = (next: boolean) => applySelection(country, next);
-  // REEA-291 AC4 — the ONLY full live re-fetch path: re-runs the server
-  // collection for this query (a live fan-out, or the ≤90 s memoized live
-  // answer per AC5), so collection timestamps update while the in-place
-  // selections above never hit the network.
-  const onRefresh = () => router.refresh();
+  // REEA-291 AC4 — the ONLY full live re-fetch path: stamps the one-shot
+  // refresh cookie, then re-runs the server collection for this query even
+  // inside the ≤90 s memo window (AC5), so collection timestamps update while
+  // the in-place selections above never hit the network.
+  const onRefresh = () => {
+    markLiveRefresh();
+    router.refresh();
+  };
 
   const staged = props.stages && props.stages.length > 0 ? props.stages : null;
 

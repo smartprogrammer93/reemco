@@ -27,7 +27,7 @@ import {
   scanWooCards,
   titleMatchScore,
 } from "@/lib/collect/search-fallback";
-import { defaultQueryCache, queryCacheKey, type QueryCache } from "@/lib/query-cache";
+import { defaultQueryCache, queryCacheKey, type QueryCache, type QueryCacheHit } from "@/lib/query-cache";
 import type { FetchImpl } from "@/lib/collect/scraper";
 import type { CountryCode } from "@/lib/country";
 import { sanitizeExternalUrl } from "@/lib/safe-url";
@@ -1509,7 +1509,13 @@ export function collectLiveResultsStaged(
   //    the live run below continues behind the response and its staged
   //    flushes deepen the page (classic stale-while-revalidate);
   //  - miss/expiry (past the ≤15-min ceiling): plain live path.
-  const cached = cache.read<LiveSearchResult>(cacheKey);
+  // REEA-291 AC4 — behind the explicit Refresh action (opts.refresh) a fresh
+  // entry degrades to the stale path: the cached snapshot is still the first
+  // flush, but the live fan-out ALWAYS re-runs behind it, so the converged
+  // write-through carries new scrapedAt stamps to the freshness chips.
+  const hit = cache.read<LiveSearchResult>(cacheKey);
+  const cached: QueryCacheHit<LiveSearchResult> | null =
+    hit && opts.refresh && !hit.stale ? { ...hit, stale: true } : hit;
   if (cached && !cached.stale) {
     const served = Promise.resolve(cached.value);
     return { stages: [served], final: served };
