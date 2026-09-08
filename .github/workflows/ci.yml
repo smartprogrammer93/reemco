@@ -1,13 +1,29 @@
 name: CI
 
+# REEA-314 minute-budget notes:
+# - `push: branches:[main]` trigger removed on purpose: every main push already
+#   runs lint/test/build inside deploy.yml, so the old dual trigger made every
+#   merge do the same checks twice. Direct pushes to main stay covered by
+#   deploy.yml; PRs are covered here. workflow_dispatch kept for manual checks.
+# - paths-ignore: docs-only changes skip CI entirely (nothing to lint/build).
+# - runs-on: self-hosted keeps heavy install/build minutes off GitHub's limited
+#   hosted-minutes allowance. Monitoring jobs (uptime.yml, smoke-scheduled.yml)
+#   intentionally stay GitHub-hosted so site monitoring survives a self-hosted
+#   runner being offline.
 on:
-  push:
-    branches: [main]
   pull_request:
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

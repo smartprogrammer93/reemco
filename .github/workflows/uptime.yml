@@ -13,7 +13,15 @@ permissions:
 
 jobs:
   probe:
+    # REEA-314: stays GitHub-hosted — curl-only job (~10s/run, no checkout, no
+    # node install), tens of minutes per month in total, and availability
+    # monitoring must not depend on the self-hosted runner being online.
+    # timeout-minutes bounds a stuck probe; concurrency drops queued overlaps.
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: uptime-probe
+      cancel-in-progress: true
     steps:
       - name: Probe public URL
         id: probe

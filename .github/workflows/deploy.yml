@@ -40,9 +40,25 @@ permissions:
   contents: read # checkout needs this; specifying any workflow-level permissions revokes the defaults
   issues: write # deploy/smoke failure alerts
 
+# REEA-314: on push bursts only the newest deploy matters — a superseded run
+# that never reaches `vercel deploy` has done nothing worth finishing, and its
+# remaining hosted-minutes are refunded by the cancel. Group per ref so a
+# rollback_dispatch on another ref is unaffected.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    # REEA-314: heavy install/lint/test/build + vercel CLI minutes go to the
+    # org's self-hosted runner — self-hosted usage does not draw down GitHub's
+    # included hosted minutes (this repo's deploy cadence alone far exceeds the
+    # ~2,000 min/month free allowance). Monitoring jobs (uptime.yml,
+    # smoke-scheduled.yml) stay GitHub-hosted on purpose: they keep probing the
+    # site even when the self-hosted runner is offline.
+    # Timeout keeps a queued job bounded while the runner is starting up.
+    runs-on: self-hosted
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:

@@ -27,7 +27,6 @@ on:
   schedule:
     - cron: "17 * * * *" # hourly anchor, off the :00 spike
     - cron: "47 * * * *" # second chance each hour when a tick is skipped
-    - cron: "7 3,9,15,21 * * *" # sparse extra chances spread across the day
   workflow_dispatch:
 
 permissions:
@@ -41,10 +40,14 @@ concurrency:
 
 jobs:
   smoke:
+    # REEA-314: intentionally kept on GitHub-hosted runners — cheap (guard-only
+    # ticks cost seconds) and monitoring must keep working even when the
+    # self-hosted runner that hosts deploy.yml/ci.yml is offline. Guard runs as
+    # the FIRST step (before checkout) so skipped ticks bill only the API call
+    # instead of a full checkout + node setup. Timeout bounds a stuck run.
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-
       # REEA-71 dedupe guard: with multiple cron lines, most ticks are redundant.
       # Only run the smoke check if the last completed run is >= 75 min old
       # ( hourly cadence + slack for cron delay). Manual dispatches always run.
@@ -66,6 +69,9 @@ jobs:
             echo "Last completed run $LAST is stale — due (missed-tick self-heal)."
             echo "due=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - uses: actions/checkout@v4
+        if: steps.guard.outputs.due != 'false'
 
       - uses: actions/setup-node@v4
         if: steps.guard.outputs.due != 'false'
