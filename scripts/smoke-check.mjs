@@ -240,5 +240,36 @@ await step(6, "catalog offer URLs resolve (link-health)", async () => {
   return `${urls.length} unique offer URL(s) resolve (<400)`;
 });
 
+// REEA-260: adapter-registration parity on the DEPLOYED query path. The
+// REEA-238 smoke ran the collector chain directly, which passes even when the
+// deployed build serves an older collector set — QA found four of the five new
+// merchants missing from the live notes array while that smoke stayed green.
+// This step closes the gap: it reads the notes array the deployed results page
+// itself emits (the RSC flight payload in its SSR HTML) and requires every
+// registered merchant to have dispatched. Presence is the assertion, not hit
+// counts — a transient challenge/403 on one storefront must not fail the whole
+// deploy check (graceful degradation), but an adapter absent from the notes
+// array means the deployed build never dispatched it.
+await step(7, "deployed results notes carry every registered adapter (REEA-238/260)", async () => {
+  const resp = await fetch(`${BASE}/results?q=${encodeURIComponent("iPhone 15")}`, {
+    headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36" },
+    redirect: "follow",
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!resp.ok) throw new Error(`results page returned HTTP ${resp.status}`);
+  const html = await resp.text();
+  // Flight payload embeds the snapshot notes with escaped quotes; take every
+  // notes array in flush order and evaluate the longest (final snapshot).
+  const arrays = [...html.matchAll(/notes\\":\[([^\]]*)\]/g)].map((m) => m[1]);
+  if (arrays.length === 0) throw new Error("no notes array found in deployed results HTML");
+  const finalNotes = arrays.reduce((a, b) => (b.length > a.length ? b : a));
+  const merchants = [...finalNotes.matchAll(/merchant\\":\\"([^\\]+)/g)].map((m) => m[1]);
+  const required = ["Xcite", "Blink", "Eureka", "Sultan Center", "Jarir", "Amazon.eg", "Quadra Stores", "Next Store", "PC Kuwait", "Lulu Hypermarket"];
+  const missing = required.filter((m) => !merchants.includes(m));
+  if (missing.length) throw new Error(`deployed notes array misses ${missing.join(", ")} (seen: ${merchants.join(", ")})`);
+  const hitLines = finalNotes.replace(/\\/g, "");
+  return `${merchants.length} merchant(s) dispatched — ${hitLines.slice(0, 160)}…`;
+});
+
 console.log(results.join("\n"));
-console.log(`SMOKE PASSED — ${BASE} funnel (home → search → click-out → freshness → link-health) is healthy.`);
+console.log(`SMOKE PASSED — ${BASE} funnel (home → search → click-out → freshness → link-health → adapter parity) is healthy.`);
