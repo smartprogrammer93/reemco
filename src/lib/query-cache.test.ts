@@ -108,4 +108,13 @@ describe("query cache keys (REEA-291 AC5)", () => {
     // so the key carries only the normalized query.
     expect(queryCacheKey("  Sony XM6  ")).toBe("sony xm6");
   });
+
+  it("the country selection joins the key when it scopes the fan-out", () => {
+    // REEA-170: COLLECTORS are filtered to the adapters tagged for the
+    // selection, so the ANSWER itself differs — the identity must too.
+    // Without a selection the plain query-only key above still applies.
+    expect(queryCacheKey("sony", "KW")).not.toBe(queryCacheKey("sony"));
+    expect(queryCacheKey("sony", "KW")).not.toBe(queryCacheKey("sony", "EG"));
+    expect(queryCacheKey(" Sony ", null)).toBe(queryCacheKey("sony"));
+  });
 });
