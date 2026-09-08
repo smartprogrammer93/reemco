@@ -25,7 +25,6 @@ import {
   scanNextStoreCards,
   scanWooCards,
   titleMatchScore,
-  VERIFIED_BOT_HEADERS,
 } from "@/lib/collect/search-fallback";
 import { defaultQueryCache, queryCacheKey, type QueryCache, type QueryCacheHit } from "@/lib/query-cache";
 import type { FetchImpl } from "@/lib/collect/scraper";
@@ -830,24 +829,23 @@ const COLLECTORS: RetailerCollector[] = [
     collect: async (query, fetchImpl) => {
       // REEA-272: lead with the WooCommerce Store API JSON (`/wp-json/wc/
       // store/v1/products`) — the challenge-tolerant endpoint the brief calls
-      // for. It answers scripted requests on the first attempt without the CF
-      // managed challenge (verified live 2026-09-08 from datacenter egress),
-      // while the HTML archive still needed the handshake. If the JSON hop
-      // can't answer, fall back to the `post_type=product` archive page
-      // (prices + stock; the plain blog search view carries neither) over the
-      // same identity-alternating handshake the other CF-fronted stores get —
-      // a bare accept-only request left a standing HTTP 403 note there while
-      // browsers reached the site, so the fallback keeps the doubled window.
+      // for. It answers even a bare accept-only request on the first attempt
+      // without the CF managed challenge (verified live 2026-09-08 from cold
+      // datacenter egress), while the HTML archive still needs an identity
+      // handshake. If the JSON hop can't answer, fall back to the
+      // `post_type=product` archive page (prices + stock; the plain blog
+      // search view carries neither) over the identity-alternating handshake
+      // the other CF-fronted stores get, with its doubled window.
       const apiUrl = `https://pckuwait.com/wp-json/wc/store/v1/products?search=${encodeURIComponent(query)}&per_page=${LIVE_SEARCH_HITS_PER_PAGE}`;
-      // Cached first: WITHOUT `cache:"no-store"` the Next data cache keeps the
-      // JSON payload across serverless invocations, so one answered handshake
-      // keeps the hop serving hits even when a later cold instance would
-      // re-fail the CF rules from its region (REEA-272 option 2 — cache that
-      // persists across invocations). Only a cached-attempt miss pays the
-      // handshake again.
+      // Cached first: with an explicit `force-cache` + bounded revalidate the
+      // Next data cache keeps the JSON payload across serverless invocations
+      // even inside the force-dynamic results segment (REEA-272 option 2 —
+      // cache that persists across invocations), so one answered hop keeps
+      // the adapter serving hits while later cold instances re-run behind
+      // the revalidate window. Only a cache miss pays the hop again.
       try {
         const cached = await fetchImpl(apiUrl, {
-          headers: { ...VERIFIED_BOT_HEADERS, accept: "application/json" },
+          headers: { accept: "application/json" },
           cache: "force-cache",
           next: { revalidate: 300 },
           signal: AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
