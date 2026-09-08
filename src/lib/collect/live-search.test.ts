@@ -620,6 +620,27 @@ describe("groupHits", () => {
     );
   });
 
+  it("REEA-254: unbranded spellings share the branded card — the brand role needs a known-brand word", () => {
+    // The old fallback consumed the first token as brand even when it was
+    // really the model-family opener, so an unbranded "iPhone 17 Pro Max …"
+    // (brand `iphone17`) never merged with the branded spelling (brand
+    // `apple`) — two cards for one device. With no vocabulary brand the
+    // field stays empty and the partial-match rule converges both spellings.
+    const products = groupHits("iphone 17 pro max", [
+      hit({ title: 'iPhone 17 Pro Max 6.9" 256GB - Deep Blue', merchant: "Xcite", price: 379.9, url: "https://xcite.example/max" }),
+      hit({ title: "Apple iPhone 17 Pro Max, 256 GB, Deep Blue, 5G, Apple A19 Pro", merchant: "Jarir", currency: "SAR", price: 1549, url: "https://jarir.example/max" }),
+    ]);
+    expect(products).toHaveLength(1);
+    expect(products[0].offers.map((o) => o.merchant)).toEqual(["Xcite", "Jarir"]);
+    // An empty brand field does not turn everything into one merge — storage
+    // still discriminates across tiers.
+    const tiers = groupHits("iphone 17 pro max", [
+      hit({ title: 'iPhone 17 Pro Max 6.9" 512GB Deep Blue', merchant: "Xcite", price: 459.9, url: "https://xcite.example/512" }),
+      hit({ title: "Apple iPhone 17 Pro Max, 256 GB, Deep Blue", merchant: "Jarir", currency: "SAR", price: 1549, url: "https://jarir.example/256" }),
+    ]);
+    expect(tiers).toHaveLength(2);
+  });
+
   it("REEA-254: the same fetched set merges identically regardless of adapter arrival order", () => {
     const base: SearchHit[] = [
       hit({ title: "Apple iPhone 17 Pro Max, 256 GB, Silver, 5G", merchant: "Jarir", currency: "SAR", price: 1500, url: "https://jarir.example/a" }),

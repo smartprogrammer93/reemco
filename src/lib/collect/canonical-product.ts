@@ -178,9 +178,17 @@ export function canonicalTokens(title: string): string[] {
 function computeCanonicalFields(title: string): CanonicalFields {
   const tokens = canonicalTokens(title);
 
+  // REEA-254 — the brand ROLE is evidence only when a known-brand word
+  // actually appears. The old fallback consumed the first token as brand even
+  // when it was really the model-family opener ("iPhone 17 Pro Max …" lost
+  // "iphone17" from the model line AND collided with the same device listed
+  // with its brand: brand `iphone17` ≠ `apple`). With no vocabulary brand the
+  // field stays empty — missing fields never block a merge (partial-match
+  // rule), so the branded and unbranded spellings of one device converge on
+  // the same tuple instead of forming two cards.
   let brandIdx = tokens.findIndex((t) => BRANDS.has(t));
-  if (brandIdx < 0) brandIdx = 0;
-  const brand = tokens[brandIdx] ?? "";
+  if (brandIdx < 0) brandIdx = -1;
+  const brand = brandIdx < 0 ? "" : tokens[brandIdx];
 
   const line: string[] = [];
   let storage = "";
