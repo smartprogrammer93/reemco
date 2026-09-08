@@ -10,6 +10,7 @@ import {
   blinkHits,
   collectLiveResults,
   collectLiveResultsStaged,
+  coverageLine,
   eurekaHits,
   groupHits,
   jarirHits,
@@ -33,6 +34,7 @@ import {
 } from "@/lib/collect/canonical-product";
 import { isAccessoryTitle } from "@/lib/relevance";
 import { bestBadgeIndex } from "@/lib/stock";
+import { createQueryCache, QUERY_CACHE_FRESH_MS } from "@/lib/query-cache";
 
 describe("hit parsers", () => {
   it("xciteHits keeps scored hits with /p product URLs", () => {
@@ -396,6 +398,42 @@ describe("groupHits", () => {
     // Canonical title = member title with the fewest tokens → stable slug.
     expect(fold.title).toBe("Samsung Galaxy Z Fold7 Phone - Silver");
     expect(fold.productId).toBe("samsung-galaxy-z-fold7-phone-silver");
+  });
+
+  it("REEA-280: retailer-titled and Apple-store-titled spellings of one SKU share a card", () => {
+    // Mirrors the live q=iPad Air answers: Xcite writes the short spec line,
+    // the Apple-store spelling adds "Tablet … Apple Intelligence …" tails —
+    // both describe the same 128 GB Blue 11" M4 device and must land on one
+    // card; the 64 GB Starlight listing is a different tier and stays out.
+    const products = groupHits("ipad air 128gb", [
+      hit({
+        title: "Apple iPad Air 11 inch M4 2026 128GB 5G MH794AB/A Blue",
+        merchant: "Xcite",
+        price: 349,
+        url: "https://xcite.example/ipad-air-128-5g",
+      }),
+      hit({
+        title: 'Apple iPad Air 11 M4 Tablet - Wi-Fi 2026, Apple Intelligence, 11", 128 GB, Blue, 8-core CPU',
+        merchant: "Jarir",
+        price: 799,
+        currency: "SAR",
+        url: "https://jarir.example/ipad-air-128",
+      }),
+      hit({
+        title: "Apple iPad Air (Wi-Fi, 64GB) - Starlight - 10.9in",
+        merchant: "Eureka",
+        price: 259,
+        url: "https://eureka.example/ipad-air-64",
+      }),
+    ]);
+    const cards = products.filter((p) => !isAccessoryTitle(p.title));
+    expect(cards).toHaveLength(2);
+    const shared = cards.find((p) => p.offers.length === 2)!;
+    // Cheapest offer leads the merged card; both spellings ride inside it.
+    expect(shared.offers.map((o) => o.price)).toEqual([349, 799]);
+    // The distinct storage tier keeps its own card.
+    const solo = cards.find((p) => p.offers.length === 1)!;
+    expect(solo.offers[0].merchant).toBe("Eureka");
   });
 
   it("REEA-192: fold7 live case — device card carries phone offers only, badge row cheapest phone offer, accessory cards own their rows", () => {
@@ -820,7 +858,9 @@ describe("collectLiveResults", () => {
     expect(second.notes.find((n) => n.merchant === "Eureka")?.error).toBeTruthy();
     // …without poisoning the cache: the mismatch skipped writeDiscovery, so
     // every call re-ran the homepage hop (old code cached after one hop).
-    expect(calls.filter((u) => u.startsWith("https://www.eureka.com.kw/"))).toHaveLength(2);
+    // REEA-290: each call now answers with the bounded retry pair — attempt +
+    // retry — so two calls land four hops, still none from a cached entry.
+    expect(calls.filter((u) => u.startsWith("https://www.eureka.com.kw/"))).toHaveLength(4);
     // The crafted value never interpolated into a follow-up fetch URL.
     expect(calls.filter((u) => u.includes("evil.example"))).toHaveLength(0);
   });
@@ -1166,21 +1206,21 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
 
   type FetchImplLike = (url: string, init?: RequestInit) => Promise<Response>;
 
-  it("the first flush carries the ranked round-one set while deepening streams later", async () => {
+  it("the first offer lands with the first answer while late merchants stream into the final flush (REEA-277)", async () => {
     resetDiscoveryCache();
     const staged = collectLiveResultsStaged("samsung", { fetchImpl: mixedSpeedFetch(), country: "KW" });
 
+    // One boundary per KW retailer in the run.
+    expect(staged.stages).toHaveLength(8);
+
     const first = await staged.stages[0];
     expect(first.products).toHaveLength(1);
-    // REEA-244: the first flushed snapshot waits for the whole bounded
-    // round-one window (every KW adapter answers within its own attempt
-    // window), so the very first served DOM already carries the merged,
-    // ranked union — cheapest first — instead of one retailer's arrival order.
-    expect(first.products[0].offers.some((o) => o.merchant === "Xcite" || o.merchant === "Blink")).toBe(true);
-    expect(first.products[0].offers.map((o) => o.price)).toEqual([379, 385, 390, 399]);
-    // Every round-one participant is reported as a note in every snapshot
-    // (eight KW retailers in the country-scoped mock).
-    expect(first.notes).toHaveLength(8);
+    // REEA-277: stage 0 opens when the FIRST round-one answer lands — the fast
+    // Xcite hop is on screen while the delayed Eureka/Sultan hops are still in
+    // flight. Each flush renders the tier ladder over everything answered so
+    // far, and the converged final carries the full-ranked union.
+    expect(first.products[0].offers.some((o) => o.merchant === "Xcite")).toBe(true);
+    expect(first.notes.some((n) => n.merchant === "Eureka")).toBe(false);
     // AC-3: every snapshot carries its own real completion stamp.
     expect(Date.now() - Date.parse(first.products[0].scrapedAt!)).toBeLessThan(5_000);
 
@@ -1386,4 +1426,76 @@ describe("whole-chain budget signal (REEA-224 F4)", () => {
     // collectors are stalled here).
     expect(notes).toHaveLength(8);
   }, 25_000);
+});
+
+describe("REA-290 — retry once with backoff + per-query coverage line", () => {
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+  }
+
+  it("retries a 403-blipped retailer once and serves its offers", async () => {
+    resetDiscoveryCache();
+    let xciteCalls = 0;
+    const fetchImpl = async (url: string): Promise<Response> => {
+      if (url.includes("xcite.com")) {
+        xciteCalls++;
+        if (xciteCalls === 1) return new Response("forbidden", { status: 403 });
+        return jsonResponse({
+          results: [{ hits: [{ name: "AirPods Pro", slug: "app", price: 74, currency: "KWD", inStock: true }] }],
+        });
+      }
+      return new Response("{}");
+    };
+    const { products, notes } = await collectLiveResults("airpods pro", { fetchImpl, country: "KW" });
+    // Exactly one bounded retry — attempt + backoff + attempt, then served.
+    expect(xciteCalls).toBe(2);
+    expect(notes.find((n) => n.merchant === "Xcite")?.error).toBeFalsy();
+    expect(products.some((p) => p.offers.some((o) => o.merchant === "Xcite"))).toBe(true);
+  });
+
+  it("names a stuck 403 retailer in the note after the retry, others keep serving", async () => {
+    resetDiscoveryCache();
+    let blinkCalls = 0;
+    const fetchImpl = async (url: string): Promise<Response> => {
+      if (url.includes("blink.com.kw")) {
+        blinkCalls++;
+        return new Response("forbidden", { status: 403 });
+      }
+      if (url.includes("xcite.com")) {
+        return jsonResponse({
+          results: [{ hits: [{ name: "AirPods Pro", slug: "app", price: 74, currency: "KWD", inStock: true }] }],
+        });
+      }
+      return new Response("{}");
+    };
+    const { products, notes } = await collectLiveResults("airpods pro", { fetchImpl, country: "KW" });
+    // Attempt + the one bounded retry (the REEA-149 deepen round answers the
+    // enriched query too — title equals the query here, so it stays out).
+    expect(blinkCalls).toBe(2);
+    expect(notes.find((n) => n.merchant === "Blink")).toMatchObject({ error: "HTTP 403", hits: 0 });
+    // Graceful degradation: the failing retailer never blanks the others.
+    expect(products.some((p) => p.offers.some((o) => o.merchant === "Xcite"))).toBe(true);
+  });
+
+  it("states who answered and who did not, in fixed adapter order", () => {
+    // Arrival order (Blink first) must not leak into the sentence — the same
+    // settled set reads identically on consecutive loads (REEA-254 rule).
+    expect(
+      coverageLine([
+        { merchant: "Blink", hits: 3 },
+        { merchant: "Jarir", hits: 0, error: "HTTP 403" },
+        { merchant: "Xcite", hits: 2 },
+      ]),
+    ).toBe("Jarir did not respond on this search. Prices from Xcite and Blink.");
+    // A zero-hit answer is still an answer — only errors mark a gap.
+    expect(coverageLine([{ merchant: "Eureka", hits: 0 }])).toBe("Prices from Eureka.");
+    expect(coverageLine([{ merchant: "Xcite", hits: 2 }, { merchant: "Blink", hits: 1 }])).toBe(
+      "Prices from Xcite and Blink.",
+    );
+    expect(coverageLine([{ merchant: "Blink", hits: 0, error: "timeout" }, { merchant: "Xcite", hits: 0, error: "timeout" }])).toBe(
+      "Xcite and Blink did not respond on this search.",
+    );
+    // Nothing collected yet: no line, no flicker.
+    expect(coverageLine([])).toBe("");
+  });
 });

@@ -231,9 +231,10 @@ function pickBrand(hit: Record<string, unknown>): string | undefined {
  * allowlist as every other scraped URL (REEA-13). Absent keys stay absent —
  * the card renders its text-only fallback rather than invent a placeholder.
  */
-function pickImage(hit: Record<string, unknown>): string | undefined {
+function pickImage(hit: object): string | undefined {
+  const rec = hit as Record<string, unknown>;
   for (const key of ["image", "imageUrl", "image_url", "image_path", "imagepath", "featured_image", "thumbnail", "picture"]) {
-    const v = hit[key];
+    const v = rec[key];
     const raw =
       typeof v === "string"
         ? v
@@ -527,7 +528,7 @@ export function luluHits(html: string, query: string): SearchHit[] {
     if (brandAwareCoverage(item.title, query) < MIN_SCORE) continue;
     // The JSON-LD photo already rides `image` (normalized in the extractor);
     // it still passes the shared URL allowlist here like every scraped src.
-    const img = pickImage(item as Record<string, unknown>);
+    const img = pickImage(item);
     out.push({
       title: item.title,
       merchant: "Lulu Hypermarket",
@@ -1220,6 +1221,39 @@ export interface LiveSearchResult {
 }
 
 /**
+ * REEA-290 — the per-query coverage sentence the results page states in plain
+ * text: which retailers answered this search and which did not, straight from
+ * the run's own notes (no second fetch, no bundled registry — a note is only
+ * ever written by the live fan-out that produced the offers on screen).
+ * Names follow the fixed COLLECTORS order (REEA-254 determinism: the same
+ * settled set reads as the same sentence on consecutive loads, whatever the
+ * completion order was). A retailer that answered with zero matching hits DID
+ * respond — its empty shelf is an answer, not a gap — so only notes carrying
+ * an error land on the "did not respond" side. An empty notes list (nothing
+ * collected yet) yields an empty string: no line, no flicker.
+ */
+export function coverageLine(notes: LiveSearchResult["notes"]): string {
+  const ordered = [...notes].sort(
+    (a, b) => adapterRank(a.merchant) - adapterRank(b.merchant),
+  );
+  const failed: string[] = [];
+  const answered: string[] = [];
+  for (const n of ordered) {
+    (n.error ? failed : answered).push(n.merchant);
+  }
+  const parts: string[] = [];
+  if (failed.length > 0) parts.push(`${joinNames(failed)} did not respond on this search.`);
+  if (answered.length > 0) parts.push(`Prices from ${joinNames(answered)}.`);
+  return parts.join(" ");
+}
+
+/** Plain-text name list: "Xcite" / "Xcite and Blink" / "Xcite, Blink and Eureka". */
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
  * REEA-178 — progressive per-retailer collection for the results page.
  * One promise per adapter in the run; stage k settles when at least k+1
  * adapters have answered (in completion order) and carries the merged-so-far
@@ -1250,19 +1284,44 @@ export interface LiveSearchStages {
 
 type SettledAdapter = { merchant: string; hits: SearchHit[]; error?: string };
 
-function collectSettled(
+/**
+ * REEA-290 — every failing adapter gets one bounded retry before render,
+ * riding the same polite pause the amazon.eg hop pioneered (REEA-149): a
+ * single 403/503 blip or a momentary timeout should not drop a retailer from
+ * the coverage line when its very next attempt answers fine. The pause keeps
+ * the retry polite to the retailer's rate limiter, and the whole chain stays
+ * inside LIVE_SEARCH_BUDGET_MS because every hop still carries its own joined
+ * attempt window (joinSignals). Adapters that already run their own bounded
+ * internal loops (amazon.eg's empty-answer attempts, fetchThroughChallenge's
+ * cookie-carry handshake) keep them — this wrapper only adds the second shot
+ * a plain throw never had. Amazon.eg throws only after BOTH of its attempts
+ * failed, so its worst case stays within the budget the signal enforces.
+ */
+async function collectSettled(
   c: RetailerCollector,
   q: string,
   fetchImpl: FetchImpl,
 ): Promise<SettledAdapter> {
-  return c.collect(q, fetchImpl).then(
-    (hits): SettledAdapter => ({ merchant: c.merchant, hits }),
-    (err: unknown): SettledAdapter => ({
-      merchant: c.merchant,
-      hits: [],
-      error: err instanceof Error ? err.message : String(err),
-    }),
-  );
+  const asError = (err: unknown): string =>
+    err instanceof Error ? err.message : String(err);
+  try {
+    return { merchant: c.merchant, hits: await c.collect(q, fetchImpl) };
+  } catch (err) {
+    const firstError = asError(err);
+    await new Promise((r) => setTimeout(r, AMAZON_RETRY_BACKOFF_MS));
+    try {
+      return { merchant: c.merchant, hits: await c.collect(q, fetchImpl) };
+    } catch (retryErr) {
+      // Both attempts down: report the LAST error — it is the state the
+      // final snapshot actually served. Fall back to the first message when
+      // the retry produced only an empty abort reason.
+      return {
+        merchant: c.merchant,
+        hits: [],
+        error: asError(retryErr) || firstError,
+      };
+    }
+  }
 }
 
 /** Shared filter+notes pass — adapter country tag wins before grouping. */
@@ -1362,9 +1421,28 @@ async function finalSnapshot(
   return { products, notes, suggestions };
 }
 
+/** Options shared by the staged and blocking collection entries. */
+export interface StagedCollectOptions {
+  fetchImpl?: FetchImpl;
+  country?: CountryCode | null;
+  signal?: AbortSignal;
+  /** Response-cache override for this run (tests, diagnostics). */
+  cache?: QueryCache;
+}
+
+/** Always-miss cache used when the caller injects its own fetchImpl: a
+ *  diagnostic chain must observe every hop it declares, not a previous run's
+ *  answer. Production calls (no fetchImpl) get the shared live cache. */
+const NO_CACHE: QueryCache = {
+  read: () => null,
+  write: () => {},
+  size: () => 0,
+  reset: () => {},
+};
+
 export function collectLiveResultsStaged(
   query: string,
-  opts: { fetchImpl?: FetchImpl; country?: CountryCode | null; signal?: AbortSignal } = {},
+  opts: StagedCollectOptions = {},
 ): LiveSearchStages {
   const baseFetch: FetchImpl = opts.fetchImpl ?? ((u, init) => fetch(u, init));
   // REEA-224 F4 — thread the overall budget signal into every hop: each hop
@@ -1378,43 +1456,84 @@ export function collectLiveResultsStaged(
   const collectors = country
     ? COLLECTORS.filter((c) => c.country === country)
     : COLLECTORS;
+  const cache = opts.cache ?? (opts.fetchImpl ? NO_CACHE : defaultQueryCache);
+  const cacheKey = queryCacheKey(q, country);
+
+  // REEA-277 AC-2 — stale-while-revalidate in front of the fan-out. Entries
+  // only ever hold responses a live fan-out produced (scrapedAt and the
+  // per-note merchant stamps ride along untouched, so freshness chips keep
+  // showing the true collection time of what is on screen).
+  //  - fresh entry: serve the last live answer immediately, no hop at all —
+  //    this is the AC-2 repeat-within-5-minutes case;
+  //  - stale entry: the cached snapshot still serves as the first flush while
+  //    the live run below continues behind the response and its staged
+  //    flushes deepen the page (classic stale-while-revalidate);
+  //  - miss/expiry (past the ≤15-min ceiling): plain live path.
+  const cached = cache.read<LiveSearchResult>(cacheKey);
+  if (cached && !cached.stale) {
+    const served = Promise.resolve(cached.value);
+    return { stages: [served], final: served };
+  }
 
   // Round one: every retailer is contacted once, in parallel, at call time —
   // same single request per retailer as the blocking path, same bounded
   // per-collector timeouts (REEA-156). Completions append to the accumulator
-  // in arrival order; every stage releases once the whole round-one set has
-  // answered, so the first flushed block already carries the merged, ranked
-  // result. (REEA-244: with per-count gates, the fastest retailer's arrival
-  // order was what a no-JS/curl inspection ever saw — a cross-category card
-  // from the quickest hop could sit above every phone card regardless of how
-  // the later snapshots ranked them.) One shared completion promise, not a
-  // per-completion wakeup queue: every stage observes the same threshold and
-  // the last completion wakes them all. Intermediate stages then land on the
-  // SAME round-one snapshot, so StageAppend's append-only diffs stay empty
-  // and only the FINAL stage (after the REEA-149 deepen round) adds cards
-  // below the ranked set. First paint stays bounded by the independent
-  // per-collector windows (PER_RETAILER_TIMEOUT_MS), never by chaining.
+  // in arrival order and each stage opens on its OWN arrival threshold
+  // (REEA-277): stage k releases when the (k+1)-th retailer answers, so the
+  // first price lands with the FIRST answer instead of behind the slowest hop
+  // (the whole-round-one hold REEA-244 added). Ranking is not lost by starting
+  // early: every intermediate flush renders the full tier ladder over
+  // everything answered so far (stagedSnapshot), and the FINAL stage carries
+  // the same full-ranked converged view the blocking path produces — one live
+  // fetch per retailer is shared by both paths, no bundled snapshot.
   const settled: SettledAdapter[] = [];
-  let wakeRoundOne: () => void = () => {};
-  const roundOneDone = new Promise<void>((res) => {
-    wakeRoundOne = res;
-  });
+  const waiting: Array<{ need: number; resolve: () => void }> = [];
+  function wakeReady(): void {
+    // Each completion checks the pending thresholds; a waiter only leaves the
+    // queue when its own count is met, so early flushes stay smallest-first.
+    for (let i = waiting.length - 1; i >= 0; i--) {
+      if (settled.length >= waiting[i].need) {
+        const w = waiting[i];
+        waiting.splice(i, 1);
+        w.resolve();
+      }
+    }
+  }
+  function untilArrivals(need: number): Promise<void> {
+    const target = Math.min(need, collectors.length);
+    if (settled.length >= target) return Promise.resolve();
+    return new Promise<void>((resolve) => waiting.push({ need: target, resolve }));
+  }
+
   for (const c of collectors) {
     void collectSettled(c, q, fetchImpl).then((s) => {
       settled.push(s);
-      if (settled.length === collectors.length) wakeRoundOne();
+      wakeReady();
     });
   }
-  if (collectors.length === 0) wakeRoundOne();
 
   const stages: Promise<LiveSearchResult>[] = collectors.map(async (_c, k) => {
-    await roundOneDone;
+    await untilArrivals(k + 1);
     if (k < collectors.length - 1) return stagedSnapshot(q, country, settled.slice());
     await deepenSilent(q, settled, fetchImpl);
     return finalSnapshot(q, country, settled, fetchImpl);
   });
+  const final: Promise<LiveSearchResult> = stages[stages.length - 1] ?? Promise.resolve(stagedSnapshot(q, country, settled));
 
-  return { stages, final: stages[stages.length - 1] };
+  // Write-through carries the converged LIVE answer only (products with their
+  // scrapedAt stamps included). A converged-empty set is usually a blip inside
+  // the bounded window rather than a real answer, so it stays uncached and the
+  // next caller re-collects live instead of re-serving the blip.
+  void final.then((snap) => {
+    if (snap.products.length > 0) cache.write(cacheKey, snap);
+  });
+
+  if (cached) {
+    // Stale window only reaches here (fresh returns above): cache-first flush,
+    // live stages behind it, converged full-ranked final.
+    return { stages: [Promise.resolve(cached.value), ...stages], final };
+  }
+  return { stages, final };
 }
 
 /**
@@ -1423,8 +1542,9 @@ export function collectLiveResultsStaged(
  * timeouts (a slow or failed retailer only loses its own offers), then the
  * bounded REEA-149 depth round for merchants that stayed silent, then the
  * full-ranked grouping (REEA-167/168) and relaxed-query suggestions. Returns
- * products ranked by title relevance, cheapest first inside each group. Never
- * reads seed files or caches — every call re-collects live.
+ * products ranked by title relevance, cheapest first inside each group. Reads
+ * only the REEA-277 short-TTL entry of a previous LIVE run — never bundled or
+ * hand-written snapshots; every cache entry is itself a fresh fan-out answer.
  *
  * REEA-170 — the optional `country` selection scopes the fan-out to the
  * adapters tagged for that country (still fetched live, per adapter, with the
@@ -1436,7 +1556,7 @@ export function collectLiveResultsStaged(
  */
 export async function collectLiveResults(
   query: string,
-  opts: { fetchImpl?: FetchImpl; country?: CountryCode | null; signal?: AbortSignal } = {},
+  opts: StagedCollectOptions = {},
 ): Promise<LiveSearchResult> {
   // REEA-224 F4 — enforce the documented LIVE_SEARCH_BUDGET_MS ceiling on the
   // whole chain: the signal is threaded through every fetchChecked hop, so a
