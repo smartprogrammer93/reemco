@@ -5,7 +5,7 @@
  * stamped label — nothing renders as a bare unexplained number.
  */
 import { describe, expect, it } from "vitest";
-import { formatCountryPrice, formatPrimaryPrice } from "@/lib/format";
+import { formatCountryPrice, formatPrimaryPrice, sortOffers, toKwdNumeric } from "@/lib/format";
 
 describe("formatPrimaryPrice (REEA-195 AC-4 / REEA-281 AC-2)", () => {
   it("KWD offers keep their figure and stamp untouched — full fils precision", () => {
@@ -99,5 +99,29 @@ describe("formatCountryPrice (REEA-283 country-led rows)", () => {
     const p = formatCountryPrice(9.5, "BH", "SA");
     expect(p.alt).toBeNull();
     expect(p.primary).toContain("BH");
+  });
+});
+
+describe("toKwdNumeric + sortOffers (REEA-254 item B)", () => {
+  const offer = (price: number, currency: string, merchant = "m") => ({
+    merchant,
+    price,
+    currency,
+    url: `https://example/${merchant}`,
+    inStock: true,
+  });
+
+  it("reference factors put every figure into KWD-space; unknown codes pass through", () => {
+    expect(toKwdNumeric(419.9, "KWD")).toBe(419.9);
+    expect(toKwdNumeric(5199, "SAR")).toBeCloseTo(424.238, 3);
+    expect(toKwdNumeric(9.5, "BH")).toBe(9.5); // REEA-195 pass-through rule
+  });
+
+  it("cheapest-first compares on effective price, not raw numerics", () => {
+    // SAR 5,199 (≈KD 424.24) is CHEAPER than KWD 429.9 — raw numerics would
+    // order the KWD row first and the card header would show a non-cheapest
+    // figure (the live QA case on the iPhone 17 Pro cards).
+    const sorted = sortOffers([offer(429.9, "KWD", "xcite"), offer(5199, "SAR", "jarir")]);
+    expect(sorted.map((o) => o.merchant)).toEqual(["jarir", "xcite"]);
   });
 });

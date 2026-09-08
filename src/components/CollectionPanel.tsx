@@ -16,7 +16,7 @@ import { useCollection, type CollectionPhase } from "@/lib/collect/useCollection
 import type { CollectJob, LiveOffer } from "@/lib/collect/types";
 import { collectedAgoLabel } from "@/lib/collect/types";
 import { filterOffersByCountry, type CountryCode } from "@/lib/country";
-import { formatPrimaryPrice } from "@/lib/format";
+import { formatPrimaryPrice, toKwdNumeric } from "@/lib/format";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import CollectionPulse, { PulseOfferCascade } from "@/components/CollectionPulse";
 
@@ -69,8 +69,11 @@ function OfferRow({ offer, best }: { offer: LiveOffer; best: boolean }) {
   );
 }
 
+/** Cheapest-effective-first (REEA-254 item B): LiveOffer rows carry their own
+ *  currency, so the comparison runs in KWD-space via toKwdNumeric — the same
+ *  rule sortOffers applies on the results cards. */
 function sortOffers(offers: LiveOffer[]): LiveOffer[] {
-  return [...offers].sort((a, b) => a.price - b.price);
+  return [...offers].sort((a, b) => toKwdNumeric(a.price, a.currency) - toKwdNumeric(b.price, b.currency));
 }
 
 export default function CollectionPanel({
