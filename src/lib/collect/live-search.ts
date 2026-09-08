@@ -785,12 +785,17 @@ const COLLECTORS: RetailerCollector[] = [
     country: "KW",
     collect: async (query, fetchImpl) => {
       // post_type=product lands on the WooCommerce archive (prices + stock);
-      // the plain blog search view carries neither.
-      const res = await fetchChecked(
+      // the plain blog search view carries neither. REEA-272: the hop rides
+      // the same browser-shaped header set + cookie-carry handshake as the
+      // other CF-fronted stores — a bare accept-only request left a standing
+      // HTTP 403 note on the deployed path while browsers reached the site;
+      // the doubled attempt window gives the handshake the same room the
+      // Next Store / Lulu chains get.
+      const res = await fetchThroughChallenge(
         fetchImpl,
         `https://pckuwait.com/?s=${encodeURIComponent(query)}&post_type=product`,
-        { headers: { accept: "text/html,application/xhtml+xml", "accept-language": "en" } },
-        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
+        { headers: { ...CHALLENGE_HEADERS } },
+        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
       );
       return pcKuwaitHits(await res.text(), query);
     },

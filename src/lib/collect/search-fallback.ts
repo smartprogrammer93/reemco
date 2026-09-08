@@ -764,6 +764,32 @@ export function fetchThroughChallenge(
   return runAttempts(fetchImpl, url, init, signal);
 }
 
+/** Shared-store key for one host's cleared jar. */
+function jarKey(host: string): string {
+  return `${CF_JAR_KEY_PREFIX}${host}`;
+}
+
+/**
+ * REEA-276 tier 2 — read the mirrored jar from the shared KV store. Every
+ * step is best-effort: no binding, KV down, malformed value or an expired
+ * mirror all fall back to the memory-only handshake, and nothing here can
+ * fail the hop (kv.ts already bounds its own calls to KV_TIMEOUT_MS).
+ */
+async function readMirroredJar(host: string): Promise<{ header: string; expiresAt: number } | null> {
+  try {
+    const kv = getSharedKv();
+    if (!kv) return null;
+    const raw = await kv.get(jarKey(host));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { header?: unknown; expiresAt?: unknown };
+    if (typeof parsed.header !== "string" || parsed.header === "") return null;
+    if (typeof parsed.expiresAt !== "number" || parsed.expiresAt < Date.now()) return null;
+    return { header: parsed.header, expiresAt: parsed.expiresAt };
+  } catch {
+    return null;
+  }
+}
+
 async function runAttempts(
   fetchImpl: FetchImpl,
   url: string,
@@ -775,6 +801,12 @@ async function runAttempts(
   if (warm && warm.expiresAt < Date.now()) {
     challengeCookies.delete(host);
     warm = undefined;
+  }
+  // Cold instance (fresh process, empty tier-1 Map): replay the clearance a
+  // previous instance mirrored to KV instead of re-paying the handshake.
+  if (!warm && !signal.aborted) {
+    warm = (await readMirroredJar(host)) ?? undefined;
+    if (warm) challengeCookies.set(host, warm);
   }
   const jar = new Map<string, string>();
   if (warm) for (const kv of warm.header.split("; ")) {
@@ -800,7 +832,21 @@ async function runAttempts(
         expiresAt: Date.now() + CHALLENGE_COOKIE_TTL_MS,
       });
     }
-    if (res.ok) return res;
+    if (res.ok) {
+      // REEA-276 tier 2: mirror the cleared jar (the entry above) to the
+      // shared store so a recycled/cold instance replays it on its FIRST
+      // attempt. Awaited on purpose — the write must land before the
+      // instance may idle after this hop; kv.ts caps it at KV_TIMEOUT_MS and
+      // swallows its own failures, so the hop still cannot fail here.
+      try {
+        const warm = challengeCookies.get(host);
+        const kv = getSharedKv();
+        if (kv && warm) await kv.set(jarKey(host), JSON.stringify(warm), Math.ceil(CHALLENGE_COOKIE_TTL_MS / 1000));
+      } catch {
+        // best-effort mirror; next handshake rewrites it
+      }
+      return res;
+    }
   }
   throw new Error(`HTTP ${lastStatus}`);
 }

@@ -467,6 +467,35 @@ describe("challenge-fronted hops (REEA-238)", () => {
     expect(calls).toBe(6);
   });
 
+  it("keeps the cleared jar across calls so a warm hop answers on its first attempt (REEA-272)", async () => {
+    const seen: Array<RequestInit | undefined> = [];
+    let calls = 0;
+    const handshakingFetch = async (_url: string, init?: RequestInit): Promise<Response> => {
+      calls += 1;
+      seen.push(init);
+      if (calls === 1) {
+        return new Response("challenge", { status: 403, headers: { "set-cookie": "__cf_bm=warm42; Path=/" } });
+      }
+      return new Response("<html>archive</html>");
+    };
+    const url = "https://pckuwait.com/?s=dell&post_type=product";
+    const first = await fetchThroughChallenge(handshakingFetch, url, {}, AbortSignal.timeout(3000));
+    expect(first.status).toBe(200);
+    expect(seen).toHaveLength(2);
+
+    // Second query on the same (warm) process: the seeded jar rides the very
+    // FIRST attempt, so one hop answers the real page — no re-paid handshake.
+    const warmFetch = async (_url: string, init?: RequestInit): Promise<Response> => {
+      calls += 1;
+      seen.push(init);
+      return new Response("<html>archive</html>");
+    };
+    const second = await fetchThroughChallenge(warmFetch, url, {}, AbortSignal.timeout(3000));
+    expect(second.status).toBe(200);
+    expect(seen).toHaveLength(3);
+    expect((seen[2]!.headers as Headers).get("cookie")).toContain("__cf_bm=warm42");
+  });
+
   it("parseNextStoreSearch answers through the shared Magento card scanner", () => {
     const html =
       '<a class="product-item-link" href="https://www.nextstore.com.kw/lg-wm-f550.html" title="LG Washing Machine F550">LG Washing Machine F550</a>' +

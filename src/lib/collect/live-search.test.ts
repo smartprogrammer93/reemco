@@ -63,6 +63,27 @@ describe("hit parsers", () => {
     expect(hits[0]).toMatchObject({ merchant: "Blink", price: 350, url: "https://blink.com.kw/products/sg-s26", inStock: true });
   });
 
+  it("blinkHits reads the suggest.json envelope the live hop answers (REEA-272)", () => {
+    // Live shape (blink.com.kw/search/suggest.json, captured 2026-09-08):
+    // products nest under resources.results and price/availability sit on
+    // the product itself — the fold must feed them into the same hit chain,
+    // which is what turned blink's deployed hits from 0 into real listings.
+    const hits = blinkHits(
+      {
+        resources: {
+          results: {
+            products: [
+              { title: "Samsung Galaxy S26+, 12GB", handle: "galaxy-s26-plus", available: true, price: "299.000", vendor: "Samsung" },
+            ],
+          },
+        },
+      },
+      "samsung",
+    );
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ merchant: "Blink", price: 299, brand: "Samsung", url: "https://blink.com.kw/products/galaxy-s26-plus", inStock: true });
+  });
+
   it("quadraHits follows blink's Shopify contract with option1-brand precedence (REEA-238)", () => {
     // Live shape (quadrastores.com/products.json, captured 2026-09-08):
     // variant option1 carries the manufacturer, vendor the store's own name.
