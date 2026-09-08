@@ -32,6 +32,7 @@ export default function FreshnessBadge({
   // One clock reading for BOTH passes: the server bakes renderStartMs into the
   // payload and hydration reuses it; only surfaces without the prop (plain
   // catalog fallback) fall back to an injected/render-time clock.
+  // eslint-disable-next-line react-hooks/purity -- fallback clock only when no baked renderStartMs/now prop is present (REEA-283).
   const nowMs = renderStartMs ?? now ?? Date.now();
   const mins = Math.max(0, Math.round((nowMs - stampMs) / 60000));
   const stale = mins >= 7 * 24 * 60;

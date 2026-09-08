@@ -56,6 +56,7 @@ export default async function ResultsPage({
   // REEA-283 — one clock reading per server render. It rides the streamed
   // props and hydration reuses the serialized value, so the freshness chip's
   // minute figure is identical in the served HTML and after hydration.
+  // eslint-disable-next-line react-hooks/purity -- intentional single clock read per server render (REEA-283); hydration reuses the serialized value.
   const renderStartMs = Date.now();
   const query = sanitizeSearchQuery(params.q) ?? "";
   const page = sanitizePage(params.page);

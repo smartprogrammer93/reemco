@@ -52,6 +52,14 @@ matched to a GitHub account", the culprit is a commit with the wrong identity.
 
 Canonical production host: **https://reemco.vercel.app** — Next.js server build on Vercel. Merge to `main` deploys automatically via `.github/workflows/deploy.yml`, no manual steps. Required repo Actions secret: `VERCEL_TOKEN` (+ optional `VERCEL_TEAM_ID` for `--scope`), injected as environment secrets only. Rollback: Actions > Deploy site > Run workflow with `rollback_sha` = previous known-good commit; the rollback run goes through the same verification steps. The post-deploy funnel smoke check (home → search → click-out) runs against reemco.vercel.app on every deploy. PRs are validated by `ci.yml` without deploying. The shared KV binding for the collect-job store (REEA-92) is ensured by the pipeline itself: the Attach KV step attaches the KV store to the `reemco` project before deploying when `KV_REST_API_URL` / `KV_REST_API_TOKEN` are missing from the project environment (REEA-143). Values come from the platform response at attach time — never committed.
 
+### Deploy parity check — after EVERY production deploy (REEA-296)
+
+1. `curl -fsS https://reemco.vercel.app/__commit.txt` — prints the SHA the live artifact was stamped with at build time.
+2. Compare with the intended HEAD: the run's `github.sha`, or `rollback_sha` on a rollback run. A failing run never promotes the alias, so the stamp equals the last green deploy's SHA until the next green run. Edge cache can hold an old stamp briefly (`age` header); retry after ~30 s before judging a mismatch real.
+3. Record both values in the deploy comment: `served=<sha> intended=<sha> match|no-match`. On no-match the new build is not live — treat the deploy as failed and rerun with `rollback_sha` = last known-good commit. QA (REEA-293) and Security (REEA-275) verification passes start only after this parity line exists.
+
+The "Post-deploy artifact check" step in `.github/workflows/deploy.yml` runs the same comparison automatically and fails the job on mismatch; steps 1–3 are the human-side record for the deploy comment. Blast radius of a mismatch is one alias flip, verified against the stamped artifact.
+
 ## Funnel instrumentation (REEA-37)
 
 Anonymous, cookie-free funnel events (`search_submitted`, `result_impressed`,
