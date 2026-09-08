@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "buildCommand": "echo \"${VERCEL_GIT_COMMIT_SHA:-$(git rev-parse HEAD)}\" > public/__commit.txt && npm run lint && NODE_ENV=test KV_URL= KV_TOKEN= npm run test && next build",
+  "buildCommand": "echo \"${VERCEL_GIT_COMMIT_SHA:-$(git rev-parse HEAD)}\" > public/__commit.txt && npm run lint && NODE_ENV=test KV_REST_API_URL= KV_REST_API_TOKEN= npm run test && next build",
   "crons": [
     {
       "path": "/api/health",
