@@ -94,3 +94,112 @@ describe("REEA-281 AC-2 — converted price on the rendered card", () => {
     expect(/≈\s?KWD 99/.test(text)).toBe(false);
   });
 });
+
+describe("REEA-283 — country-led price rows (hero + retailer rows)", () => {
+  const SCRAPED_AT = "2026-09-07T00:00:00.000Z";
+  const sarProduct: NormalizedProduct = {
+    productId: "apple-iphone-17-pro",
+    title: "Apple iPhone 17 Pro 256GB",
+    brand: "Apple",
+    offers: [
+      { merchant: "Xcite", price: 5199, currency: "SAR", url: "https://xcite.example/p", inStock: true },
+    ],
+    coupons: [],
+    variations: [],
+    alternatives: [],
+    scrapedAt: SCRAPED_AT,
+  };
+  const kwdProduct: NormalizedProduct = {
+    ...sarProduct,
+    productId: "apple-iphone-17-pro-kw",
+    offers: [
+      { merchant: "Jarir", price: 424.238, currency: "KWD", url: "https://jarir.example/p", inStock: true },
+    ],
+  };
+
+  it("c=SA: SAR leads hero AND retailer rows; the converted stamp rides behind as .price-alt", () => {
+    const { container } = render(
+      <ProductResultCard product={sarProduct} isBest query="iphone 17 pro" rank={0} country="SA" />,
+    );
+    const primary = Array.from(container.querySelectorAll(".price-cur"));
+    expect(primary.length).toBeGreaterThanOrEqual(2); // hero + offer row
+    for (const span of primary) {
+      expect(span.textContent?.replace(/\s+/g, " ").trim().startsWith("SAR")).toBe(true);
+    }
+    const alt = Array.from(container.querySelectorAll(".price-alt"));
+    expect(alt.length).toBeGreaterThanOrEqual(2);
+    for (const span of alt) {
+      expect(span.textContent?.replace(/\s+/g, " ")).toMatch(/^· ≈?\s?KWD\b/);
+    }
+    // Hero treatment on the PRIMARY span only: price font + savings colour;
+    // the retailer-row primary carries 600/ink; the muted stamp is pure CSS.
+    expect(primary[0].getAttribute("style")).toContain("--rc-text-price");
+    expect(primary[0].getAttribute("style")).toContain("--rc-savings");
+    expect(primary[1].getAttribute("style")).toContain("font-weight: 600");
+    expect(primary[1].getAttribute("style")).toContain("--rc-ink");
+    expect(alt[1].getAttribute("style")).toBeNull();
+  });
+
+  it("c=KW over KWD-native offers: ONE exact figure with fils kept — no stamp", () => {
+    const { container } = render(
+      <ProductResultCard product={kwdProduct} query="iphone 17 pro" rank={0} country="KW" />,
+    );
+    const primary = Array.from(container.querySelectorAll(".price-cur"));
+    expect(primary.length).toBeGreaterThanOrEqual(2);
+    for (const span of primary) expect(span.textContent).toContain("424.238");
+    expect(container.querySelectorAll(".price-alt").length).toBe(0);
+  });
+
+  it("with no country selection the scraped figure still leads (native-first)", () => {
+    const { container } = render(
+      <ProductResultCard product={sarProduct} query="iphone 17 pro" rank={0} />,
+    );
+    const hero = container.querySelector(".price-cur");
+    expect(hero?.textContent?.replace(/\s+/g, " ").trim().startsWith("SAR")).toBe(true);
+  });
+});
+
+describe("REEA-283 — freshness digit ships in the first render", () => {
+  const SCRAPED_AT = "2026-09-07T00:00:00.000Z";
+  const withStamp: NormalizedProduct = {
+    productId: "sony-xm6-fresh",
+    title: "Sony WH-1000XM6",
+    brand: "Sony",
+    offers: [
+      { merchant: "Xcite", price: 99, currency: "KWD", url: "https://xcite.example/p", inStock: true },
+    ],
+    coupons: [],
+    variations: [],
+    alternatives: [],
+    scrapedAt: SCRAPED_AT,
+  };
+  const chipOf = (c: HTMLElement) => c.querySelector(".fresh-chip")?.textContent ?? "";
+
+  it("the first render already carries the minute figure derived from renderStartMs", () => {
+    const renderStartMs = Date.parse(SCRAPED_AT) + 3 * 60_000;
+    const { container } = render(
+      <ProductResultCard product={withStamp} query="xm6" rank={0} renderStartMs={renderStartMs} />,
+    );
+    expect(chipOf(container)).toMatch(/\d/);
+    expect(chipOf(container).replace(/\s+/g, " ")).toContain("UPDATED 3 MINUTES AGO");
+  });
+
+  it("a repeated pass with the same renderStartMs reproduces identical chip text", () => {
+    const renderStartMs = Date.parse(SCRAPED_AT) + 12 * 60_000;
+    const props = { product: withStamp, query: "xm6", rank: 0, renderStartMs };
+    const first = render(<ProductResultCard {...props} />);
+    const ssrText = chipOf(first.container);
+    cleanup();
+    const second = render(<ProductResultCard {...props} />);
+    expect(chipOf(second.container)).toBe(ssrText);
+    expect(ssrText.replace(/\s+/g, " ")).toContain("UPDATED 12 MINUTES AGO");
+  });
+
+  it("a stale (>7d) stamp keeps the explicit outdated suffix", () => {
+    const renderStartMs = Date.parse(SCRAPED_AT) + (8 * 24 * 60 + 5) * 60_000;
+    const { container } = render(
+      <ProductResultCard product={withStamp} query="xm6" rank={0} renderStartMs={renderStartMs} />,
+    );
+    expect(chipOf(container)).toContain("may be outdated");
+  });
+});
