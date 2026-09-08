@@ -35,7 +35,7 @@ import {
 import { isAccessoryTitle } from "@/lib/relevance";
 import { bestBadgeIndex } from "@/lib/stock";
 import { toKwdNumeric } from "@/lib/format";
-import { createQueryCache, QUERY_CACHE_FRESH_MS } from "@/lib/query-cache";
+import { createQueryCache } from "@/lib/query-cache";
 
 describe("hit parsers", () => {
   it("xciteHits keeps scored hits with /p product URLs", () => {
@@ -1298,6 +1298,65 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     const blocking = await collectLiveResults("samsung", { fetchImpl: mixedSpeedFetch(), country: "KW" });
     const shape = (s: typeof staged) => s.products.map((p) => [p.productId, p.offers.map((o) => `${o.merchant}:${o.price}`)]);
     expect(shape(staged)).toEqual(shape(blocking));
+  });
+});
+
+describe("query memo window (REEA-291 AC5)", () => {
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+  }
+
+  // Every hop answers instantly; Xcite is the one retailer with an offer so
+  // the converged snapshot is non-empty and rides the write-through.
+  function countingFetch(calls: string[]) {
+    return async (url: string): Promise<Response> => {
+      calls.push(url);
+      if (url.includes("xcite.com")) {
+        return jsonResponse({
+          results: [{ hits: [{ name: "Sony WH-1000XM6", slug: "xm6", price: 120, currency: "KWD", inStock: true }] }],
+        });
+      }
+      return jsonResponse({});
+    };
+  }
+
+  it("a repeat inside the fresh window serves the cached live answer with no second hop", async () => {
+    resetDiscoveryCache();
+    const cache = createQueryCache();
+    const calls: string[] = [];
+    const fetchImpl = countingFetch(calls);
+
+    const cold = await collectLiveResultsStaged("xm6", { fetchImpl, cache }).final;
+    expect(cold.products).toHaveLength(1);
+    const coldCalls = calls.length;
+    expect(cache.size()).toBe(1);
+
+    // Repeat of the SAME query inside the fresh window: the last live answer
+    // serves immediately and NO hop runs — the AC5 ≤50% ratio rides on this
+    // being zero-hop. The memo keys on the NORMALIZED QUERY STRING ONLY, so
+    // a differently-cased/padded repeat shares the entry (no fork).
+    const warm = await collectLiveResultsStaged(" XM6 ", { fetchImpl, cache }).final;
+    expect(calls.length).toBe(coldCalls);
+    expect(warm.products).toEqual(cold.products);
+  });
+
+  it("the explicit Refresh re-runs the live fan-out inside the fresh window", async () => {
+    resetDiscoveryCache();
+    const cache = createQueryCache();
+    const calls: string[] = [];
+    const fetchImpl = countingFetch(calls);
+
+    await collectLiveResultsStaged("xm6", { fetchImpl, cache }).final;
+    const coldCalls = calls.length;
+
+    // AC4's Refresh: no fresh-window shortcut. The cached answer still leads
+    // as the first flush, the live fan-out re-runs behind it, and the fresh
+    // stamps ride the converged write-through.
+    const refreshed = collectLiveResultsStaged("xm6", { fetchImpl, cache, refresh: true });
+    expect(refreshed.stages.length).toBeGreaterThan(1);
+    const finalSnap = await refreshed.final;
+    expect(calls.length).toBeGreaterThan(coldCalls);
+    expect(finalSnap.products).toHaveLength(1);
   });
 });
 
