@@ -19,8 +19,10 @@ import { filterOffersByCountry, type CountryCode } from "@/lib/country";
 import { formatPrimaryPrice, toKwdNumeric } from "@/lib/format";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import CollectionPulse, { PulseOfferCascade } from "@/components/CollectionPulse";
+import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
 
-function OfferRow({ offer, best }: { offer: LiveOffer; best: boolean }) {
+function OfferRow({ offer, best, locale }: { offer: LiveOffer; best: boolean; locale?: Locale }) {
+  const t = getStrings(locale ?? clientLocale());
   const ago = collectedAgoLabel(offer.collectedAt);
   return (
     <li
@@ -44,16 +46,17 @@ function OfferRow({ offer, best }: { offer: LiveOffer; best: boolean }) {
               color: "var(--rc-savings)",
             }}
           >
-            Best price
+            {t.bestPrice}
           </span>
         )}
         <span style={{ color: "var(--rc-body-text)", font: "var(--rc-text-body)" }}>
-          {offer.inStock ? "In stock" : "Out of stock"}
+          {offer.inStock ? t.inStock : t.outOfStock}
         </span>
       </div>
       {/* Provenance line (AC4): retailer + domain, collected-at, live/cache. */}
       <p style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)", marginTop: 4 }}>
-        {offer.merchant} ({offer.domain}) · collected {ago ?? "date unknown"} · {offer.method}
+        {offer.merchant} ({offer.domain}) · {t.collectedWord} {ago ?? t.dateUnknown} ·{" "}
+        {offer.method === "live" ? t.liveWord : t.cachedWord}
       </p>
       <TrackedOutboundLink
         href={offer.url}
@@ -63,7 +66,7 @@ function OfferRow({ offer, best }: { offer: LiveOffer; best: boolean }) {
         className="hover:underline"
         style={{ font: "var(--rc-text-small)", color: "var(--rc-primary)" }}
       >
-        View at retailer →
+        {t.viewAtRetailer}
       </TrackedOutboundLink>
     </li>
   );
@@ -80,12 +83,16 @@ export default function CollectionPanel({
   productId,
   currency,
   country = null,
+  locale,
 }: {
   productId: string;
   currency: string;
   /** REEA-170 active country selection; LiveOffer rows carry their currency. */
   country?: CountryCode | null;
+  /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
+  locale?: Locale;
 }) {
+  const t = getStrings(locale ?? clientLocale());
   const { state, cachedNoticeAt, start, retryRetailer } = useCollection(productId);
   const [staleFallback, setStaleFallback] = useState<CollectJob | null>(null);
   // Ticking clock for the elapsed label — updates via interval, never during render.
@@ -139,16 +146,16 @@ export default function CollectionPanel({
 
   if (phase.kind === "idle" || phase.kind === "starting") {
     return (
-      <section aria-label="Live price collection" style={{ marginTop: 16 }}>
+      <section aria-label={t.liveCollectionAria} style={{ marginTop: 16 }}>
         <p style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
-          {phase.kind === "starting" ? "Starting live collection…" : "Live collection idle."}{" "}
+          {phase.kind === "starting" ? t.startingLive : t.idleLive}{" "}
           <button
             type="button"
             onClick={() => void start({ force: true })}
             className="hover:underline"
             style={{ font: "var(--rc-text-body)", color: "var(--rc-primary)" }}
           >
-            Collect now
+            {t.collectNow}
           </button>
         </p>
       </section>
@@ -156,7 +163,7 @@ export default function CollectionPanel({
   }
 
   return (
-    <section aria-label="Live price collection" style={{ marginTop: 16 }}>
+    <section aria-label={t.liveCollectionAria} style={{ marginTop: 16 }}>
       {job && (
         <CollectionPulse
           job={job}
@@ -166,11 +173,12 @@ export default function CollectionPanel({
               : undefined
           }
           onRetryRetailer={(retailer) => void retryRetailer(retailer, job.jobId)}
+          locale={locale}
         />
       )}
 
       {job && job.offers.length > 0 && (
-        <PulseOfferCascade offers={filterOffersByCountry(sortOffers(job.offers), country)} />
+        <PulseOfferCascade offers={filterOffersByCountry(sortOffers(job.offers), country)} locale={locale} />
       )}
 
       {/* Full-failure error state with retry CTA (AC6) — never a silent empty state. */}
@@ -185,7 +193,7 @@ export default function CollectionPanel({
           }}
         >
           <p style={{ font: "var(--rc-text-body)", color: "var(--rc-error)" }}>
-            {job.error ?? "Collection failed"}
+            {job.error ?? t.collectionFailed}
           </p>
           <button
             type="button"
@@ -198,15 +206,15 @@ export default function CollectionPanel({
               marginTop: 8,
             }}
           >
-            Retry collection
+            {t.retryCollection}
           </button>
           {staleFallback && staleFallback.offers.length > 0 && (
             <div style={{ marginTop: 12 }}>
               <p style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)" }}>
-                Showing last cached results — collected{" "}
+                {t.showingCachedLead}{" "}
                 {collectedAgoLabel(staleFallback.finishedAt ?? staleFallback.startedAt, now) ??
-                  "at an unknown time"}{" "}
-                (stale)
+                  t.dateUnknown}{" "}
+                {t.staleNote}
               </p>
               <ul style={{ listStyle: "none", padding: 0 }}>
                 {filterOffersByCountry(sortOffers(staleFallback.offers), country).map((offer, i) => (
@@ -214,6 +222,7 @@ export default function CollectionPanel({
                     key={`${offer.merchant}-stale`}
                     offer={{ ...offer, method: "cache" }}
                     best={i === 0}
+                    locale={locale}
                   />
                 ))}
               </ul>
@@ -238,20 +247,20 @@ export default function CollectionPanel({
       )}
       {job && job.status === "complete" && !cachedNoticeAt && (
         <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)", marginTop: 8 }}>
-          Live results · collected{" "}
-          {collectedAgoLabel(job.finishedAt ?? job.startedAt, now) ?? "just now"} ·{" "}
+          {t.liveResultsLead}{" "}
+          {collectedAgoLabel(job.finishedAt ?? job.startedAt, now) ?? t.justNow} ·{" "}
           <button
             type="button"
             onClick={() => void start({ force: true })}
             className="hover:underline"
             style={{ font: "var(--rc-text-small)", color: "var(--rc-primary)" }}
           >
-            Collect again
+            {t.collectAgain}
           </button>
         </p>
       )}
       <p style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)", marginTop: 4 }}>
-        Prices in {currency}. Collection is scoped to this product only.
+        {`${t.pricesInLead} ${currency}${t.pricesInTail}`}
       </p>
     </section>
   );

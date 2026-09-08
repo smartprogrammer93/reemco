@@ -5,6 +5,7 @@ import { jobProgress } from "@/lib/collect-progress";
 import { effectivePrice, formatPrimaryPrice } from "@/lib/format";
 import type { Coupon } from "@/types/product";
 import OfferCard from "@/components/OfferCard";
+import { clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
 
 /**
  * Design v3 "Aurora" collection-progress moment (design-v3 §5.6 paired with
@@ -19,11 +20,14 @@ function RetailerChip({
   subtask,
   index,
   onRetry,
+  locale,
 }: {
   subtask: RetailerSubtask;
   index: number;
   onRetry?: (retailer: string) => void;
+  locale?: Locale;
 }) {
+  const t = getStrings(locale ?? clientLocale());
   const { status, retailer, offersFound, error } = subtask;
   const failed = status === "failed" || status === "timeout";
   return (
@@ -38,10 +42,10 @@ function RetailerChip({
       <span>{retailer}</span>
       {status === "done" && offersFound > 0 && (
         <span className="tabular">
-          {offersFound} {offersFound === 1 ? "offer" : "offers"}
+          {offersFound} {offersFound === 1 ? t.offerOne : t.offerMany}
         </span>
       )}
-      {failed && <span>{status === "timeout" ? "Timed out" : "Failed"}</span>}
+      {failed && <span>{status === "timeout" ? t.timedOut : t.failedLabel}</span>}
       {/* Failure always pairs with a per-slot retry affordance — never blanks
           the rest of the page (realtime-policy §4 failure ladder). */}
       {failed && onRetry && (
@@ -51,7 +55,7 @@ function RetailerChip({
           className="hover:underline"
           style={{ font: "inherit", color: "inherit" }}
         >
-          Retry
+          {t.retry}
         </button>
       )}
     </li>
@@ -65,8 +69,10 @@ function RetailerChip({
  */
 export function PulseOfferCascade({
   offers,
+  locale,
 }: {
   offers: (LiveOffer & { coupon?: Coupon })[];
+  locale?: Locale;
 }) {
   const prices = offers.map((o) => o.price);
   const best = Math.min(...prices);
@@ -107,6 +113,7 @@ export function PulseOfferCascade({
                   ? formatPrimaryPrice(worst - best, offer.currency).label
                   : null
               }
+              locale={locale}
             />
           </li>
         );
@@ -119,13 +126,16 @@ export default function CollectionPulse({
   job,
   elapsedLabel,
   onRetryRetailer,
+  locale,
 }: {
   job: CollectJob;
   /** Human elapsed time, e.g. "12s" — computed by the caller from startedAt. */
   elapsedLabel?: string;
   /** Per-retailer retry — wired by the panel to the collect-job retry API. */
   onRetryRetailer?: (retailer: string) => void;
+  locale?: Locale;
 }) {
+  const t = getStrings(locale ?? clientLocale());
   const progress = Math.round(jobProgress(job) * 100);
   const settled = job.status !== "collecting";
   // Warm Signal loading label: name the store being checked right now
@@ -136,7 +146,7 @@ export default function CollectionPulse({
     active?.retailer ?? job.subtasks.find((s) => s.status === "pending")?.retailer;
   const doneCount = job.subtasks.filter((s) => s.status === "done").length;
   return (
-    <section aria-label="Collecting live offers" aria-busy={!settled}>
+    <section aria-label={t.collectingAria} aria-busy={!settled}>
       {!settled && (
         <>
           <div
@@ -152,9 +162,9 @@ export default function CollectionPulse({
             className="mt-2 flex flex-wrap items-center justify-between gap-2"
             style={{ font: "var(--rc-text-body)", color: "var(--rc-muted)" }}
           >
-            <span>{checking ? `Checking ${checking}…` : "Checking live stores…"}</span>
+            <span>{checking ? fill(t.checkingStore, { x: checking }) : t.checkingStores}</span>
             <span className="tabular">
-              {doneCount}/{job.subtasks.length} stores
+              {doneCount}/{job.subtasks.length} {t.storesWord}
               {elapsedLabel ? ` · ${elapsedLabel}` : ""}
             </span>
           </p>
@@ -167,7 +177,7 @@ export default function CollectionPulse({
           mount with the same stagger as the cards rising below. */}
       <ul className={`rc-chip-rail ${settled ? "mt-2" : ""}`}>
         {job.subtasks.map((s: RetailerSubtask, i: number) => (
-          <RetailerChip key={s.retailer} subtask={s} index={i} onRetry={onRetryRetailer} />
+          <RetailerChip key={s.retailer} subtask={s} index={i} onRetry={onRetryRetailer} locale={locale} />
         ))}
       </ul>
       {settled && job.status === "complete" && (
@@ -176,7 +186,7 @@ export default function CollectionPulse({
           style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}
         >
           <span className="live-dot" aria-hidden />
-          Collection complete
+          {t.collectionComplete}
         </p>
       )}
     </section>

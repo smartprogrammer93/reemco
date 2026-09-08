@@ -4,6 +4,7 @@ import { safeHref } from "@/lib/safe-url";
 import { isTenMinutesOld, relativeAge } from "@/lib/relative-time";
 import { formatPrice } from "@/lib/format";
 import type { Coupon } from "@/types/product";
+import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
 
 /**
  * Design v3 offer card (design-v3 §5.2–§5.5), paired with realtime-policy §6.
@@ -37,6 +38,8 @@ export interface OfferCardProps {
   /** Raw numeric price for the Arrival count-up; label falls back otherwise. */
   price?: number;
   currency?: string;
+  /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
+  locale?: Locale;
 }
 
 /**
@@ -89,23 +92,26 @@ function FreshnessChip({
   collectedAt,
   method,
   merchant,
+  locale,
 }: {
   collectedAt: string;
   method: "live" | "cache";
   merchant: string;
+  locale?: Locale;
 }) {
+  const t = getStrings(locale ?? clientLocale());
   const age = relativeAge(collectedAt);
   const late = age !== null && isTenMinutesOld(collectedAt);
   // §5.5 wording: fresh arrivals read "updated just now"; older keep the age.
   const freshSeconds = age !== null && /^\d+s ago$/.test(age);
-  const timePart = age === null ? null : freshSeconds ? "just now" : age;
+  const timePart = age === null ? null : freshSeconds ? t.justNow : age;
   return (
     <p className="mt-2">
       <span className="fresh-chip">
         <span className={`fresh-dot${late ? " is-late" : ""}`} aria-hidden />
         <span>
-          {timePart !== null ? `updated ${timePart} · ${merchant}` : merchant} ·{" "}
-          {method === "live" ? "live" : "cached"}
+          {timePart !== null ? `${t.updatedWord} ${timePart} · ${merchant}` : merchant} ·{" "}
+          {method === "live" ? t.liveWord : t.cachedWord}
         </span>
       </span>
     </p>
@@ -127,10 +133,12 @@ export default function OfferCard({
   method,
   isBest,
   savings,
+  locale,
 }: OfferCardProps) {
   // REEA-224 F2 — same render-time sanitization ProductResultCard applies via
   // resolveOfferUrl (REEA-13 allowlist): a crafted scheme lands as an empty
   // href instead of an inline-JavaScript anchor.
+  const t = getStrings(locale ?? clientLocale());
   const href = safeHref(url) ?? "";
   return (
     <article className={`result-card${isBest ? " is-best" : ""}`}>
@@ -143,7 +151,7 @@ export default function OfferCard({
       {/* Chips row: availability + coupon value (§5.4) */}
       <p className="mt-1 flex flex-wrap items-center gap-2">
         <span className="savings-pill" style={!inStock ? { background: "var(--rc-error-bg)", color: "var(--rc-error)" } : undefined}>
-          {inStock ? "In stock" : "Out of stock"}
+          {inStock ? t.inStock : t.outOfStock}
         </span>
         {coupon && (
           <span className="coupon-badge">
@@ -169,22 +177,22 @@ export default function OfferCard({
             {compareAtLabel}
           </span>
         )}
-        {isBest && savings && <span className="savings-pill">Save {savings}</span>}
+        {isBest && savings && <span className="savings-pill">{`${t.saveLead} ${savings}`}</span>}
       </div>
       {effectivePriceLabel && (
         <p className="tabular mt-1" style={{ font: "var(--rc-text-small)", color: "var(--rc-savings)" }}>
-          Effective {effectivePriceLabel} with coupon
+          {t.effectiveLead} {effectivePriceLabel} {t.effectiveTail}
         </p>
       )}
 
       {isBest && (
         <p className="mt-2">
-          <span className="best-flag">Best price</span>
+          <span className="best-flag">{t.bestPrice}</span>
         </p>
       )}
 
       {/* Provenance chip (§5.5): dot + time + retailer + live|cache label. */}
-      <FreshnessChip collectedAt={collectedAt} method={method} merchant={merchant} />
+      <FreshnessChip collectedAt={collectedAt} method={method} merchant={merchant} locale={locale} />
 
       <TrackedOutboundLink
         href={href}
@@ -193,7 +201,7 @@ export default function OfferCard({
         itemId={merchant}
         className={`${isBest ? "r2-btn" : "btn-outline focusable"} mt-3 min-h-11 w-full px-4 py-2`}
       >
-        View at {merchant}
+        {t.viewAtLead} {merchant}
       </TrackedOutboundLink>
     </article>
   );

@@ -7,7 +7,7 @@ import { gradeBadgeLabel } from "@/lib/collect/canonical-product";
 import CouponBadge from "@/components/CouponBadge";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import { resolveOfferUrl } from "@/lib/links";
-import type { Locale } from "@/lib/i18n";
+import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
 import FreshnessBadge from "@/components/FreshnessBadge";
 
 /**
@@ -21,9 +21,8 @@ import FreshnessBadge from "@/components/FreshnessBadge";
  * the results list has no live job and is the feed's serving surface.
  */
 
-const STOCK_LABEL = { in: "In stock", out: "Out of stock" } as const;
-
-function StockDot({ state }: { state: keyof typeof STOCK_LABEL }) {
+function StockDot({ state, locale }: { state: "in" | "out"; locale?: Locale }) {
+  const t = getStrings(locale ?? clientLocale());
   return (
     <span className="inline-flex items-center gap-1.5" style={{ font: "var(--rc-text-body)" }}>
       <span
@@ -33,7 +32,7 @@ function StockDot({ state }: { state: keyof typeof STOCK_LABEL }) {
         }}
         aria-hidden
       />
-      <span style={{ color: "var(--rc-body-text)" }}>{STOCK_LABEL[state]}</span>
+      <span style={{ color: "var(--rc-body-text)" }}>{state === "in" ? t.inStock : t.outOfStock}</span>
     </span>
   );
 }
@@ -102,13 +101,17 @@ function PriceBlock({
   coupon,
   oos = false,
   country,
+  locale,
 }: {
   offer: PriceOffer;
   isBest: boolean;
   coupon?: Coupon;
   oos?: boolean;
   country: CountryCode | null;
+  /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
+  locale?: Locale;
 }) {
+  const t = getStrings(locale ?? clientLocale());
   const eff = effectivePrice(offer, coupon);
   // REEA-75: ml-auto keeps the price right-aligned when the row wraps;
   // flex-wrap on the baseline row stops the Best badge clipping (M3).
@@ -148,18 +151,18 @@ function PriceBlock({
           </span>
         )}
         {saved && offer.wasPrice != null && (
-          <span className="savings-pill">Save {formatCountryPrice(offer.wasPrice - offer.price, offer.currency, country).primary}</span>
+          <span className="savings-pill">{`${t.saveLead} ${formatCountryPrice(offer.wasPrice - offer.price, offer.currency, country).primary}`}</span>
         )}
-        {isBest && <span className="best-flag">Best price</span>}
+        {isBest && <span className="best-flag">{t.bestPrice}</span>}
       </div>
       {/* Effective-price line: computed value, always explained (§3.3) */}
       {eff != null && (
         <p className="mt-1" style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)" }}>
-          Effective{" "}
+          {t.effectiveLead}{" "}
           <span className="tabular" style={{ color: "var(--rc-savings)" }}>
             {formatCountryPrice(eff, offer.currency, country).primary}
           </span>{" "}
-          · incl. coupon {coupon?.code ?? coupon?.discount}
+          {t.effectiveTail} {coupon?.code ?? coupon?.discount}
         </p>
       )}
     </div>
@@ -175,6 +178,7 @@ export default function ProductResultCard({
   country = null,
   showOutOfStock = false,
   renderStartMs,
+  locale,
 }: {
   product: NormalizedProduct;
   /** True when this offer carries the best effective price on the page (§3.3 Von Restorff). */
@@ -193,6 +197,7 @@ export default function ProductResultCard({
   locale?: Locale;
 }) {
   const detail = variant === "detail";
+  const t = getStrings(locale ?? clientLocale());
   const offers = sortOffers(product.offers);
   const best = offers[0];
   // Base figure for the swatch chips (REEA-254): the cheapest listed price in
@@ -213,8 +218,8 @@ export default function ProductResultCard({
         {/* REEA-189 Rule 1 step 3: an unresolved brand renders NO brand line —
             an empty chip is itself an artifact. */}
         {product.brand ? <RetailerChip>{product.brand}</RetailerChip> : null}
-        {!detail && best && <StockDot state={best.inStock ? "in" : "out"} />}
-        {!detail && <FreshnessBadge scrapedAt={product.scrapedAt} renderStartMs={renderStartMs} />}
+        {!detail && best && <StockDot state={best.inStock ? "in" : "out"} locale={locale} />}
+        {!detail && <FreshnessBadge scrapedAt={product.scrapedAt} renderStartMs={renderStartMs} locale={locale} />}
       </div>
 
       {/* REEA-75 (M4): flex-wrap lets the price drop under a long title on
@@ -249,6 +254,7 @@ export default function ProductResultCard({
             coupon={primaryCoupon}
             oos={oos}
             country={country}
+            locale={locale}
           />
         )}
       </div>
@@ -256,7 +262,7 @@ export default function ProductResultCard({
       {/* Coupon pill (§5.4): amber, value only; extras count beside it */}
       {primaryCoupon && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <CouponBadge coupon={primaryCoupon} />
+          <CouponBadge coupon={primaryCoupon} locale={locale} />
           {extraCoupons > 0 && (
             <span
               title={product.coupons
@@ -266,7 +272,7 @@ export default function ProductResultCard({
                 .join(", ")}
               style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)" }}
             >
-              +{extraCoupons} more
+              {`+${extraCoupons} ${t.couponMoreSuffix}`}
             </span>
           )}
         </div>
@@ -277,7 +283,7 @@ export default function ProductResultCard({
       {!detail && best && (
         <p className="mt-3" style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
           <span className="tabular">{offers.length}</span>{" "}
-          {offers.length === 1 ? "retailer" : "retailers"} · from{" "}
+          {offers.length === 1 ? t.retailersOne : t.retailersMany} · {t.fromWord}{" "}
           <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
             {formatCountryPrice(best.price, best.currency, country).primary}
           </span>
@@ -292,7 +298,7 @@ export default function ProductResultCard({
           card keeps the plain price treatment above. */}
       {!detail && best && product.variations.length > 0 && (
         <section
-          aria-label="Colour options"
+          aria-label={t.colourOptionsAria}
           className="mt-3 flex flex-wrap items-center gap-2"
         >
           {product.variations.map((v) => (
@@ -324,9 +330,9 @@ export default function ProductResultCard({
           collection job (CollectionPanel) so seeded figures and live figures
           never sit on one screen contradicting each other. */}
       {!detail && offers.length > 0 && (
-        <section aria-label="Prices and availability by retailer" className="mt-4">
+        <section aria-label={t.pricesSectionAria} className="mt-4">
           <h3 className="label-token mb-1" style={{ color: "var(--rc-body-text)" }}>
-            Prices at retailers · excl. delivery
+            {t.pricesHeading}
           </h3>
           <ul>
             {offers.map((o, i) => {
@@ -377,7 +383,7 @@ export default function ProductResultCard({
                         className="label-token whitespace-nowrap rounded px-2 py-0.5"
                         style={{ background: "var(--rc-savings-bg)", color: "var(--rc-savings)" }}
                       >
-                        Lowest listed price
+                        {t.lowestListed}
                       </span>
                     )}
                   </span>
@@ -394,7 +400,7 @@ export default function ProductResultCard({
                       the min-w-0 price span, keeping the CTA inside the card
                       (REEA-75 M2 intent). */}
                   <span className="ml-auto flex min-w-0 items-center justify-end gap-3 sm:shrink-0">
-                    <StockDot state={o.inStock ? "in" : "out"} />
+                    <StockDot state={o.inStock ? "in" : "out"} locale={locale} />
                     {/* REEA-283: the row's figure leads in the selected country's
                         currency (the offer's native figure with no selection);
                         the converted stamp rides beside it on the same baseline
@@ -418,7 +424,7 @@ export default function ProductResultCard({
                         itemId={product.productId}
                         className="btn-primary focusable min-h-11 shrink-0 px-4"
                       >
-                        Go to store
+                        {t.goToStore}
                       </TrackedOutboundLink>
                     ) : null}
                   </span>
@@ -431,9 +437,9 @@ export default function ProductResultCard({
 
       {/* §3.4 variations: 32px chips, selected = 2px primary border */}
       {detail && product.variations.length > 0 && (
-        <section aria-label="Variations" className="mt-4">
+        <section aria-label={t.variationsLabel} className="mt-4">
           <h3 className="label-token mb-2" style={{ color: "var(--rc-body-text)" }}>
-            Variations
+            {t.variationsLabel}
           </h3>
           <ul className="flex flex-wrap gap-2">
             {product.variations.map((v, i) => (
@@ -463,9 +469,9 @@ export default function ProductResultCard({
 
       {/* §3.4 alternatives: 48px rows, right-aligned tabular price, hairline separators */}
       {detail && product.alternatives.length > 0 && (
-        <section aria-label="Alternatives" className="mt-4">
+        <section aria-label={t.alternativesLabel} className="mt-4">
           <h3 className="label-token mb-2" style={{ color: "var(--rc-body-text)" }}>
-            Alternatives
+            {t.alternativesLabel}
           </h3>
           <ul>
             {/* REEA-75: wrap + min-h so long alt titles never push the
@@ -486,7 +492,7 @@ export default function ProductResultCard({
                   className="tabular ml-auto shrink-0"
                   style={{ font: "var(--rc-text-body)", fontWeight: 600, color: "var(--rc-ink)" }}
                 >
-                  from {formatPrimaryPrice(a.fromPrice, "KWD").label}
+                  {`${t.fromWord} ${formatPrimaryPrice(a.fromPrice, "KWD").label}`}
                 </span>
               </li>
             ))}
