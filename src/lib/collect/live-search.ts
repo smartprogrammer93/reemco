@@ -40,7 +40,7 @@ import {
   resolveBrand,
   titleMatchesBrand,
 } from "@/lib/relevance";
-import type { NormalizedProduct, PriceOffer } from "@/types/product";
+import type { NormalizedProduct, PriceOffer, ProductAlternative, ProductVariation } from "@/types/product";
 
 /**
  * Per-attempt fetch ceiling for the search fan-out (parallel per retailer).
@@ -771,10 +771,18 @@ const COLLECTORS: RetailerCollector[] = [
  * spellings lands on one card carrying the UNION of offers, cheapest first.
  * Titles are kept verbatim; the card shows the member title with the fewest
  * tokens (tie-break alphabetically smallest slug) as the canonical view title.
+ * REEA-254 adds two things on top: the merge pass runs over adapter-rank-
+ * ordered hits so consecutive loads of the same fetched set converge on the
+ * identical card set, and colors join INSIDE one model+storage card (as
+ * per-color best-price swatches) instead of splitting into per-color cards.
  */
-export function groupHits(query: string, hits: SearchHit[]): NormalizedProduct[] {
+export function groupHits(
+  query: string,
+  hits: SearchHit[],
+  includeAlternatives = true,
+): NormalizedProduct[] {
   const groups = buildGroups(query, hits);
-  return finalizeGroups(rankByRelevance(query, groups));
+  return finalizeGroups(rankByRelevance(query, groups), includeAlternatives);
 }
 
 /**
@@ -872,24 +880,48 @@ function leadWithBrandMatch(groups: HitGroup[], query: string): HitGroup[] {
   return [...matched, ...groups.filter((g) => !matched.includes(g))];
 }
 
+/** Fixed adapter rank per merchant from the COLLECTORS order. Unknown
+ *  merchants (injectable test parsers) land after the known ones in arrival
+ *  order — still deterministic for a given fetched set. */
+function adapterRank(merchant: string): number {
+  const i = COLLECTORS.findIndex((c) => c.merchant === merchant);
+  return i < 0 ? COLLECTORS.length : i;
+}
+
 /**
- * REEA-178 — intermediate-snapshot grouping for progressive per-retailer
- * streaming: same canonical merge rules as groupHits, but groups keep their
- * first-seen order and later arrivals only append. That makes each flush an
- * append-only diff of the previous one — already-rendered cards keep their
- * slot while slower retailers add offers underneath (AC-2). The final flush
- * still runs the full groupHits ranking above, so the converged page is the
- * exact result the non-streamed path produces.
+ * REEA-254 — stable pre-order for the grouping pass. Adapter completion order
+ * changes between consecutive loads, so an arrival-order grouping made the
+ * merge itself load-dependent. Sorting into the fixed COLLECTORS order (the
+ * explicit arrival-index tie-break keeps each adapter's payload order inside
+ * its rank) makes grouping a pure function of the fetched SET: same input,
+ * same merge, every load. The title→tuple mapping itself is cached in
+ * canonical-product: same title, same tuple, every load.
  */
-export function groupHitsStable(query: string, hits: SearchHit[]): NormalizedProduct[] {
-  return finalizeGroups(buildGroups(query, hits).slice(0, LIVE_SEARCH_MAX_PRODUCTS));
+function orderByAdapter(hits: SearchHit[]): SearchHit[] {
+  return hits
+    .map((h, i) => ({ h, i }))
+    .sort((a, b) => adapterRank(a.h.merchant) - adapterRank(b.h.merchant) || a.i - b.i)
+    .map((x) => x.h);
+}
+
+/** REEA-254 merge decision. One card per model+storage tier: colors ride
+ *  inside the card as swatches (see colorSwatches), so they never split the
+ *  merge — storage tiers, model lines and grades still discriminate. The
+ *  too-generic guard still reads colors when neither side carries a model
+ *  line or storage value: there the color IS the visible variant label. */
+function mergeCompatible(a: CanonicalFields, b: CanonicalFields): boolean {
+  if (!compatibleFields({ ...a, color: "" }, { ...b, color: "" })) return false;
+  if (a.modelLine === "" && b.modelLine === "" && a.storage === "" && b.storage === "") {
+    return compatibleFields(a, b);
+  }
+  return true;
 }
 
 function buildGroups(query: string, hits: SearchHit[]): HitGroup[] {
   const groups: HitGroup[] = [];
   const cheapestOf = (g: HitGroup): number => Math.min(...g.offers.map((o) => o.price));
 
-  for (const hit of hits) {
+  for (const hit of orderByAdapter(hits)) {
     const title = hit.title.trim();
     if (!title) continue;
     const fields = canonicalFields(title);
@@ -909,16 +941,17 @@ function buildGroups(query: string, hits: SearchHit[]): HitGroup[] {
     let chosen: HitGroup | undefined;
     for (const g of groups) {
       if (g.accessory !== accessory) continue;
-      if (!compatibleFields(g.fields, fields)) continue;
+      if (!mergeCompatible(g.fields, fields)) continue;
       if (!chosen || cheapestOf(g) < cheapestOf(chosen)) chosen = g;
     }
     if (!chosen) {
-      chosen = { fields, accessory, titleScore: 0, titles: new Set<string>(), offers: [], brandRaw: hit.brand ?? "" };
+      // The tuple comes from a shared cache — copy before the group seeds it.
+      chosen = { fields: { ...fields }, accessory, titleScore: 0, titles: new Set<string>(), offers: [], brandRaw: hit.brand ?? "" };
       groups.push(chosen);
     } else {
       // REEA-168 follow-up (board note on REEA-169): seed the group's missing
-      // fields from the incoming offer on merge. Once a group carries a
-      // color/storage value it DISCRIMINATES — a later offer of another color
+      // fields from the incoming offer on merge. Storage stays the card-
+      // splitting discriminator (REEA-254): a later offer of another capacity
       // forms its own group instead of leaking into this ranked list; offers
       // still missing that field keep joining through the partial-match rule.
       const f = chosen.fields;
@@ -970,8 +1003,63 @@ function canonicalGroupTitle(group: HitGroup): string {
   return title;
 }
 
-function finalizeGroups(selected: HitGroup[]): NormalizedProduct[] {
+/** REEA-254 color swatches — when a merged card's offers carry more than one
+ *  color, each color gets its own best-price chip. The color's best minus the
+ *  card's best rides in `priceDelta` so the card renders the absolute figure;
+ *  one color (or none) keeps the plain single-price card. Sorted cheapest
+ *  first, color name as the alphabetical tie-break. */
+function colorSwatches(group: HitGroup, offers: PriceOffer[]): ProductVariation[] {
+  const colorBest = new Map<string, number>();
+  for (const o of group.offers) {
+    const color = canonicalFields(o.title).color;
+    if (color === "") continue;
+    const prev = colorBest.get(color);
+    if (prev === undefined || o.price < prev) colorBest.set(color, o.price);
+  }
+  if (colorBest.size < 2) return [];
+  const cardBest = Math.min(...offers.map((o) => o.price));
+  return [...colorBest.entries()]
+    .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))
+    .map(([color, price]) => ({
+      id: color,
+      label: color.charAt(0).toUpperCase() + color.slice(1),
+      // Cent-rounded difference: currency arithmetic stays readable on the
+      // wire (25.1, not the float-sum 25.100000000000023).
+      priceDelta: Math.round((price - cardBest) * 100) / 100,
+    }));
+}
+
+function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean): NormalizedProduct[] {
   const scrapedAt = new Date().toISOString(); // real collection completion time
+
+  // REEA-254 payload trim — shared alternatives. Every card's row list
+  // re-references ONE computed entry per referenced group, and a group that
+  // sits outside the top three shares the single top-three array itself.
+  // The RSC flight payload serializes each distinct object once and refers to
+  // it afterwards, so the repeated per-row arrays collapse from ~20×3 entries
+  // to a handful of distinct ones. Same content as before: top-ranked other
+  // groups, self excluded, fromPrice = that group's cheapest live offer.
+  const metas = new Map<HitGroup, ProductAlternative>();
+  const metaOf = (g: HitGroup): ProductAlternative => {
+    let m = metas.get(g);
+    if (!m) {
+      const otherTitle = canonicalGroupTitle(g);
+      m = {
+        productId: slugify(otherTitle),
+        title: otherTitle,
+        fromPrice: Math.min(...g.offers.map((o) => o.price)),
+      };
+      metas.set(g, m);
+    }
+    return m;
+  };
+  const topGroups = selected.slice(0, 3);
+  const sharedTop: ProductAlternative[] = topGroups.map(metaOf);
+  const alternativesFor = (group: HitGroup): ProductAlternative[] => {
+    if (!topGroups.includes(group)) return sharedTop;
+    // A top-three row still excludes itself — a small array of shared entries.
+    return selected.filter((other) => other !== group).slice(0, 3).map(metaOf);
+  };
 
   return selected.map((group, idx) => {
     const title = canonicalGroupTitle(group);
@@ -1003,18 +1091,8 @@ function finalizeGroups(selected: HitGroup[]): NormalizedProduct[] {
       brand: resolveBrand(group.brandRaw, title),
       offers,
       coupons: [],
-      variations: [],
-      alternatives: selected
-        .filter((other) => other !== group)
-        .slice(0, 3)
-        .map((other) => {
-          const otherTitle = canonicalGroupTitle(other);
-          return {
-            productId: slugify(otherTitle),
-            title: otherTitle,
-            fromPrice: Math.min(...other.offers.map((o) => o.price)),
-          };
-        }),
+      variations: colorSwatches(group, offers),
+      alternatives: includeAlternatives ? alternativesFor(group) : [],
       scrapedAt,
     } satisfies NormalizedProduct;
   });
@@ -1130,14 +1208,27 @@ function filterNotes(
   return { hits, notes };
 }
 
-/** Intermediate flush: stable insertion order, append-only across flushes. */
+/**
+ * Intermediate flush: same full relevance ranking as the converged snapshot
+ * (REEA-222). Append-only still holds at StageAppend's diff level — earlier
+ * cards keep their slots and each flush only renders the not-yet-seen cards —
+ * but within every flushed block the tier ladder leads, so the streamed SSR
+ * shell shows phones above cross-category filler and the single Best-price
+ * badge lands on the lead block's cheapest in-stock card without waiting for
+ * client hydration (QA REEA-240 re-run: with insertion-order flushes the
+ * camera-first arrival order of the fastest retailer was what curl-only
+ * inspection ever saw).
+ */
 function stagedSnapshot(
   q: string,
   country: CountryCode | null,
   settledSoFar: SettledAdapter[],
 ): LiveSearchResult {
   const { hits, notes } = filterNotes(country, settledSoFar);
-  const products = groupHitsStable(q, hits);
+  // REEA-254 payload trim: intermediate flushes render through the card
+  // variant, which never reads `alternatives`; the converged snapshot carries
+  // the shared row list. Every staged flush re-serialized the same arrays.
+  const products = groupHits(q, hits, false);
   return { products, notes, suggestions: products.slice(0, 3) };
 }
 
@@ -1217,22 +1308,33 @@ export function collectLiveResultsStaged(
   // Round one: every retailer is contacted once, in parallel, at call time —
   // same single request per retailer as the blocking path, same bounded
   // per-collector timeouts (REEA-156). Completions append to the accumulator
-  // in arrival order and release the next waiting stage.
+  // in arrival order; every stage releases once the whole round-one set has
+  // answered, so the first flushed block already carries the merged, ranked
+  // result. (REEA-244: with per-count gates, the fastest retailer's arrival
+  // order was what a no-JS/curl inspection ever saw — a cross-category card
+  // from the quickest hop could sit above every phone card regardless of how
+  // the later snapshots ranked them.) One shared completion promise, not a
+  // per-completion wakeup queue: every stage observes the same threshold and
+  // the last completion wakes them all. Intermediate stages then land on the
+  // SAME round-one snapshot, so StageAppend's append-only diffs stay empty
+  // and only the FINAL stage (after the REEA-149 deepen round) adds cards
+  // below the ranked set. First paint stays bounded by the independent
+  // per-collector windows (PER_RETAILER_TIMEOUT_MS), never by chaining.
   const settled: SettledAdapter[] = [];
-  const waiting: (() => void)[] = [];
+  let wakeRoundOne: () => void = () => {};
+  const roundOneDone = new Promise<void>((res) => {
+    wakeRoundOne = res;
+  });
   for (const c of collectors) {
     void collectSettled(c, q, fetchImpl).then((s) => {
       settled.push(s);
-      waiting.shift()?.();
+      if (settled.length === collectors.length) wakeRoundOne();
     });
   }
+  if (collectors.length === 0) wakeRoundOne();
 
   const stages: Promise<LiveSearchResult>[] = collectors.map(async (_c, k) => {
-    // Count-based gate instead of chaining: later stages never wait on the
-    // rendering of earlier ones, only on their own adapter-count.
-    while (settled.length < k + 1) {
-      await new Promise<void>((res) => waiting.push(res));
-    }
+    await roundOneDone;
     if (k < collectors.length - 1) return stagedSnapshot(q, country, settled.slice());
     await deepenSilent(q, settled, fetchImpl);
     return finalSnapshot(q, country, settled, fetchImpl);

@@ -561,25 +561,34 @@ describe("groupHits", () => {
     expect(compatibleFields(canonicalFields("Samsung Galaxy Z Fold7"), base)).toBe(true);
   });
 
-  it("REEA-168/169: color discriminates inside the merged offer list", () => {
-    // Board note on REEA-169: on the Silver page the ranked list holds only
-    // Silver units — black/Jet Black units form their own labeled view, and
-    // colorless listings keep joining through the partial-match rule.
+  it("REEA-254: colours ride inside one model+storage card as best-price swatches", () => {
+    // REEA-254 supersedes the REEA-169 per-colour card split: one card per
+    // model+storage tier; colours become swatches carrying each colour's
+    // best effective price when they differ. Colourless listings still join
+    // through the partial-match rule.
     const products = groupHits("galaxy z fold7 silver", [
       hit({ title: "Samsung Galaxy Z Fold7 Phone", merchant: "Blink", price: 460, url: "https://blink.example/seed" }),
       hit({ title: "Samsung Galaxy Z Fold7 Phone Silver", merchant: "Eureka", price: 494.9, url: "https://eureka.example/silver" }),
       hit({ title: "Samsung Galaxy Z Fold7 Phone Silver", merchant: "Xcite", price: 429.9, url: "https://xcite.example/silver" }),
       hit({ title: "Samsung Galaxy Z Fold7 Phone Jet Black", merchant: "Jarir", price: 455, url: "https://jarir.example/black" }),
     ]);
-    expect(products).toHaveLength(2);
-    // Canonical title of the Silver view: fewest tokens among its members —
-    // the colorless seed spelling.
-    const silver = products.find((p) => p.title === "Samsung Galaxy Z Fold7 Phone")!;
-    // Seed merges the Silver offers in (partial-match + field seeding), ranked
-    // cheapest-first; the Jet Black unit never enters this list.
-    expect(silver.offers.map((o) => o.price)).toEqual([429.9, 460, 494.9]);
-    const black = products.find((p) => p.title === "Samsung Galaxy Z Fold7 Phone Jet Black")!;
-    expect(black.offers).toHaveLength(1);
+    // Every listing of the tier lands on the ONE collapsed card.
+    expect(products).toHaveLength(1);
+    const fold = products[0];
+    // Cheapest offer first; one row per retailer at its best price.
+    expect(fold.offers.map((o) => `${o.merchant}:${o.price}`)).toEqual([
+      "Xcite:429.9",
+      "Jarir:455",
+      "Blink:460",
+      "Eureka:494.9",
+    ]);
+    // Canonical title: fewest tokens among members — the colourless seed.
+    expect(fold.title).toBe("Samsung Galaxy Z Fold7 Phone");
+    // Swatches: cheapest colour first; delta rides off the card's best.
+    expect(fold.variations).toEqual([
+      { id: "silver", label: "Silver", priceDelta: 0 },
+      { id: "black", label: "Black", priceDelta: 25.1 },
+    ]);
     // Jet Black collapses to base black without polluting the model line.
     expect(canonicalFields("Samsung Galaxy Z Fold7 Phone Jet Black").modelLine).toBe("galaxy z fold7");
     // Accessory listings stay out of the device's offer list (REEA-169 f1):
@@ -590,6 +599,78 @@ describe("groupHits", () => {
         canonicalFields("Samsung Galaxy Z Fold7 Case"),
       ),
     ).toBe(false);
+  });
+
+  it("REEA-254: storage tiers still split; a single colour keeps the plain card", () => {
+    // No fuzzy merge across capacities: 512GB is its own decision unit.
+    const products = groupHits("iphone 17 pro", [
+      hit({ title: 'Apple iPhone 17 Pro 6.3" 256GB - Silver', merchant: "Xcite", price: 429.9, url: "https://xcite.example/256" }),
+      hit({ title: "Apple iPhone 17 Pro, 256 GB, Silver, 5G, Apple A19 Pro", merchant: "Jarir", currency: "SAR", price: 1500, url: "https://jarir.example/256" }),
+      hit({ title: 'Apple iPhone 17 Pro Max 6.9" 512GB Silver', merchant: "Eureka", price: 520, url: "https://eureka.example/512" }),
+    ]);
+    expect(products).toHaveLength(2);
+    const pro256 = products.find((p) => p.title.includes("6.3"))!;
+    // Both spellings of the 256GB tier collapse into the merged card…
+    expect(pro256.offers.map((o) => o.merchant)).toEqual(["Xcite", "Jarir"]);
+    // …one colour only → no swatches (plain single-price card).
+    expect(pro256.variations).toEqual([]);
+    // The cheapest offer of each tier sits inside its own collapsed card.
+    expect(products[0].offers[0].price).toBeLessThanOrEqual(
+      Math.min(...products.flatMap((p) => p.offers.map((o) => o.price))),
+    );
+  });
+
+  it("REEA-254: the same fetched set merges identically regardless of adapter arrival order", () => {
+    const base: SearchHit[] = [
+      hit({ title: "Apple iPhone 17 Pro Max, 256 GB, Silver, 5G", merchant: "Jarir", currency: "SAR", price: 1500, url: "https://jarir.example/a" }),
+      hit({ title: 'Apple iPhone 17 Pro Max 6.9" 256GB Silver', merchant: "Xcite", price: 379.9, url: "https://xcite.example/b" }),
+      hit({ title: "Apple iPhone 17 Pro Max 6.9 inch 256GB Deep Blue", merchant: "Eureka", price: 375, url: "https://eureka.example/c" }),
+    ];
+    // Two consecutive loads: retailers answered in different completion
+    // orders; grouping must be a pure function of the fetched set. The card
+    // projection (identity, title, offers, swatches) must match exactly —
+    // scrapedAt is the run's own completion stamp and stays out of it.
+    const shape = (ps: typeof first) =>
+      JSON.stringify(
+        ps.map((p) => [p.productId, p.title, p.offers, p.variations, p.alternatives]),
+      );
+    const first = groupHits("iphone 17 pro max", base);
+    const second = groupHits("iphone 17 pro max", [base[2], base[0], base[1]]);
+    expect(shape(second)).toBe(shape(first));
+    // The spec pair merges: verbose and short spellings of one device.
+    expect(first).toHaveLength(1);
+    // Swatch colours differ → both ride the single card.
+    expect(first[0].variations.map((v) => v.id)).toEqual(["blue", "silver"]);
+  });
+
+  it("REEA-254: staged flushes skip the repeated alternatives arrays", async () => {
+    resetDiscoveryCache();
+    const fetchImpl = async (url: string): Promise<Response> => {
+      if (url.includes("xcite.com")) {
+        return new Response(
+          JSON.stringify({
+            results: [
+              {
+                hits: [
+                  { name: "Apple AirPods Pro 2", slug: "app2", price: 74, currency: "KWD", inStock: true },
+                  { name: "Apple AirPods Max", slug: "apm", price: 189, currency: "KWD", inStock: true },
+                ],
+              },
+            ],
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response("{}");
+    };
+    const staged = collectLiveResultsStaged("airpods", { fetchImpl, country: "KW" });
+    const first = await staged.stages[0];
+    // Intermediate flush: row identity + offers survive, the repeated per-row
+    // alternatives arrays are trimmed out of the serialized state.
+    expect(first.products.length).toBeGreaterThan(0);
+    expect(first.products.every((p) => p.alternatives.length === 0)).toBe(true);
+    const finalSnap = await staged.final;
+    expect(finalSnap.products.some((p) => p.alternatives.length > 0)).toBe(true);
   });
 });
 
@@ -1045,17 +1126,21 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
 
   type FetchImplLike = (url: string, init?: RequestInit) => Promise<Response>;
 
-  it("flushes the fast retailers' offers while slower hops are still in flight", async () => {
+  it("the first flush carries the ranked round-one set while deepening streams later", async () => {
     resetDiscoveryCache();
     const staged = collectLiveResultsStaged("samsung", { fetchImpl: mixedSpeedFetch(), country: "KW" });
 
     const first = await staged.stages[0];
     expect(first.products).toHaveLength(1);
-    // AC-1: a real price renders from the answered adapters alone.
+    // REEA-244: the first flushed snapshot waits for the whole bounded
+    // round-one window (every KW adapter answers within its own attempt
+    // window), so the very first served DOM already carries the merged,
+    // ranked union — cheapest first — instead of one retailer's arrival order.
     expect(first.products[0].offers.some((o) => o.merchant === "Xcite" || o.merchant === "Blink")).toBe(true);
-    // Slow hops had no say in the first flush: only collectors whose mocks
-    // never answer early count as notes (six of the ten retailers now).
-    expect(first.notes.length).toBeLessThanOrEqual(6);
+    expect(first.products[0].offers.map((o) => o.price)).toEqual([379, 385, 390, 399]);
+    // Every round-one participant is reported as a note in every snapshot
+    // (eight KW retailers in the country-scoped mock).
+    expect(first.notes).toHaveLength(8);
     // AC-3: every snapshot carries its own real completion stamp.
     expect(Date.now() - Date.parse(first.products[0].scrapedAt!)).toBeLessThan(5_000);
 
