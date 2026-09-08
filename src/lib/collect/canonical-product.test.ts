@@ -23,8 +23,9 @@ const A4_TITLES = [
 
 /** The one identity tuple A4 demands: brand | model line | colour | grade
  *  (empty storage filtered by the join rule), rendered space-separated as
- *  the spec writes it. */
-const SCOPE_II_X = "asus rog strix scope ii x black";
+ *  the spec writes it. The "ROG" marker is a brand restatement (the sub-brand
+ *  of ASUS the brand field already carries) and rides off with it. */
+const SCOPE_II_X = "asus strix scope ii x black";
 
 function hit(over: Partial<SearchHit>): SearchHit {
   return {

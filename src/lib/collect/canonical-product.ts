@@ -105,8 +105,35 @@ const NOISE = new Set([
   // omits the tail must not fork the short spelling into a second card.
   // "in" rides with the join-word class ("Built-in" splits to "built in").
   "wireless", "bluetooth", "microphone", "noise", "cancelling", "usb",
-  "built", "smart", "ai", "vision", "in",
+  "built", "smart", "ai", "vision", "in", "cellular",
+  // REEA-316: the Jarir-style spec tail on peripheral listings — "Mechanical
+  // Switch Gaming Keyboard, Bluetooth/Wireless (2.4 GHz RF)/Wired, for
+  // Laptop/Desktop Computer/CPU Windows 10 or Later" — is one long
+  // connectivity/use-case restatement of the same device. Every word of it
+  // rides in the class above: the switch type, the radio bands, the join
+  // words, and the host-device nouns the keyboard merely plugs into. A
+  // retailer that writes the tail must not fork the short spelling into a
+  // second card. Digit-tailed spellings ("windows10") reach the field scan
+  // through the join pass; noised() below reads them back to their word.
+  "switch", "ghz", "rf", "for", "or", "later", "cpu", "desktop", "computer",
+  "windows",
+  // REEA-254's brand-restatement rule applied to sub-brand markers: "ROG"
+  // restates the ASUS gaming brand line the brand field already carries —
+  // exactly like the repeated brand word inside one title — while retailers
+  // disagree on whether they spell it out at all ("Asus Strix Scope II X …"
+  // vs "ASUS ROG STRIX SCOPE II X …"). One SKU must not fork on that.
+  // Line-defining series words (TUF, VivoBook, …) are NOT in this class —
+  // they stay visible in the model line.
+  "rog",
 ]);
+
+/** NOISE membership that reads back joined word+digit tokens: the tokenizer
+ *  glues a trailing figure onto its word ("Windows 10" → `windows10`), so a
+ *  restatement word stays recognized after the join pass. Plain model codes
+ *  keep discriminating — `air11` is not noise because "air" is not either. */
+function noised(token: string): boolean {
+  return NOISE.has(token) || (/^\p{L}+\d+$/.test(token) && NOISE.has(token.replace(/\d+$/g, "")));
+}
 
 const STORAGE_RE = /^(\d+(?:\.\d+)?)(gb|tb)$/;
 /** "12gbram" (merged in the join pass) is RAM restated, never storage. */
@@ -148,7 +175,7 @@ export function canonicalTokens(title: string): string[] {
     // (`iphone17 pro (256` ≠ `iphone17 pro`) and one SKU forks into several
     // cards. As spaces they normalize exactly like the retailer's own
     // short spelling.
-    .replace(/[,;:()|/\-‒–—]/g, " ")
+    .replace(/[,;:()|/+\-‒–—]/g, " ")
     // REEA-205: quote-family marks fold to separators too — the inch sign
     // arrives as `"`/″/” depending on the retailer's feed encoding, and a
     // trailing quote after a size figure must tokenize exactly like the
@@ -336,7 +363,7 @@ function computeCanonicalFields(title: string): CanonicalFields {
     // REEA-280: a repeated brand word inside one title ("iPad Air … Apple
     // Intelligence …") restates the brand field the same way — the role is
     // evidence once (REEA-254), echoes carry no model-line information.
-    if (NOISE.has(t) || brandOf(t) !== "" || /^\d+(?:\.\d+)?$/.test(t)) continue;
+    if (noised(t) || brandOf(t) !== "" || /^\d+(?:\.\d+)?$/.test(t)) continue;
 
     if (!stopped) {
       // Single-letter model-line parts ("Galaxy Z Fold7") stay in the line;
