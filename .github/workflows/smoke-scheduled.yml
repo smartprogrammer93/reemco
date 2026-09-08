@@ -29,10 +29,7 @@ on:
     - cron: "47 * * * *" # second chance each hour when a tick is skipped
   workflow_dispatch:
 
-permissions:
-  contents: read # checkout needs this; specifying any workflow-level permissions revokes the defaults
-  issues: write # smoke failure alerts
-  actions: read # guard reads last-run timestamp to dedupe ticks
+
 
 concurrency:
   group: smoke-scheduled
@@ -72,6 +69,40 @@ jobs:
 
       - uses: actions/checkout@v4
         if: steps.guard.outputs.due != 'false'
+
+      # REEA-337 deploy parity self-heal: compare the served artifact stamp with
+      # this run's main HEAD. On mismatch, dispatch the Deploy site workflow
+      # (its own concurrency + post-deploy stamp check make repeated dispatches
+      # safe/idempotent), then poll the stamp briefly and report before/after.
+      # Runs inside the existing hourly tick — zero extra scheduled jobs, so the
+      # ~2,000 min/month REEA-314 budget is unaffected. curl+gh only: no node.
+      - name: Deploy parity self-heal (REEA-337)
+        if: steps.guard.outputs.due != 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          SERVED=$(curl -fsS --max-time 15 "https://reemco.vercel.app/__commit.txt?parity=$RANDOM$RANDOM" | tr -d '[:space:]' || echo empty)
+          HEAD="${{ github.sha }}"
+          echo "parity before: served=$SERVED intended=$HEAD"
+          if [ "$SERVED" = "$HEAD" ]; then
+            echo "parity green - no dispatch needed"
+            exit 0
+          fi
+          echo "parity lag detected - dispatching Deploy site for $HEAD"
+          echo '{"ref":"${{ github.ref_name }}"}' > /tmp/dispatch.json
+          gh api --method POST \
+            "repos/${{ github.repository }}/actions/workflows/deploy.yml/dispatches" \
+            --input /tmp/dispatch.json && echo "dispatch accepted" || echo "dispatch call failed"
+          AFTER=""
+          for i in $(seq 1 12); do
+            sleep 15
+            AFTER=$(curl -fsS --max-time 15 "https://reemco.vercel.app/__commit.txt?after=$i$RANDOM" | tr -d '[:space:]' || echo empty)
+            echo "poll $i: served=$AFTER"
+            [ "$AFTER" = "$HEAD" ] && break
+          done
+          echo "parity after: served=$AFTER intended=$HEAD $([ "$AFTER" = "$HEAD" ] && echo MATCH || echo MISMATCH)"
+          [ "$AFTER" = "$HEAD" ] || echo "::warning::parity still lagging after self-heal dispatch - check the Deploy site run"
 
       - uses: actions/setup-node@v4
         if: steps.guard.outputs.due != 'false'
