@@ -11,7 +11,7 @@
  * memory-only handshake, never to a failed hop.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { fetchThroughChallenge } from "@/lib/collect/search-fallback";
+import { fetchThroughChallenge, VERIFIED_BOT_HEADERS } from "@/lib/collect/search-fallback";
 
 const originalFetch = globalThis.fetch;
 
@@ -88,5 +88,54 @@ describe("cleared-jar persistence across invocations (REEA-272)", () => {
     expect(sets.length).toBeGreaterThanOrEqual(1);
     expect(sets.join("\n")).toContain("__cf_bm=hand42");
     expect(sets.join("\n")).toMatch(/EX\n\d+/);
+  });
+});
+
+describe("identity rotation through the CF handshake (REEA-272)", () => {
+  it("leads with the verified-crawler identity and retries with the browser set", async () => {
+    const seen: string[] = [];
+    let calls = 0;
+    const hopFetch = async (_url: string, init?: RequestInit): Promise<Response> => {
+      calls += 1;
+      seen.push(new Headers(init?.headers).get("user-agent") ?? "");
+      if (calls === 1) return new Response("challenge", { status: 403 });
+      return new Response("<html>archive</html>");
+    };
+    const res = await fetchThroughChallenge(
+      hopFetch,
+      "https://www.nextstore.com.kw/catalogsearch/result/index/?q=dell",
+      {},
+      AbortSignal.timeout(3000),
+    );
+    expect(res.status).toBe(200);
+    expect(calls).toBe(2);
+    // Attempt 1 must present the verified-crawler identity — the CF rules on
+    // these zones pass it inside the hop window, which is exactly what the
+    // standing "hits:0 HTTP 403" notes needed. Attempt 2 falls back to the
+    // scripted-browser identity for zones without a bot allow.
+    expect(seen[0]).toBe(VERIFIED_BOT_HEADERS["user-agent"]);
+    expect(seen[1]).toContain("Chrome/126");
+  });
+
+  it("rides the mirrored jar on the first attempt together with the bot identity", async () => {
+    const mirrored = JSON.stringify({ header: "__cf_bm=mirrored", expiresAt: Date.now() + 60_000 });
+    stubKv(mirrored, []);
+
+    const seen: Array<{ ua: string; cookie: string | null }> = [];
+    const hopFetch = async (_url: string, init?: RequestInit): Promise<Response> => {
+      const headers = new Headers(init?.headers);
+      seen.push({ ua: headers.get("user-agent") ?? "", cookie: headers.get("cookie") });
+      return new Response("<html>archive</html>");
+    };
+    const res = await fetchThroughChallenge(
+      hopFetch,
+      "https://pckuwait.com/?s=dell&post_type=product",
+      {},
+      AbortSignal.timeout(3000),
+    );
+    expect(res.status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.ua).toBe(VERIFIED_BOT_HEADERS["user-agent"]);
+    expect(seen[0]!.cookie).toContain("__cf_bm=mirrored");
   });
 });

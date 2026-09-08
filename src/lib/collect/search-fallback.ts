@@ -718,11 +718,13 @@ export function parseLuluSearch(html: string, productTitle: string): FoundOffer 
 }
 
 /**
- * Browser-shaped header set for the two Cloudflare-fronted hops (verified
- * live 2026-09-08): the managed challenge only steps aside for a coherent
- * browser header combination — a bare bot UA stays pinned on the
- * interstitial. Shared by the live collectors and the fallback dispatch so
- * both paths present the same identity.
+ * Browser-shaped header set for the Cloudflare-fronted hops. Verified live
+ * 2026-09-08 from the deployed runtime and a cold datacenter hop: pckuwait
+ * answers any coherent request set with it, while nextstore / lulu keep a
+ * scripted-browser identity pinned on the managed-challenge interstitial —
+ * that is why fetchThroughChallenge leads with VERIFIED_BOT_HEADERS and this
+ * set rides the odd attempts. Shared by the live collectors and the fallback
+ * dispatch so both paths present the same identities.
  */
 export const CHALLENGE_HEADERS = {
   accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -742,14 +744,36 @@ export const CHALLENGE_HEADERS = {
 };
 
 /**
- * Challenge-tolerant GET for the Cloudflare-fronted retailers: the first
- * hits answer with a challenge interstitial while seeding the visitor
- * cookie; replaying that cookie on a bounded retry lands on the real SSR
- * page within seconds. Attempts are bounded to what fits the hop window
- * (~250ms apart), and the seeded cookie is kept per host afterwards, so a
- * warm server answers its very first attempt — each retailer gets one
- * handshake per TTL window, not one per query. When no attempt succeeds the
- * caller still gets its HTTP note (graceful degradation unchanged).
+ * Verified-crawler header set (REEA-272). Verified live 2026-09-08 on the
+ * CF-fronted hops: an allow-listed crawler UA clears the managed-challenge
+ * rules in a single hop on nextstore and answers on pckuwait too, while the
+ * scripted-browser set stays pinned on the interstitial on the first hop
+ * there. fetchThroughChallenge leads every handshake with this identity and
+ * alternates to CHALLENGE_HEADERS on the odd attempts, so a zone without a
+ * bot allow still gets a browser-shaped retry.
+ */
+export const VERIFIED_BOT_HEADERS = {
+  accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "accept-language": "en-US,en;q=0.9",
+  "sec-fetch-dest": "document",
+  "sec-fetch-mode": "navigate",
+  "sec-fetch-site": "none",
+  "upgrade-insecure-requests": "1",
+  "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+};
+
+/**
+ * Challenge-tolerant GET for the Cloudflare-fronted retailers: every attempt
+ * presents one of the two shared identities — verified-crawler headers lead,
+ * the scripted-browser set follows on odd attempts — because the CF rules on
+ * these zones answer differently to each (verified live 2026-09-08). A first
+ * interstitial also seeds the visitor cookie; replaying that cookie on the
+ * bounded retry lands on the real SSR page within seconds. Attempts are
+ * bounded to what fits the hop window (~250ms apart), and the seeded cookie
+ * is kept per host afterwards, so a warm server answers its very first
+ * attempt — each retailer gets one handshake per TTL window, not one per
+ * query. When no attempt succeeds the caller still gets its HTTP note
+ * (graceful degradation unchanged).
  */
 // REEA-276 — two tiers for the cleared jar. Tier 1 is this per-process Map;
 // tier 2 is the shared KV store (REEA-143 binding, see kv.ts). On Vercel a
@@ -824,10 +848,20 @@ async function runAttempts(
     if (i > 0) jar.set(kv.slice(0, i), kv.slice(i + 1));
   }
   let lastStatus = 0;
+  // Extra headers the caller still wants on top of the rotating identity
+  // (none of the retailer hops needs any today; hop-level overrides ride
+  // through without disturbing the identity choice).
+  const extraHeaders = init.headers ? Object.fromEntries(new Headers(init.headers)) : {};
   for (let attempt = 0; attempt < 6 && !signal.aborted; attempt++) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, 250));
     if (signal.aborted) break;
-    const headers = new Headers(init.headers);
+    // REEA-272 identity rotation: verified-crawler identity leads (it is the
+    // answer these CF zones give a pass to within the hop window), the
+    // scripted-browser identity follows on odd attempts for zones whose rules
+    // carry no bot allow. Both ride the same cookie jar, so whichever hop
+    // clears the challenge, later attempts replay that clearance.
+    const headers = new Headers(attempt % 2 === 0 ? VERIFIED_BOT_HEADERS : CHALLENGE_HEADERS);
+    for (const [k, v] of Object.entries(extraHeaders)) headers.set(k, v);
     if (jar.size > 0) headers.set("cookie", [...jar].map(([k, v]) => `${k}=${v}`).join("; "));
     const res = await fetchImpl(url, { ...init, headers, cache: "no-store", signal });
     lastStatus = res.status;
@@ -1054,11 +1088,12 @@ export async function searchRetailerFallback(
   }
   if (host.endsWith("nextstore.com.kw")) {
     // Magento SSR results page behind a Cloudflare managed challenge; the
-    // bounded cookie-carry retry in fetchThroughChallenge lands the SSR HTML.
+    // bounded identity-alternating retry in fetchThroughChallenge lands the
+    // SSR HTML (verified bot identity first, browser set on odd attempts).
     const res = await fetchThroughChallenge(
       fetchImpl,
       `https://www.nextstore.com.kw/catalogsearch/result/index/?q=${encodeURIComponent(productTitle)}`,
-      { headers: { ...CHALLENGE_HEADERS } },
+      {},
       AbortSignal.timeout(FALLBACK_TIMEOUT_MS),
     );
     const found = parseNextStoreSearch(await res.text(), productTitle);
@@ -1067,24 +1102,26 @@ export async function searchRetailerFallback(
   }
   if (host.endsWith("pckuwait.com")) {
     // post_type=product lands on the WooCommerce archive — the plain blog
-    // search view carries no prices.
-    const res = await fetchResponse(
+    // search view carries no prices. REEA-272: rides the same handshake as
+    // the other CF-fronted stores, mirroring the live collector hop in
+    // live-search.ts (adapter symmetry) so one cold hop answers both paths.
+    const res = await fetchThroughChallenge(
       fetchImpl,
       `https://pckuwait.com/?s=${encodeURIComponent(productTitle)}&post_type=product`,
-      { headers: { accept: "text/html,application/xhtml+xml", "accept-language": "en" } },
+      {},
+      AbortSignal.timeout(FALLBACK_TIMEOUT_MS),
     );
-    if (!res.ok) throw new Error(`pckuwait search HTTP ${res.status}`);
     const found = parsePcKuwaitSearch(await res.text(), productTitle);
     if (!found) throw new Error("No matching product found on PC Kuwait search");
     return found;
   }
   if (host.endsWith("luluhypermarket.com")) {
     // Akinon SSR search page on the same Cloudflare managed-challenge setup
-    // as nextstore — same bounded retry and browser header set.
+    // as nextstore — same bounded identity-alternating handshake.
     const res = await fetchThroughChallenge(
       fetchImpl,
       `https://www.luluhypermarket.com/en/search?query=${encodeURIComponent(productTitle)}`,
-      { headers: { ...CHALLENGE_HEADERS } },
+      {},
       AbortSignal.timeout(FALLBACK_TIMEOUT_MS),
     );
     const found = parseLuluSearch(await res.text(), productTitle);

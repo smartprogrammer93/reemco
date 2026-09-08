@@ -15,7 +15,6 @@
  */
 import {
   APP_ID_ALLOW,
-  CHALLENGE_HEADERS,
   SEARCH_KEY_ALLOW,
   brandAwareCoverage,
   extractJarirIndexKey,
@@ -767,15 +766,16 @@ const COLLECTORS: RetailerCollector[] = [
     country: "KW",
     collect: async (query, fetchImpl) => {
       // Magento SSR search page behind a Cloudflare managed challenge (verified
-      // live 2026-09-08): the interstitial steps aside for the browser-shaped
-      // header set once the visitor cookie it seeds is replayed, so this hop
-      // rides fetchThroughChallenge's bounded cookie-carry retry. The attempt
-      // window mirrors eureka's two-step hop — the challenge handshake needs
-      // a little more room than a plain API answer.
+      // live 2026-09-08): the interstitial steps aside within the hop window —
+      // the verified-crawler identity clears the CF rules on the first attempt,
+      // the scripted-browser set follows on odd attempts — so this hop rides
+      // fetchThroughChallenge's bounded identity-alternating retry without its
+      // own header set. The attempt window mirrors eureka's two-step hop — the
+      // challenge handshake needs a little more room than a plain API answer.
       const res = await fetchThroughChallenge(
         fetchImpl,
         `https://www.nextstore.com.kw/catalogsearch/result/index/?q=${encodeURIComponent(query)}`,
-        { headers: { ...CHALLENGE_HEADERS } },
+        {},
         AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
       );
       return nextStoreHits(await res.text(), query);
@@ -787,15 +787,16 @@ const COLLECTORS: RetailerCollector[] = [
     collect: async (query, fetchImpl) => {
       // post_type=product lands on the WooCommerce archive (prices + stock);
       // the plain blog search view carries neither. REEA-272: the hop rides
-      // the same browser-shaped header set + cookie-carry handshake as the
-      // other CF-fronted stores — a bare accept-only request left a standing
-      // HTTP 403 note on the deployed path while browsers reached the site;
-      // the doubled attempt window gives the handshake the same room the
-      // Next Store / Lulu chains get.
+      // fetchThroughChallenge's identity-alternating handshake (verified-bot
+      // first, browser-shaped fallback on odd attempts) — matching the other
+      // CF-fronted stores; a bare accept-only request left a standing HTTP
+      // 403 note on the deployed path while browsers reached the site. The
+      // doubled attempt window gives the handshake the same room the Next
+      // Store / Lulu chains get.
       const res = await fetchThroughChallenge(
         fetchImpl,
         `https://pckuwait.com/?s=${encodeURIComponent(query)}&post_type=product`,
-        { headers: { ...CHALLENGE_HEADERS } },
+        {},
         AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
       );
       return pcKuwaitHits(await res.text(), query);
@@ -807,13 +808,14 @@ const COLLECTORS: RetailerCollector[] = [
     collect: async (query, fetchImpl) => {
       // Kuwait storefront — luluwebstore.com is a plain 301 onto this host,
       // so this is the one that answers Kuwait prices. JSON-LD comes off the
-      // SSR search page; same managed-challenge retry as the Next Store hop
-      // (verified live 2026-09-08), and on a still-blocked answer the note
-      // explains the gap while the other retailers serve (graceful degradation).
+      // SSR search page; same identity-alternating managed-challenge retry
+      // as the Next Store hop (verified live 2026-09-08), and on a still-
+      // blocked answer the note explains the gap while the other retailers
+      // serve (graceful degradation).
       const res = await fetchThroughChallenge(
         fetchImpl,
         `https://www.luluhypermarket.com/en/search?query=${encodeURIComponent(query)}`,
-        { headers: { ...CHALLENGE_HEADERS } },
+        {},
         AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
       );
       return luluHits(await res.text(), query);
