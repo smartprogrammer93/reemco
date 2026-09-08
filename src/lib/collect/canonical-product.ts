@@ -47,7 +47,7 @@ const BRANDS = new Set([
 /** Spec §1 color vocabulary — exact words, casing/space noise already gone. */
 const COLORS = new Set([
   "silver", "black", "white", "blue", "green", "gray", "grey", "gold", "red",
-  "violet", "beige",
+  "violet", "beige", "orange", "purple", "pink",
 ]);
 
 /** Modifier words that open a two-word official colour name (§1 step 2):
@@ -76,6 +76,10 @@ const NOISE = new Set([
   "snapdragon", "elite", "exynos", "dimensity", "helios", "octa", "core",
   "with", "pen", "global", "version", "unlocked", "ram", "memory", "mem",
   "inch", "inches",
+  // REEA-254: Jarir-style tail clauses ("with Face ID | Tax Paid | 2 Years
+  // Official Warranty") restate warranty/setup marketing, never a product
+  // attribute — same role as the spec restatements above.
+  "face", "id", "tax", "paid", "warranty", "years", "official",
 ]);
 
 const STORAGE_RE = /^(\d+(?:\.\d+)?)(gb|tb)$/;
@@ -103,7 +107,13 @@ export function canonicalTokens(title: string): string[] {
   const raw = title
     .toLowerCase()
     .replace(/open[\s-]+box/g, "open-box")
-    .replace(/[,;:\-/‒–—]/g, " ")
+    // REEA-254: parentheses and pipes are separators too. Jarir-style titles
+    // write the capacity inside brackets ("iPhone 17 Pro (256 GB)") and tail
+    // marketing clauses with pipes; left as text they poison the model line
+    // (`iphone17 pro (256` ≠ `iphone17 pro`) and one SKU forks into several
+    // cards. As spaces they normalize exactly like the retailer's own
+    // short spelling.
+    .replace(/[,;:()|/\-‒–—]/g, " ")
     // REEA-205: quote-family marks fold to separators too — the inch sign
     // arrives as `"`/″/” depending on the retailer's feed encoding, and a
     // trailing quote after a size figure must tokenize exactly like the

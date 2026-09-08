@@ -641,6 +641,23 @@ describe("groupHits", () => {
     expect(tiers).toHaveLength(2);
   });
 
+  it("REEA-254: brackets and pipe tails normalize away, so bracketed spellings merge", () => {
+    // Live case from the benchmark: Jarir writes the capacity inside brackets
+    // and tails the title with "| Tax Paid | 2 Years Official Warranty".
+    // Without bracket/pipe normalization the model line forks
+    // (`iphone17 pro (256` ≠ `iphone17 pro`) and one SKU shows two cards.
+    const products = groupHits("iphone 17 pro", [
+      hit({ title: 'Apple iPhone 17 Pro 6.3" 256GB - Silver', merchant: "Xcite", price: 339.9, url: "https://xcite.example/256s" }),
+      hit({ title: "Apple iPhone 17 Pro (256 GB) - Silver with Face ID | Tax Paid | 2 Years Official Warranty", merchant: "Jarir", currency: "SAR", price: 1500, url: "https://jarir.example/256s" }),
+    ]);
+    expect(products).toHaveLength(1);
+    expect(products[0].offers.map((o) => o.price)).toEqual([339.9, 1500]);
+    // The bracketed capacity still discriminates the tier after normalization.
+    expect(canonicalFields("Apple iPhone 17 Pro (256 GB)").storage).toBe("256gb");
+    // Cosmic Orange closes on the colour through the widened vocabulary.
+    expect(canonicalFields("Apple iPhone 17 Pro Max 6.9 inch 1TB 5G Cosmic Orange").color).toBe("orange");
+  });
+
   it("REEA-254: the same fetched set merges identically regardless of adapter arrival order", () => {
     const base: SearchHit[] = [
       hit({ title: "Apple iPhone 17 Pro Max, 256 GB, Silver, 5G", merchant: "Jarir", currency: "SAR", price: 1500, url: "https://jarir.example/a" }),
@@ -990,7 +1007,9 @@ describe("collectLiveResults page width (REEA-156)", () => {
     expect(sultanBody?.pagesize).toBe(n);
 
     const blink = seen.find((s) => s.url.includes("blink.com.kw"));
-    expect(blink?.url).toContain(`limit=${n}`);
+    // Shopify hops nest the param (`resources[limit]=24`), the plain hop does
+    // not (`limit=24`); assert the number behind either shape.
+    expect(blink?.url.match(/limit\D*(\d+)/)?.[1]).toBe(String(n));
     const jarir = seen.find((s) => s.url.includes("cnstrc.com"));
     expect(decodeURIComponent(jarir?.url ?? "")).toContain(`num_results_per_page=${n}`);
   });
