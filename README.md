@@ -84,3 +84,5 @@ there are silently dropped.
 - Raw events are pruned after 90 days (Data Minimization); only aggregates outlive that.
 - Hardening: JSON-only, 16 KB cap, batch ≤ 20, schema-validated fields, 120 req/min rate limit.
 Deploy secrets: all four (SURGE_LOGIN, SURGE_TOKEN, VERCEL_TOKEN, VERCEL_TEAM_ID) are set in repo Actions secrets as of REEA-43. See issue REEA-43 for verification runs.
+
+REEA-322 note: keep `vercel.json` limited to schema-approved keys (`additionalProperties: false` in Vercel's validator); a stray top-level `description` fails every build and freezes the alias at the last green artifact.
