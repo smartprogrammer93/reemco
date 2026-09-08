@@ -88,6 +88,13 @@
   --rc-dark-savings: #4ADE80;
   --rc-dark-fresh: #FBBF24;
   --rc-dark-error: #F87171;
+
+  /* Streaming-skeleton geometry (REEA-217 pass / REEA-224 item 2): the ghost
+     cards reserve the real card geometry — same radius, padding and gutter —
+     with these two fill tones, so nothing below the fold shifts between first
+     paint and the settled grid. Verbatim from the design pass. */
+  --rc-skeleton-bg: #EFEAE1;
+  --rc-skeleton-fill: #E2DCCF;
 }
 
 /* Dark theme attaches the verbatim dark values onto the shared names. Tints
@@ -370,8 +377,21 @@ a:focus-visible {
   animation: rc-sheen 1.2s ease-in-out infinite;
 }
 
+/* Ghost card for the results streaming skeleton (REEA-224 item 2): real card
+   geometry — radius 14px, card padding, one gutter between ghosts — in the
+   skeleton tones above, so the footer sits at the same height from first
+   paint through the settled grid. */
+.skeleton-card {
+  background: var(--rc-skeleton-bg);
+  border-radius: var(--rc-radius-card);
+  padding: var(--rc-space-6);
+}
+
+/* Skeleton fill bars: 12px tall on the deeper skeleton tone (REEA-224 item
+   2). Heights live here so every ghost bar shares the exact figure. */
 .skeleton-block {
-  background: var(--rc-line);
+  height: 12px;
+  background: var(--rc-skeleton-fill);
   border-radius: var(--rc-radius-control);
   animation: rc-sheen 1.2s ease-in-out infinite;
 }

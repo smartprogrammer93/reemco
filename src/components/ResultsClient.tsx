@@ -87,15 +87,17 @@ class ResultsErrorBoundary extends Component<
 }
 
 /* Brief v4 loading state: card-shaped ghosts with sheen + the slim amber
-   pulse bar carrying the "checking stores" label — never a blank area. */
+   pulse bar carrying the "checking stores" label — never a blank area.
+   REEA-224 item 2: ghosts + heading slot mirror the real geometry (see
+   .skeleton-card in globals.css and results/loading.tsx — kept identical). */
 function SkeletonCard() {
   return (
-    <div className="result-card" aria-hidden>
-      <div className="skeleton-block h-5 w-2/3" />
-      <div className="skeleton-block mt-2 h-4 w-1/3" />
-      <div className="skeleton-block mt-4 h-7 w-32" />
-      <div className="skeleton-block mt-4 h-12" />
-      <div className="skeleton-block mt-2 h-12" />
+    <div className="skeleton-card" aria-hidden>
+      <div className="skeleton-block w-2/3" />
+      <div className="skeleton-block mt-2 w-1/3" />
+      <div className="skeleton-block mt-4 w-32" />
+      <div className="skeleton-block mt-4 w-full" />
+      <div className="skeleton-block mt-2 w-full" />
     </div>
   );
 }
@@ -109,6 +111,10 @@ export function LoadingFallback() {
       <p className="meta-stamp" style={{ color: "var(--rc-muted)" }}>
         Checking live stores…
       </p>
+      {/* Heading slot at the h1's own display height (same clamp math as
+          --rc-text-display × line-height 1.05) so the settled heading lands
+          without pushing anything below it. */}
+      <div className="skeleton-block" style={{ width: "45%", height: "clamp(36px, 4.8vw, 55px)" }} aria-hidden />
       <SkeletonCard />
       <SkeletonCard />
       <SkeletonCard />
@@ -419,6 +425,29 @@ function StageAppend(props: {
   );
 }
 
+/* REEA-224 item 2 — the `N results for …` h1 must be part of the initial
+   server shell, not something that appears only when the view converges:
+   without it the late heading pushes the footer down between first paint and
+   the settled grid. This boundary resolves with the FIRST staged flush (the
+   same promise StageAppend index 0 consumes), so the heading rides the first
+   streamed chunk and only its count deepens as slower retailers land. */
+function ResultsHeading(props: {
+  stage: Promise<LiveSearchResult>;
+  query: string;
+  page: number;
+  country: CountryCode | null;
+  showOutOfStock: boolean;
+}) {
+  const snap = use(props.stage);
+  const visible = stagedView(snap, props.page, props.country, props.showOutOfStock);
+  return (
+    <h1 style={{ font: "var(--rc-text-display)", color: "var(--rc-ink)" }}>
+      <span className="tabular">{visible.length}</span>{" "}
+      {visible.length === 1 ? "result" : "results"} for &ldquo;{props.query || "all products"}&rdquo;
+    </h1>
+  );
+}
+
 function StagedResults(props: {
   stages: Promise<LiveSearchResult>[];
   query: string;
@@ -497,14 +526,26 @@ function StagedResults(props: {
     );
   }
 
-  // Streaming view: append-only flushes; count/empty state wait for the
-  // converged snapshot so a partial arrival never reads as "no results".
+  // Streaming view: append-only flushes; the heading lands with the first
+  // flush (REEA-224 item 2 — part of the initial server shell, count-so-far
+  // deepening to the final figure on convergence) and only the empty state
+  // waits for the converged snapshot, so a partial arrival never reads as
+  // "no results".
   // REEA-189: the container is a flex column so flush blocks stack full-width
   // and the block `order` values (Devices 1 / Accessories 2) hold across
   // flushes — late devices still stack above earlier accessories.
   return (
     <ResultsErrorBoundary>
       <SelectionRow query={query} country={country} showOutOfStock={showOutOfStock} />
+      <Suspense fallback={null}>
+        <ResultsHeading
+          stage={stages[0]}
+          query={query}
+          page={page}
+          country={country}
+          showOutOfStock={showOutOfStock}
+        />
+      </Suspense>
       <div className="flex min-w-0 flex-col items-stretch gap-4" style={{ marginTop: "var(--rc-space-8)" }}>
         <Suspense fallback={null}>
           <StageAppend
