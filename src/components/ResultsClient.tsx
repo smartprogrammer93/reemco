@@ -1,7 +1,7 @@
 "use client";
 
 import { Component, Suspense, useEffect, useRef, useState, use, type ReactNode } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import CountryFilter from "@/components/CountryFilter";
 import StockToggle from "@/components/StockToggle";
@@ -297,22 +297,32 @@ export default function ResultsClient(props: {
 }
 
 function SelectionRow({
-  query,
   country,
   showOutOfStock,
+  onSelectCountry,
+  onToggleStock,
+  onRefresh,
 }: {
-  query: string;
   country: CountryCode | null;
   showOutOfStock: boolean;
+  onSelectCountry: (code: CountryCode | null) => void;
+  onToggleStock: (next: boolean) => void;
+  onRefresh: () => void;
 }) {
   return (
     /* REEA-170: country pills above the list — same control for both the
        result list and the empty state, active choice echoed from the URL.
        REEA-186: stock selection beside the country pills — visible in both
-       the result list and the empty state, same control. */
+       the result list and the empty state, same control.
+       REEA-291 AC4: the pills and the checkbox filter the already-loaded
+       payload IN PLACE (ResultsClient state); the Refresh button is the one
+       explicit action that re-runs the live collection server-side. */
     <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: "var(--rc-space-4)" }}>
-      <CountryFilter query={query} country={country} />
-      <StockToggle query={query} country={country} showOutOfStock={showOutOfStock} />
+      <CountryFilter country={country} onSelect={onSelectCountry} />
+      <StockToggle showOutOfStock={showOutOfStock} onToggle={onToggleStock} />
+      <button type="button" onClick={onRefresh} className="query-pill query-pill-on-light focusable">
+        Refresh
+      </button>
     </div>
   );
 }
@@ -509,9 +519,12 @@ function StagedResults(props: {
   page: number;
   country: CountryCode | null;
   showOutOfStock: boolean;
+  onSelectCountry: (code: CountryCode | null) => void;
+  onToggleStock: (next: boolean) => void;
+  onRefresh: () => void;
   renderStartMs?: number;
 }) {
-  const { stages, query, page, country, showOutOfStock } = props;
+  const { stages, query, page, country, showOutOfStock, onSelectCountry, onToggleStock, onRefresh } = props;
   const finalPromise = stages[stages.length - 1];
   const [finalSnap, setFinalSnap] = useState<LiveSearchResult | null>(null);
 
@@ -559,7 +572,7 @@ function StagedResults(props: {
     // Converged view: full count + empty state, identical to the blocking path.
     return (
       <ResultsErrorBoundary>
-        <SelectionRow query={query} country={country} showOutOfStock={showOutOfStock} />
+        <SelectionRow country={country} showOutOfStock={showOutOfStock} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
         {products.length === 0 && query.length > 0 ? (
           <>
             <EmptyState query={query} suggestions={stagedSuggestions(finalSnap, country, showOutOfStock)} country={country} />
@@ -597,7 +610,7 @@ function StagedResults(props: {
   // flushes — late devices still stack above earlier accessories.
   return (
     <ResultsErrorBoundary>
-      <SelectionRow query={query} country={country} showOutOfStock={showOutOfStock} />
+      <SelectionRow country={country} showOutOfStock={showOutOfStock} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
       <Suspense fallback={null}>
         <ResultsHeading
           stage={stages[0]}
@@ -638,9 +651,10 @@ function ResultsInner(props: {
   renderStartMs?: number;
 }) {
   const searchParams = useSearchParams();
+  const router = useRouter();
   // AC-U4 (REEA-13): malformed/oversized params degrade safely before use.
   const query = props.query ?? sanitizeSearchQuery(searchParams.get("q")) ?? "";
-  const page = props.page ?? sanitizePage(searchParams.get("page"));
+  const urlPage = props.page ?? sanitizePage(searchParams.get("page"));
   // REEA-170: the server-resolved selection wins; otherwise read the URL, then
   // the remembered choice (same-tab slot, then the REEA-280 preference cookie)
   // so a returning tab keeps its filter without re-selecting.
@@ -652,16 +666,54 @@ function ResultsInner(props: {
     typeof navigator === "undefined"
       ? null
       : countryFromAcceptLanguage(navigator.language ?? undefined);
-  const country =
+  const resolvedCountry =
     props.country ?? sanitizeCountry(searchParams.get("c")) ?? recallCountry() ?? browserHint ?? null;
   // REEA-186: same resolution chain as the country selection — server-resolved
   // value wins, then the URL, then the same-tab remembered choice; default is
   // hide out-of-stock listings (checkbox unchecked).
-  const showOutOfStock =
+  const resolvedOos =
     props.showOutOfStock ??
     sanitizeShowOutOfStock(searchParams.get("oos")) ??
     recallShowOutOfStock() ??
     false;
+
+  // REEA-291 AC4 — the selections are CLIENT-side filters over the loaded
+  // payload: the pills/toggle re-render the view from the staged/plain props
+  // with no navigation and no refetch. The in-place override lives until the
+  // served view's identity changes (new query, new page, or a refreshed
+  // server resolution after the explicit Refresh action), then the
+  // server-resolved chain takes over again from the URL / remembered
+  // preference. The override starts from the SAME values the server resolved,
+  // so hydration matches the served markup.
+  const viewKey = `${query}|${urlPage}|${resolvedCountry ?? ""}|${resolvedOos ? 1 : 0}`;
+  const [selectionOverride, setSelectionOverride] = useState<{
+    key: string;
+    country: CountryCode | null;
+    showOutOfStock: boolean;
+  } | null>(null);
+  const overridden = selectionOverride !== null && selectionOverride.key === viewKey;
+  const country = overridden ? selectionOverride.country : resolvedCountry;
+  const showOutOfStock = overridden ? selectionOverride.showOutOfStock : resolvedOos;
+  // Selection changes reset to page 1 — the filtered set is a different
+  // result set (same rule the old link targets carried).
+  const page = overridden ? 1 : urlPage;
+
+  // Selection handlers: filter the loaded payload immediately (AC4) and keep
+  // the URL echo in sync for sharing / a later reload — history.replaceState
+  // updates the address without navigation or network round-trip.
+  const applySelection = (nextCountry: CountryCode | null, nextOos: boolean) => {
+    setSelectionOverride({ key: viewKey, country: nextCountry, showOutOfStock: nextOos });
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", buildResultsHref(query, 1, nextCountry, nextOos));
+    }
+  };
+  const onSelectCountry = (code: CountryCode | null) => applySelection(code, showOutOfStock);
+  const onToggleStock = (next: boolean) => applySelection(country, next);
+  // REEA-291 AC4 — the ONLY full live re-fetch path: re-runs the server
+  // collection for this query (a live fan-out, or the ≤90 s memoized live
+  // answer per AC5), so collection timestamps update while the in-place
+  // selections above never hit the network.
+  const onRefresh = () => router.refresh();
 
   const staged = props.stages && props.stages.length > 0 ? props.stages : null;
 
@@ -730,7 +782,7 @@ function ResultsInner(props: {
 
   return (
     <ResultsErrorBoundary>
-      <SelectionRow query={query} country={country} showOutOfStock={showOutOfStock} />
+      <SelectionRow country={country} showOutOfStock={showOutOfStock} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
       {zero ? (
         <EmptyState query={query} suggestions={suggestions} country={country} />
       ) : (

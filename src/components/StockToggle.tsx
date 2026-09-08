@@ -1,33 +1,36 @@
 "use client";
 
-import Link from "next/link";
-import { buildResultsHref, type CountryCode } from "@/lib/country";
 import { rememberShowOutOfStock } from "@/lib/stock";
 
 /**
  * REEA-186 — "Show out-of-stock items" checkbox on the results surface. Same
- * mechanism as the REEA-170 pills: the selection rides the URL (`?oos=1`) as a
- * plain link, so enabling/disabling re-collects live under the new selection;
- * unchecked drops the param and the default (hide out-of-stock) applies.
- * Checkbox semantics on the link: aria-checked mirrors the state and the box
- * glyph shows it. Clicking records the choice in the same-tab slot so the next
- * search from the header form carries it without re-selecting. Selection
- * changes reset to page 1 — the visible set is a different result set.
+ * mechanism as the REEA-170 pills. REEA-291 AC4: the toggle is an IN-PLACE
+ * control — clicking flips the selection against the already-loaded offer
+ * payload on the client, with no navigation and no second network round-trip
+ * (the live re-collection stays behind the explicit Refresh action). The
+ * click still records the choice in the same-tab slot so the next search from
+ * the header form carries it without re-selecting. Checkbox semantics on the
+ * control: aria-checked mirrors the state and the box glyph shows it.
+ * Selection changes reset to page 1 — the visible set is a different result
+ * set. Offers always stay live-collected; this only selects among what the
+ * last live fetch returned.
  */
 export default function StockToggle({
-  query,
-  country,
   showOutOfStock,
+  onToggle,
 }: {
-  query: string;
-  country: CountryCode | null;
   showOutOfStock: boolean;
+  /** Applied to the loaded payload immediately (AC4). */
+  onToggle: (next: boolean) => void;
 }) {
   const next = !showOutOfStock;
   return (
-    <Link
-      href={buildResultsHref(query, 1, country, next)}
-      onClick={() => rememberShowOutOfStock(next)}
+    <button
+      type="button"
+      onClick={() => {
+        rememberShowOutOfStock(next);
+        onToggle(next);
+      }}
       role="checkbox"
       aria-checked={showOutOfStock}
       className="query-pill query-pill-on-light focusable inline-flex items-center gap-2"
@@ -46,6 +49,6 @@ export default function StockToggle({
         ✓
       </span>
       Show out-of-stock items
-    </Link>
+    </button>
   );
 }

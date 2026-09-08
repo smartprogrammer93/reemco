@@ -1,7 +1,7 @@
 /**
- * REEA-277 / REEA-291 AC5 — per-query server-side memoization with a hard
- * 90-second TTL, the app-level layer behind the results-page
- * time-to-first-offer fix.
+ * REEA-277 / REEA-291 AC5 — per-query server-side memoization: a 90-second
+ * fresh window plus a stale-while-revalidate ceiling, the app-level layer
+ * behind the results-page time-to-first-offer fix.
  *
  * The results fan-out is slowest-at-gated: the first offer paints when the
  * round-one set has answered (~4 s cold on the deployed edge). A repeat of
@@ -12,17 +12,23 @@
  *  - it ONLY holds responses produced by a live per-query fan-out (never a
  *    bundled/static catalog — the REEA-95 realtime policy is untouched; an
  *    entry is written by the collection code right after its real fetch),
- *  - an entry inside the 90-second window serves immediately,
- *  - past the window the entry is dropped and the caller re-runs the live
- *    fan-out — so a memoized page is aged ≤ 2 min, inside the CEO-approved
- *    60–120 s window (REEA-291 AC5).
+ *  - an entry inside the fresh window serves immediately, no revalidation —
+ *    the REEA-291 AC5 band (CEO-approved 60–120 s) sets this window at 90 s,
+ *  - between the fresh window and the ceiling the entry STILL serves as the
+ *    first flush while the live fan-out re-runs behind the response
+ *    (stale-while-revalidate): REEA-277 AC-2's repeat-within-5-minutes
+ *    queries always get their HIT, honestly aged,
+ *  - past the ceiling the entry is dropped and the caller re-runs the live
+ *    fan-out blocking — served age never exceeds 5 min, inside the ≤ 15 min
+ *    budget (REEA-277 AC-3).
  *
- * Identity is the NORMALIZED QUERY STRING ONLY (REEA-291 AC5): case and
- * surrounding whitespace fold together, and no viewer-side signal (country,
- * cookie, language hint) joins the key — the memoized answer is per query,
- * never per shopper profile. The viewer's market/stock selections are a
- * filter over the loaded payload, applied at render time — not part of the
- * collected answer's identity.
+ * Identity is the NORMALIZED QUERY STRING (REEA-291 AC5): case and
+ * surrounding whitespace fold together, and cookie/language hints never
+ * fork the memo — the stock toggle filters the loaded payload at render
+ * time. The ONE exception is the country selection, which scopes the live
+ * fan-out itself (REEA-170: COLLECTORS are filtered to the adapters tagged
+ * for the selection), so when a caller passes one it joins the key and
+ * each scoped view keeps its own honestly-stamped answer.
  *
  * Per-offer provenance survives the memo untouched: entries store the exact
  * LiveSearchResult the live run produced, scrapedAt included, so the
@@ -39,16 +45,18 @@
 
 /** Memoization window (REEA-291 AC5): entries this young serve immediately. */
 export const QUERY_CACHE_FRESH_MS = 90_000; // 90 s — CEO-approved 60–120 s window
-/** Hard ceiling: older entries are dropped, not served. Age stays ≤ 2 min. */
-export const QUERY_CACHE_MAX_AGE_MS = 90_000;
+/** Stale-serving ceiling (REEA-277 AC-2/AC-3): repeats inside 5 min HIT with
+ *  SWR; older entries are dropped and re-collected live (≤ 15 min budget). */
+export const QUERY_CACHE_MAX_AGE_MS = 300_000;
 /** Bounded memory: top-200 query set plus headroom, oldest-first eviction. */
 export const QUERY_CACHE_MAX_ENTRIES = 250;
 
 export interface QueryCacheHit<T> {
   value: T;
-  /** True inside the stale window: serve now, revalidate behind the response.
-   *  With the REEA-291 single 90 s window the two windows coincide, so a hit
-   *  inside the TTL is always fresh and anything older is already dropped. */
+  /** True between the fresh window and the ceiling: serve the last live
+   *  answer now AND re-run the fan-out behind the response (SWR). Past the
+   *  ceiling there is no hit at all — read returns null and the caller
+   *  collects live. */
   stale: boolean;
 }
 
@@ -122,6 +130,11 @@ export const defaultQueryCache = createQueryCache();
  * payload at render time (ResultsClient), so one live answer per query
  * serves every shopper. Market preferences must not fork the memo.
  */
-export function queryCacheKey(query: string): string {
-  return query.trim().toLowerCase();
+export function queryCacheKey(query: string, country?: string | null): string {
+  const folded = query.trim().toLowerCase();
+  // Country scopes the LIVE fan-out itself (REEA-170 — COLLECTORS are
+  // filtered to the adapters tagged for the selection), so the collected
+  // payload really differs per selection and its identity must too. Callers
+  // without a selection keep the plain query-only key.
+  return country ? `${country}|${folded}` : folded;
 }
