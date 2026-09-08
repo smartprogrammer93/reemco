@@ -383,13 +383,19 @@ function StageAppend(props: {
   const snap = use(stages[index]);
   const visible = stagedView(snap, page, country, showOutOfStock);
   // Snapshots are cumulative, so comparing against the adjacent prior stage is
-  // enough to isolate what this flush adds. At index 0 the "prior" promise is
-  // this same stage — everything visible is fresh.
+  // enough to isolate what this flush adds. At index 0 the "prior" is the
+  // same stage — everything visible is fresh.
   const prevSnap = use(stages[Math.max(0, index - 1)]);
-  const prevIds = new Set(
-    stagedView(prevSnap, page, country, showOutOfStock).map((p) => p.productId),
-  );
+  const prevVisible = stagedView(prevSnap, page, country, showOutOfStock);
+  const prevIds = new Set(prevVisible.map((p) => p.productId));
   const fresh = index === 0 ? visible : visible.filter((p) => !prevIds.has(p.productId));
+  // REEA-222: badge ownership follows the first flush that actually RENDERS
+  // cards, not index 0 blindly. When the earliest snapshots are empty under
+  // the country/stock selections, the whole page used to render without any
+  // Best-price badge (only index 0 could carry one). Same rule inside the
+  // tiered path: the Accessories block owns the badge only when it is the
+  // only rendered block up to here.
+  const badgeOwner = index === 0 || prevVisible.length === 0;
   // The tier gate reads the FULL matched set (cumulative snapshot), so the
   // decision only ever flips toward tiering as more retailers answer.
   const tiered = partitionForQuery(visible).tiered;
@@ -402,7 +408,7 @@ function StageAppend(props: {
   if (!tiered) {
     return (
       <>
-        <FlushBlock order={1} products={fresh} bestAt={index === 0 ? 0 : -1} {...props} />
+        <FlushBlock order={1} products={fresh} bestAt={badgeOwner ? 0 : -1} {...props} />
         {next}
       </>
     );
@@ -416,10 +422,10 @@ function StageAppend(props: {
         order={1}
         
         products={devices}
-        bestAt={index === 0 ? 0 : -1}
+        bestAt={badgeOwner ? 0 : -1}
         {...props}
       />
-      <FlushBlock label="Accessories" order={2}  products={accessories} bestAt={-1} {...props} />
+      <FlushBlock label="Accessories" order={2} products={accessories} bestAt={badgeOwner && devices.length === 0 ? 0 : -1} {...props} />
       {next}
     </>
   );

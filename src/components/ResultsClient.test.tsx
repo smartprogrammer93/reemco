@@ -308,6 +308,56 @@ describe("staged progressive results (REEA-178)", () => {
     const search = evts.find((e) => e.type === "search_submitted");
     expect(search?.result_count).toBe(2);
   });
+
+  it("REEA-222: the streaming shell keeps exactly one Best-price badge when early flushes render nothing", async () => {
+    // Live repro: `Case for iPhone 17 Pro` answered with an empty first
+    // snapshot — every later flush used to render badge-less because only
+    // index 0 could own the badge. Badge ownership now follows the first
+    // flush that actually renders cards.
+    searchParams.set("q", "Case for iPhone 17 Pro");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    const CASE_A: NormalizedProduct = {
+      productId: "panzer-magsafe-slim",
+      title: "Panzer Care MagSafe Slim Case for iPhone 17 Pro",
+      brand: "",
+      offers: [{ merchant: "Blink", price: 6.9, currency: "KWD", url: "https://blink.example/p1", inStock: true }],
+      coupons: [],
+      variations: [],
+      alternatives: [],
+      scrapedAt: new Date().toISOString(),
+    };
+    const CASE_B: NormalizedProduct = {
+      productId: "amazing-thing-folio",
+      title: "Amazing Thing Glamour Folio Flip Cover for iPhone 17 Pro",
+      brand: "",
+      offers: [{ merchant: "Xcite", price: 11.342, currency: "KWD", url: "https://xcite.example/p2", inStock: true }],
+      coupons: [],
+      variations: [],
+      alternatives: [],
+      scrapedAt: new Date().toISOString(),
+    };
+    const stages: Promise<LiveSearchResult>[] = [
+      // Flush 0: the first retailer answered with nothing visible under the
+      // current selections — renders no cards.
+      Promise.resolve({ products: [], notes: [], suggestions: [] }),
+      Promise.resolve({ products: [CASE_A, CASE_B], notes: [], suggestions: [] }),
+      // Later flush still pending: the view is the streamed shell, exactly
+      // what a no-JS client sees.
+      new Promise<LiveSearchResult>(() => {}),
+    ];
+
+    await act(async () => {
+      render(
+        <ResultsClient query="Case for iPhone 17 Pro" page={1} country={null} stages={stages} />,
+      );
+    });
+
+    const flags = document.querySelectorAll(".best-flag");
+    expect(flags).toHaveLength(1);
+    // The badge rides the first stocked card of the rendered block.
+    expect(flags[0].closest("article")?.textContent).toContain("Panzer Care MagSafe Slim");
+  });
 });
 
 describe("relevance tiering + brand hygiene (REEA-189)", () => {
