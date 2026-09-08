@@ -51,6 +51,29 @@ export const QUERY_CACHE_MAX_AGE_MS = 300_000;
 /** Bounded memory: top-200 query set plus headroom, oldest-first eviction. */
 export const QUERY_CACHE_MAX_ENTRIES = 250;
 
+/**
+ * REEA-291 AC4 — the explicit Refresh action is the ONE path that must always
+ * re-run the live collection (and so update the collection timestamps), even
+ * inside the AC5 fresh window. It rides to the server as a one-shot cookie:
+ * `router.refresh()` re-issues the exact same RSC request as the last render,
+ * so the flag has to travel inside the request itself — and request-time
+ * cookie reads are already the established channel on this route (REEA-280
+ * preference hints). Ten seconds of max-age covers the hop it rides; the
+ * signal is consumed by that single render and expires by itself.
+ */
+export const REFRESH_COOKIE = "rc_refresh";
+
+/** Client side of the Refresh signal: stamp the one-shot flag, then refresh. */
+export function markLiveRefresh(): void {
+  if (typeof document === "undefined") return;
+  document.cookie = `${REFRESH_COOKIE}=1; path=/; max-age=10; SameSite=Lax`;
+}
+
+/** Server side: is this request an explicit Refresh? */
+export function isRefreshSignal(value: string | undefined | null): boolean {
+  return value === "1";
+}
+
 export interface QueryCacheHit<T> {
   value: T;
   /** True between the fresh window and the ceiling: serve the last live

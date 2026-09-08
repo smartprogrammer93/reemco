@@ -1,6 +1,7 @@
 import ResultsClient from "@/components/ResultsClient";
 import { collectLiveResultsStaged } from "@/lib/collect/live-search";
 import { MARKET_COOKIE, resolveCountrySelection } from "@/lib/country";
+import { isRefreshSignal, REFRESH_COOKIE } from "@/lib/query-cache";
 import { sanitizeSearchQuery, sanitizePage } from "@/lib/search-params";
 import { sanitizeShowOutOfStock } from "@/lib/stock";
 import { cookies, headers } from "next/headers";
@@ -34,6 +35,7 @@ export const maxDuration = 20;
 async function readPreferenceHint(): Promise<{
   cookie: string | undefined;
   acceptLanguage: string | null;
+  refresh: boolean;
 }> {
   try {
     const cookieStore = await cookies();
@@ -41,9 +43,12 @@ async function readPreferenceHint(): Promise<{
     return {
       cookie: cookieStore.get(MARKET_COOKIE)?.value,
       acceptLanguage: headersList.get("accept-language"),
+      // REEA-291 AC4 — the one-shot Refresh signal rides the same request-time
+      // cookie read: this render re-collects live instead of taking the memo.
+      refresh: isRefreshSignal(cookieStore.get(REFRESH_COOKIE)?.value),
     };
   } catch {
-    return { cookie: undefined, acceptLanguage: null };
+    return { cookie: undefined, acceptLanguage: null, refresh: false };
   }
 }
 
@@ -82,7 +87,9 @@ export default async function ResultsPage({
   // right: one live fan-out serves every market view, so the response cache
   // keys on the normalized query string only and never forks on viewer-side
   // signals. Coverage notes describe the whole fan-out the page actually ran.
-  const staged = collectLiveResultsStaged(query);
+  // The ONE exception is the explicit Refresh action (REFRESH_COOKIE), which
+  // always re-runs the live collection so its timestamps move.
+  const staged = collectLiveResultsStaged(query, { refresh: hint.refresh });
 
   return (
     <div
