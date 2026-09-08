@@ -85,6 +85,11 @@ const NOISE = new Set([
   // the model line and split one SKU into two cards when a retailer omits
   // them and the Apple-store listing carries them.
   "intelligence",
+  // REEA-310: keyboard descriptor words ("RGB Wired Gaming Mechanical
+  // Optical") restate the same hardware across retailer spellings; the
+  // colour outside them is what makes one SKU distinct. Same role as the
+  // spec restatements above.
+  "gaming", "wired", "rgb", "mechanical", "optical",
 ]);
 
 const STORAGE_RE = /^(\d+(?:\.\d+)?)(gb|tb)$/;
@@ -112,6 +117,15 @@ export function canonicalTokens(title: string): string[] {
   const raw = title
     .toLowerCase()
     .replace(/open[\s-]+box/g, "open-box")
+    // REEA-310: annotation parentheses drop WITH contents — switch/layout
+    // notes ("(ROG RX Red Switch)", "(Arabic Layout)") are listing chrome,
+    // not product identity, and one SKU must not fork on whether a retailer
+    // carries them. Colour words outside the parens survive. Brackets that
+    // carry a quantity keep the REEA-254 bracket-as-space behaviour — a
+    // capacity inside brackets ("(256 GB)") is an attribute restatement, not
+    // chrome, and stays visible to the field scan. Stray paren characters
+    // fall through to the separator class below either way.
+    .replace(/\((?![^()]*\d)[^()]*\)/g, " ")
     // REEA-254: parentheses and pipes are separators too. Jarir-style titles
     // write the capacity inside brackets ("iPhone 17 Pro (256 GB)") and tail
     // marketing clauses with pipes; left as text they poison the model line
@@ -189,9 +203,42 @@ export function canonicalTokens(title: string): string[] {
   return out;
 }
 
+/** REEA-310 step 5 — a retailer shelf code glued right after the leading
+ *  brand token(s) ("ASUS XA14 ROG STRIX …") restates the retailer's own
+ *  prefix, not the product line. Generation parts keep their shape: `ii`
+ *  and `x` carry no digits, `96` carries no letters. */
+const SHELF_CODE_RE = /^[a-z]{1,3}[0-9]{1,3}$/;
+
+/** REEA-310 step 7 — a one-letter switch suffix riding right after a
+ *  numeral/Roman-numeral generation part restates that part
+ *  ("Scope II RX" ≡ "Scope II X"). Position-scoped: applied once per pair,
+ *  never chained. */
+const SUFFIX_RE = /^r([a-z])$/;
+const ORDINAL_RE = /^(?:\d+(?:\.\d+)?|[ivxlcdm]+)$/;
+
+/** Run steps 5 and 7 over the token stream, before the field scan. */
+function identityTokens(tokens: string[]): string[] {
+  const out: string[] = [];
+  // Shelf codes only inside the leading brand block at the head of the title.
+  let i = 0;
+  while (i < tokens.length && BRANDS.has(tokens[i])) out.push(tokens[i++]);
+  while (i < tokens.length && SHELF_CODE_RE.test(tokens[i])) i++;
+  for (; i < tokens.length; i++) out.push(tokens[i]);
+  // Switch-suffix collapse, position-scoped.
+  for (let j = 0; j + 1 < out.length; j++) {
+    if (!ORDINAL_RE.test(out[j])) continue;
+    const m = SUFFIX_RE.exec(out[j + 1]);
+    if (m) {
+      out[j + 1] = m[1];
+      j++; // pair resolved — the next ordinal starts fresh
+    }
+  }
+  return out;
+}
+
 /** Compute the spec §1 tuple from any live title (or slug-decoded query). */
 function computeCanonicalFields(title: string): CanonicalFields {
-  const tokens = canonicalTokens(title);
+  const tokens = identityTokens(canonicalTokens(title));
 
   // REEA-254 — the brand ROLE is evidence only when a known-brand word
   // actually appears. The old fallback consumed the first token as brand even
@@ -320,10 +367,17 @@ export function canonicalFields(title: string): CanonicalFields {
   return fields;
 }
 
-/** Join non-empty fields with `|` (spec §1 step 4). */
+/**
+ * Join non-empty fields with `|` (spec §1 step 4). REEA-310: the default
+ * grade carries no identity — §1 itself defines an absent grade as `new`,
+ * and the join rule already drops empty fields, so the default rides in the
+ * rendered key exactly like a missing one. An explicit grade
+ * ("renewed-grade-b") still discriminates. Field-level equality is
+ * unchanged: compatibleFields compares the tuple, not this string.
+ */
 export function canonicalKey(title: string): string {
   const f = canonicalFields(title);
-  return [f.brand, f.modelLine, f.storage, f.color, f.grade]
+  return [f.brand, f.modelLine, f.storage, f.color, f.grade === "new" ? "" : f.grade]
     .filter((v) => v !== "")
     .join("|");
 }
