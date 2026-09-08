@@ -23,7 +23,9 @@
  *  4. fields join with `|`; partial-match equality lives in compatibleFields:
  *     every field that is non-empty on BOTH sides must be equal, so a subset
  *     key (missing color/storage) joins the matching full group instead of
- *     splitting it, while different storage/color/grade/model-line never do.
+ *     splitting it, while different storage/color/grade never do. The model
+ *     line agrees under head containment too (REEA-280): a short family
+ *     spelling covers the retailer-tailed long spelling of the same line.
  */
 
 export interface CanonicalFields {
@@ -44,10 +46,13 @@ const BRANDS = new Set([
   "realme", "tecno", "infinix", "philips", "hisense", "tcl", "sharp",
 ]);
 
-/** Spec §1 color vocabulary — exact words, casing/space noise already gone. */
+/** Spec §1 color vocabulary — exact words, casing/space noise already gone.
+ *  REEA-280 extends the set with the official names retailers spell after the
+ *  line tokens ("Plum"); they close the colour field instead of riding on the
+ *  model line and splitting one SKU across its own colours. */
 const COLORS = new Set([
   "silver", "black", "white", "blue", "green", "gray", "grey", "gold", "red",
-  "violet", "beige", "orange", "purple", "pink",
+  "violet", "beige", "orange", "purple", "pink", "plum",
 ]);
 
 /** Modifier words that open a two-word official colour name (§1 step 2):
@@ -58,6 +63,10 @@ const COLORS = new Set([
 const COLOR_PREFIXES = new Set([
   "cobalt", "titanium", "phantom", "cosmic", "midnight", "starlight", "jet",
   "sky", "ice", "desert", "mist", "frost", "lava", "solar", "aurora",
+  // REEA-280: Bose's official QC II names ("Eclipse Grey", "Twilight Blue")
+  // arrive as modifier + base; they close the colour exactly like the
+  // existing prefix pairs, not as extra model-line words.
+  "eclipse", "twilight",
 ]);
 
 const GRADE_WORDS = new Set(["new", "renewed", "refurbished", "opened"]);
@@ -90,6 +99,13 @@ const NOISE = new Set([
   // colour outside them is what makes one SKU distinct. Same role as the
   // spec restatements above.
   "gaming", "wired", "rgb", "mechanical", "optical",
+  // REEA-280: the same class on earbud/TV listings — "Noise Cancelling
+  // Microphone, Bluetooth, USB (Charging), Built-in Microphone" restates
+  // the connectivity the model line already implies, and a retailer that
+  // omits the tail must not fork the short spelling into a second card.
+  // "in" rides with the join-word class ("Built-in" splits to "built in").
+  "wireless", "bluetooth", "microphone", "noise", "cancelling", "usb",
+  "built", "smart", "ai", "vision", "in",
 ]);
 
 const STORAGE_RE = /^(\d+(?:\.\d+)?)(gb|tb)$/;
@@ -248,9 +264,18 @@ function computeCanonicalFields(title: string): CanonicalFields {
   // field stays empty — missing fields never block a merge (partial-match
   // rule), so the branded and unbranded spellings of one device converge on
   // the same tuple instead of forming two cards.
-  let brandIdx = tokens.findIndex((t) => BRANDS.has(t));
+  // REEA-280: the tokenizer joins a size figure to the word before it
+  // ("Samsung 55" → `samsung55`), so the role also reads through the digit
+  // tail — the brand FIELD keeps the vocabulary word itself, so a titled
+  // "Samsung 75" and a titled "Samsung" agree on `samsung`.
+  const brandOf = (t: string): string => {
+    if (BRANDS.has(t)) return t;
+    const stem = t.replace(/\d+$/, "");
+    return BRANDS.has(stem) ? stem : "";
+  };
+  let brandIdx = tokens.findIndex((t) => brandOf(t) !== "");
   if (brandIdx < 0) brandIdx = -1;
-  const brand = brandIdx < 0 ? "" : tokens[brandIdx];
+  const brand = brandIdx < 0 ? "" : brandOf(tokens[brandIdx]);
 
   const line: string[] = [];
   let storage = "";
@@ -311,7 +336,7 @@ function computeCanonicalFields(title: string): CanonicalFields {
     // REEA-280: a repeated brand word inside one title ("iPad Air … Apple
     // Intelligence …") restates the brand field the same way — the role is
     // evidence once (REEA-254), echoes carry no model-line information.
-    if (NOISE.has(t) || BRANDS.has(t) || /^\d+(?:\.\d+)?$/.test(t)) continue;
+    if (NOISE.has(t) || brandOf(t) !== "" || /^\d+(?:\.\d+)?$/.test(t)) continue;
 
     if (!stopped) {
       // Single-letter model-line parts ("Galaxy Z Fold7") stay in the line;
@@ -383,20 +408,80 @@ export function canonicalKey(title: string): string {
 }
 
 /**
+ * REEA-280 — model-line containment. One retailer truncates its tail while
+ * another appends listing chrome ("Crystal UHD U8000F Smart TV" vs
+ * "... 4K Smart TV UA75U8000FUXZN"). The shorter line must sit at the head
+ * of the longer one, token by token, and everything the long side adds after
+ * it must be LISTING CHROME: a noise/descriptor word, a colour word, a lone
+ * letter, or a retailer code shape (letters + digits — "ua75u8000fuxzn").
+ * A plain word is identity: "Pro" vs "Pro Max" (REA-213 tiering) keeps two
+ * cards. At the head position, two retailer-code tokens agree when one is a
+ * prefix of the other — the shelf suffix ("...uxzn") restates the family
+ * code ("u8000f" shape), it does not fork the SKU.
+ */
+const CODE_SHAPE = /^(?:[a-z]{1,3}\d|\d[a-z]{1,3}\d)/;
+
+function isCodeShape(token: string): boolean {
+  return CODE_SHAPE.test(token) && /\d/.test(token) && /[a-z]/.test(token);
+}
+
+/** A lone chrome word may ride after the shared head of the shorter line. */
+function isChromeWord(token: string): boolean {
+  return NOISE.has(token) || COLORS.has(token) || COLOR_PREFIXES.has(token) || /^[a-z]$/.test(token);
+}
+
+/** Two shelf codes of one family agree when the SHORTER one's digit run and
+ *  letter run both appear in the longer ("8000f" rides inside
+ *  "ua75u8000fuxzn", the retailer's regional suffix), while sibling codes
+ *  still disagree: different digits ("7000" vs "8000") or different letters
+ *  ("a25" vs "s25") break one of the two runs. */
+function codesAgree(a: string, b: string): boolean {
+  const [shortTok, longTok] = a.length <= b.length ? [a, b] : [b, a];
+  if (longTok.startsWith(shortTok)) return true;
+  const digits = (s: string): string => s.replace(/\D/g, "");
+  const letters = (s: string): string => s.replace(/\d/g, "");
+  const sd = digits(shortTok);
+  return sd.length >= 2 && digits(longTok).includes(sd) && letters(longTok).includes(letters(shortTok));
+}
+
+function headTokensAgree(shortToken: string, longToken: string): boolean {
+  if (shortToken === longToken) return true;
+  if (shortToken.length >= 2 && longToken.startsWith(shortToken)) return true;
+  if (shortToken.length >= 2 && shortToken.startsWith(longToken)) return true;
+  // Two shelf codes of one family: the shorter code's digit + letter runs
+  // ride inside the suffixed one.
+  return isCodeShape(shortToken) && isCodeShape(longToken) && codesAgree(shortToken, longToken);
+}
+
+function lineCompatible(a: string, b: string): boolean {
+  if (a === b) return true;
+  const at = a.split(" ");
+  const bt = b.split(" ");
+  const [short, long] = at.length <= bt.length ? [at, bt] : [bt, at];
+  if (!short.every((t, i) => headTokensAgree(t, long[i] ?? ""))) return false;
+  // The long tail must be chrome only — a real word extends the identity.
+  return long.slice(short.length).every((t) => isChromeWord(t) || isCodeShape(t));
+}
+
+/**
  * Group-membership equality. Exact equality of every field non-empty on BOTH
  * sides: missing fields never block a merge (partial-match rule), present
  * ones must agree — different storage/color/grade/model-line stay separate.
+ * REEA-280: the model line agrees under containment too (lineCompatible),
+ * one short head spelling over several long retailer tails.
  */
 export function compatibleFields(a: CanonicalFields, b: CanonicalFields): boolean {
   const pairs: [string, string][] = [
     [a.brand, b.brand],
-    [a.modelLine, b.modelLine],
     [a.storage, b.storage],
     [a.color, b.color],
     [a.grade, b.grade],
   ];
   for (const [x, y] of pairs) {
     if (x !== "" && y !== "" && x !== y) return false;
+  }
+  if (a.modelLine !== "" && b.modelLine !== "" && !lineCompatible(a.modelLine, b.modelLine)) {
+    return false;
   }
   // A key with neither model line nor storage is too generic to merge on
   // brand alone: require the rest of the visible fields to speak up.

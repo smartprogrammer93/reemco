@@ -11,7 +11,7 @@
  * table, no precomputed merged-product row.
  */
 import { describe, expect, it } from "vitest";
-import { canonicalKey } from "@/lib/collect/canonical-product";
+import { canonicalKey, canonicalFields, compatibleFields } from "@/lib/collect/canonical-product";
 import { groupHits, type SearchHit } from "@/lib/collect/live-search";
 
 const A4_TITLES = [
@@ -89,6 +89,86 @@ describe("REEA-310 merge gate — A5 guardrail: adjacent lines stay separate", (
     expect(canonicalKey("ASUS ROG Strix Scope II X Wired Gaming Keyboard - Black")).not.toBe(
       canonicalKey("ASUS ROG Strix Scope II X Wired Gaming Keyboard - White"),
     );
+  });
+});
+
+describe("REE-280 residual merge classes (live QA repros)", () => {
+  // Every title below is captured verbatim from the deployed results surface
+  // (ar-KW, q=Bose QuietComfort II / q=Samsung Crystal UHD 55). Each group is
+  // one SKU whose retailer spellings diverge in listing chrome, not identity.
+  it("Bose QC II: descriptor-tailed and short spellings of one SKU share a tuple", () => {
+    const short = canonicalFields("Bose QuietComfort II Wireless Earbuds Black");
+    const verbose = canonicalFields(
+      "Bose QuietComfort II Earbuds, Noise Cancelling Microphone, Bluetooth, USB (Charging), Built-in Microphone, Eclipse Grey",
+    );
+    const plum = canonicalFields("Bose QuietComfort II Wireless Earbuds Plum");
+    // Chrome words (earbud-descriptor restatements) never ride the line, so
+    // all three spellings reduce to the same brand|model-line tuple.
+    expect(short.modelLine).toBe("quietcomfort ii");
+    expect(verbose.modelLine).toBe(short.modelLine);
+    expect(plum.modelLine).toBe(short.modelLine);
+    // Official colour names close the colour field; they do not extend the
+    // model line, so colours merge inside the card as swatches (REEA-254).
+    expect(short.color).toBe("black");
+    expect(verbose.color).toBe("grey");
+    expect(plum.color).toBe("plum");
+    // One merge gate, no colour split: the live spellings land on one card.
+    expect(compatibleFields({ ...short, color: "" }, { ...verbose, color: "" })).toBe(true);
+    expect(compatibleFields({ ...short, color: "" }, { ...plum, color: "" })).toBe(true);
+  });
+
+  it("Samsung TVs: the bare model-family code and the full shelf code are one identity", () => {
+    const bare = canonicalFields("Samsung Crystal UHD U8000F 4K Smart TV (2025)");
+    const full = canonicalFields('Samsung 75" Crystal UHD U8000F 4K Smart TV, UA75U8000FUXZN');
+    expect(compatibleFields(bare, full)).toBe(true);
+    // A different code stem is a different SKU — containment is per token.
+    const other = canonicalFields('Samsung 55" FLAT UHD 4K Resolution UA55CU7000UXZN (2023)');
+    expect(compatibleFields(bare, other)).toBe(false);
+  });
+
+  it("generation parts stay discriminators: Air 11-inch and Air 13-inch keep two cards", () => {
+    const air11 = canonicalFields("Apple iPad Air 11 inch M4 2026 128GB 5G MH794AB/A Blue");
+    const air13 = canonicalFields("Apple iPad Air 13 inch M4 128GB Wi-Fi MH5N4AB/A Grey");
+    expect(compatibleFields(air11, air13)).toBe(false);
+  });
+
+  it("groupHits folds the QC II live spellings into one card with merged offers", () => {
+    const products = groupHits("bose quietcomfort ii", [
+      hit({
+        title: "Bose QuietComfort II Wireless Earbuds Black",
+        merchant: "Xcite",
+        price: 29.9,
+        url: "https://xcite.example/qc2-black",
+      }),
+      hit({
+        title: "Bose QuietComfort II Wireless Earbuds Plum",
+        merchant: "Xcite",
+        price: 31.9,
+        url: "https://xcite.example/qc2-plum",
+      }),
+      hit({
+        title:
+          "Bose QuietComfort II Earbuds, Noise Cancelling Microphone, Bluetooth, USB (Charging), Built-in Microphone, Eclipse Grey",
+        merchant: "Jarir",
+        price: 480,
+        currency: "SAR",
+        url: "https://jarir.example/qc2-grey",
+      }),
+    ]);
+    expect(products).toHaveLength(1);
+    // Cheapest-first in KWD-space (SAR 480 ≈ KWD 39 behind KWD 29.9); same-
+    // retailer rows still fold to that retailer's best listing (REEA-192),
+    // so two Xcite listings keep the cheaper one.
+    expect(products[0].offers.map((o) => `${o.merchant}:${o.price}`)).toEqual([
+      "Xcite:29.9",
+      "Jarir:480",
+    ]);
+    // The three spellings' colours ride the card as swatches (REEA-254).
+    expect(products[0].variations.map((v) => v.label)).toEqual([
+      "Black",
+      "Plum",
+      "Grey",
+    ]);
   });
 });
 
