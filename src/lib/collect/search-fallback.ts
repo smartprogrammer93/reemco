@@ -29,6 +29,23 @@ import type { FetchImpl } from "@/lib/collect/scraper";
 const FALLBACK_TIMEOUT_MS = 8_000;
 
 /**
+ * REEA-152 — allowlists for discovery-hop values scraped from upstream
+ * homepage HTML before they are interpolated (unescaped) into the follow-up
+ * hop-fetch URLs (`https://${appId}-dsn.algolia.net/...`, `...?key=${indexKey}`).
+ * Each alphabet is exactly the character set real Algolia app ids, Algolia
+ * search keys and Constructor index keys use, so legitimate values always
+ * pass; anything else can only shrink the origin suffix `-dsn.algolia.net` /
+ * the query tail, never close the origin or inject a second segment.
+ * Shared single source (REEA-224 F3): live-search.ts imports these and runs
+ * the same checks on its cached discovery hop.
+ */
+// Real Algolia app ids carry upper-case letters (eureka.com.kw ships
+// "5GPHMAA239"), so the alphabet must include upper-case like SEARCH_KEY_ALLOW
+// does; still only characters safe for interpolation into the hop-fetch URL.
+export const APP_ID_ALLOW = /^[A-Za-z0-9-]{1,64}$/;
+export const SEARCH_KEY_ALLOW = /^[A-Za-z0-9_-]{8,128}$/;
+
+/**
  * Minimum query-token coverage for a fallback hit to count (REEA-137). Half
  * the query tokens present keeps the single-best-hit pick targeted while the
  * descriptive tail of retailer titles no longer suppresses a real match.
@@ -434,6 +451,11 @@ export async function searchRetailerFallback(
     const appId = html.match(/id="cky"[^>]*value="([^"]+)"/)?.[1];
     const searchKey = html.match(/id="srcapk"[^>]*value="([^"]+)"/)?.[1];
     if (!appId || !searchKey) throw new Error("eureka: algolia credentials not found on page");
+    if (!APP_ID_ALLOW.test(appId) || !SEARCH_KEY_ALLOW.test(searchKey)) {
+      // REEA-224 F3 — same REEA-152 allowlist live-search.ts runs: fail closed
+      // BEFORE interpolating, so a crafted homepage never reaches the hop URL.
+      throw new Error("eureka: discovery credentials failed validation");
+    }
     const payload = await postJson(
       fetchImpl,
       `https://${appId}-dsn.algolia.net/1/indexes/instant_records/query` +
@@ -484,6 +506,10 @@ export async function searchRetailerFallback(
     if (!page.ok) throw new Error(`jarir homepage HTTP ${page.status}`);
     const indexKey = extractJarirIndexKey(await page.text(), jarirIndexLang(productTitle));
     if (!indexKey) throw new Error("jarir: constructor index key not found on page");
+    if (!SEARCH_KEY_ALLOW.test(indexKey)) {
+      // REEA-224 F3 — same shared allowlist as the eureka hop and live-search.
+      throw new Error("jarir: constructor index key failed validation");
+    }
     const payload = await fetchResponse(
       fetchImpl,
       `https://ac.cnstrc.com/search/${encodeURIComponent(productTitle)}` +

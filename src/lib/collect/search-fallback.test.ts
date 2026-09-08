@@ -397,3 +397,40 @@ describe("seed catalog dispatch routing (REEA-93)", () => {
     expect(checked).toBeGreaterThanOrEqual(4);
   });
 });
+
+describe("discovery-hop allowlist (REEA-224 F3)", () => {
+  function html(body: string): Response {
+    return new Response(body, { headers: { "content-type": "text/html" } });
+  }
+
+  it("lets a well-formed eureka credential pair reach only the *-dsn.algolia.net hop", async () => {
+    const seen: string[] = [];
+    const fetchImpl = async (url: string): Promise<Response> => {
+      seen.push(url);
+      if (url.endsWith("eureka.com.kw/")) {
+        return html('<input id="cky" value="5GPHMAA239"><input id="srcapk" value="key4eureka">');
+      }
+      return new Response(JSON.stringify({ hits: [] }));
+    };
+    await searchRetailerFallback("eureka.com.kw", PRODUCT, fetchImpl).catch(() => null);
+    // Discovery passed the shared REEA-152 allowlist, so the follow-up hop is
+    // the plain Algolia origin — the app id only ever shrank the suffix.
+    expect(seen.some((u) => u.startsWith("https://5GPHMAA239-dsn.algolia.net/"))).toBe(true);
+  });
+
+  it("fails closed on crafted eureka credentials before interpolating them", async () => {
+    const seen: string[] = [];
+    const fetchImpl = async (url: string): Promise<Response> => {
+      seen.push(url);
+      // Crafted homepage: appId carries an origin + query + fragment; the
+      // searchKey is well-formed so only the allowlist check can trip here.
+      return html('<input id="cky" value="evil.example/?a#"><input id="srcapk" value="validkey12">');
+    };
+    await expect(
+      searchRetailerFallback("eureka.com.kw", PRODUCT, fetchImpl),
+    ).rejects.toThrow("eureka: discovery credentials failed validation");
+    // Homepage fetched once; the crafted value never entered a hop URL.
+    expect(seen).toHaveLength(1);
+    expect(seen.join(" ")).not.toContain("evil.example");
+  });
+});
