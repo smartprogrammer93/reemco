@@ -303,7 +303,8 @@ function leadingBrandOffset(firstWordFolded: string, metadataFolded: string): nu
  *  2 — full token coverage buried in the title;
  *  3 — at least half the tokens (rounded up) match as whole words;
  *  4 — matched only via brand field / merchant metadata;
- *  0 — zero token matches (excluded, same as today's behavior).
+ *  0 — zero token matches: ranked below every matched tier (never blended
+ *      into the lead block — REEA-222).
  * An empty query treats everything as tier 1 so untouched ordering holds.
  */
 export function relevanceTier(query: string, title: string, metadata = ""): number {

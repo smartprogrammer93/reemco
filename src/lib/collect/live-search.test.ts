@@ -1054,6 +1054,24 @@ describe("relevance-first ranking (REEA-213 Bet 1, REEA-211 acceptance)", () => 
     expect(bestBadgeIndex(products)).toBe(0);
   });
 
+  it("REEA-222: a zero-token cross-category card sits below the phones, badge on the cheapest Pro Max", () => {
+    // Live-shape repro from QA (REEA-222 Q3): the cheap Instax camera
+    // answers none of the query tokens; it must not ride the lead bucket on
+    // its low price and steal the single badge from the phones.
+    const products = groupHits("iPhone 17 Pro Max", [
+      hit({ title: "Fujifilm Instax Mini 41 Instant Camera, Classic Design", merchant: "Blink", price: 44, url: "https://blink.example/instax", brand: "Fujifilm" }),
+      hit({ title: "Apple iPhone 17 Pro Max 256GB Orange", merchant: "Xcite", price: 379.9, url: "https://xcite.example/17pmo", brand: "Apple" }),
+      hit({ title: "Apple iPhone 17 Pro Max 512GB Black", merchant: "Jarir", country: "SA", currency: "SAR", price: 429.9, url: "https://jarir.example/17pm5", brand: "Apple" }),
+    ]);
+    expect(products.map((p) => p.title)).toEqual([
+      "Apple iPhone 17 Pro Max 256GB Orange",
+      "Apple iPhone 17 Pro Max 512GB Black",
+      "Fujifilm Instax Mini 41 Instant Camera, Classic Design",
+    ]);
+    // The badge follows the lead phone card, never the cheaper camera.
+    expect(bestBadgeIndex(products)).toBe(0);
+  });
+
   it("query `Case for iPhone 17 Pro`: the ladder flips — case cards lead the phones", () => {
     const products = groupHits("Case for iPhone 17 Pro", [
       hit({ title: "Apple iPhone 17 Pro Max, 256 GB Black", merchant: "Jarir", country: "SA", currency: "SAR", price: 470, url: "https://jarir.example/17pm", brand: "Apple" }),

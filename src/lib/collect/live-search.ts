@@ -662,7 +662,13 @@ function rankByRelevance(query: string, groups: HitGroup[]): HitGroup[] {
 
   const buckets: Ranked[][] = [];
   for (const r of ranked) {
-    const idx = Math.min(Math.max(r.tier, 1), 4) - 1;
+    // REEA-222: a tier-0 group (zero query-token coverage) is the WEAKEST
+    // match and joins the bottom bucket. Clamping it into the lead bucket
+    // let a cheap cross-category card (an Instax camera at KWD 44 under
+    // `iPhone 17 Pro Max`) outrank every phone on the inside-tier price
+    // tiebreak and steal the single Best-price badge. Unknown/absent tiers
+    // (Infinity) keep their old home — the last matched block.
+    const idx = r.tier >= 1 && r.tier <= 4 ? r.tier - 1 : 4;
     (buckets[idx] ??= []).push(r);
   }
   const out: HitGroup[] = [];
