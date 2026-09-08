@@ -7,10 +7,12 @@ import { describe, expect, it } from "vitest";
 import {
   brandAwareCoverage,
   extractJarirIndexKey,
+  fetchThroughChallenge,
   jarirIndexLang,
   parseAmazonEgSearch,
   parseEurekaSearch,
   parseJarirSearch,
+  parseNextStoreSearch,
   parseShopifyProducts,
   parseSultanCenterSearch,
   parseXciteSearch,
@@ -432,5 +434,53 @@ describe("discovery-hop allowlist (REEA-224 F3)", () => {
     // Homepage fetched once; the crafted value never entered a hop URL.
     expect(seen).toHaveLength(1);
     expect(seen.join(" ")).not.toContain("evil.example");
+  });
+});
+
+describe("challenge-fronted hops (REEA-238)", () => {
+  it("replays the seeded visitor cookie on the retry and keeps the first ok answer", async () => {
+    const seen: Array<RequestInit | undefined> = [];
+    const fetchImpl = async (_url: string, init?: RequestInit): Promise<Response> => {
+      seen.push(init);
+      if (seen.length === 1) {
+        return new Response("challenge", { status: 403, headers: { "set-cookie": "__cf_bm=abc123; Path=/" } });
+      }
+      return new Response("<html>real</html>", { headers: { "content-type": "text/html" } });
+    };
+    const res = await fetchThroughChallenge(fetchImpl, "https://www.nextstore.com.kw/", {}, AbortSignal.timeout(3000));
+    expect(res.status).toBe(200);
+    expect(seen).toHaveLength(2);
+    // The interstitial's visitor cookie must ride on the retry — that is the
+    // whole handshake; without it every attempt stays on the interstitial.
+    expect((seen[1]!.headers as Headers).get("cookie")).toContain("__cf_bm=abc123");
+  });
+
+  it("bounds retries on an unanswered challenge instead of hanging the hop", async () => {
+    let calls = 0;
+    const fetchImpl = async (): Promise<Response> => {
+      calls += 1;
+      return new Response("challenge", { status: 403 });
+    };
+    await expect(
+      fetchThroughChallenge(fetchImpl, "https://www.nextstore.com.kw/", {}, AbortSignal.timeout(3000)),
+    ).rejects.toThrow("HTTP 403");
+    expect(calls).toBe(6);
+  });
+
+  it("parseNextStoreSearch answers through the shared Magento card scanner", () => {
+    const html =
+      '<a class="product-item-link" href="https://www.nextstore.com.kw/lg-wm-f550.html" title="LG Washing Machine F550">LG Washing Machine F550</a>' +
+      '<span class="price-box"><span class="price" data-price-amount="89.000" data-price-type="finalPrice">KD 89.000</span></span>';
+    expect(parseNextStoreSearch(html, "LG Washing Machine F550")).toMatchObject({ price: 89, currency: "KWD", inStock: true });
+  });
+
+  it("shares the Shopify parser across the two JSON retailers (adapter symmetry)", () => {
+    const payload = { products: [{ title: PRODUCT, handle: "sony-ch520", variants: [{ price: "25.900", available: true }] }] };
+    // blink keeps its own host…
+    expect(parseShopifyProducts(payload, PRODUCT)?.url).toBe("https://blink.com.kw/products/sony-ch520");
+    // …and Quadra lands on quadrastores.com through the same code path.
+    expect(parseShopifyProducts(payload, PRODUCT, "https://quadrastores.com")?.url).toBe(
+      "https://quadrastores.com/products/sony-ch520",
+    );
   });
 });

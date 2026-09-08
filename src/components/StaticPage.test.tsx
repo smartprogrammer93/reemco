@@ -37,7 +37,11 @@ describe("static trust pages (REEA-181)", () => {
     render(<AboutPage />);
     expect(screen.getByRole("heading", { name: "About Reemco" })).toBeTruthy();
     expect(screen.getByText(/price-comparison site for shopping in Kuwait/)).toBeTruthy();
-    expect(screen.getByText("Xcite · Jarir · Eureka · Sultan Center.")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Xcite · Jarir · Eureka · Sultan Center · Blink · Lulu Hypermarket · Quadra Stores · Next Store · PC Kuwait.",
+      ),
+    ).toBeTruthy();
     expect(screen.getByText(/fetched live from each retailer/)).toBeTruthy();
   });
 

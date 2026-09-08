@@ -13,9 +13,13 @@ import {
   eurekaHits,
   groupHits,
   jarirHits,
+  luluHits,
   LIVE_SEARCH_BUDGET_MS,
   LIVE_SEARCH_HITS_PER_PAGE,
   LIVE_SEARCH_TIMEOUT_MS,
+  nextStoreHits,
+  pcKuwaitHits,
+  quadraHits,
   resetDiscoveryCache,
   sultanCenterHits,
   xciteHits,
@@ -55,6 +59,124 @@ describe("hit parsers", () => {
       "samsung galaxy s26",
     );
     expect(hits[0]).toMatchObject({ merchant: "Blink", price: 350, url: "https://blink.com.kw/products/sg-s26", inStock: true });
+  });
+
+  it("quadraHits follows blink's Shopify contract with option1-brand precedence (REEA-238)", () => {
+    // Live shape (quadrastores.com/products.json, captured 2026-09-08):
+    // variant option1 carries the manufacturer, vendor the store's own name.
+    const hits = quadraHits(
+      {
+        products: [
+          {
+            title: "ASUS VivoBook 15 X1502ZA Intel Core i5",
+            handle: "asus-vivobook-15-x1502za",
+            vendor: "Quadra Stores",
+            variants: [{ price: "99.00", compare_at_price: "129.00", available: true, option1: "ASUS" }],
+          },
+          { title: "No Variant", handle: "nv", variants: [] },
+        ],
+      },
+      "asus vivobook",
+    );
+    expect(hits[0]).toMatchObject({
+      merchant: "Quadra Stores",
+      brand: "ASUS",
+      price: 99,
+      wasPrice: 129,
+      currency: "KWD",
+      url: "https://quadrastores.com/products/asus-vivobook-15-x1502za",
+      inStock: true,
+    });
+    expect(hits).toHaveLength(1);
+  });
+
+  it("nextStoreHits scans Magento SSR cards through the shared scanner (REEA-238)", () => {
+    // Trimmed from the captured live catalogsearch page (2026-09-08): card
+    // anchor with title attr, price-box data-price amounts, brand anchor.
+    const html =
+      '<li><a class="product-item-link" href="https://www.nextstore.com.kw/lg-washing-machine-fh2j3qdnl02.html" title="LG Front Load Washing Machine FH2J3QDNL02">LG Front Load Washing Machine FH2J3QDNL02</a>' +
+      '<span class="price-box"><span class="price" data-price-amount="119.900" data-price-type="finalPrice">KD 119.900</span>' +
+      '<span class="old-price" data-price-amount="149.900" data-price-type="oldPrice">KD 149.900</span></span>' +
+      '<a class="product-item-brand" href="/lg">LG</a></li>' +
+      '<li><a class="product-item-link" href="https://www.nextstore.com.kw/anker-powercore.html" title="Anker PowerCore 20100">Anker PowerCore 20100</a>' +
+      '<span class="price-box"><span class="price" data-price-amount="19.000" data-price-type="finalPrice">KD 19.000</span></span></li>';
+    const hits = nextStoreHits(html, "lg washing machine");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({
+      merchant: "Next Store",
+      brand: "LG",
+      price: 119.9,
+      wasPrice: 149.9,
+      currency: "KWD",
+      url: "https://www.nextstore.com.kw/lg-washing-machine-fh2j3qdnl02.html",
+      inStock: true,
+    });
+  });
+
+  it("nextStoreHits marks only the explicit out-of-stock tail as unavailable", () => {
+    const html =
+      '<a class="product-item-link" href="https://www.nextstore.com.kw/lg-wm.html" title="LG Washing Machine F550">LG Washing Machine F550</a>' +
+      '<span class="price-box"><span class="price" data-price-amount="89.000" data-price-type="finalPrice">KD 89.000</span></span>' +
+      '<div class="stock unavailable">Out of stock</div>';
+    const hits = nextStoreHits(html, "lg washing machine");
+    expect(hits[0].inStock).toBe(false);
+  });
+
+  it("pcKuwaitHits reads WooCommerce sale prices off the product archive (REEA-238)", () => {
+    // Trimmed from the captured live archive (2026-09-08): loop link wraps the
+    // h2 title, price block keeps ins(current)/del(regular) with KD symbols.
+    const html =
+      '<li class="product-type-simple"><a href="https://pckuwait.com/shop/logitech-m330-silent-plus/" class="woocommerce-loop-product__link"><img alt="Logitech M330" />' +
+      '<h2 class="woocommerce-loop-product__title">Logitech M330 Silent Plus Mouse</h2></a>' +
+      '<span class="price"><ins><span class="woocommerce-Price-amount amount"><span class="woocommerce-Price-currencySymbol">KD</span>&nbsp;11.500</span></ins>' +
+      '<del><span class="woocommerce-Price-amount amount"><span class="woocommerce-Price-currencySymbol">KD</span>&nbsp;13.000</span></del></span></li>';
+    const hits = pcKuwaitHits(html, "logitech mouse");
+    expect(hits[0]).toMatchObject({
+      merchant: "PC Kuwait",
+      title: "Logitech M330 Silent Plus Mouse",
+      price: 11.5,
+      wasPrice: 13,
+      currency: "KWD",
+      url: "https://pckuwait.com/shop/logitech-m330-silent-plus/",
+      inStock: true,
+    });
+  });
+
+  it("luluHits lifts JSON-LD offers and honours schema.org availability (REEA-238)", () => {
+    // Shape captured from the luluhypermarket.com SSR search page 2026-09-08:
+    // ItemList wrapper, relative offer URLs, explicit InStock/OutOfStock.
+    const ld = JSON.stringify({
+      "@type": "ItemList",
+      itemListElement: [
+        {
+          "@type": "Item",
+          item: {
+            "@type": "Product",
+            name: "Apple iPhone 15 128 GB Blue",
+            offers: {
+              "@type": "Offer",
+              price: "249.00",
+              priceCurrency: "KWD",
+              availability: "https://schema.org/InStock",
+              url: "/en/apple-iphone-15-128-gb",
+            },
+          },
+        },
+        {
+          "@type": "Item",
+          item: {
+            "@type": "Product",
+            name: "Apple iPhone 15 Plus 128 GB",
+            offers: { "@type": "Offer", price: "299.00", priceCurrency: "KWD", availability: "https://schema.org/OutOfStock" },
+          },
+        },
+      ],
+    });
+    const hits = luluHits(`<script type="application/ld+json">${ld}</script>`, "iphone 15");
+    expect(hits).toHaveLength(2);
+    expect(hits[0]).toMatchObject({ merchant: "Lulu Hypermarket", price: 249, currency: "KWD", inStock: true });
+    expect(hits[0].url).toBe("https://www.luluhypermarket.com/en/apple-iphone-15-128-gb");
+    expect(hits[1].inStock).toBe(false);
   });
 
   it("eurekaHits maps clprc/lprc and stock quantity", () => {
@@ -931,8 +1053,9 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     expect(first.products).toHaveLength(1);
     // AC-1: a real price renders from the answered adapters alone.
     expect(first.products[0].offers.some((o) => o.merchant === "Xcite" || o.merchant === "Blink")).toBe(true);
-    // Slow hops had no say in the first flush.
-    expect(first.notes.length).toBeLessThanOrEqual(2);
+    // Slow hops had no say in the first flush: only collectors whose mocks
+    // never answer early count as notes (six of the ten retailers now).
+    expect(first.notes.length).toBeLessThanOrEqual(6);
     // AC-3: every snapshot carries its own real completion stamp.
     expect(Date.now() - Date.parse(first.products[0].scrapedAt!)).toBeLessThan(5_000);
 
@@ -944,7 +1067,9 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     expect(finalSnap.products[0].offers.map((o) => o.price)).toEqual([379, 385, 390, 399]);
     expect(merchants.has("Eureka")).toBe(true);
     expect(merchants.has("Sultan Center")).toBe(true);
-    expect(finalSnap.notes).toHaveLength(4);
+    // Merchants whose mocks never answer are all reported as notes (eight of
+    // the ten retailers).
+    expect(finalSnap.notes).toHaveLength(8);
   });
 
   it("the final flush equals the blocking path on the same live answers", async () => {
@@ -1132,7 +1257,8 @@ describe("whole-chain budget signal (REEA-224 F4)", () => {
     // drift past the documented LIVE_SEARCH_BUDGET_MS ceiling.
     expect(elapsed).toBeGreaterThanOrEqual(LIVE_SEARCH_TIMEOUT_MS * 2 - 1_500);
     expect(elapsed).toBeLessThan(LIVE_SEARCH_BUDGET_MS + 2_000);
-    // Graceful degradation: every silent retailer is still reported.
-    expect(notes).toHaveLength(4);
+    // Graceful degradation: every silent retailer is still reported (all ten
+    // collectors are stalled here).
+    expect(notes).toHaveLength(8);
   }, 25_000);
 });
