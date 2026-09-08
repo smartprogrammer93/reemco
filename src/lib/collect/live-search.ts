@@ -25,6 +25,7 @@ import {
   scanNextStoreCards,
   scanWooCards,
   titleMatchScore,
+  VERIFIED_BOT_HEADERS,
 } from "@/lib/collect/search-fallback";
 import { defaultQueryCache, queryCacheKey, type QueryCache, type QueryCacheHit } from "@/lib/query-cache";
 import type { FetchImpl } from "@/lib/collect/scraper";
@@ -838,6 +839,22 @@ const COLLECTORS: RetailerCollector[] = [
       // a bare accept-only request left a standing HTTP 403 note there while
       // browsers reached the site, so the fallback keeps the doubled window.
       const apiUrl = `https://pckuwait.com/wp-json/wc/store/v1/products?search=${encodeURIComponent(query)}&per_page=${LIVE_SEARCH_HITS_PER_PAGE}`;
+      // Cached first: WITHOUT `cache:"no-store"` the Next data cache keeps the
+      // JSON payload across serverless invocations, so one answered handshake
+      // keeps the hop serving hits even when a later cold instance would
+      // re-fail the CF rules from its region (REEA-272 option 2 — cache that
+      // persists across invocations). Only a cached-attempt miss pays the
+      // handshake again.
+      try {
+        const cached = await fetchImpl(apiUrl, {
+          headers: { ...VERIFIED_BOT_HEADERS, accept: "application/json" },
+          signal: AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
+        });
+        if (cached.ok) return pcKuwaitApiHits(JSON.parse(await cached.text()), query);
+      } catch {
+        // Cache-first miss (or a squeezed window) — the uncached chain below
+        // answers with the same payload shape.
+      }
       try {
         const jsonRes = await fetchThroughChallenge(
           fetchImpl,
