@@ -3,8 +3,9 @@ name: Deploy site
 # REEA-132: consolidated deploy path. One merge to main = one deploy to the
 # canonical production host https://reemco.vercel.app (Next.js server build on
 # Vercel, so the /api/events funnel endpoints are served). No preview host:
-# every check below verifies reemco.vercel.app itself. PRs are validated by
-# ci.yml (lint/test/build); only main pushes deploy.
+# every check below verifies reemco.vercel.app itself. Automated lint/test
+# gating now lives in the Vercel buildCommand (vercel.json); this workflow is
+# the verified manual path: rollback via rollback_sha, KV re-attach, redeploy.
 #
 # REEA-314 budget: automatic deploys ride Vercel's own git-connected project
 # build (Project settings → Git → "Connected" + Production Branch: main),

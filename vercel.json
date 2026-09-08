@@ -1,4 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": "nextjs"
+  "framework": "nextjs",
+  "buildCommand": "echo \"${VERCEL_GIT_COMMIT_SHA:-$(git rev-parse HEAD)}\" > public/__commit.txt && npm run lint && npm run test && next build",
+  "crons": [
+    {
+      "path": "/api/health",
+      "schedule": "17 * * * *"
+    }
+  ]
 }
