@@ -204,6 +204,83 @@ describe("hit parsers", () => {
     });
   });
 
+  it("PC Kuwait hop re-searches per word when the whole-query search is empty (REEA-357)", async () => {
+    resetDiscoveryCache();
+    // Live-measured Store API behaviour (2026-09-09): the near-exact phrase
+    // match answers `dell laptop` with an empty array while `dell` answers 23
+    // items — the hop must still surface hits for natural multi-word queries.
+    const pckuwait = (q: string) => {
+      if (q === "dell") {
+        return [
+          {
+            name: "Dell KM7321W Pro Plus Keyboard Wireless Combo",
+            permalink: "https://pckuwait.com/product/dell-km7321w/",
+            is_in_stock: true,
+            prices: { price: "29900", currency_code: "KWD", currency_minor_unit: 3 },
+          },
+        ];
+      }
+      if (q === "laptop") {
+        return [
+          {
+            name: "Dell KM7321W Pro Plus Keyboard Wireless Combo",
+            permalink: "https://pckuwait.com/product/dell-km7321w/",
+            is_in_stock: true,
+            prices: { price: "29900", currency_code: "KWD", currency_minor_unit: 3 },
+          },
+          {
+            name: "Asus Vivobook 15 Laptop Core i5",
+            permalink: "https://pckuwait.com/product/asus-vivobook-15/",
+            is_in_stock: true,
+            prices: { price: "119000", currency_code: "KWD", currency_minor_unit: 3 },
+          },
+        ];
+      }
+      return [];
+    };
+    const { notes } = await collectLiveResults("dell laptop", {
+      fetchImpl: async (url) => {
+        if (url.includes("wp-json/wc/store/v1/products")) {
+          const q = decodeURIComponent(url.match(/[?&]search=([^&]*)/)?.[1] ?? "");
+          return new Response(JSON.stringify(pckuwait(q)), { headers: { "content-type": "application/json" } });
+        }
+        return new Response("{}");
+      },
+    });
+    const note = notes.find((n) => n.merchant === "PC Kuwait");
+    // The shared combo card merges to one entry: keyboard + laptop = 2 hits,
+    // and the note carries no error field.
+    expect(note?.hits).toBe(2);
+    expect(note?.error).toBeUndefined();
+  });
+
+  it("PC Kuwait hop stops at the first non-empty whole-query answer (REEA-357)", async () => {
+    resetDiscoveryCache();
+    const calls: string[] = [];
+    await collectLiveResults("iphone", {
+      fetchImpl: async (url) => {
+        if (url.includes("wp-json/wc/store/v1/products")) {
+          calls.push(url);
+          return new Response(
+            JSON.stringify([
+              {
+                name: "Apple iPhone 15 128GB",
+                permalink: "https://pckuwait.com/product/iphone-15/",
+                is_in_stock: true,
+                prices: { price: "185000", currency_code: "KWD", currency_minor_unit: 3 },
+              },
+            ]),
+            { headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response("{}");
+      },
+    });
+    // Phrase hit answers the hop: exactly one Store API search, no per-word
+    // follow-ups, so the common path stays as cheap as before the fix.
+    expect(calls).toHaveLength(1);
+  });
+
   it("luluHits lifts JSON-LD offers and honours schema.org availability (REEA-238)", () => {
     // Shape captured from the luluhypermarket.com SSR search page 2026-09-08:
     // ItemList wrapper, relative offer URLs, explicit InStock/OutOfStock.

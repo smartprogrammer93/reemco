@@ -970,7 +970,18 @@ const COLLECTORS: RetailerCollector[] = [
       // `post_type=product` archive page (prices + stock; the plain blog
       // search view carries neither) over the identity-alternating handshake
       // the other CF-fronted stores get, with its doubled window.
-      const apiUrl = `https://pckuwait.com/wp-json/wc/store/v1/products?search=${encodeURIComponent(query)}&per_page=${LIVE_SEARCH_HITS_PER_PAGE}`;
+      //
+      // REEA-357: the Store API's `search` matches nearly exactly against
+      // titles, so natural multi-word shopper queries ("dell laptop") can
+      // answer a valid-but-empty array even though the store carries dozens
+      // of matching devices (measured live 2026-09-09: `dell laptop` → 0
+      // items, `dell` → 23). When the whole-query search comes back empty,
+      // retry per word inside the SAME hop window and merge; the shared
+      // brandAwareCoverage gate then keeps only titles answering the full
+      // query. Single-word queries and non-empty answers cost exactly what
+      // they cost before.
+      const apiUrl = (q: string) =>
+        `https://pckuwait.com/wp-json/wc/store/v1/products?search=${encodeURIComponent(q)}&per_page=${LIVE_SEARCH_HITS_PER_PAGE}`;
       // Cached first: with an explicit `force-cache` + bounded revalidate the
       // Next data cache keeps the JSON payload across serverless invocations
       // even inside the force-dynamic results segment (REEA-272 option 2 —
@@ -980,30 +991,52 @@ const COLLECTORS: RetailerCollector[] = [
       // the chain costs at most what the other CF-fronted hops pay; only a
       // cache miss with a squeezed window falls to the archive page below.
       const jsonWindow = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS);
-      try {
-        const cached = await fetchImpl(apiUrl, {
-          headers: { accept: "application/json" },
-          cache: "force-cache",
-          next: { revalidate: 300 },
-          signal: jsonWindow,
-        } as RequestInit);
-        if (cached.ok) return pcKuwaitApiHits(JSON.parse(await cached.text()), query);
-      } catch {
-        // Cache-first miss (or a squeezed window) — the uncached JSON attempt
-        // inside the same window answers with the same payload shape.
+      const asItems = (parsed: unknown): Record<string, unknown>[] =>
+        Array.isArray(parsed) ? (parsed as Record<string, unknown>[]) : [];
+      const apiItems = async (q: string): Promise<Record<string, unknown>[]> => {
+        try {
+          const cached = await fetchImpl(apiUrl(q), {
+            headers: { accept: "application/json" },
+            cache: "force-cache",
+            next: { revalidate: 300 },
+            signal: jsonWindow,
+          } as RequestInit);
+          if (cached.ok) return asItems(JSON.parse(await cached.text()));
+        } catch {
+          // Cache-first miss (or a squeezed window) — the uncached JSON attempt
+          // inside the same window answers with the same payload shape.
+        }
+        try {
+          const jsonRes = await fetchThroughChallenge(fetchImpl, apiUrl(q), {}, jsonWindow);
+          if (jsonRes.ok) return asItems(JSON.parse(await jsonRes.text()));
+        } catch {
+          // Malformed JSON or the window spent — the archive page below
+          // answers with the same data shape.
+        }
+        return [];
+      };
+      const seen = new Set<string>();
+      const items: Record<string, unknown>[] = [];
+      const mergeItems = (incoming: Record<string, unknown>[]) => {
+        for (const item of incoming) {
+          const key = String(item.permalink ?? item.name ?? "");
+          if (!seen.has(key)) {
+            seen.add(key);
+            items.push(item);
+          }
+        }
+      };
+      mergeItems(await apiItems(query));
+      if (items.length === 0) {
+        // Empty whole-query answer: one bounded per-word re-search (longest
+        // words first are the most selective), still riding the JSON window.
+        const words = query
+          .split(/\s+/)
+          .filter((w) => w.length > 1)
+          .slice(0, 3);
+        for (const word of words) mergeItems(await apiItems(word));
       }
-      try {
-        const jsonRes = await fetchThroughChallenge(
-          fetchImpl,
-          apiUrl,
-          {},
-          jsonWindow,
-        );
-        if (jsonRes.ok) return pcKuwaitApiHits(JSON.parse(await jsonRes.text()), query);
-      } catch {
-        // Malformed JSON or the window spent — the archive page below
-        // answers with the same data shape.
-      }
+      if (items.length > 0) return pcKuwaitApiHits(items, query);
       const res = await fetchThroughChallenge(
         fetchImpl,
         `https://pckuwait.com/?s=${encodeURIComponent(query)}&post_type=product`,
