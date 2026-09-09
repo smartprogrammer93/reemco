@@ -17,8 +17,20 @@
  * naming the failed step, visible in Vercel cron/deployment logs. Skeletons
  * render class skeleton-card (never result-card), so any result-card match is
  * a real card.
+ *
+ * REEA-377: the served body is the minimal shape — `{ok, build}` (verdict +
+ * build stamp) — while the per-step internals (card/chip counts, fixture
+ * name, checkedAt/failedAt) go to the function console instead, so a public
+ * GET leaks nothing beyond the verdict. GET shares the REEA-37 sliding-window
+ * checkRateLimit: while inside the limit the funnel runs and its verdict is
+ * cached in memory; past the limit the cached verdict is replayed without a
+ * re-walk, so hammering one anonymous endpoint cannot re-run the whole site
+ * walk on every hit. Step 3 stays a hard assertion; its hop budget (25 s,
+ * REEA-391 tier) covers the measured cold walk so a healthy funnel flips the
+ * scheduled tick green rather than sitting at 503.
  */
 import type { NextRequest } from "next/server";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -77,7 +89,32 @@ function countCards(html: string): number {
   return (html.match(/class="[^"]*\bresult-card\b/g) || []).length;
 }
 
+// REEA-377 build stamp: Vercel injects VERCEL_GIT_COMMIT_SHA at build time
+// (same value the build command writes to public/__commit.txt). Not a secret;
+// a short SHA is what rollback instructions reference.
+const BUILD_SHA = (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 12);
+
+// Last funnel verdict, memory-only — same lifecycle as the rate-limit buckets
+// in lib/rate-limit.ts; a new instance simply re-runs the funnel once.
+let lastVerdict: { ok: boolean } | null = null;
+
+// Same caller key as the /api/events limiter (client IP from the proxy chain).
+function clientKey(req: NextRequest): string {
+  const fwd = req.headers.get("x-forwarded-for");
+  return (fwd ? fwd.split(",")[0].trim() : "") || req.headers.get("x-real-ip") || "unknown";
+}
+
+function verdictResponse(ok: boolean): Response {
+  return Response.json({ ok, build: BUILD_SHA }, { status: ok ? 200 : 503 });
+}
+
 export async function GET(req: NextRequest): Promise<Response> {
+  // REEA-377: reuse the REEA-37 limiter on the GET path. Inside the window
+  // the funnel runs (and caches its verdict); past it the cached verdict is
+  // replayed so repeated hits do not each re-walk home → results → product.
+  const gate = checkRateLimit(clientKey(req), Date.now());
+  if (!gate.allowed && lastVerdict) return verdictResponse(lastVerdict.ok);
+
   const origin = new URL(req.url).origin;
   const failed: string[] = [];
   const checks: Record<string, string | number> = {};
@@ -130,8 +167,12 @@ export async function GET(req: NextRequest): Promise<Response> {
   }
 
   const ok = failed.length === 0;
-  return Response.json(
-    { ok, checks, failedAt: failed, checkedAt: new Date().toISOString(), fixture: FIXTURE_QUERY },
-    { status: ok ? 200 : 503 },
-  );
+  const checkedAt = new Date().toISOString();
+  // Internals to console logs only (REEA-377): Vercel function logs keep the
+  // full step detail, the served body stays the minimal {ok, build} shape.
+  const detail = `fixture=${FIXTURE_QUERY} checks=${JSON.stringify(checks)} failedAt=${JSON.stringify(failed)} checkedAt=${checkedAt}`;
+  if (ok) console.log(`health pass ${detail}`);
+  else console.error(`health FAIL ${detail}`);
+  lastVerdict = { ok };
+  return verdictResponse(ok);
 }
