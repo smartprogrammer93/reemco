@@ -1,0 +1,94 @@
+name: Keep production alias warm
+
+# REEA-371: first request after idle must answer HTTP 200 JSON from /api/health
+# within 5s. The Hobby-plan alias scales its function down between traffic, so
+# the first shopper of a quiet window paid a ~30s cold boot (CEO ground-truth
+# check 2026-09-09 ~03:04Z: HTTP 503 after ~29.5s on first hit, instant 200 on
+# retry). This workflow pre-warms the alias on a schedule by GETting the cheap
+# /api/health endpoint — same route the Vercel cron already uses, so the ping
+# also keeps functioning as the funnel liveness check (Observability-before-Launch).
+#
+# Why scheduled pre-warm instead of minimum instances (issue decision rule:
+# "minimum instances if the plan supports it, otherwise scheduled pre-warm"):
+# minInstances keeps compute permanently allocated; on the Hobby included
+# usage that burns the monthly function allowance just to hold one instance
+# idle 24/7, and support for the key differs by plan tier. The guarded-cron
+# pattern this repo already runs (REAAs 71/314/337) fits the ~2,000 min/month
+# Actions allowance deterministically instead, so the pre-warm is the plan-safe
+# branch. Blast radius is unchanged either way: one GET on a read-only health
+# route; worst failure mode is a cold first hit, exactly today's status quo.
+#
+# Cadence: :07 and :37 hourly — two anchors per hour, off the :00 spike, max
+# gap ~30 min. REEA-71 showed single cron lines silently skip ticks; the second
+# anchor self-heals a missed one within the hour, and the smoke-scheduled
+# anchors (:17/:47 every 3h) still ping the site underneath this one. Each tick
+# is curl-only (no checkout, no node install): ~10s typical runner time.
+# Cost math (REEA-314 budget): 48 ticks/day x ~10s = ~8 min/day ~= 250
+# min/month typical, worst case with two cold-boot attempts per tick ~700
+# min/month ceiling, inside the ~2,000 min/month Hobby Actions allowance
+# alongside smoke-scheduled (~600) and per-push CI. concurrency cancels queued
+# overlaps so a burst cannot stack billable runs. Rollback: delete the two
+# `schedule:` cron lines (or the workflow file) and push — the alias keeps
+# serving from the smoke-check anchors, no other behavior depends on this file.
+
+on:
+  schedule:
+    - cron: "7,37 * * * *" # two anchors/hr, max gap ~30min; missed tick self-heals on the next anchor
+  workflow_dispatch:
+
+permissions:
+  issues: write # deduped uptime-alert on sustained ping failure
+
+concurrency:
+  group: keep-warm
+  cancel-in-progress: true
+
+jobs:
+  warm:
+    # Same GitHub-hosted rationale as uptime.yml (REEA-314): curl-only job,
+    # must keep working when the self-hosted runner is offline. Timeout bounds
+    # a stuck run; two attempts fit comfortably in 4 min.
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      # Attempt 1 absorbs the cold boot (measured ~30s, sometimes a 503 while
+      # the function is still starting); attempt 2 lands on the warm path and
+      # proves the envelope a shopper sees. Only a still-unhealthy alias after
+      # both attempts counts as a failure signal. Timing is logged every tick
+      # so the Actions history is the cold/hot trend line.
+      - name: Pre-warm production alias via /api/health
+        id: warm
+        run: |
+          set -u
+          BASE="https://reemco.vercel.app"
+          OK=""
+          for attempt in 1 2; do
+            METRICS=$(curl -s -o /tmp/health.json -w '%{http_code} %{time_total}' --max-time 60 "$BASE/api/health" || echo "000 0")
+            CODE="${METRICS%% *}"; SECS="${METRICS##* }"
+            echo "attempt $attempt -> HTTP $CODE in ${SECS}s"
+            if [ "$CODE" = "200" ] && grep -q '"ok":true' /tmp/health.json; then
+              OK=yes
+              echo "warmed attempt=$attempt code=$CODE secs=$SECS" >> "$GITHUB_OUTPUT"
+              break
+            fi
+            sleep 5
+          done
+          if [ -z "$OK" ]; then
+            echo "::warning::keep-warm ping did not reach healthy 200 JSON after two attempts"
+            exit 1
+          fi
+
+      # Alerting reuses the deduped uptime-alert lane from uptime.yml so a
+      # failing alias produces one issue, not one per tick (MTTR: single noisy
+      # signal; Idempotency: same comment-or-create flow as the uptime probe).
+      - name: Alert on failure (deduped uptime-alert)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BODY="Keep-warm ping failed at $(date -u +%FT%TZ): /api/health did not reach healthy 200 JSON on two attempts - production alias may be cold or unhealthy. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if gh issue list --label uptime-alert --state open --json number -q '.[0].number' | grep -q .; then
+            gh issue comment "$(gh issue list --label uptime-alert --state open --json number -q '.[0].number')" --body "$BODY"
+          else
+            gh issue create --title "UP ALERT: keep-warm ping failing on production alias" --label uptime-alert --body "$BODY"
+          fi
