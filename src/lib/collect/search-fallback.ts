@@ -947,7 +947,7 @@ async function shopifyKuwaitOffer(
 ): Promise<FoundOffer | null> {
   const urls = [
     `${origin}/search/suggest.json?q=${encodeURIComponent(productTitle)}&resources[type]=product&resources[limit]=8`,
-    `${origin}/products.json?limit=8`,
+    `${origin}/products.json?limit=100`,
   ];
   for (const url of urls) {
     try {

@@ -694,7 +694,11 @@ async function collectShopifyKuwait(
   let failed = 0;
   const urls = [
     `${origin}/search/suggest.json?q=${encodeURIComponent(query)}&resources[type]=product&resources[limit]=${LIVE_SEARCH_HITS_PER_PAGE}`,
-    `${origin}/products.json?limit=${LIVE_SEARCH_HITS_PER_PAGE}`,
+    // The newest-page hop ignores its title filter server-side, so it gets
+    // one wide bounded page (Shopify's `limit` ceiling) — measured live, the
+    // 24-hit convention cut the tail the generic page tops up with, while
+    // limit=100 still answers in well under a second.
+    `${origin}/products.json?limit=100`,
   ];
   for (const url of urls) {
     try {
