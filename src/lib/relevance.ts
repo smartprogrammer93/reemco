@@ -378,6 +378,52 @@ export function brandIsNamed(brandField: string | undefined, title: string): boo
   return !GENERIC_BRAND_RE.test(brand.trim());
 }
 
+/* ---- REEA-399 — coverage gate + Arabic generic lane. ---- */
+
+/**
+ * REEA-399 — the query-time coverage gate: an answer set "passes" when at
+ * least HALF of the retailers in the run contributed at least one hit; below
+ * that the query is treated as thinly covered and the generic lane may widen
+ * it (see arabicGenericQuery). Same half-rounded-up arithmetic the tier ladder
+ * uses (answered * 2 >= total), so one rule governs both card ranking and the
+ * widen decision. `answered` counts retailers that contributed hits > 0; a
+ * merchant answering with an empty shelf did not COVER the query even though
+ * it answered, so it stays on the silent side of the gate. Pure, so the
+ * staged collector and the counts probe (scripts/reaa408-counts.mjs) read the
+ * gate off the same numbers.
+ */
+export function queryGatePasses(answered: number, totalRetailers: number): boolean {
+  if (totalRetailers <= 0) return false;
+  return answered * 2 >= totalRetailers;
+}
+
+/**
+ * REEA-399 Arabic generic lane: Arabic shopper queries often pair a category
+ * word with a brand word ("لابتوب ديل"), and the brand half is exactly what
+ * makes thin storefront indexes answer empty while the category alone carries
+ * the stock. The generic form drops brand tokens — Arabic aliases from the
+ * curated alias map and curated Latin names — keeps the remaining Arabic
+ * tokens, and returns "" when nothing generic remains (pure brand query:
+ * widening it would only change which brand shows, not coverage). Latin-only
+ * queries return "" and keep the untouched enriched path. Deterministic: the
+ * same query always folds to the same generic form.
+ */
+export function arabicGenericQuery(query: string): string {
+  const tokens = tierQueryTokens(query); // already alef-folded, first-seen order
+  if (!tokens.some((t) => /[\u0600-\u06FF]/.test(t))) return "";
+  const generic: string[] = [];
+  for (const t of tokens) {
+    if (!/[\u0600-\u06FF]/.test(t)) continue; // Latin brand words drop out
+    if (ARABIC_BRAND_ALIASES.has(t)) continue; // "ديل" rides along via the alias bridge
+    const isCurated = CURATED_BRANDS.some(
+      (entry) => normalizeArabicText(entry).toLowerCase() === t || entry.toLowerCase() === t,
+    );
+    if (isCurated) continue;
+    generic.push(t);
+  }
+  return generic.join(" ");
+}
+
 /** Split a ranked list for device-intent queries: two stacked containers,
  *  Devices above Accessories, each keeping the incoming (arrival/ranking)
  *  order inside it. `tiered: false` means keep the plain single list. */

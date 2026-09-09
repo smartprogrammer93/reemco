@@ -35,10 +35,12 @@ import { toKwdNumeric } from "@/lib/format";
 import { canonicalFields, compatibleFields, type CanonicalFields } from "@/lib/collect/canonical-product";
 import {
   arabicBrandIntent,
+  arabicGenericQuery,
   brandIsNamed,
   isAccessoryTitle,
   isModelExtended,
   matchesQueryToken,
+  queryGatePasses,
   queryMatchTokens,
   relevanceTier,
   resolveBrand,
@@ -698,6 +700,136 @@ export function asterHits(html: string, query: string): SearchHit[] {
   return out;
 }
 
+/**
+ * REEA-378 item 2 — Nahdi Online (nahdionline.com) hydration JSON: the search
+ * route embeds the answered product records as plain JSON in the flight
+ * payload, one record per `sku` with `name`, `image_url`, `url` and a price
+ * map keyed by currency (`{"SAR":{"default":299,...}}`), promos carried as
+ * `default_original_formated`. Measured live 2026-09-09 from cold datacenter
+ * egress: `/en-sa/search?srchtxt=` answers scripted GETs HTTP 200 in ~2 s
+ * with those records populated; the bare `/en/` prefix 302s onto the locale
+ * root, so the search path is pinned to `/en-sa/`. Prices ride as scraped
+ * (SAR on this storefront — same honest-label rule as the Jarir hop).
+ */
+export function nahdiHits(html: string, query: string): SearchHit[] {
+  const out: SearchHit[] = [];
+  const seen = new Set<string>();
+  const re = /"sku":"([^"]{1,20})","objectID":"[^"]*","OBJECTID":"[^"]*","name":"((?:[^"\\]|\\.){1,200}?)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const sku = m[1];
+    if (seen.has(sku)) continue;
+    seen.add(sku);
+    const title = m[2].replace(/\\u0026/g, "&").replace(/\\"/g, '"');
+    if (brandAwareCoverage(title, query) < MIN_SCORE) continue;
+    // Windowed read of the rest of the record, same convention as asterHits:
+    // first-match field reads inside the window always belong to this record.
+    const w = html.slice(m.index, m.index + 1200);
+    const priceMatch = /"price":\{"([A-Z]{3})":\{"default":([0-9.]+)/.exec(w);
+    if (!priceMatch) continue;
+    const price = Number(priceMatch[2]);
+    if (!Number.isFinite(price) || price <= 0) continue;
+    const original = Number(/"default_original_formated":"([0-9.]+)/.exec(w)?.[1]);
+    const running = Number.isFinite(original) && original > price;
+    const urlPath = /"url":"(https:[^"]+)"/.exec(w)?.[1] ?? "";
+    const imgRaw = /"image_url":"(https:[^"]+)"/.exec(w)?.[1];
+    const image = imgRaw?.replace(/\\u0026/g, "&");
+    out.push({
+      title,
+      merchant: "Nahdi Online",
+      country: "SA",
+      price,
+      currency: priceMatch[1],
+      url: urlPath || "https://www.nahdionline.com/en-sa",
+      inStock: true,
+      ...(running ? { wasPrice: original } : {}),
+      ...(image ? { image } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * REEA-378 item 3 — Ounass (ounass.com) flights to its Kuwait storefront:
+ * the bare host 302s onto kuwait.ounass.com, so the hop pins that working
+ * search path directly. The SSR document carries product anchors
+ * (`href="/en/product/<slug>"` with the listing title as the anchor/img alt)
+ * and the KWD price label in the same block; prices render with the KD label
+ * native to this locale. Records are read anchor-first with a windowed scan
+ * so one missing alt never costs the whole hop; stock is not stated on the
+ * card grid (listed-with-price implies purchasable, same rule as the other
+ * card scanners). Measured live 2026-09-09: scripted GET on
+ * kuwait.ounass.com answers HTTP in well under a second from cold egress.
+ */
+export function ounassHits(html: string, query: string): SearchHit[] {
+  const out: SearchHit[] = [];
+  const seen = new Set<string>();
+  const re = /href="(\/en\/product\/[a-z0-9][^"]{2,120})"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const path = m[1];
+    if (seen.has(path)) continue;
+    seen.add(path);
+    const w = html.slice(m.index, m.index + 900);
+    // Title: nearest alt/text inside the anchor block, else the slug words.
+    const alt = /alt="([^"]{3,120})"/.exec(w)?.[1];
+    const title = (alt ?? path.split("/").filter(Boolean).join(" ")).replace(/&amp;/g, "&");
+    if (brandAwareCoverage(title, query) < MIN_SCORE) continue;
+    const priceRaw = /(?:KD|KWD)\s*([0-9]+(?:\.[0-9]{1,2})?)/.exec(w)?.[1];
+    const price = priceRaw != null ? Number(priceRaw) : NaN;
+    if (!Number.isFinite(price) || price <= 0) continue;
+    out.push({
+      title,
+      merchant: "Ounass",
+      country: "KW",
+      price,
+      currency: "KWD",
+      url: `https://kuwait.ounass.com${path}`,
+      inStock: true,
+    });
+  }
+  return out;
+}
+
+/**
+ * REEA-378 item 4 — Danube Home (danube.sa): the `/en/search?q=` route
+ * answers scripted GETs on the first attempt (~0.5 s from cold egress,
+ * measured 2026-09-09) with the BigCommerce-style SSR list: product anchors
+ * `/en/<slug>.html` carrying the tile title and a currency-labelled price in
+ * the same block. The brief's locale note holds — default render is SAR, so
+ * the currency rides off the tile label per card (KD/KWD tiles keep KWD);
+ * nothing is re-labelled. Cards that carry no readable price are skipped
+ * (graceful degradation), which is why the hop is tolerant rather than strict.
+ */
+export function danubeHomeHits(html: string, query: string): SearchHit[] {
+  const out: SearchHit[] = [];
+  const seen = new Set<string>();
+  const re = /href="(https:\/\/danube\.sa\/en\/[a-z0-9][^"]{2,120}\.html)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const url = m[1];
+    if (seen.has(url)) continue;
+    seen.add(url);
+    const w = html.slice(m.index, m.index + 900);
+    const alt = /alt="([^"]{3,120})"/.exec(w)?.[1] ?? /[>]{1}([^<>]{3,120})</.exec(w)?.[1];
+    const title = (alt ?? url.split("/").pop()!.replace(/\.html$/, "").replace(/-/g, " ")).replace(/&amp;/g, "&");
+    if (brandAwareCoverage(title, query) < MIN_SCORE) continue;
+    const priceMatch = /(KD|KWD|SAR)\s*([0-9]+(?:,[0-9]{3})*(?:\.[0-9]{1,2})?)/.exec(w);
+    const price = priceMatch ? Number(priceMatch[2].replace(/,/g, "")) : NaN;
+    if (!Number.isFinite(price) || price <= 0) continue;
+    out.push({
+      title: title.trim(),
+      merchant: "Danube Home",
+      country: "SA",
+      price,
+      currency: priceMatch![1] === "SAR" ? "SAR" : "KWD",
+      url,
+      inStock: true,
+    });
+  }
+  return out;
+}
+
 /** Yousifi Kuwait (www.yousifi.com.kw): WooCommerce archive cards. */
 export function yousifiHits(html: string, query: string): SearchHit[] {
   const out: SearchHit[] = [];
@@ -796,13 +928,41 @@ async function challengeHtmlHop(fetchImpl: FetchImpl, url: string): Promise<stri
       next: { revalidate: 300 },
       signal: window,
     } as RequestInit);
-    if (cached.ok) return await cached.text();
+    if (cached.ok) {
+      const text = await cached.text();
+      // REEA-408: replay only a cleared document — see challengeAnswered.
+      if (challengeAnswered(text)) return text;
+    }
   } catch {
     // Cache miss (cold cache, eviction, squeezed window) — the handshake
     // below answers exactly as before.
   }
   const res = await fetchThroughChallenge(fetchImpl, url, {}, window);
-  return await res.text();
+  const text = await res.text();
+  if (!challengeAnswered(text) && !res.ok) {
+    // Still the interstitial shape: surface the status in the merchant note
+    // so the zero is classifiable (blocked-vs-empty) from the deployed path.
+    throw new Error(`HTTP ${res.status}`);
+  }
+  return text;
+}
+
+/**
+ * REEA-408 hop diagnostics — classify a challenge-fronted answer by shape so
+ * a CF interstitial never counts as an answer. Measured 2026-09-09 from cold
+ * datacenter egress: Lulu answers both the bare accept-only request and the
+ * crawler identity with a ~5.5 KB challenge shell inside ~0.2 s (HTTP shape
+ * varies with the edge, the body shape does not), while cleared SSR search
+ * pages on the same two hosts measured 90 KB+ with real tile markup. An
+ * interstitial replayed from cache would otherwise keep a merchant recorded
+ * as answered-with-zero for the whole revalidate window — the misclassification
+ * the fixed-query matrix kept hitting. Accept a document when it carries real
+ * markup mass (length floor above the interstitial ceiling); anything lighter
+ * falls through to the handshake and a still-thin answer surfaces its HTTP
+ * status in the note instead of hiding inside a zero count.
+ */
+function challengeAnswered(html: string): boolean {
+  return html.length >= 8_000;
 }
 
 const COLLECTORS: RetailerCollector[] = [
@@ -896,7 +1056,10 @@ const COLLECTORS: RetailerCollector[] = [
         "https://www.sultan-center.com/mobile/api/search",
         {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          // REEA-408: the POST carries `accept` beside content-type — a
+          // content-type-only request occasionally lands on an HTML apology
+          // from the edge; the explicit JSON shape keeps the answer parseable.
+          headers: { "content-type": "application/json", accept: "application/json" },
           body: JSON.stringify({
             customerId: "",
             delivery_type: "home_delivery",
@@ -1020,16 +1183,15 @@ const COLLECTORS: RetailerCollector[] = [
   {
     merchant: "Quadra Stores",
     country: "KW",
-    collect: async (query, fetchImpl) => {
-      // Shopify contract, same shape as blink's hop (verified live 2026-09-08).
-      const res = await fetchChecked(
-        fetchImpl,
-        `https://quadrastores.com/search/suggest.json?q=${encodeURIComponent(query)}&resources[type]=product&resources[limit]=${LIVE_SEARCH_HITS_PER_PAGE}`,
-        { headers: { accept: "application/json" } },
-        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
-      );
-      return quadraHits(await res.json(), query);
-    },
+    collect: (query, fetchImpl) =>
+      // REEA-408 — one-shot suggest hops blank the merchant on a single
+      // instant-close blip: measured 2026-09-09 from cold datacenter egress,
+      // the first scripted GET against quadrastores.com closed without an
+      // answer while the immediate retry served full JSON in ~0.8 s. Riding
+      // collectShopifyKuwait gives the hop its own suggest + newest-page
+      // top-up pair inside ONE doubled window (same shape Switch/Wibi/Astore/
+      // Zayoom carry), so one throttled envelope never empties the shelf.
+      collectShopifyKuwait("https://quadrastores.com", query, fetchImpl, quadraHits),
   },
   {
     merchant: "Next Store",
@@ -1200,10 +1362,14 @@ const COLLECTORS: RetailerCollector[] = [
       // whenever the merged JSON answer is still empty; it only skips when
       // JSON already produced hits.
       if (answered && items.length > 0) return pcKuwaitApiHits(items, query);
+      // REEA-408: the archive fallback rides the handshake with hop-level
+      // extras (accept text/html) instead of a bare init — the shaped
+      // handshake inside fetchThroughChallenge rotates identities, and the
+      // priced archive view is what an explicit HTML-shaped request answers.
       const res = await fetchThroughChallenge(
         fetchImpl,
         `https://pckuwait.com/?s=${encodeURIComponent(query)}&post_type=product`,
-        {},
+        { headers: { accept: "text/html,application/xhtml+xml" } },
         AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
       );
       return pcKuwaitHits(await res.text(), query);
@@ -1299,6 +1465,81 @@ const COLLECTORS: RetailerCollector[] = [
         AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
       );
       return asterHits(await res.text(), query);
+    },
+  },
+  {
+    merchant: "Nahdi Online",
+    country: "SA",
+    collect: async (query, fetchImpl) => {
+      // REEA-378 item 2 — the search route answers scripted GETs when the
+      // language is pinned (Accept-Language: en) on the /en-sa/ locale root;
+      // the bare /en/ prefix 302s onto the region root instead (verified live
+      // 2026-09-09). Product records ride in the hydration JSON next to the
+      // SSR markup, so this hop reads the document once with a plain
+      // fetchChecked and nahdiHits picks the records out of it. The measured
+      // answer lands ~1-2 s from cold egress — above a single attempt window
+      // under parallel load — so the hop gets the doubled window the other
+      // two-step-shaped collectors use.
+      const res = await fetchChecked(
+        fetchImpl,
+        `https://www.nahdionline.com/en-sa/search?srchtxt=${encodeURIComponent(query)}`,
+        {
+          headers: {
+            accept: "text/html,application/xhtml+xml",
+            "accept-language": "en-US,en;q=0.9",
+            "accept-encoding": "gzip, deflate, br",
+            "user-agent": "Mozilla/5.0",
+          },
+        },
+        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
+      );
+      return nahdiHits(await res.text(), query);
+    },
+  },
+  {
+    merchant: "Ounass",
+    country: "KW",
+    collect: async (query, fetchImpl) => {
+      // REEA-378 item 3 — ounass.com is a thin 302 onto the Kuwait storefront,
+      // so the hop pins kuwait.ounass.com directly (the working search path).
+      // Scripted GETs answer well under a second from cold egress, so this
+      // rides a plain fetchChecked in the single attempt window.
+      const res = await fetchChecked(
+        fetchImpl,
+        `https://kuwait.ounass.com/en/search?q=${encodeURIComponent(query)}`,
+        {
+          headers: {
+            accept: "text/html,application/xhtml+xml",
+            "accept-language": "en",
+            "user-agent": "Mozilla/5.0",
+          },
+        },
+        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
+      );
+      return ounassHits(await res.text(), query);
+    },
+  },
+  {
+    merchant: "Danube Home",
+    country: "SA",
+    collect: async (query, fetchImpl) => {
+      // REEA-378 item 4 — danube.sa answers the /en/search route on scripted
+      // GETs with the SSR tile list (measured ~0.5 s from cold egress with a
+      // crawler-shaped identity); currency labels ride per tile, SAR default
+      // render included. One hop, single window.
+      const res = await fetchChecked(
+        fetchImpl,
+        `https://danube.sa/en/search?q=${encodeURIComponent(query)}`,
+        {
+          headers: {
+            accept: "text/html,application/xhtml+xml",
+            "accept-language": "en",
+            "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+          },
+        },
+        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
+      );
+      return danubeHomeHits(await res.text(), query);
     },
   },
 ];
@@ -1886,6 +2127,15 @@ function stagedSnapshot(
  * existing offer never depends on this round, and when every merchant already
  * answered there is nothing to deepen, so it stays a single round. Runs
  * inside the FINAL stage only, so mid-stream flushes stay single-hop.
+ *
+ * REEA-399 adds the coverage-gate branch: when the round-one set is thinly
+ * covered (fewer than half the retailers contributed hits — queryGatePasses
+ * false), the Arabic generic lane widens the silent merchants one bounded
+ * time with the brand-less Arabic form ("لابتوب ديل" → "لابتوب"): Arabic
+ * indexes key on the category word, so the brand half is what blanks them.
+ * The lane also runs when NOTHING answered (every merchant silent on an
+ * Arabic query), where enrichedQuery has no live title to normalize off.
+ * Latin-only queries keep the enriched path exactly as before.
  */
 async function deepenSilent(
   q: string,
@@ -1895,15 +2145,26 @@ async function deepenSilent(
   const firstHits: SearchHit[] = [];
   for (const s of settled) firstHits.push(...s.hits);
   const missing = settled.filter((s) => s.hits.length === 0);
-  if (firstHits.length === 0 || missing.length === 0) return;
+  if (missing.length === 0) return;
+  const thin = !queryGatePasses(settled.length - missing.length, settled.length);
   const enriched = enrichedQuery(firstHits, q);
-  if (!enriched || enriched.toLowerCase() === q.toLowerCase()) return;
+  const generic = arabicGenericQuery(q);
+  // Pick the widening form: normalized live title when one exists, else the
+  // Arabic generic form on thinly covered runs. Same-bounded-query rule as
+  // before — one extra collect() per silent merchant, no more rounds.
+  const widenWith =
+    enriched && enriched.toLowerCase() !== q.toLowerCase()
+      ? enriched
+      : thin && generic !== "" && generic.toLowerCase() !== q.toLowerCase()
+        ? generic
+        : "";
+  if (widenWith === "") return;
   await Promise.all(
     missing.map(async (s) => {
       const collector = COLLECTORS.find((c) => c.merchant === s.merchant);
       if (!collector) return;
       try {
-        const hits = await collector.collect(enriched, fetchImpl);
+        const hits = await collector.collect(widenWith, fetchImpl);
         if (hits.length > 0) {
           s.hits = hits;
           s.error = undefined;

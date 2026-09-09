@@ -28,6 +28,13 @@
  * walk on every hit. Step 3 stays a hard assertion; its hop budget (25 s,
  * REEA-391 tier) covers the measured cold walk so a healthy funnel flips the
  * scheduled tick green rather than sitting at 503.
+ *
+ * REEA-398 follow-up: the home and results hops read the streamed documents
+ * shell-first — the hop resolves on the FIRST flush carrying the assertion
+ * inputs (shell marker; card + freshness chip + click-out href) and cancels
+ * the rest of the body, so the tick answers in ~1-2 s warm instead of paying
+ * the ~21 s staged-collection finalize. The served body keeps the minimal
+ * `{ok, build}` shape either way.
  */
 import type { NextRequest } from "next/server";
 import { checkRateLimit } from "@/lib/rate-limit";
@@ -60,12 +67,27 @@ const CHIP_RE = "(?:Verified|updated)[ ]*(?:<!--[ ]-->)?[ ]*(?:\\d+[hd] ago|\\d+
 const CHIP_ALT_RE = "may be outdated|(?:updated|Verification) date unknown";
 
 async function get(origin: string, path: string, timeoutMs: number) {
-  // REEA-369 — one bounded retry. The first request after a deploy walks a
-  // cold instance through connection setup on every hop; when a hop still
-  // spends its window, the very next attempt lands on the warmed instance
-  // and answers in about a second (measured on prod: first call ~26 s with
-  // the product hop aborted, immediate re-check HTTP 200 in ~1 s). Without
-  // the retry the cron tick reports a false failure for the whole hour.
+  return readHop(origin, path, timeoutMs);
+}
+
+/**
+ * REEA-398 follow-up — shell-first hop reads with a streamed-results
+ * follow-up. Results pages finalize their document in ~21 s (staged live
+ * collection; REEA-391 ceilings); the funnel assertions only need the FIRST
+ * flush: the shell marker on home, and real cards + a freshness chip + the
+ * click-out href on results. This resolves as soon as `until` is satisfied on
+ * the accumulated prefix (or the stream ends) and cancels the remaining
+ * body, so a healthy deploy flips the tick in ~1-2 s warm instead of paying
+ * the whole document walk. Without `until` the hop drains fully, exactly as
+ * before. The bounded retry keeps its meaning: a stalled first attempt is
+ * retried once against the warmed instance.
+ */
+async function readHop(
+  origin: string,
+  path: string,
+  timeoutMs: number,
+  until?: (html: string) => boolean,
+): Promise<{ status: number; html: string }> {
   let lastError = "";
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -74,7 +96,25 @@ async function get(origin: string, path: string, timeoutMs: number) {
         signal: AbortSignal.timeout(timeoutMs),
         headers: { "user-agent": "reemco-health/1.0" },
       });
-      const html = await res.text();
+      let html = "";
+      if (until && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          html += decoder.decode(value, { stream: true });
+          if (until(html)) {
+            // First flush carried every assertion input — stop reading the
+            // rest of the staged document.
+            await reader.cancel().catch(() => {});
+            break;
+          }
+        }
+        html += decoder.decode();
+      } else {
+        html = await res.text();
+      }
       if (res.status === 200 || attempt === 1) return { status: res.status, html };
     } catch (e) {
       lastError = (e as Error).message;
@@ -87,6 +127,19 @@ async function get(origin: string, path: string, timeoutMs: number) {
 // OfferCard/ProductResultCard); skeletons use skeleton-card and never match.
 function countCards(html: string): number {
   return (html.match(/class="[^"]*\bresult-card\b/g) || []).length;
+}
+
+// Freshness chip matchers as one pair so the until-chain and the assertion
+// read the same shape (case-insensitive; legacy spellings allowed).
+function countChips(html: string): number {
+  return (
+    (html.match(new RegExp(CHIP_RE, "gi")) || []).length +
+    (html.match(new RegExp(CHIP_ALT_RE, "gi")) || []).length
+  );
+}
+
+function hasChip(html: string): boolean {
+  return countChips(html) >= 1;
 }
 
 // REEA-377 build stamp: Vercel injects VERCEL_GIT_COMMIT_SHA at build time
@@ -121,7 +174,7 @@ export async function GET(req: NextRequest): Promise<Response> {
 
   // step 1 — home renders the app shell (header nav is part of the shell).
   try {
-    const home = await get(origin, "/", HOME_TIMEOUT_MS);
+    const home = await readHop(origin, "/", HOME_TIMEOUT_MS, (h) => h.includes("site-header"));
     if (home.status !== 200 || !home.html.includes("site-header")) {
       failed.push(`home status=${home.status} shell=${home.html.includes("site-header")}`);
     } else {
@@ -132,13 +185,19 @@ export async function GET(req: NextRequest): Promise<Response> {
   }
 
   // steps 2+4 — fixture query returns real cards wearing freshness chips.
+  // The until-chain stops at the first flush that already answers all three
+  // assertion inputs (card + chip + click-out href); the late streamed
+  // offers are not needed to flip the tick green (REA-398 follow-up).
   let productHref = "";
   try {
-    const res = await get(origin, `/results?q=${encodeURIComponent(FIXTURE_QUERY)}`, RESULTS_TIMEOUT_MS);
+    const res = await readHop(
+      origin,
+      `/results?q=${encodeURIComponent(FIXTURE_QUERY)}`,
+      RESULTS_TIMEOUT_MS,
+      (h) => countCards(h) >= 1 && hasChip(h) && h.includes('href="/product/'),
+    );
     const cards = countCards(res.html);
-    const chips =
-      (res.html.match(new RegExp(CHIP_RE, "gi")) || []).length +
-      (res.html.match(new RegExp(CHIP_ALT_RE, "gi")) || []).length;
+    const chips = countChips(res.html);
     if (res.status !== 200 || cards < 1) {
       failed.push(`results status=${res.status} cards=${cards}`);
     } else if (chips < 1) {
