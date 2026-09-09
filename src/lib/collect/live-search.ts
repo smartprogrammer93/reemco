@@ -16,6 +16,7 @@
 import {
   APP_ID_ALLOW,
   SEARCH_KEY_ALLOW,
+  VERIFIED_BOT_HEADERS,
   brandAwareCoverage,
   extractJarirIndexKey,
   extractJsonLdProducts,
@@ -1024,7 +1025,10 @@ const COLLECTORS: RetailerCollector[] = [
       // even inside the force-dynamic results segment (REEA-272 option 2 —
       // cache that persists across invocations), so one answered hop keeps
       // the adapter serving hits while later cold instances re-run behind
-      // the revalidate window. REEA-369: the window is the doubled one the
+      // the revalidate window. The attempt itself wears the same
+      // verified-crawler identity the handshake leads with (REEA-369: the
+      // bare accept-only shape is the fragile one on CF-fronted zones — the
+      // first attempt must not be it). REEA-369: the window is the doubled one the
       // other CF-fronted hops get — measured 2026-09-09, the cold TLS + WP
       // query hop to pckuwait lands ~0.7–0.9 s from a datacenter egress but
       // a cold serverless instance can spend most of a single 4 s window on
@@ -1049,7 +1053,7 @@ const COLLECTORS: RetailerCollector[] = [
       const apiItems = async (q: string): Promise<Record<string, unknown>[]> => {
         try {
           const cached = await fetchImpl(apiUrl(q), {
-            headers: { accept: "application/json" },
+            headers: { ...VERIFIED_BOT_HEADERS, accept: "application/json" },
             cache: "force-cache",
             next: { revalidate: 300 },
             signal: jsonWindow,
@@ -1129,7 +1133,13 @@ const COLLECTORS: RetailerCollector[] = [
           .slice(0, 3);
         for (const word of words) mergeItems(await apiItems(word));
       }
-      if (answered) return pcKuwaitApiHits(items, query);
+      // An empty answer after the whole-query + per-word pass is NOT proof
+      // the store carries nothing (measured 2026-09-09: the Store API
+      // answers `dell laptop`/`basmati rice` with a bare [] while the
+      // archive page carries the cards). Keep the archive hop eligible
+      // whenever the merged JSON answer is still empty; it only skips when
+      // JSON already produced hits.
+      if (answered && items.length > 0) return pcKuwaitApiHits(items, query);
       const res = await fetchThroughChallenge(
         fetchImpl,
         `https://pckuwait.com/?s=${encodeURIComponent(query)}&post_type=product`,
