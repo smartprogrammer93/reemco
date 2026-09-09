@@ -31,7 +31,11 @@ export async function generateMetadata({
   const query = sanitizeSearchQuery(params.q) ?? "";
   const hint = await readPreferenceHint();
   const country = resolveCountrySelection(params.c, hint.cookie, hint.acceptLanguage);
-  const locale = resolveUiLocale(hint.localeCookie, hint.acceptLanguage);
+  // REEA-448 G2 — the query text is the third link of the chain: with no
+  // cookie and no Accept-Language header, an Arabic-script query decides the
+  // session, so "آيفون" gets the Arabic title template instead of the mixed
+  // "آيفون prices in Kuwait - Reemco".
+  const locale = resolveUiLocale(hint.localeCookie, hint.acceptLanguage, query);
   const meta = buildResultsMeta({ query, country, locale });
   return { title: meta.title, description: meta.description };
 }
@@ -111,8 +115,10 @@ export default async function ResultsPage({
   const hint = await readPreferenceHint();
   const country = resolveCountrySelection(params.c, hint.cookie, hint.acceptLanguage);
   // REEA-279 — the same request-time read resolves the chrome locale: the
-  // rc_locale cookie wins, then the coarse Accept-Language hint, then "en".
-  const locale = resolveUiLocale(hint.localeCookie, hint.acceptLanguage);
+  // rc_locale cookie wins, then the coarse Accept-Language hint, then the
+  // Arabic-script query text (REEA-448 G2), then "en" — the same call the
+  // metadata above makes, so chrome and title never fork on locale.
+  const locale = resolveUiLocale(hint.localeCookie, hint.acceptLanguage, query);
   // REEA-186 — stock selection (`?oos=1` shows out-of-stock listings).
   // Default hides them; the ResultsClient view applies it BEFORE slicing each
   // staged snapshot so counts and pages match the visible set. Offers stay

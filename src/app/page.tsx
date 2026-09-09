@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { after } from "next/server";
+import type { Metadata } from "next";
 import SearchForm from "@/components/SearchForm";
 import { collectLiveResultsStaged } from "@/lib/collect/live-search";
 import { getStrings } from "@/lib/i18n";
@@ -9,6 +10,22 @@ import { resolveRequestLocale } from "@/lib/i18n-server";
    ONE amber underline accent under "best price", preset-query pills, trust
    caption below. */
 const EXAMPLES = ["iPhone 17 Pro", "WH-1000XM6", "Scope II keyboard"];
+
+/**
+ * REEA-448 G1 — the home <title>/description pair localizes with the session,
+ * like the /results templates already do (REEA-400): the ar session reads the
+ * Arabic pair instead of keeping the English one under lang="ar". One request
+ * -time resolution (resolveRequestLocale: rc_locale → Accept-Language → "en"),
+ * then the static table picks the pair. The layout keeps its static
+ * `metadata` object as the shared fallback for the other routes (and the
+ * referrer meta), so only this segment overrides — same one-export-per-
+ * segment shape as src/app/results/page.tsx.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  const locale = await resolveRequestLocale();
+  const t = getStrings(locale);
+  return { title: t.homeTitle, description: t.homeDescription };
+}
 
 export default async function Home() {
   // REEA-279 — hero chrome from the static table; EXAMPLES stay the real

@@ -40,6 +40,52 @@ describe("resolveUiLocale precedence (REEA-279)", () => {
   });
 });
 
+describe("resolveUiLocale query-text step (REEA-448 G2)", () => {
+  it("an Arabic-script query decides the session when no header is sent", () => {
+    expect(resolveUiLocale(undefined, null, "آيفون")).toBe("ar");
+  });
+
+  it("a Latin query — or none — keeps the en default", () => {
+    expect(resolveUiLocale(undefined, null, "iPhone 17")).toBe("en");
+    expect(resolveUiLocale(undefined, null)).toBe("en");
+  });
+
+  it("chain order holds: cookie > stated header > query text", () => {
+    // Stated cookie outranks everything…
+    expect(resolveUiLocale("en", null, "آيفون")).toBe("en");
+    // …then a header that states a served language…
+    expect(resolveUiLocale(undefined, "en-US", "آيفون")).toBe("en");
+    expect(resolveUiLocale(undefined, "ar-KW", "iPhone")).toBe("ar");
+    // …then the query text; an unheld header alone never blocks it.
+    expect(resolveUiLocale(undefined, "fr-FR", "آيفون")).toBe("ar");
+    expect(resolveUiLocale(undefined, "fr-FR", "iPhone")).toBe("en");
+  });
+
+  it("the query-decoded session gets the Arabic title template (mixed-title fix)", () => {
+    const locale = resolveUiLocale(undefined, null, "آيفون");
+    const t = getStrings(locale);
+    expect(fill(t.metaTitle, { q: "آيفون", country: t.countryKW })).toBe(
+      "أسعار آيفون في الكويت - ريمكو",
+    );
+  });
+});
+
+describe("home chrome pair (REEA-448 G1)", () => {
+  it("the ar session reads the Arabic title+description from the table", () => {
+    expect(getStrings("ar").homeTitle).toBe("ريمكو — قارن الأسعار في الكويت");
+    expect(getStrings("ar").homeDescription).toBe(
+      "قارن الأسعار والكوبونات وحالة التوافر عبر متاجر الكويت. تُجمع العروض لحظة بحثك — أفضل سعر فعلي يفوز.",
+    );
+  });
+
+  it("the en session keeps the shipped English pair", () => {
+    expect(getStrings("en").homeTitle).toBe("Reemco Price Compare");
+    expect(getStrings("en").homeDescription).toBe(
+      "Prices, coupons and stock, compared honestly across retailers.",
+    );
+  });
+});
+
 describe("localeFromAcceptLanguage — coarse q-weighted hint", () => {
   it("walks locales by descending q, not list order", () => {
     expect(localeFromAcceptLanguage("en-US;q=0.8,ar-KW;q=0.9")).toBe("ar");

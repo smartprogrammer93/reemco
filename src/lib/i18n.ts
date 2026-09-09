@@ -10,7 +10,8 @@
  * Persistence follows the app's existing preference mechanism (REEA-280
  * pattern in country.ts): the choice lives in ONE cookie (`rc_locale`), nothing
  * else — no profile, no fingerprint, no extra storage. Resolution order is the
- * same chain everywhere: cookie → coarse Accept-Language hint → "en". The hint
+ * same chain everywhere (REEA-448 order): cookie → coarse Accept-Language
+ * hint → Arabic-script query text → "en". The hint
  * is coarse on purpose (only the ar/en language subtag decides; language-only
  * tags map directly, regions are ignored) — guessing beyond the stated browser
  * language would be profiling, not a hint.
@@ -173,6 +174,12 @@ const en = {
   metaTitle: "{q} prices in {country} - Reemco",
   metaDescription:
     "Compare live prices, coupons and stock for {q} across retailers in {country}. Offers are collected the moment you search — best effective price wins.",
+  // REEA-448 G1: home-page chrome pair. The results templates localize through
+  // buildResultsMeta; the home pair rides the same table so the ar session no
+  // longer keeps the English <title>/description under lang="ar".
+  homeTitle: "Reemco Price Compare",
+  homeDescription:
+    "Prices, coupons and stock, compared honestly across retailers.",
 };
 
 /** The AR dictionary is checked against the EN shape at compile time. */
@@ -305,6 +312,10 @@ const ar: typeof en = {
   metaTitle: "أسعار {q} في {country} - ريمكو",
   metaDescription:
     "قارن الأسعار والكوبونات وحالة التوافر لـ{q} عبر متاجر {country}. تُجمع العروض لحظة بحثك — أفضل سعر فعلي يفوز.",
+  // REEA-448 G1: Arabic home chrome pair, verbatim from the REEA-440 spec.
+  homeTitle: "ريمكو — قارن الأسعار في الكويت",
+  homeDescription:
+    "قارن الأسعار والكوبونات وحالة التوافر عبر متاجر الكويت. تُجمع العروض لحظة بحثك — أفضل سعر فعلي يفوز.",
 };
 
 export type Strings = typeof en;
@@ -337,13 +348,15 @@ export function normalizeLocaleCookie(raw: unknown): Locale | null {
  * Coarse Accept-Language hint (mirrors countryFromAcceptLanguage in
  * country.ts): walk the locales in weight order (q descending, stable on
  * equal q) and take the first primary language subtag we serve ("ar"/"en").
- * Region subtags are ignored — the language alone decides the chrome. No
- * match keeps the "en" default.
+ * Region subtags are ignored — the language alone decides the chrome. `null`
+ * when the header stated no language we serve (or nothing at all), so the
+ * REEA-448 chain can fall through to the query-text step instead of treating
+ * "no hint" as a positive "en" answer.
  */
-export function localeFromAcceptLanguage(
+export function hintLocaleFromAcceptLanguage(
   header: string | null | undefined,
-): Locale {
-  if (!header) return "en";
+): Locale | null {
+  if (!header) return null;
   const entries: { locale: Locale | null; q: number; order: number }[] = [];
   header.split(",").forEach((part, order) => {
     const segments = part.trim().split(";");
@@ -360,16 +373,42 @@ export function localeFromAcceptLanguage(
   });
   entries.sort((a, b) => b.q - a.q || a.order - b.order);
   for (const e of entries) if (e.locale) return e.locale;
-  return "en";
+  return null;
 }
 
-/** The one chain every surface shares: stated cookie first, coarse browser
- *  hint second, "en" default. Same shape as resolveCountrySelection. */
+/** Back-compatible wrapper over the nullable hint: "en" when no hint. */
+export function localeFromAcceptLanguage(
+  header: string | null | undefined,
+): Locale {
+  return hintLocaleFromAcceptLanguage(header) ?? "en";
+}
+
+/**
+ * REEA-448 G2 step 3: the query text itself is the shopper's own language
+ * signal — Arabic-script codepoints (U+0600–U+06FF) decide "ar" when neither
+ * the cookie nor Accept-Language stated a preference. This is what stops the
+ * mixed "آيفون prices in Kuwait - Reemco" title when no header is sent.
+ */
+export function localeFromQueryText(
+  queryText: string | null | undefined,
+): Locale | null {
+  if (!queryText) return null;
+  return /[\u0600-\u06FF]/.test(queryText) ? "ar" : null;
+}
+
+/** The one chain every surface shares (REEA-448 order): stated cookie first,
+ *  then the coarse Accept-Language hint, then an Arabic-script query text,
+ *  then the "en" default. Same shape as resolveCountrySelection. */
 export function resolveUiLocale(
   cookieRaw: unknown,
   acceptLanguage: string | null | undefined,
+  queryText?: string,
 ): Locale {
-  return normalizeLocaleCookie(cookieRaw) ?? localeFromAcceptLanguage(acceptLanguage);
+  const stated = normalizeLocaleCookie(cookieRaw);
+  if (stated) return stated;
+  const hint = hintLocaleFromAcceptLanguage(acceptLanguage);
+  if (hint) return hint;
+  return localeFromQueryText(queryText) ?? "en";
 }
 
 /** The cookie read behind everything (mirrors readMarketCookie). */

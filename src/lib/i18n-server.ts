@@ -17,17 +17,20 @@ import { LOCALE_COOKIE, resolveUiLocale } from "./i18n";
 
 /**
  * Server-side read behind the layout and pages: the request's cookie wins,
- * then the coarse Accept-Language header, then "en".
+ * then the coarse Accept-Language header, then (REEA-448 G2) an Arabic-script
+ * query text when the caller passes one, then "en". Home passes no query
+ * text — the surface has none.
  */
-export async function resolveRequestLocale(): Promise<"en" | "ar"> {
+export async function resolveRequestLocale(queryText?: string): Promise<"en" | "ar"> {
   try {
     const cookieStore = await cookies();
     const headersList = await headers();
     return resolveUiLocale(
       cookieStore.get(LOCALE_COOKIE)?.value,
       headersList.get("accept-language"),
+      queryText,
     );
   } catch {
-    return resolveUiLocale(undefined, null);
+    return resolveUiLocale(undefined, null, queryText);
   }
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildResultsMeta } from "./results-meta";
+import { resolveUiLocale } from "./i18n";
 
 /**
  * REEA-400 — guardrails for the per-query results metadata. These prove the
@@ -41,5 +42,16 @@ describe("buildResultsMeta (results-page SEO metadata)", () => {
     const meta = buildResultsMeta({ query: "", country: null, locale: "en" });
     expect(meta.title).toBe("all products prices in Kuwait - Reemco");
     expect(meta.title).toContain("Reemco");
+  });
+
+  it("an Arabic query with no cookie and no Accept-Language gets the Arabic template (REEA-448 G2)", () => {
+    // Exactly what the page's generateMetadata composes: the request-time
+    // chain over the request's own signals, then buildResultsMeta over it.
+    const locale = resolveUiLocale(undefined, null, "آيفون");
+    const meta = buildResultsMeta({ query: "آيفون", country: null, locale });
+    expect(meta.title).toBe("أسعار آيفون في الكويت - ريمكو");
+    // The mixed "آيفون prices in Kuwait - Reemco" pair was the shipped bug:
+    // an Arabic-script query must never compose onto the English template.
+    expect(meta.title).not.toContain("prices in");
   });
 });

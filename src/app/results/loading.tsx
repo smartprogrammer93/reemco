@@ -23,11 +23,20 @@ function SkeletonCard() {
 }
 
 import { getStrings } from "@/lib/i18n";
+import { sanitizeSearchQuery } from "@/lib/search-params";
 import { resolveRequestLocale } from "@/lib/i18n-server";
 
-export default async function ResultsLoading() {
+export default async function ResultsLoading({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
   // REEA-279 — the loading stamp is chrome: it comes from the table too.
-  const locale = await resolveRequestLocale();
+  // REEA-448 G2 — same chain as the settled page: with no cookie and no
+  // Accept-Language header the Arabic-script query decides the flash locale,
+  // so the loading chrome never flashes English under an Arabic title.
+  const params = await searchParams;
+  const locale = await resolveRequestLocale(sanitizeSearchQuery(params.q) ?? undefined);
   const t = getStrings(locale);
   return (
     <div
