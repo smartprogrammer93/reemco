@@ -41,6 +41,20 @@ const fetchImpl = async (url: string): Promise<Response> => {
       ],
     });
   }
+  if (url.includes("1D2IEWLQAD-dsn.algolia.net")) {
+    return jsonResponse({
+      hits: [
+        {
+          master_id: 58784,
+          full_name_en: "Nescafe Classic Coffee 200g",
+          price: 2.3,
+          original_price: 2.3,
+          on_sale: false,
+          url_en: "/en/products/nescafe-classic-coffee-200g",
+        },
+      ],
+    });
+  }
   if (url.includes("-dsn.algolia.net")) {
     return jsonResponse({ hits: [{ itmn: "Nescafe Classic Coffee", objectID: "7001", clprc: 2.1, avaqt: 6 }] });
   }
@@ -95,6 +109,39 @@ const fetchImpl = async (url: string): Promise<Response> => {
     });
     return htmlResponse(`<script type="application/ld+json">${ld}</script>`);
   }
+  if (url.includes("myaster.com")) {
+    return htmlResponse(
+      '<script>{"sku":"1068110","name":"Nescafe Classic Coffee 200g","brand":"NESCAFE","quantity":3,' +
+        '"inStock":true,"productUrl":"/p/nescafe-classic-coffee/1068110","itemLabels":["NONRX"],' +
+        '"currency":"KWD","price":2.9,"special_price":2.15}</script>',
+    );
+  }
+  if (url.includes("nahdionline.com")) {
+    return htmlResponse(
+      '<script>{"name":"Nescafe Classic Coffee 200g","price":{"KWD":{"default":2.3,' +
+        '"default_formated":"2.30 KD","default_original_formated":"2.80 KD"}},"sku":"103830664"}</script>',
+    );
+  }
+  if (url.includes("ounass.com")) {
+    return htmlResponse(
+      '<script>{"contentTypeId":"shelf","name":"Nescafe Classic Coffee 200g","price":2.4,' +
+        '"categoryUrl":"women/gifts","analyticsId":"x1"}</script>',
+    );
+  }
+  if (url.includes("algolia.net")) {
+    return jsonResponse({
+      hits: [
+        {
+          master_id: 58784,
+          full_name_en: "Nescafe Classic Coffee 200g",
+          price: 2.3,
+          original_price: 2.3,
+          on_sale: false,
+          url_en: "/en/products/nescafe-classic-coffee-200g",
+        },
+      ],
+    });
+  }
   return jsonResponse({});
 };
 
@@ -104,9 +151,8 @@ describe("REEA-262 staged adapter dispatch", () => {
     const staged = collectLiveResultsStaged("nescafe coffee", { fetchImpl });
     const snap = await staged.final;
 
-    // Every adapter of the nineteen-store set (REA-270 batch + the REEA-378
-    // hops: Aster Pharmacy, Nahdi Online, Ounass, Danube Home included) must
-    // appear in the converged notes.
+    // Every adapter of the seventeen-store set (REA-270 batch and the
+    // REEA-378 batch three included) must appear in the converged notes.
     expect(new Set(snap.notes.map((n) => n.merchant))).toEqual(
       new Set([
         "Xcite",
@@ -125,15 +171,25 @@ describe("REEA-262 staged adapter dispatch", () => {
         "Astore",
         "Zayoom",
         "Yousifi",
-        "Nahdi Online",
+        "Aster Pharmacy",
+        "Nahdi",
         "Ounass",
         "Danube Home",
       ]),
     );
 
-    // Scheduled-and-silent would look identical for the four new stores: each
+    // Scheduled-and-silent would look identical for the new stores: each
     // one must also have answered with parsed hits and no error note.
-    for (const merchant of ["Quadra Stores", "Next Store", "PC Kuwait", "Lulu Hypermarket"]) {
+    for (const merchant of [
+      "Quadra Stores",
+      "Next Store",
+      "PC Kuwait",
+      "Lulu Hypermarket",
+      "Aster Pharmacy",
+      "Nahdi",
+      "Ounass",
+      "Danube Home",
+    ]) {
       const note = snap.notes.find((n) => n.merchant === merchant);
       expect(note?.hits, `${merchant} must contribute hits`).toBeGreaterThan(0);
       expect(note?.error).toBeUndefined();

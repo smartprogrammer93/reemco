@@ -5,22 +5,29 @@
  */
 import { describe, expect, it } from "vitest";
 import { PER_RETAILER_TIMEOUT_MS } from "@/lib/collect/types";
+import { COVERAGE_ORDER } from "@/lib/collect/coverage";
 import {
   asterHits,
   astoreHits,
   amazonEgHits,
   blinkHits,
+  COLLECTORS,
   collectLiveResults,
   collectLiveResultsStaged,
   coverageLine,
+  danubeHomeHits,
+  followUpSnapshot,
+  RESULTS_COMPLETION_BUDGET_MS,
   eurekaHits,
   groupHits,
   jarirHits,
   luluHits,
+  nahdiHits,
   LIVE_SEARCH_BUDGET_MS,
   LIVE_SEARCH_HITS_PER_PAGE,
   LIVE_SEARCH_TIMEOUT_MS,
   nextStoreHits,
+  ounassHits,
   pcKuwaitApiHits,
   pcKuwaitHits,
   quadraHits,
@@ -28,6 +35,7 @@ import {
   sultanCenterHits,
   switchHits,
   wibiHits,
+  widerQuery,
   xciteHits,
   yousifiHits,
   zayoomHits,
@@ -39,7 +47,7 @@ import {
   compatibleFields,
   gradeBadgeLabel,
 } from "@/lib/collect/canonical-product";
-import { isAccessoryTitle } from "@/lib/relevance";
+import { isAccessoryTitle, partitionForQuery } from "@/lib/relevance";
 import { bestBadgeIndex } from "@/lib/stock";
 import { toKwdNumeric } from "@/lib/format";
 import { createQueryCache } from "@/lib/query-cache";
@@ -119,6 +127,70 @@ describe("hit parsers", () => {
       inStock: true,
     });
     expect(hits).toHaveLength(1);
+  });
+
+  it("Quadra cards correct a stale manufacturer stamp against the title brand (REEA-487)", () => {
+    // Observed live on `iPhone 17 Pro`: the Huntsman Mini keyboard and the
+    // Arctis Nova Pro headset both carried the option1 value ACER — Quadra's
+    // Shopify `Manufacturer` option stamps one stale value over an import
+    // batch. The adapter keeps the source field verbatim; the render chain
+    // resolves the disagreement in favour of the brand the title shows.
+    const hits = quadraHits(
+      {
+        products: [
+          {
+            title: "RAZER HUNTSMAN V3 PRO MINI 60% Analog Optical Esports Keyboard US - Black",
+            handle: "razer-huntsman-v3-pro-mini-60-analog-optical-esports-keyboard-us-black-1",
+            vendor: "Quadra Stores",
+            variants: [{ price: "47.281", available: true, option1: "ACER" }],
+          },
+        ],
+      },
+      "razer huntsman v3 pro mini",
+    );
+    expect(hits[0].brand).toBe("ACER");
+    const products = groupHits("razer huntsman v3 pro mini", hits);
+    expect(products[0].brand).toBe("Razer");
+  });
+
+  it("quadraHits reads the suggest.json lite envelope with empty variants (REEA-408)", () => {
+    // Live shape (quadrastores.com/search/suggest.json, captured 2026-09-09
+    // from the coder edge): suggest records arrive with an EMPTY `variants`
+    // array and carry price/availability on the product record — the fold in
+    // normalizeShopifyProducts must keep those rows alive so the hop answers
+    // its priced catalog instead of a standing zero.
+    const hits = quadraHits(
+      {
+        resources: {
+          results: {
+            products: [
+              {
+                title: "DELL S2419HGF - 24 Inch Gaming Monitor - Black",
+                handle: "dell-s2419hgf",
+                vendor: "Dell",
+                price: "89.000",
+                available: true,
+                compare_at_price_min: "119.000",
+                variants: [],
+                image: { src: "https://quadrastores.com/cdn/s2419hg.png" },
+              },
+              { title: "Label Only", handle: "lo", variants: [] },
+            ],
+          },
+        },
+      },
+      "dell monitor",
+    );
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({
+      merchant: "Quadra Stores",
+      brand: "Dell",
+      price: 89,
+      wasPrice: 119,
+      currency: "KWD",
+      url: "https://quadrastores.com/products/dell-s2419hgf",
+      inStock: true,
+    });
   });
 
   it("nextStoreHits scans Magento SSR cards through the shared scanner (REEA-238)", () => {
@@ -253,6 +325,10 @@ describe("hit parsers", () => {
     // and the note carries no error field.
     expect(note?.hits).toBe(2);
     expect(note?.error).toBeUndefined();
+    // REEA-488 item 2: every stage note carries its coupon coverage count —
+    // this hop's contract surfaced no coupon info, and the note says so with
+    // an honest 0 beside the hit count instead of staying silent.
+    expect(note?.coupons).toBe(0);
   });
 
   it("PC Kuwait hop stops at the first non-empty whole-query answer (REEA-357)", async () => {
@@ -460,6 +536,41 @@ describe("hit parsers", () => {
     expect(hits[0].inStock).toBe(false);
   });
 
+  it("sultanCenterHits keeps English-titled grocery rows for the Arabic fixed-set query (REEA-408)", () => {
+    // Fixture trimmed from the live mobile/api/search answer for
+    // `أرز بسمتي` captured 2026-09-09: the zone lists its basmati stock
+    // under English titles, so a cross-script zero-score drop here is the
+    // silent-zero cell the deployed matrix recorded — with the curated
+    // category forms the rows score on their own words and survive.
+    const payload = {
+      status: "1",
+      products: {
+        product_list: [
+          { name: "Country Xl Organic Basmati Rice", sku: "1", price: "2.3100", slug: "country-xl-organic-basmati-rice-2-kg-1", is_in_stock: "1" },
+          { name: "Daawat Extra Long White Basmati Rice", sku: "2", price: "1.8500", slug: "daawat-extra-long-white-basmati-rice", is_in_stock: "1" },
+        ],
+      },
+    };
+    const hits = sultanCenterHits(payload, "أرز بسمتي");
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits[0].title).toMatch(/Basmati Rice/);
+  });
+
+  it("brand+category Arabic queries keep the matching row and drop near-miss rows", () => {
+    // `لابتوب ديل` on the Store API shape: the laptop row answers both the
+    // curated category form and (via the brand alias) the brand token; the
+    // tea row answers neither and the gate holds it out.
+    const hits = pcKuwaitApiHits(
+      [
+        { name: 'Latitude 5440 Laptop 14" i5', permalink: "https://pckuwait.com/lat-5440", prices: { price: "119000", regular_price: "125000", currency_minor_unit: "3", currency_code: "KWD" }, is_in_stock: true },
+        { name: "Lipton Yellow Label Black Tea", permalink: "https://pckuwait.com/lipton", prices: { price: "450", currency_minor_unit: "3" }, is_in_stock: true },
+      ],
+      "لابتوب ديل",
+    );
+    expect(hits).toHaveLength(1);
+    expect(hits[0].title).toBe('Latitude 5440 Laptop 14" i5');
+  });
+
   it("amazonEgHits parses cards with Arabic-Indic prices", () => {
     const html =
       'x data-component-type="s-search-result" <h2 aria-label="Samsung Galaxy S26 Ultra"><span>. </span></h2> ' +
@@ -496,7 +607,12 @@ describe("groupHits", () => {
     // REEA-167 §2: the canonical offer list ascends by price — cheapest
     // first; purchasable offers only break ties.
     expect(s26.offers.map((o) => o.merchant)).toEqual(["Amazon.eg", "Xcite", "Jarir"]);
-    expect(s26.alternatives.map((a) => a.title)).toContain("Samsung Monitor Odyssey");
+    // REEA-488 item 1: alternatives list CHEAPER same-family products. The
+    // monitor (200 KWD) is not cheaper than the S26's best row (~20 KWD after
+    // EGP conversion), so the phone card gets none; the monitor sees the
+    // cheaper phone.
+    expect(s26.alternatives).toHaveLength(0);
+    expect(monitor.alternatives.map((a) => a.title)).toContain("Samsung Galaxy S26 Ultra");
     expect(monitor.offers).toHaveLength(1);
     // Real collection timestamp, not a computed offset — chips age honestly.
     expect(Date.parse(s26.scrapedAt!)).toBeLessThanOrEqual(Date.now());
@@ -890,7 +1006,7 @@ describe("groupHits", () => {
     expect(first[0].variations.map((v) => v.id)).toEqual(["silver", "blue"]);
   });
 
-  it("REEA-254: staged flushes skip the repeated alternatives arrays", async () => {
+  it("REEA-254 + REEA-488: staged flushes share one alternatives entry", async () => {
     resetDiscoveryCache();
     const fetchImpl = async (url: string): Promise<Response> => {
       if (url.includes("xcite.com")) {
@@ -912,10 +1028,11 @@ describe("groupHits", () => {
     };
     const staged = collectLiveResultsStaged("airpods", { fetchImpl, country: "KW" });
     const first = await staged.stages[0];
-    // Intermediate flush: row identity + offers survive, the repeated per-row
-    // alternatives arrays are trimmed out of the serialized state.
+    // Intermediate flush: row identity + offers survive, and the card now
+    // reads `alternatives` off every flush too — the payload trim is ENTRY
+    // SHARING (one object per referenced group), not emptied arrays.
     expect(first.products.length).toBeGreaterThan(0);
-    expect(first.products.every((p) => p.alternatives.length === 0)).toBe(true);
+    expect(first.products.some((p) => p.alternatives.length > 0)).toBe(true);
     const finalSnap = await staged.final;
     expect(finalSnap.products.some((p) => p.alternatives.length > 0)).toBe(true);
   });
@@ -1000,8 +1117,9 @@ describe("collectLiveResults", () => {
     const homeRuns = calls.filter((u) => u === "https://www.jarir.com/" || u === "https://www.eureka.com.kw/").length;
     expect(homeRuns).toBe(2); // one discovery chain total, not one per call
     expect(afterFirst).toBeGreaterThan(homeRuns);
-    // Offers stay live: every call re-queries each retailer's search endpoint.
-    expect(calls.filter((u) => u.includes("cnstrc.com") || u.includes("algolia.net"))).toHaveLength(4);
+    // Offers stay live: every call re-queries each retailer's search endpoint
+    // (eight across two calls once both algolia-host hops join the set).
+    expect(calls.filter((u) => u.includes("cnstrc.com") || u.includes("algolia.net"))).toHaveLength(8);
   });
 
   it("fails discovery on crafted credentials and never interpolates them into hop URLs (REEA-152)", async () => {
@@ -1029,9 +1147,11 @@ describe("collectLiveResults", () => {
     expect(second.notes.find((n) => n.merchant === "Eureka")?.error).toBeTruthy();
     // …without poisoning the cache: the mismatch skipped writeDiscovery, so
     // every call re-ran the homepage hop (old code cached after one hop).
-    // REEA-290: each call now answers with the bounded retry pair — attempt +
-    // retry — so two calls land four hops, still none from a cached entry.
-    expect(calls.filter((u) => u.startsWith("https://www.eureka.com.kw/"))).toHaveLength(4);
+    // REEA-290: each call answers with the bounded retry pair — attempt +
+    // retry. REEA-437: a fully silent answer additionally gets the ONE
+    // widened zero-result round, so two calls land eight hops total, still
+    // none from a cached entry.
+    expect(calls.filter((u) => u.startsWith("https://www.eureka.com.kw/"))).toHaveLength(8);
     // The crafted value never interpolated into a follow-up fetch URL.
     expect(calls.filter((u) => u.includes("evil.example"))).toHaveLength(0);
   });
@@ -1184,7 +1304,9 @@ describe("collectLiveResults depth pass (REEA-149)", () => {
     };
     const { products } = await collectLiveResults("quiet-widget", { fetchImpl });
     expect(products).toHaveLength(0);
-    expect(calls.filter((u) => u.includes("cnstrc.com"))).toHaveLength(1);
+    // Round one plus the ONE REEA-437 widened round; the enriched REEA-149
+    // depth pass still stays skipped when round one collected nothing.
+    expect(calls.filter((u) => u.includes("cnstrc.com"))).toHaveLength(2);
   });
 });
 
@@ -1246,6 +1368,33 @@ describe("collectLiveResults page width (REEA-156)", () => {
     expect(blink?.url.match(/limit\D*(\d+)/)?.[1]).toBe(String(n));
     const jarir = seen.find((s) => s.url.includes("cnstrc.com"));
     expect(decodeURIComponent(jarir?.url ?? "")).toContain(`num_results_per_page=${n}`);
+  });
+
+  it("Sultan Center re-searches per word when the whole phrase answers empty (REEA-408)", async () => {
+    resetDiscoveryCache();
+    // Measured live shape 2026-09-09: the mobile API answers `iPhone 17 Pro`
+    // and `لابتوب ديل` with an EMPTY product_list while single words answer
+    // rows — the collector must ride the same window with a bounded per-word
+    // re-search instead of recording the phrase-shaped zero.
+    const calls: string[] = [];
+    const fetchImpl = async (url: string, init?: RequestInit): Promise<Response> => {
+      if (url.includes("sultan-center.com")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { search_data?: string };
+        const q = String(body.search_data ?? "");
+        calls.push(q);
+        const rows =
+          q === "inspiron" || q === "dell"
+            ? [{ name: "Dell Inspiron 15 Laptop", slug: "dl-i15", price: "299.0000", is_in_stock: "1" }]
+            : [];
+        return jsonResponse({ status: "1", products: { product_list: rows } });
+      }
+      return jsonResponse({});
+    };
+    const { notes } = await collectLiveResults("dell inspiron laptop", { fetchImpl });
+    expect(calls[0]).toBe("dell inspiron laptop");
+    expect(calls).toContain("dell");
+    const sultan = notes.find((n) => n.merchant === "Sultan Center");
+    expect((sultan?.hits ?? 0)).toBeGreaterThan(0);
   });
 
   it("keeps the widened page above the thin 12-hit window it replaces", () => {
@@ -1404,10 +1553,8 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     resetDiscoveryCache();
     const staged = collectLiveResultsStaged("samsung", { fetchImpl: mixedSpeedFetch(), country: "KW" });
 
-    // One boundary per KW retailer in the run (fifteen since REEA-378 items
-    // 2-4: the Ounass KW hop joins the bounded set; Nahdi/Danube carry SA
-    // stores and never bound a KW run).
-    expect(staged.stages).toHaveLength(15);
+    // One boundary per KW retailer in the run (seventeen since REEA-378).
+    expect(staged.stages).toHaveLength(17);
 
     const first = await staged.stages[0];
     expect(first.products).toHaveLength(1);
@@ -1428,9 +1575,9 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     expect(finalSnap.products[0].offers.map((o) => o.price)).toEqual([379, 385, 390, 399]);
     expect(merchants.has("Eureka")).toBe(true);
     expect(merchants.has("Sultan Center")).toBe(true);
-    // Merchants whose mocks never answer are all reported as notes (fifteen
-    // of the nineteen retailers).
-    expect(finalSnap.notes).toHaveLength(15);
+    // Merchants whose mocks never answer are all reported as notes (seventeen
+    // of the seventeen retailers).
+    expect(finalSnap.notes).toHaveLength(17);
   });
 
   it("the final flush equals the blocking path on the same live answers", async () => {
@@ -1439,6 +1586,122 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     const blocking = await collectLiveResults("samsung", { fetchImpl: mixedSpeedFetch(), country: "KW" });
     const shape = (s: typeof staged) => s.products.map((p) => [p.productId, p.offers.map((o) => `${o.merchant}:${o.price}`)]);
     expect(shape(staged)).toEqual(shape(blocking));
+  });
+});
+
+describe("completion-budget finalize (REEA-398)", () => {
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+  }
+
+  type FetchImplLike = (url: string, init?: RequestInit) => Promise<Response>;
+
+  // The fast hops (Xcite, Blink, the plain-archive retailers) answer at
+  // once; the two-step Eureka chain and the Sultan Center storefront land
+  // AFTER the finalize deadline but inside the hop window — so the stream
+  // closes on budget with the landed offers plus honest coverage notes,
+  // while the late ones converge into the follow-up feed right after.
+  function lateTailFetch(delayMs = 120): FetchImplLike {
+    return async (url: string): Promise<Response> => {
+      if (url.endsWith("eureka.com.kw/")) {
+        return new Promise((res) =>
+          setTimeout(
+            () =>
+              res(
+                new Response('<input id="cky" value="APPS1"><input id="srcapk" value="keyStage01">', {
+                  headers: { "content-type": "text/html" },
+                }),
+              ),
+            delayMs,
+          ),
+        );
+      }
+      if (url.includes("algolia.net")) {
+        return new Promise((res) =>
+          setTimeout(
+            () =>
+              res(
+                jsonResponse({ hits: [{ itmn: "Samsung Galaxy S26 Ultra", objectID: "9101", clprc: 379, avaqt: 3 }] }),
+              ),
+            delayMs,
+          ),
+        );
+      }
+      if (url.includes("sultan-center.com")) {
+        return new Promise((res) =>
+          setTimeout(
+            () =>
+              res(
+                jsonResponse({
+                  status: "1",
+                  products: { product_list: [{ name: "Samsung Galaxy S26 Ultra", slug: "s26u", price: "385.0000", is_in_stock: "1" }] },
+                }),
+              ),
+            delayMs,
+          ),
+        );
+      }
+      if (url.includes("xcite.com")) {
+        return jsonResponse({
+          results: [{ hits: [{ name: "Samsung Galaxy S26 Ultra", slug: "s26u", price: 399, currency: "KWD", inStock: true }] }],
+        });
+      }
+      if (url.includes("blink.com.kw")) {
+        return jsonResponse({ products: [{ title: "Samsung Galaxy S26 Ultra", handle: "s26u", variants: [{ price: "390.00", available: true }] }] });
+      }
+      return jsonResponse({});
+    };
+  }
+
+  it("finalizes on the completion budget with honest coverage notes while late hops are still in flight", async () => {
+    resetDiscoveryCache();
+    const staged = collectLiveResultsStaged("samsung", { fetchImpl: lateTailFetch(), country: "KW", deadlineMs: 40 });
+
+    const snap = await staged.final;
+    // The finalized document carries everything that landed inside the budget…
+    const merchants = new Set(snap.products.flatMap((p) => p.offers.map((o) => o.merchant)));
+    expect(merchants.has("Xcite")).toBe(true);
+    expect(merchants.has("Eureka")).toBe(false);
+    // …plus one honest budget note per still-silent merchant: the coverage
+    // line of the FINALIZED page names every gap, with the budget as its
+    // reason — across all seventeen KW retailers in the run.
+    expect(snap.notes).toHaveLength(17);
+    expect(snap.notes.find((n) => n.merchant === "Eureka")?.error).toMatch(/completion budget/);
+    expect(snap.notes.find((n) => n.merchant === "Sultan Center")?.error).toMatch(/completion budget/);
+    // The page clock sits inside the brief's 4-5 s window.
+    expect(RESULTS_COMPLETION_BUDGET_MS).toBeLessThanOrEqual(5_000);
+  });
+
+  it("late offers land through the follow-up feed from the SAME run, no second fan-out", async () => {
+    resetDiscoveryCache();
+    const cache = createQueryCache();
+    const staged = collectLiveResultsStaged("samsung", {
+      fetchImpl: lateTailFetch(),
+      cache,
+      country: "KW",
+      deadlineMs: 40,
+    });
+
+    // Finalized at the budget: only the immediate hops are on the page.
+    const finalized = await staged.final;
+    expect(finalized.products[0].offers).toHaveLength(2);
+
+    // The follow-up feed reads the SAME in-flight chain: the late Eureka and
+    // Sultan hops fold in without any re-fetch of the retailers that already
+    // answered — the feed hands over the run's own converged snapshot.
+    const late = await followUpSnapshot("samsung");
+    expect(late).not.toBeNull();
+    const lateMerchants = new Set(late!.products.flatMap((p) => p.offers.map((o) => o.merchant)));
+    expect(lateMerchants.has("Eureka")).toBe(true);
+    expect(lateMerchants.has("Sultan Center")).toBe(true);
+    expect(late!.products[0].offers.map((o) => o.price)).toEqual([379, 385, 390, 399]);
+
+    // The converged write-through leaves the COMPLETE live answer in the
+    // cache, so the next identical query inside the memo window gets the
+    // full coverage immediately.
+    const memo = cache.read<{ products: { offers: unknown[] }[] }>("samsung");
+    expect(memo).not.toBeNull();
+    expect(memo!.value.products[0].offers).toHaveLength(4);
   });
 });
 
@@ -1678,8 +1941,8 @@ describe("whole-chain budget signal (REEA-224 F4)", () => {
     expect(elapsed).toBeGreaterThanOrEqual(LIVE_SEARCH_TIMEOUT_MS * 2 - 1_500);
     expect(elapsed).toBeLessThan(LIVE_SEARCH_BUDGET_MS + 2_000);
     // Graceful degradation: every silent retailer is still reported (all
-    // fifteen KW collectors are stalled here, REEA-378 included).
-    expect(notes).toHaveLength(15);
+    // seventeen KW collectors are stalled here, REEA-378 included).
+    expect(notes).toHaveLength(17);
   }, 25_000);
 });
 
@@ -1887,5 +2150,325 @@ describe("REEA-270 — Kuwait batch two adapters", () => {
       url: "https://www.myaster.com/p/vichy-serum/1068110",
       inStock: true,
     });
+  });
+
+  it("nahdiHits pairs price-anchor records with nearest names both directions", () => {
+    // Record shapes measured live 2026-09-09 off the ar-sa search hop: the
+    // bilingual payload puts names either before the price object (with a
+    // trailing strike price) or after it; the sku rides whichever side. The
+    // scanner must take the LATIN title nearest each price anchor and keep
+    // each record's own sku — no bleeding across neighbours.
+    const html =
+      '<script>{"name":"صيدلية النهدي","seoName":"Nahdi Pharmacy United","items":[' +
+      '{"name":"Nescafe Classic Coffee 200g","name_ar":"نسكافي كلاسيك","categoryIds":["8"],' +
+      '"price":{"SAR":{"default":2.25,"default_formated":"2.25 ر س","default_original_formated":"3.00 ر س"}},' +
+      '"sku":"103830664"},' +
+      '{"sku":"103635949","brand":"NESCAFE","is_out_of_stock":"No","display_flag":true,' +
+      '"price":{"SAR":{"default":4,"default_formated":"4.00"}},"name":"NESCAFE Classic Coffee Jar 100g",' +
+      '"keyword_enrichment":{"arabic":["نسكافي"]}}]}</script>';
+    const hits = nahdiHits(html, "nescafe coffee");
+    expect(hits).toHaveLength(2);
+    expect(hits[0]).toMatchObject({
+      title: "Nescafe Classic Coffee 200g",
+      merchant: "Nahdi",
+      country: "KW",
+      price: 2.25,
+      wasPrice: 3,
+      currency: "SAR",
+      url: "https://ecombe.nahdionline.com/ar/103830664",
+      inStock: true,
+    });
+    expect(hits[1]).toMatchObject({
+      title: "NESCAFE Classic Coffee Jar 100g",
+      price: 4,
+      currency: "SAR",
+      url: "https://ecombe.nahdionline.com/ar/103635949",
+    });
+    expect(hits[1].wasPrice).toBeUndefined();
+  });
+
+  it("ounassHits keeps priced island records and skips label records", () => {
+    // Measured shape off the working `/?q=` hop (2026-09-09): inline islands
+    // pair a name with a numeric price and a categoryUrl; the shell's own
+    // i18n labels ride the same keys with string prices and must not join.
+    const html =
+      '<script>{"contentTypeId":"shelf","name":"Nescafe Classic Coffee 200g","price":2.5,' +
+      '"categoryUrl":"women/gifts","analyticsId":"x1"},' +
+      '{"name":"Nescafe Coffee Blend","price":"Price","categoryUrl":"women"}</script>';
+    const hits = ounassHits(html, "nescafe coffee");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({
+      title: "Nescafe Classic Coffee 200g",
+      merchant: "Ounass",
+      country: "KW",
+      price: 2.5,
+      currency: "KWD",
+      url: "https://kuwait.ounass.com/women/gifts",
+      inStock: true,
+    });
+  });
+
+  it("danubeHomeHits reads Algolia records with bilingual names and sale flags", () => {
+    // Measured shape off the spree_products index hop (2026-09-09): bilingual
+    // names with the Latin first, numeric price/original_price, on_sale as
+    // the strike-price flag, url_en relative to the danube.sa host. Records
+    // without a numeric price or without query coverage stay out.
+    const payload = {
+      hits: [
+        {
+          master_id: 58784,
+          name_en: "iPhone 17 Pro Max Cosmic Orange",
+          full_name_en: "Apple iPhone 17 Pro Max Cosmic Orange",
+          full_name_ar: "ابل آيفون 17 برو ماكس",
+          price: 6699,
+          original_price: 6899,
+          on_sale: true,
+          url_en: "/en/products/iphone-17-pro-max-cosmic-orange",
+          image: "https://d1c124wpoew66.cloudfront.net/spree/images/x.png",
+        },
+        {
+          master_id: 58785,
+          full_name_en: "Samsung The Frame 55",
+          price: 3299,
+          original_price: 3299,
+          on_sale: false,
+          url_en: "/en/products/samsung-frame",
+        },
+        { master_id: 58786, full_name_en: "Apple Care Bundle", price: 0, url_en: "/en/" },
+      ],
+    };
+    const hits = danubeHomeHits(payload, "iphone 17 pro");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({
+      title: "Apple iPhone 17 Pro Max Cosmic Orange",
+      merchant: "Danube Home",
+      country: "KW",
+      price: 6699,
+      wasPrice: 6899,
+      currency: "SAR",
+      url: "https://danube.sa/en/products/iphone-17-pro-max-cosmic-orange",
+      image: "https://d1c124wpoew66.cloudfront.net/spree/images/x.png",
+      inStock: true,
+    });
+  });
+});
+
+describe("REEA-437 — cold-start zero gets one widened retry + honest empty state", () => {
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      headers: { "content-type": "application/json" },
+    });
+  }
+  const xciteEnvelope = (hits: Record<string, unknown>[]) => ({ results: [{ hits }] });
+  const xciteQuery = (init?: RequestInit): string => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as {
+      requests?: { params?: { query?: string } }[];
+    };
+    return body.requests?.[0]?.params?.query ?? "";
+  };
+
+  it("widerQuery trims one trailing token; single-token codes keep their form", () => {
+    expect(widerQuery("iPhone 17 Pro")).toBe("iPhone 17");
+    expect(widerQuery("WH-1000XM6")).toBe("WH-1000XM6");
+    expect(widerQuery("  lg   gram  ")).toBe("lg");
+  });
+
+  it("a zero whole-query answer gets one trimmed-token retry whose live hits become the served cards", async () => {
+    resetDiscoveryCache();
+    const queries: string[] = [];
+    const fetchImpl = async (_url: string, init?: RequestInit): Promise<Response> => {
+      const query = xciteQuery(init);
+      queries.push(query);
+      // The whole phrase answers thin on the cold hop; the widened form
+      // carries the real listings (the REEA-357 near-exact-match quirk).
+      if (query === "lg gram mini") return jsonResponse(xciteEnvelope([]));
+      if (query === "lg gram") {
+        return jsonResponse(
+          xciteEnvelope([
+            { name: "LG gram 16 Notebook", slug: "lg16", price: 299, currency: "KWD", inStock: true },
+          ]),
+        );
+      }
+      return jsonResponse({});
+    };
+
+    const { products, notes, attemptedQueries } = await collectLiveResults("lg gram mini", { fetchImpl });
+
+    // The widened retry's LIVE hits are the served answer — the page never
+    // shows its own zero while a broader live fetch still had cards.
+    expect(products.length).toBeGreaterThan(0);
+    expect(products[0].title).toContain("LG gram");
+    // The zero path names BOTH forms the run actually issued.
+    expect(attemptedQueries).toEqual(["lg gram mini", "lg gram"]);
+    // Coverage honesty: Xcite's answering retry note replaces its round-one zero.
+    expect(notes.find((n) => n.merchant === "Xcite")?.hits).toBe(1);
+    // One widening round only: the whole phrase runs at most once more than
+    // the trimmed form, which never re-widens itself.
+    const wholeRuns = queries.filter((q) => q === "lg gram mini").length;
+    const wideRuns = queries.filter((q) => q === "lg gram").length;
+    expect(wideRuns).toBeGreaterThanOrEqual(1);
+    expect(wholeRuns - wideRuns).toBeLessThanOrEqual(1);
+  });
+
+  it("a single-token model code keeps its form and still gets its one bounded second attempt", async () => {
+    resetDiscoveryCache();
+    let xciteCalls = 0;
+    const fetchImpl = async (_url: string, init?: RequestInit): Promise<Response> => {
+      if (xciteQuery(init) !== "WH-1000XM6") return jsonResponse({});
+      xciteCalls++;
+      // Cold first hop comes back thin (handshake/discovery window); the
+      // second bounded attempt behind warmed hop caches answers fine — the
+      // measured cold-first-load shape of the curated chips.
+      if (xciteCalls === 1) return jsonResponse(xciteEnvelope([]));
+      return jsonResponse(
+        xciteEnvelope([
+          { name: "Sony WH-1000XM6 Wireless Headphones", slug: "xm6", price: 74.9, currency: "KWD", inStock: true },
+        ]),
+      );
+    };
+
+    const { products, attemptedQueries } = await collectLiveResults("WH-1000XM6", { fetchImpl });
+
+    expect(xciteCalls).toBe(2);
+    expect(products.length).toBeGreaterThan(0);
+    expect(products.some((p) => /WH-1000XM6/i.test(p.title))).toBe(true);
+    // Single token: the widening IS the retry — one form, named once.
+    expect(attemptedQueries).toEqual(["WH-1000XM6"]);
+  });
+
+  it("zero after the widened retry stays a real zero — one bounded retry, nothing invented", async () => {
+    resetDiscoveryCache();
+    const queries: string[] = [];
+    const fetchImpl = async (_url: string, init?: RequestInit): Promise<Response> => {
+      queries.push(xciteQuery(init));
+      return jsonResponse(xciteEnvelope([]));
+    };
+
+    const { products, attemptedQueries } = await collectLiveResults("zzxwq kvqpl", { fetchImpl });
+
+    expect(products).toHaveLength(0);
+    // The whole phrase answered once; the widened form answered once; done.
+    expect(attemptedQueries).toEqual(["zzxwq kvqpl", "zzxwq"]);
+    expect(queries.filter((q) => q === "zzxwq kvqpl").length).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("coverage order parity (REEA-437 split)", () => {
+  it("COVERAGE_ORDER mirrors the COLLECTORS declaration order exactly", () => {
+    // coverage.ts keeps a plain name list so the browser bundle never needs
+    // the COLLECTORS object graph; this pins the list to the real adapter
+    // order, so adding or reordering an adapter cannot silently desync the
+    // coverage sentence from the REEA-254 determinism contract.
+    expect([...COVERAGE_ORDER]).toEqual(COLLECTORS.map((c) => c.merchant));
+  });
+});
+
+describe("REEA-486 grouped offer cards — one card per product identity", () => {
+  it("`iPhone 17 Pro` shows one Pro card, one Pro Max card, the case after them", () => {
+    // The exact shape from the brief: five near-duplicate listings for two
+    // devices plus a case. The Japanese-Version tails fold onto their own
+    // line (eSIM / plain), never onto a sibling model and never away from
+    // the row they label.
+    const products = groupHits("iPhone 17 Pro", [
+      hit({ title: "Apple iPhone 17 Pro - Japanese Version (eSIM)", merchant: "Eureka", price: 429.9, url: "https://eureka.example/17p-jp", collectedAt: "2026-09-10T08:00:02.000Z" }),
+      hit({ title: "Apple iPhone 17 Pro Silicone Case", merchant: "Blink", price: 12.9, url: "https://blink.example/case" }),
+      hit({ title: "Apple iPhone 17 Pro Max - Japanese Version", merchant: "Jarir", country: "SA", currency: "SAR", price: 1900, url: "https://jarir.example/17pm-jp", collectedAt: "2026-09-10T08:00:03.000Z" }),
+      hit({ title: "Apple iPhone 17 Pro Max - eSIM", merchant: "Xcite", price: 489.9, url: "https://xcite.example/17pm", collectedAt: "2026-09-10T08:00:01.000Z" }),
+      hit({ title: "Apple iPhone 17 Pro - eSIM", merchant: "Xcite", price: 449.9, url: "https://xcite.example/17p", collectedAt: "2026-09-10T08:00:01.000Z" }),
+    ]);
+    expect(products).toHaveLength(3);
+    // Pro and Pro Max keep their own cards; the case keeps its own and
+    // renders AFTER the devices (Devices/Accessories tiering, REEA-189).
+    const tier = partitionForQuery(products);
+    expect(tier.tiered).toBe(true);
+    expect(tier.devices.map((p) => p.title)).toEqual([
+      // Non-extended model match leads its extension (REEA-213), and each
+      // card shows its shortest member title — the qualifier survives below
+      // it, on the row it labels.
+      "Apple iPhone 17 Pro - eSIM",
+      "Apple iPhone 17 Pro Max - eSIM",
+    ]);
+    expect(tier.accessories.map((p) => p.title)).toEqual(["Apple iPhone 17 Pro Silicone Case"]);
+
+    // One Pro card: both spellings merged, every retailer that carries it.
+    const pro = tier.devices.find((p) => !p.title.includes("Max"))!;
+    expect(pro.offers.map((o) => `${o.merchant}:${o.price}`)).toEqual(["Eureka:429.9", "Xcite:449.9"]);
+    // The qualifier survives inside the card on the row it labels …
+    expect(pro.offers.find((o) => o.merchant === "Eureka")?.label).toBe("Japanese Version");
+    // … and the plain listing keeps no label; both rows carry their hop stamp.
+    expect(pro.offers.find((o) => o.merchant === "Xcite")?.label).toBeUndefined();
+    expect(pro.offers.find((o) => o.merchant === "Eureka")?.collectedAt).toBe("2026-09-10T08:00:02.000Z");
+    expect(pro.offers.every((o) => typeof o.collectedAt === "string")).toBe(true);
+
+    // Pro Max card: same fold on its own line, case never joins a phone card.
+    const max = tier.devices.find((p) => p.title.includes("Max"))!;
+    expect(max.offers.map((o) => o.merchant).sort()).toEqual(["Jarir", "Xcite"]);
+    expect(tier.accessories[0].offers.map((o) => o.merchant)).toEqual(["Blink"]);
+  });
+
+  it("Arabic locale mirrors the structure exactly (AC-5)", () => {
+    const products = groupHits("آيفون 17 برو", [
+      hit({ title: "آيفون 17 برو - نسخة يابانية (eSIM)", merchant: "Jarir", country: "SA", currency: "SAR", price: 1550, url: "https://jarir.example/ar-jp" }),
+      hit({ title: "آيفون 17 برو (eSIM)", merchant: "Jarir", country: "SA", currency: "SAR", price: 1500, url: "https://jarir.example/ar" }),
+    ]);
+    expect(products).toHaveLength(1);
+    const card = products[0];
+    // Same two distinct listings, labels mirroring the Arabic tail.
+    expect(card.offers.map((o) => `${o.price}:${o.label ?? ""}`)).toEqual([
+      "1500:",
+      "1550:نسخة يابانية",
+    ]);
+    // Max keeps its own card in Arabic too.
+    const withMax = groupHits("آيفون 17 برو", [
+      hit({ title: "آيفون 17 برو ماكس", merchant: "Jarir", country: "SA", currency: "SAR", price: 1700, url: "https://jarir.example/ar-max" }),
+      hit({ title: "آيفون 17 برو", merchant: "Jarir", country: "SA", currency: "SAR", price: 1500, url: "https://jarir.example/ar" }),
+    ]);
+    expect(withMax).toHaveLength(2);
+  });
+
+  it("live chain stamps each retailer row with its own collected-at (AC-2/AC-4)", async () => {
+    resetDiscoveryCache();
+    function jsonResponse(body: unknown): Response {
+      return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    }
+    // Xcite answers with the two Pro spellings, Blink with the plain one:
+    // one card per model must come out of the REAL chain (collectSettled →
+    // groupHits), every row carrying its hop stamp so later retailer stages
+    // append rows to the SAME grouped card instead of forking it.
+    const fetchImpl = async (url: string): Promise<Response> => {
+      if (url.includes("xcite.com")) {
+        return jsonResponse({
+          results: [
+            {
+              hits: [
+                { name: "Apple iPhone 17 Pro - Japanese Version (eSIM)", slug: "jp", price: 105, currency: "KWD", inStock: true },
+                { name: "Apple iPhone 17 Pro - eSIM", slug: "eu", price: 110, currency: "KWD", inStock: true },
+              ],
+            },
+          ],
+        });
+      }
+      // Blink is the only merchant whose hop is this suggest.json shape;
+      // every other retailer answers the empty object, so the card carries
+      // exactly the two stubbed merchants.
+      if (url.includes("blink.com.kw")) {
+        return jsonResponse({ products: [{ title: "Apple iPhone 17 Pro - eSIM", handle: "p1", variants: [{ price: "99", available: true }] }] });
+      }
+      return new Response("{}");
+    };
+    const { products } = await collectLiveResults("iphone 17 pro", { fetchImpl });
+    const proCards = products.filter((p) => p.title.includes("iPhone 17 Pro") && !p.title.includes("Max"));
+    expect(proCards).toHaveLength(1);
+    const rows = proCards[0].offers;
+    // Both retailers on the one Pro card; the qualifier rides the row it
+    // labels, and Xcite's two distinct listings keep their own rows.
+    expect(rows.map((o) => `${o.merchant}:${o.price}`)).toEqual([
+      "Blink:99",
+      "Xcite:105",
+      "Xcite:110",
+    ]);
+    expect(rows.every((o) => typeof o.collectedAt === "string")).toBe(true);
+    const xciteRow = rows.find((o) => o.merchant === "Xcite")!;
+    expect(xciteRow.label).toBe("Japanese Version");
   });
 });

@@ -13,40 +13,53 @@
  * retailer that fails never blocks the others; failures are dropped silently
  * in production but surfaced in tests via the returned diagnostics.
  */
+import zlib from "node:zlib";
 import {
   APP_ID_ALLOW,
   SEARCH_KEY_ALLOW,
   VERIFIED_BOT_HEADERS,
-  brandAwareCoverage,
   extractJarirIndexKey,
   extractJsonLdProducts,
   fetchThroughChallenge,
   jarirIndexLang,
   normalizeShopifyProducts,
+  queryGatePasses,
   scanNextStoreCards,
   scanWooCards,
   titleMatchScore,
 } from "@/lib/collect/search-fallback";
-import { defaultQueryCache, queryCacheKey, type QueryCache, type QueryCacheHit } from "@/lib/query-cache";
+import {
+  defaultQueryCache,
+  queryCacheKey,
+  QUERY_CACHE_MAX_AGE_MS,
+  QUERY_CACHE_MAX_ENTRIES,
+  type QueryCache,
+  type QueryCacheHit,
+} from "@/lib/query-cache";
 import type { FetchImpl } from "@/lib/collect/scraper";
 import type { CountryCode } from "@/lib/country";
 import { sanitizeExternalUrl } from "@/lib/safe-url";
 import { toKwdNumeric } from "@/lib/format";
-import { canonicalFields, compatibleFields, type CanonicalFields } from "@/lib/collect/canonical-product";
+import { canonicalFields, compatibleFields, listingLabel, type CanonicalFields } from "@/lib/collect/canonical-product";
 import {
   arabicBrandIntent,
-  arabicGenericQuery,
   brandIsNamed,
   isAccessoryTitle,
   isModelExtended,
   matchesQueryToken,
-  queryGatePasses,
   queryMatchTokens,
   relevanceTier,
   resolveBrand,
   titleMatchesBrand,
 } from "@/lib/relevance";
-import type { NormalizedProduct, PriceOffer, ProductAlternative, ProductVariation } from "@/types/product";
+import type { Coupon, NormalizedProduct, PriceOffer, ProductAlternative, ProductVariation } from "@/types/product";
+// REEA-437 — the snapshot shape and the coverage sentence moved to the pure
+// ./coverage.ts so the browser-side results shell can import them without
+// pulling this server-only module into the client bundle; re-exported here so
+// every existing "@/lib/collect/live-search" import path keeps working.
+import type { LiveSearchResult } from "@/lib/collect/coverage";
+export type { LiveSearchResult } from "@/lib/collect/coverage";
+export { coverageLine } from "@/lib/collect/coverage";
 
 /**
  * Per-attempt fetch ceiling for the search fan-out (parallel per retailer).
@@ -70,6 +83,29 @@ export const LIVE_SEARCH_TIMEOUT_MS = 4_000;
  * / per-attempt window decide).
  */
 export const LIVE_SEARCH_BUDGET_MS = 16_000;
+/**
+ * REEA-398 — per-query completion budget for the streamed results page.
+ * The page finalizes on this clock: whatever has answered lands in the
+ * served document together with its coverage line, and the HTML stream
+ * closes instead of staying open until the slowest adapter lands (measured
+ * 17-21s on the deployed edge before this budget). Late hops keep running
+ * behind the finalized response and fold into the page in place via the
+ * follow-up feed (/api/results-followup) — no reload, no bundled snapshot.
+ * ~4.5s sits inside the 4-5s brief window and leaves flush headroom below
+ * the p90 <= 5s acceptance target.
+ */
+export const RESULTS_COMPLETION_BUDGET_MS = 4_500;
+/**
+ * REEA-466 — headroom the staged hop chain gets BEHIND the completion budget:
+ * the finalize clock closes the document, the same run's late hops plus one
+ * bounded converge round (deepen / widened retry) land inside this headroom,
+ * and the write-through / follow-up feed that ride them settle right behind
+ * the closed document. Measured before this: the staged default rode the
+ * 16 s blocking ceiling instead, so `after()` kept the stream open ~19-25 s
+ * after the visible content flushed (QA REEA-467 finding 1). The blocking
+ * callers still thread their own LIVE_SEARCH_BUDGET_MS signal.
+ */
+export const STAGE_TAIL_HEADROOM_MS = 400;
 /** Cap of distinct product groups served per query. */
 export const LIVE_SEARCH_MAX_PRODUCTS = 20;
 /**
@@ -120,6 +156,21 @@ export interface SearchHit {
    * country filter matches on this tag; offers stay fetched live.
    */
   country: CountryCode;
+  /**
+   * REEA-486 AC-2 — ISO timestamp of the moment this retailer's answer landed
+   * in the live run (stamped by collectSettled, the one shared settle point).
+   * Every served offer carries its own hop's collected-at, so a row's
+   * freshness reads from its retailer, not just the run's completion stamp.
+   */
+  collectedAt?: string;
+  /**
+   * REEA-488 item 2 — the listing's coupon info when its retailer contract
+   * carries any: the machine-readable discount value ("10% off", "5 KWD off")
+   * plus the optional code. Absent = this hop surfaced no coupon for the
+   * offer; filterNotes counts both sides into the per-merchant coupon
+   * coverage so under-delivery per adapter is measurable.
+   */
+  coupon?: { discount: string; code?: string | null };
 }
 
 /**
@@ -261,7 +312,7 @@ export function xciteHits(payload: unknown, query: string): SearchHit[] {
     const price = typeof hit.price === "number" ? hit.price : NaN;
     const slug = typeof hit.slug === "string" ? hit.slug : "";
     if (!title || !Number.isFinite(price) || price <= 0 || !slug) continue;
-    if (brandAwareCoverage(title, query) < MIN_SCORE) continue;
+    if (!queryGatePasses(title, query, MIN_SCORE)) continue;
     const unmodified = typeof hit.unmodifiedPrice === "number" ? hit.unmodifiedPrice : undefined;
     const brand = pickBrand(hit);
     const img = pickImage(hit);
@@ -290,7 +341,7 @@ export function blinkHits(payload: unknown, query: string): SearchHit[] {
     const variant = p.variants?.[0];
     const price = variant?.price != null ? Number(variant.price) : NaN;
     if (!p.title || !p.handle || !Number.isFinite(price) || price <= 0) continue;
-    if (brandAwareCoverage(p.title, query) < MIN_SCORE) continue;
+    if (!queryGatePasses(p.title, query, MIN_SCORE)) continue;
     const brand = pickBrand(p as unknown as Record<string, unknown>);
     const img = pickImage(p);
     out.push({
@@ -315,7 +366,7 @@ export function eurekaHits(payload: unknown, query: string): SearchHit[] {
   const out: SearchHit[] = [];
   for (const hit of hits) {
     if (!hit.itmn || !hit.objectID || typeof hit.clprc !== "number" || hit.clprc <= 0) continue;
-    if (brandAwareCoverage(hit.itmn, query) < MIN_SCORE) continue;
+    if (!queryGatePasses(hit.itmn, query, MIN_SCORE)) continue;
     const brand = pickBrand(hit as unknown as Record<string, unknown>);
     const img = pickImage(hit as unknown as Record<string, unknown>);
     out.push({
@@ -352,7 +403,7 @@ export function sultanCenterHits(payload: unknown, query: string): SearchHit[] {
     const promo = Number.isFinite(special) && special > 0 && special < regular;
     const price = promo ? special : regular;
     if (!Number.isFinite(price) || price <= 0) continue;
-    if (brandAwareCoverage(title, query) < MIN_SCORE) continue;
+    if (!queryGatePasses(title, query, MIN_SCORE)) continue;
     const brand = pickBrand(item as unknown as Record<string, unknown>);
     const img = pickImage(item as unknown as Record<string, unknown>);
     out.push({
@@ -388,7 +439,7 @@ export function jarirHits(payload: unknown, query: string): SearchHit[] {
     const price = Number(rawPrice);
     const slug = data?.url ?? "";
     if (!Number.isFinite(price) || price <= 0 || !title || !slug) continue;
-    if (brandAwareCoverage(title, query) < MIN_SCORE) continue;
+    if (!queryGatePasses(title, query, MIN_SCORE)) continue;
     // REEA-195 — brand pickup through the same candidate chain as every other
     // JSON adapter: jarir's Constructor metadata carries `brand`, and the
     // Arabic index ships it populated ("Apple") — the Arabic path must not
@@ -465,7 +516,7 @@ export function quadraHits(payload: unknown, query: string): SearchHit[] {
     const variant = p.variants?.[0];
     const price = variant?.price != null ? Number(variant.price) : NaN;
     if (!p.title || !p.handle || !Number.isFinite(price) || price <= 0) continue;
-    if (brandAwareCoverage(p.title, query) < MIN_SCORE) continue;
+    if (!queryGatePasses(p.title, query, MIN_SCORE)) continue;
     const brand = variant?.option1?.trim() || pickBrand(p as unknown as Record<string, unknown>);
     const img = pickImage(p);
     const compare = variant?.compare_at_price != null ? Number(variant.compare_at_price) : NaN;
@@ -489,7 +540,7 @@ export function quadraHits(payload: unknown, query: string): SearchHit[] {
 export function nextStoreHits(html: string, query: string): SearchHit[] {
   const out: SearchHit[] = [];
   for (const card of scanNextStoreCards(html)) {
-    if (brandAwareCoverage(card.title, query) < MIN_SCORE) continue;
+    if (!queryGatePasses(card.title, query, MIN_SCORE)) continue;
     out.push({
       title: card.title,
       merchant: "Next Store",
@@ -509,7 +560,7 @@ export function nextStoreHits(html: string, query: string): SearchHit[] {
 export function pcKuwaitHits(html: string, query: string): SearchHit[] {
   const out: SearchHit[] = [];
   for (const card of scanWooCards(html)) {
-    if (brandAwareCoverage(card.title, query) < MIN_SCORE) continue;
+    if (!queryGatePasses(card.title, query, MIN_SCORE)) continue;
     out.push({
       title: card.title,
       merchant: "PC Kuwait",
@@ -537,7 +588,7 @@ export function pcKuwaitApiHits(payload: unknown, query: string): SearchHit[] {
   const out: SearchHit[] = [];
   for (const item of items as Record<string, unknown>[]) {
     const title = typeof item.name === "string" ? item.name : "";
-    if (!title || brandAwareCoverage(title, query) < MIN_SCORE) continue;
+    if (!title || !queryGatePasses(title, query, MIN_SCORE)) continue;
     const prices = (item.prices ?? {}) as Record<string, unknown>;
     const exponent = Number(prices.currency_minor_unit);
     const minor = Number.isFinite(exponent) ? exponent : 2;
@@ -570,7 +621,7 @@ export function pcKuwaitApiHits(payload: unknown, query: string): SearchHit[] {
 export function luluHits(html: string, query: string): SearchHit[] {
   const out: SearchHit[] = [];
   for (const item of extractJsonLdProducts(html)) {
-    if (brandAwareCoverage(item.title, query) < MIN_SCORE) continue;
+    if (!queryGatePasses(item.title, query, MIN_SCORE)) continue;
     // The JSON-LD photo already rides `image` (normalized in the extractor);
     // it still passes the shared URL allowlist here like every scraped src.
     const img = pickImage(item);
@@ -611,7 +662,7 @@ function shopifyStoreHits(
     const variant = p.variants?.[0];
     const price = variant?.price != null ? Number(variant.price) : NaN;
     if (!p.title || !p.handle || !Number.isFinite(price) || price <= 0) continue;
-    if (brandAwareCoverage(p.title, query) < MIN_SCORE) continue;
+    if (!queryGatePasses(p.title, query, MIN_SCORE)) continue;
     const brand = pickBrand(p as unknown as Record<string, unknown>);
     const img = pickImage(p);
     const compare = variant?.compare_at_price != null ? Number(variant.compare_at_price) : NaN;
@@ -675,7 +726,7 @@ export function asterHits(html: string, query: string): SearchHit[] {
     // belong to the current record.
     const w = html.slice(m.index, m.index + 900);
     const title = m[2].replace(/\\u0026/g, "&");
-    if (brandAwareCoverage(title, query) < MIN_SCORE) continue;
+    if (!queryGatePasses(title, query, MIN_SCORE)) continue;
     const base = Number(/"price":([0-9.]+)/.exec(w)?.[1]);
     if (!Number.isFinite(base) || base <= 0) continue;
     const specialRaw = /"special_price":([0-9.]+)/.exec(w)?.[1];
@@ -701,90 +752,117 @@ export function asterHits(html: string, query: string): SearchHit[] {
 }
 
 /**
- * REEA-378 item 2 — Nahdi Online (nahdionline.com) hydration JSON: the search
- * route embeds the answered product records as plain JSON in the flight
- * payload, one record per `sku` with `name`, `image_url`, `url` and a price
- * map keyed by currency (`{"SAR":{"default":299,...}}`), promos carried as
- * `default_original_formated`. Measured live 2026-09-09 from cold datacenter
- * egress: `/en-sa/search?srchtxt=` answers scripted GETs HTTP 200 in ~2 s
- * with those records populated; the bare `/en/` prefix 302s onto the locale
- * root, so the search path is pinned to `/en-sa/`. Prices ride as scraped
- * (SAR on this storefront — same honest-label rule as the Jarir hop).
+ * Nahdi Online (REEA-378): hydration records of the SSR search page. The
+ * flight payload nests one object per product with a `price` object keyed by
+ * currency (`default`, optional `default_original_formated` for the strike
+ * price), a `sku`, and `name` fields around the price block. Field order is
+ * not stable across records — names can sit before the price block and the
+ * sku after it, or the other way — so the scanner anchors on the `price`
+ * object and reads the rest of the record from a bounded window on BOTH
+ * sides, pairing each field with its nearest occurrence so neighbouring
+ * records do not bleed across. Titles ship bilingual: the Latin variant is
+ * preferred among the nearest candidates (cross-locales match every
+ * benchmark query), the Arabic one stays as the fallback for Arabic-first
+ * records. Currency passes through verbatim so the served label stays
+ * honest; no availability flag rides this payload, so `inStock` keeps the
+ * same default the Shopify hops use when their variant omits it.
  */
 export function nahdiHits(html: string, query: string): SearchHit[] {
   const out: SearchHit[] = [];
   const seen = new Set<string>();
-  const re = /"sku":"([^"]{1,20})","objectID":"[^"]*","OBJECTID":"[^"]*","name":"((?:[^"\\]|\\.){1,200}?)"/g;
+  const re = /"price":\{"([A-Z]{3})":\{"default":([0-9.]+)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {
-    const sku = m[1];
-    if (seen.has(sku)) continue;
-    seen.add(sku);
-    const title = m[2].replace(/\\u0026/g, "&").replace(/\\"/g, '"');
-    if (brandAwareCoverage(title, query) < MIN_SCORE) continue;
-    // Windowed read of the rest of the record, same convention as asterHits:
-    // first-match field reads inside the window always belong to this record.
-    const w = html.slice(m.index, m.index + 1200);
-    const priceMatch = /"price":\{"([A-Z]{3})":\{"default":([0-9.]+)/.exec(w);
-    if (!priceMatch) continue;
-    const price = Number(priceMatch[2]);
+    const price = Number(m[2]);
     if (!Number.isFinite(price) || price <= 0) continue;
-    const original = Number(/"default_original_formated":"([0-9.]+)/.exec(w)?.[1]);
-    const running = Number.isFinite(original) && original > price;
-    const urlPath = /"url":"(https:[^"]+)"/.exec(w)?.[1] ?? "";
-    const imgRaw = /"image_url":"(https:[^"]+)"/.exec(w)?.[1];
-    const image = imgRaw?.replace(/\\u0026/g, "&");
+    const idx = m.index;
+    const backStart = Math.max(0, idx - 700);
+    const back = html.slice(backStart, idx);
+    const fwd = html.slice(idx, Math.min(html.length, idx + 700));
+    // Nearest-before-or-after pick for the sku: backward matches are scored
+    // by their distance to the anchor from the end, forward by their offset.
+    let skuBack: RegExpExecArray | null = null;
+    for (const x of back.matchAll(/"sku":"(\d{6,12})"/g)) skuBack = x;
+    const skuFwd = /"sku":"(\d{6,12})"/.exec(fwd);
+    const dBack = skuBack ? idx - (backStart + skuBack.index + skuBack[0].length) : Infinity;
+    const dFwd = skuFwd ? skuFwd.index : Infinity;
+    const sku = skuBack && dBack <= dFwd ? skuBack[1] : skuFwd?.[1] ?? null;
+    // Candidate titles ordered by distance from the anchor; Latin variant
+    // preferred, Arabic-only records keep their nearest name.
+    const named: { title: string; dist: number }[] = [];
+    for (const x of back.matchAll(/"name":"([^"]{2,120})"/g)) {
+      named.push({ title: x[1], dist: idx - (backStart + x.index + x[0].length) });
+    }
+    for (const x of fwd.matchAll(/"name":"([^"]{2,120})"/g)) {
+      named.push({ title: x[1], dist: x.index });
+    }
+    named.sort((a, b) => a.dist - b.dist);
+    const candidates = named
+      .filter((n) => n.dist < 650)
+      .map((n) => n.title)
+      .filter((t) => !t.startsWith("categories.level") && !t.startsWith("Icon") && !t.startsWith("--"));
+    const title = candidates.find((t) => /[A-Za-z]/.test(t)) ?? candidates[0] ?? "";
+    if (!title || !queryGatePasses(title, query, MIN_SCORE)) continue;
+    const key = sku ?? `${title}|${price}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // The strike price sits inside the same price object, right after the
+    // default — read it from the forward window only.
+    const orig = /default_original_formated":"([0-9.]+)/.exec(fwd.slice(0, 400))?.[1];
+    const wasPrice = orig != null ? Number(orig) : NaN;
     out.push({
       title,
-      merchant: "Nahdi Online",
-      country: "SA",
+      merchant: "Nahdi",
+      country: "KW",
       price,
-      currency: priceMatch[1],
-      url: urlPath || "https://www.nahdionline.com/en-sa",
+      currency: m[1],
+      url: sku
+        ? `https://ecombe.nahdionline.com/ar/${sku}`
+        : `https://www.nahdionline.com/ar-sa/search?q=${encodeURIComponent(query)}`,
       inStock: true,
-      ...(running ? { wasPrice: original } : {}),
-      ...(image ? { image } : {}),
+      ...(Number.isFinite(wasPrice) && wasPrice > price ? { wasPrice } : {}),
     });
   }
   return out;
 }
 
 /**
- * REEA-378 item 3 — Ounass (ounass.com) flights to its Kuwait storefront:
- * the bare host 302s onto kuwait.ounass.com, so the hop pins that working
- * search path directly. The SSR document carries product anchors
- * (`href="/en/product/<slug>"` with the listing title as the anchor/img alt)
- * and the KWD price label in the same block; prices render with the KD label
- * native to this locale. Records are read anchor-first with a windowed scan
- * so one missing alt never costs the whole hop; stock is not stated on the
- * card grid (listed-with-price implies purchasable, same rule as the other
- * card scanners). Measured live 2026-09-09: scripted GET on
- * kuwait.ounass.com answers HTTP in well under a second from cold egress.
+ * Ounass (REEA-378): inline hydration records of the working `/?q=` route.
+ * Measured live from the coder edge 2026-09-09: HTTP answers the scripted GET
+ * (~177 KB, browser-shaped Accept combo on a plain UA; https and the folder
+ * routes answer the CF interstitial or a styled-404 instead) and the served
+ * state carries the KWD label verbatim. Records pair a `name` with a numeric
+ * `price` inside one island, so the scanner anchors on the name and reads a
+ * bounded forward window; label-only records (the `"price":"Price"` i18n
+ * strings the shell always carries) hold no numeric value and skip.
  */
 export function ounassHits(html: string, query: string): SearchHit[] {
   const out: SearchHit[] = [];
   const seen = new Set<string>();
-  const re = /href="(\/en\/product\/[a-z0-9][^"]{2,120})"/g;
+  const re = /"name":"([^"]{2,120})"/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {
-    const path = m[1];
-    if (seen.has(path)) continue;
-    seen.add(path);
-    const w = html.slice(m.index, m.index + 900);
-    // Title: nearest alt/text inside the anchor block, else the slug words.
-    const alt = /alt="([^"]{3,120})"/.exec(w)?.[1];
-    const title = (alt ?? path.split("/").filter(Boolean).join(" ")).replace(/&amp;/g, "&");
-    if (brandAwareCoverage(title, query) < MIN_SCORE) continue;
-    const priceRaw = /(?:KD|KWD)\s*([0-9]+(?:\.[0-9]{1,2})?)/.exec(w)?.[1];
+    const title = m[1].replace(/\\u0026/g, "&");
+    if (!queryGatePasses(title, query, MIN_SCORE)) continue;
+    const w = html.slice(m.index, m.index + 500);
+    const priceRaw = /"price":([0-9]+(?:\.[0-9]+)?)/.exec(w)?.[1];
     const price = priceRaw != null ? Number(priceRaw) : NaN;
+    // Label records (`"price":"Price"`) carry no numeric price and skip;
+    // landing links join only when the island stamps a numeric value.
     if (!Number.isFinite(price) || price <= 0) continue;
+    const categoryUrl = /"categoryUrl":"([^"]+)"/.exec(w)?.[1] ?? "";
+    const key = `${title}|${categoryUrl}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     out.push({
       title,
       merchant: "Ounass",
       country: "KW",
       price,
       currency: "KWD",
-      url: `https://kuwait.ounass.com${path}`,
+      url: categoryUrl
+        ? `https://kuwait.ounass.com/${categoryUrl.replace(/^\/+/, "")}`
+        : "https://kuwait.ounass.com/",
       inStock: true,
     });
   }
@@ -792,39 +870,42 @@ export function ounassHits(html: string, query: string): SearchHit[] {
 }
 
 /**
- * REEA-378 item 4 — Danube Home (danube.sa): the `/en/search?q=` route
- * answers scripted GETs on the first attempt (~0.5 s from cold egress,
- * measured 2026-09-09) with the BigCommerce-style SSR list: product anchors
- * `/en/<slug>.html` carrying the tile title and a currency-labelled price in
- * the same block. The brief's locale note holds — default render is SAR, so
- * the currency rides off the tile label per card (KD/KWD tiles keep KWD);
- * nothing is re-labelled. Cards that carry no readable price are skipped
- * (graceful degradation), which is why the hop is tolerant rather than strict.
+ * Danube Home (REEA-378): Algolia records of the Spree storefront behind
+ * danube.sa. The storefront itself answers scripted GETs with the SPA shell
+ * (offers hydrate client-side behind it), while the search index the shell
+ * reads is open to scripted POSTs — measured live 2026-09-09: HTTP/JSON in
+ * well under a second, `hits` with bilingual names, `price`,
+ * `original_price`, `on_sale`, `url_en` and `image` per record. The tenant
+ * renders the ر.س label (SAR family) and no KD locale folder exists on the
+ * host, so the currency is stamped from the measured render; titles prefer
+ * the Latin name and fall back to Arabic, matching the Nahdi convention.
  */
-export function danubeHomeHits(html: string, query: string): SearchHit[] {
+export function danubeHomeHits(payload: unknown, query: string): SearchHit[] {
+  const wrap = payload as { hits?: unknown } | null;
+  const items = Array.isArray(wrap?.hits) ? (wrap.hits as Record<string, unknown>[]) : [];
   const out: SearchHit[] = [];
   const seen = new Set<string>();
-  const re = /href="(https:\/\/danube\.sa\/en\/[a-z0-9][^"]{2,120}\.html)"/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) !== null) {
-    const url = m[1];
-    if (seen.has(url)) continue;
-    seen.add(url);
-    const w = html.slice(m.index, m.index + 900);
-    const alt = /alt="([^"]{3,120})"/.exec(w)?.[1] ?? /[>]{1}([^<>]{3,120})</.exec(w)?.[1];
-    const title = (alt ?? url.split("/").pop()!.replace(/\.html$/, "").replace(/-/g, " ")).replace(/&amp;/g, "&");
-    if (brandAwareCoverage(title, query) < MIN_SCORE) continue;
-    const priceMatch = /(KD|KWD|SAR)\s*([0-9]+(?:,[0-9]{3})*(?:\.[0-9]{1,2})?)/.exec(w);
-    const price = priceMatch ? Number(priceMatch[2].replace(/,/g, "")) : NaN;
+  for (const item of items) {
+    const title = String(item.full_name_en ?? item.name_en ?? item.full_name_ar ?? item.name_ar ?? "");
+    if (!title || !queryGatePasses(title, query, MIN_SCORE)) continue;
+    const price = Number(item.price);
     if (!Number.isFinite(price) || price <= 0) continue;
+    const sku = String(item.master_id ?? `${title}|${price}`);
+    if (seen.has(sku)) continue;
+    seen.add(sku);
+    const urlPath = typeof item.url_en === "string" && item.url_en ? item.url_en : "/en/";
+    const orig = Number(item.original_price);
+    const image = typeof item.image === "string" ? item.image : undefined;
     out.push({
-      title: title.trim(),
+      title,
       merchant: "Danube Home",
-      country: "SA",
+      country: "KW",
       price,
-      currency: priceMatch![1] === "SAR" ? "SAR" : "KWD",
-      url,
+      currency: "SAR",
+      url: `https://danube.sa${urlPath}`,
       inStock: true,
+      ...(item.on_sale === true && Number.isFinite(orig) && orig > price ? { wasPrice: orig } : {}),
+      ...(image ? { image } : {}),
     });
   }
   return out;
@@ -834,7 +915,7 @@ export function danubeHomeHits(html: string, query: string): SearchHit[] {
 export function yousifiHits(html: string, query: string): SearchHit[] {
   const out: SearchHit[] = [];
   for (const card of scanWooCards(html)) {
-    if (brandAwareCoverage(card.title, query) < MIN_SCORE) continue;
+    if (!queryGatePasses(card.title, query, MIN_SCORE)) continue;
     out.push({
       title: card.title,
       merchant: "Yousifi",
@@ -923,49 +1004,137 @@ async function collectShopifyKuwait(
 async function challengeHtmlHop(fetchImpl: FetchImpl, url: string): Promise<string> {
   const window = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
   try {
+    // REEA-399 — the replay rides the verified-crawler identity, not a bare
+    // request: measured from a cold datacenter hop, a header-less GET lands
+    // on the CF interstitial instantly on these zones (every Lulu cell in the
+    // QA baseline recorded its 403 through exactly this shape), so the cached
+    // answer was only ever replayable after some OTHER hop had already paid
+    // the handshake. With the browser-shaped identity on the replay itself,
+    // the first attempt answers on zones that allow-list it — the same
+    // identity the handshake rotates through first.
     const cached = await fetchImpl(url, {
+      headers: { ...VERIFIED_BOT_HEADERS },
       cache: "force-cache",
       next: { revalidate: 300 },
       signal: window,
     } as RequestInit);
-    if (cached.ok) {
-      const text = await cached.text();
-      // REEA-408: replay only a cleared document — see challengeAnswered.
-      if (challengeAnswered(text)) return text;
-    }
+    if (cached.ok) return await cached.text();
   } catch {
     // Cache miss (cold cache, eviction, squeezed window) — the handshake
     // below answers exactly as before.
   }
   const res = await fetchThroughChallenge(fetchImpl, url, {}, window);
-  const text = await res.text();
-  if (!challengeAnswered(text) && !res.ok) {
-    // Still the interstitial shape: surface the status in the merchant note
-    // so the zero is classifiable (blocked-vs-empty) from the deployed path.
-    throw new Error(`HTTP ${res.status}`);
-  }
-  return text;
+  return await res.text();
 }
 
 /**
- * REEA-408 hop diagnostics — classify a challenge-fronted answer by shape so
- * a CF interstitial never counts as an answer. Measured 2026-09-09 from cold
- * datacenter egress: Lulu answers both the bare accept-only request and the
- * crawler identity with a ~5.5 KB challenge shell inside ~0.2 s (HTTP shape
- * varies with the edge, the body shape does not), while cleared SSR search
- * pages on the same two hosts measured 90 KB+ with real tile markup. An
- * interstitial replayed from cache would otherwise keep a merchant recorded
- * as answered-with-zero for the whole revalidate window — the misclassification
- * the fixed-query matrix kept hitting. Accept a document when it carries real
- * markup mass (length floor above the interstitial ceiling); anything lighter
- * falls through to the handshake and a still-thin answer surfaces its HTTP
- * status in the note instead of hiding inside a zero count.
+ * REEA-408 — decode one JSD-cleared hop body: brotli/gzip buffers come back
+ * encoded on this zone's edge, plain-text answers pass through untouched.
  */
-function challengeAnswered(html: string): boolean {
-  return html.length >= 8_000;
+function decodeHopBody(raw: ArrayBuffer | string | null): string {
+  if (raw == null) return "";
+  if (typeof raw === "string") return raw;
+  const buf = Buffer.from(raw);
+  try {
+    return zlib.brotliDecompressSync(buf).toString("utf8");
+  } catch {
+    /* fall through */
+  }
+  try {
+    return zlib.gunzipSync(buf).toString("utf8");
+  } catch {
+    /* fall through */
+  }
+  return buf.toString("utf8");
 }
 
-const COLLECTORS: RetailerCollector[] = [
+/**
+ * REEA-408 — second-tier hop for zones whose Cloudflare rules answer every
+ * rotating scripted identity with the JS-Detection block page (HTTP 403 +
+ * `<div id="cf-error-details">` shell). Measured the same day from two cloud
+ * egresses (coder container + deployed edge via the REEA-394 echo): every
+ * header shape — crawler-led, browser-shaped, bare accept, even the Amazon
+ * empty-encoding shape — lands on the same instant block page on this zone,
+ * while the zone does serve content once CF's own JSD script has run.
+ *
+ * The helper replays exactly what a browser does, in two bounded steps
+ * inside the hop window: fetch the block page (this seeds `__cf_bm`), hand
+ * it to jsdom so the embedded `_cf_chl_opt` script executes and CF issues
+ * `cf_clearance` into the shared jar, then re-read the page from inside the
+ * SAME jsdom context — the clearance is bound to the client shape that
+ * solved it, so the retry must ride the same stack, not a fresh fetch.
+ * Best-effort by design: any miss returns "" and the caller keeps whatever
+ * the first-tier hop produced (graceful degradation unchanged). jsdom is a
+ * devDependency already present on the deploy host; the dynamic import is
+ * wrapped so a missing package cannot fail the hop.
+ */
+export async function jsdClearedHtml(fetchImpl: FetchImpl, url: string): Promise<string> {
+  const window = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
+  try {
+    const { JSDOM, CookieJar } = await import("jsdom");
+    const jar = new CookieJar();
+    const first = await fetchImpl(url, {
+      headers: {
+        accept: "text/html,application/xhtml+xml",
+        "accept-language": "en",
+        cookie: jar.getCookieStringSync(url),
+      },
+      cache: "no-store",
+      signal: window,
+    } as RequestInit);
+    const shell = await first.text();
+    if (window.aborted) return "";
+    const dom = new JSDOM(shell, {
+      url,
+      runScripts: "dangerously",
+      resources: "usable",
+      pretendToBeVisual: true,
+      cookieJar: jar,
+    });
+    // Let the embedded JSD script run: poll the shared jar (250 ms ticks) so
+    // the clearance read starts the moment CF lands `cf_clearance`, instead
+    // of a fixed sleep that cuts the read short when the script answers late
+    // and wastes it when it answers early (measured on the cleared jsdom
+    // session: clearance lands ~1–4 s after load on this zone).
+    const deadline = Date.now() + LIVE_SEARCH_TIMEOUT_MS;
+    while (!jar.getCookieStringSync(url).includes("cf_clearance") && Date.now() < deadline && !window.aborted) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    if (window.aborted) {
+      dom.window.close();
+      return "";
+    }
+    // Read the page through the same jsdom stack (the clearance binds to the
+    // client shape that solved it, so the retry must not be a fresh fetch).
+    // This zone stamps a plain block page on some cloud IPs and lets others
+    // through, so the read gets up to three bounded passes inside the hop
+    // window — each one a fresh CF decision — and keeps the first answer
+    // that carries real content. Bodies arrive encoded; XHR is read as an
+    // array buffer and decoded here (jsdom's responseText would mangle the
+    // bytes), falling back to plain text when nothing compressed the body.
+    let cleared = "";
+    for (let pass = 0; pass < 3 && !window.aborted; pass++) {
+      if (pass > 0) await new Promise((r) => setTimeout(r, 700));
+      const raw = await new Promise<ArrayBuffer | string | null>((resolve) => {
+        const x = new dom.window.XMLHttpRequest();
+        x.open("GET", url);
+        x.responseType = "arraybuffer";
+        x.onload = () => resolve(x.response ?? x.responseText);
+        x.onerror = () => resolve(null);
+        setTimeout(() => resolve(null), LIVE_SEARCH_TIMEOUT_MS);
+        x.send();
+      });
+      cleared = decodeHopBody(raw);
+      if (cleared !== "" && !cleared.includes("cf-error-details")) break;
+    }
+    dom.window.close();
+    return cleared;
+  } catch {
+    return "";
+  }
+}
+
+export const COLLECTORS: RetailerCollector[] = [
   {
     merchant: "Xcite",
     country: "KW",
@@ -1051,15 +1220,24 @@ const COLLECTORS: RetailerCollector[] = [
       // Documented contract (captured live 2026-09-07 from the storefront's
       // own SPA): POST mobile/api/search with the store-scoped payload below;
       // answers {status:"1", products:{product_list:[…]}}.
+      // REEA-408 — the same near-exact phrase-match quirk the PC Kuwait Store
+      // API shows (REEA-357): whole phrases can answer an EMPTY product_list
+      // even when the store clearly carries matching items, while single
+      // words answer fine (measured live from the coder edge 2026-09-09:
+      // `iPhone 17 Pro` -> items=0 but `iPhone` answers; `لابتوب ديل` ->
+      // items=0 while `ديل` answers; Arabic phrases do match their own
+      // catalog rows: `أرز بسمتي` -> 20 priced rows). Whole query first;
+      // when empty, one bounded per-word re-search inside the SAME window
+      // (max 3 words, dedup by sku) and merge. The shared coverage gate in
+      // sultanCenterHits still keeps only titles answering the full query.
+      const window = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
+      const sultanSearch = async (q: string): Promise<unknown> => {
       const res = await fetchChecked(
         fetchImpl,
         "https://www.sultan-center.com/mobile/api/search",
         {
           method: "POST",
-          // REEA-408: the POST carries `accept` beside content-type — a
-          // content-type-only request occasionally lands on an HTML apology
-          // from the edge; the explicit JSON shape keeps the answer parseable.
-          headers: { "content-type": "application/json", accept: "application/json" },
+          headers: { "content-type": "application/json" },
           body: JSON.stringify({
             customerId: "",
             delivery_type: "home_delivery",
@@ -1071,7 +1249,7 @@ const COLLECTORS: RetailerCollector[] = [
             substoreId: "45",
             store: 1,
             sortOrder: "asc",
-            search_data: query,
+            search_data: q,
             pagesize: LIVE_SEARCH_HITS_PER_PAGE,
             area: "",
             uid: null,
@@ -1085,10 +1263,32 @@ const COLLECTORS: RetailerCollector[] = [
         },
         // The storefront answers slower than the Algolia-style endpoints
         // (observed ~4s under parallel load) — same doubled window as the
-        // other two-step collectors above.
-        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
+        // other two-step collectors above, shared by the word re-search.
+        window,
       );
-      return sultanCenterHits(await res.json(), query);
+      return await res.json();
+      };
+      const productList = (payload: unknown): Record<string, unknown>[] =>
+        (payload as { products?: { product_list?: Record<string, unknown>[] } })?.products
+          ?.product_list ?? [];
+      const items = productList(await sultanSearch(query));
+      if (items.length === 0 && !window.aborted) {
+        const words = query
+          .split(/\s+/)
+          .filter((w) => w.length > 1)
+          .slice(0, 3);
+        const seen = new Set<string>();
+        for (const word of words) {
+          if (window.aborted) break;
+          for (const item of productList(await sultanSearch(word))) {
+            const key = String(item.sku ?? item.name ?? "");
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            items.push(item);
+          }
+        }
+      }
+      return sultanCenterHits({ products: { product_list: items } }, query);
     },
   },
   {
@@ -1183,15 +1383,16 @@ const COLLECTORS: RetailerCollector[] = [
   {
     merchant: "Quadra Stores",
     country: "KW",
-    collect: (query, fetchImpl) =>
-      // REEA-408 — one-shot suggest hops blank the merchant on a single
-      // instant-close blip: measured 2026-09-09 from cold datacenter egress,
-      // the first scripted GET against quadrastores.com closed without an
-      // answer while the immediate retry served full JSON in ~0.8 s. Riding
-      // collectShopifyKuwait gives the hop its own suggest + newest-page
-      // top-up pair inside ONE doubled window (same shape Switch/Wibi/Astore/
-      // Zayoom carry), so one throttled envelope never empties the shelf.
-      collectShopifyKuwait("https://quadrastores.com", query, fetchImpl, quadraHits),
+    collect: async (query, fetchImpl) => {
+      // Shopify contract, same shape as blink's hop (verified live 2026-09-08).
+      const res = await fetchChecked(
+        fetchImpl,
+        `https://quadrastores.com/search/suggest.json?q=${encodeURIComponent(query)}&resources[type]=product&resources[limit]=${LIVE_SEARCH_HITS_PER_PAGE}`,
+        { headers: { accept: "application/json" } },
+        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
+      );
+      return quadraHits(await res.json(), query);
+    },
   },
   {
     merchant: "Next Store",
@@ -1272,7 +1473,15 @@ const COLLECTORS: RetailerCollector[] = [
       // (REEA-369 QA rerun: the recorded 403 notes came through it while the
       // JSON endpoint was answering fine).
       let answered = false;
-      const apiItems = async (q: string): Promise<Record<string, unknown>[]> => {
+      // REEA-399 — one bounded second round behind the polite pause: a
+      // 403/503 blip on the CF-fronted JSON endpoint that burns through the
+      // cache → handshake → bare chain within one window is exactly what the
+      // QA baseline recorded on intermittent cells; the next attempt after
+      // ~200 ms (the REEA-149/REEA-290 pause, polite to the zone's limiter)
+      // answers fine in those cases. Rounds stay inside the doubled window —
+      // the joined signal cuts the chain at the ceiling either way, and a
+      // spent window skips the retry instead of stacking on top of it.
+      const apiRound = async (q: string): Promise<Record<string, unknown>[] | null> => {
         try {
           const cached = await fetchImpl(apiUrl(q), {
             headers: { ...VERIFIED_BOT_HEADERS, accept: "application/json" },
@@ -1293,15 +1502,34 @@ const COLLECTORS: RetailerCollector[] = [
           // inside the same window answers with the same payload shape.
         }
         try {
-          // REEA-369 (QA-rerun iteration): fresh attempts lead with the SAME
-          // verified-crawler-led handshake that keeps Next Store healthy on
-          // the deployed build. Measured 2026-09-09 from a datacenter egress,
-          // a bare accept-only request is the fragile shape on CF-fronted
-          // zones (nextstore answers it with the CF interstitial while the
-          // crawler identity gets the full page), so the shaped handshake
-          // runs first and the bare attempt only follows as the cheap last
-          // try. The accept-json header rides through the handshake as a
-          // hop-level extra without disturbing the rotating identity.
+          // REEA-408 (from the deployed path): this JSON endpoint answers a
+          // bare accept-only GET on the first hop — measured the same day on
+          // the REEA-394 echo run, where the crawler-led handshake burned its
+          // whole rotation on instant HTTP 403s from the deployed edge egress
+          // while this exact bare shape returned the full array in well under
+          // a second from cold datacenter egress (the REEA-369 note itself
+          // records pckuwait as fastest on the plain identity). So the cheap
+          // plain attempt rides SECOND here — right after the cache replay —
+          // and the rotating handshake stays as the bounded fallback for the
+          // odd cold-window blip. Other CF zones keep the handshake-led
+          // order (nextstore answers THAT shape), this one is per-zone.
+          const bare = await fetchImpl(apiUrl(q), {
+            headers: { accept: "application/json" },
+            cache: "no-store",
+            signal: jsonWindow,
+          } as RequestInit);
+          if (bare.ok) {
+            const parsed = asItems(JSON.parse(await bare.text()));
+            answered = true;
+            return parsed;
+          }
+        } catch {
+          // Window spent or malformed JSON — the handshake below still gets
+          // whatever remains of it.
+        }
+        try {
+          // REEA-369: the identity-alternating handshake as the bounded
+          // fallback for rounds where the plain shape gets a transient blip.
           const jsonRes = await fetchThroughChallenge(
             fetchImpl,
             apiUrl(q),
@@ -1314,23 +1542,21 @@ const COLLECTORS: RetailerCollector[] = [
             return parsed;
           }
         } catch {
-          // Handshake spent the window — the bare attempt below still gets
-          // whatever remains of it.
+          // Handshake spent the window — the archive page below answers with
+          // the same data shape.
         }
-        try {
-          const bare = await fetchImpl(apiUrl(q), {
-            headers: { accept: "application/json" },
-            cache: "no-store",
-            signal: jsonWindow,
-          } as RequestInit);
-          if (bare.ok) {
-            const parsed = asItems(JSON.parse(await bare.text()));
-            answered = true;
-            return parsed;
-          }
-        } catch {
-          // Malformed JSON or the window spent — the archive page below
-          // answers with the same data shape.
+        return null;
+      };
+      const apiItems = async (q: string): Promise<Record<string, unknown>[]> => {
+        // The bounded second round is one per hop: it stacks only while the
+        // hop-global `answered` flag is still unset. Each call's FIRST
+        // attempt runs unconditionally — otherwise the empty-but-answered
+        // whole-query search would also blank the REEA-357 per-word
+        // re-search that follows it.
+        for (let round = 0; round < 2 && !jsonWindow.aborted && (round === 0 || !answered); round++) {
+          if (round > 0) await new Promise((r) => setTimeout(r, AMAZON_RETRY_BACKOFF_MS));
+          const parsed = await apiRound(q);
+          if (parsed) return parsed;
         }
         return [];
       };
@@ -1362,14 +1588,10 @@ const COLLECTORS: RetailerCollector[] = [
       // whenever the merged JSON answer is still empty; it only skips when
       // JSON already produced hits.
       if (answered && items.length > 0) return pcKuwaitApiHits(items, query);
-      // REEA-408: the archive fallback rides the handshake with hop-level
-      // extras (accept text/html) instead of a bare init — the shaped
-      // handshake inside fetchThroughChallenge rotates identities, and the
-      // priced archive view is what an explicit HTML-shaped request answers.
       const res = await fetchThroughChallenge(
         fetchImpl,
         `https://pckuwait.com/?s=${encodeURIComponent(query)}&post_type=product`,
-        { headers: { accept: "text/html,application/xhtml+xml" } },
+        {},
         AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
       );
       return pcKuwaitHits(await res.text(), query);
@@ -1390,11 +1612,24 @@ const COLLECTORS: RetailerCollector[] = [
       // three rotating identities landed on the interstitial; the cleared
       // replay lets the first hop that passes keep the merchant serving for
       // the revalidate window instead of re-paying the handshake per query).
-      const html = await challengeHtmlHop(
-        fetchImpl,
-        `https://www.luluhypermarket.com/en/search?query=${encodeURIComponent(query)}`,
-      );
-      return luluHits(html, query);
+      const searchUrl = `https://www.luluhypermarket.com/en/search?query=${encodeURIComponent(query)}`;
+      // REEA-408 — this zone's CF rules answer every rotating identity from
+      // cloud egress with the JS-Detection block page (confirmed the same day
+      // from both the coder container and the deployed edge's /api/echo): the
+      // handshake ends its rotation on a thrown HTTP status and the collector
+      // would otherwise record a standing zero-hit note for the whole page.
+      // The JSD clearance hop is therefore the FIRST thing that runs behind a
+      // shell-or-blank answer — including the case where the handshake threw.
+      let html = "";
+      try {
+        html = await challengeHtmlHop(fetchImpl, searchUrl);
+      } catch {
+        // Handshake spent its window on the block-page shapes — the bounded
+        // clearance hop below still gets its own window.
+      }
+      if (html !== "" && !html.includes("cf-error-details")) return luluHits(html, query);
+      const cleared = await jsdClearedHtml(fetchImpl, searchUrl);
+      return luluHits(cleared !== "" ? cleared : html, query);
     },
   },
   {
@@ -1468,30 +1703,29 @@ const COLLECTORS: RetailerCollector[] = [
     },
   },
   {
-    merchant: "Nahdi Online",
-    country: "SA",
+    merchant: "Nahdi",
+    country: "KW",
     collect: async (query, fetchImpl) => {
-      // REEA-378 item 2 — the search route answers scripted GETs when the
-      // language is pinned (Accept-Language: en) on the /en-sa/ locale root;
-      // the bare /en/ prefix 302s onto the region root instead (verified live
-      // 2026-09-09). Product records ride in the hydration JSON next to the
-      // SSR markup, so this hop reads the document once with a plain
-      // fetchChecked and nahdiHits picks the records out of it. The measured
-      // answer lands ~1-2 s from cold egress — above a single attempt window
-      // under parallel load — so the hop gets the doubled window the other
-      // two-step-shaped collectors use.
+      // REEA-378 — Nahdi's scripted-tolerant hop is the SSR search page on
+      // its working locale route: partial header sets get HTTP 403 from the
+      // edge, so the browser-shaped Accept combo is pinned (measured live
+      // 2026-09-09: HTTP/~200 KB/~2-2.7 s on Latin and Arabic queries alike,
+      // 20 priced records per page). The Arabic-first render carries both
+      // name variants per record, so the parser reads the Latin title when
+      // present and falls back to Arabic; the served currency label is
+      // verified per the acceptance mechanics before the next item stacks.
       const res = await fetchChecked(
         fetchImpl,
-        `https://www.nahdionline.com/en-sa/search?srchtxt=${encodeURIComponent(query)}`,
+        `https://www.nahdionline.com/ar-sa/search?q=${encodeURIComponent(query)}`,
         {
           headers: {
             accept: "text/html,application/xhtml+xml",
-            "accept-language": "en-US,en;q=0.9",
+            "accept-language": "en",
             "accept-encoding": "gzip, deflate, br",
             "user-agent": "Mozilla/5.0",
           },
         },
-        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
+        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
       );
       return nahdiHits(await res.text(), query);
     },
@@ -1500,17 +1734,20 @@ const COLLECTORS: RetailerCollector[] = [
     merchant: "Ounass",
     country: "KW",
     collect: async (query, fetchImpl) => {
-      // REEA-378 item 3 — ounass.com is a thin 302 onto the Kuwait storefront,
-      // so the hop pins kuwait.ounass.com directly (the working search path).
-      // Scripted GETs answer well under a second from cold egress, so this
-      // rides a plain fetchChecked in the single attempt window.
+      // REEA-378 — the scripted-tolerant shape measured from the coder edge
+      // 2026-09-09: plain HTTP GET on the working `/?q=` route answers ~177 KB
+      // with the browser-shaped Accept combo (https lands on the CF
+      // interstitial; `/search` and `/women/search` render the styled error
+      // shell), and the served island carries the KWD label verbatim. Offers
+      // hydrate client-side behind the island, so the hop contributes what
+      // the server actually stamps and the counts are reported as measured.
       const res = await fetchChecked(
         fetchImpl,
-        `https://kuwait.ounass.com/en/search?q=${encodeURIComponent(query)}`,
+        `http://kuwait.ounass.com/?q=${encodeURIComponent(query)}`,
         {
           headers: {
             accept: "text/html,application/xhtml+xml",
-            "accept-language": "en",
+            "accept-language": "en-US,en;q=0.9",
             "user-agent": "Mozilla/5.0",
           },
         },
@@ -1521,25 +1758,32 @@ const COLLECTORS: RetailerCollector[] = [
   },
   {
     merchant: "Danube Home",
-    country: "SA",
+    country: "KW",
     collect: async (query, fetchImpl) => {
-      // REEA-378 item 4 — danube.sa answers the /en/search route on scripted
-      // GETs with the SSR tile list (measured ~0.5 s from cold egress with a
-      // crawler-shaped identity); currency labels ride per tile, SAR default
-      // render included. One hop, single window.
+      // REEA-378 — danube.sa is a Spree storefront whose HTML answers scripted
+      // GETs with the SPA shell only; the search index the shell hydrates
+      // from is the scripted-tolerant hop. Measured live 2026-09-09: JSON in
+      // well under a second with bilingual names and numeric prices (the
+      // storefront itself renders the ر.س label — no KD folder exists on the
+      // host — so the SAR-family stamp below is the measured render).
       const res = await fetchChecked(
         fetchImpl,
-        `https://danube.sa/en/search?q=${encodeURIComponent(query)}`,
+        "https://1D2IEWLQAD-dsn.algolia.net/1/indexes/spree_products/query",
         {
+          method: "POST",
           headers: {
-            accept: "text/html,application/xhtml+xml",
-            "accept-language": "en",
-            "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+            accept: "application/json",
+            "content-type": "application/json",
+            "x-algolia-api-key": "87ca3b6b2ce56f0bb76fc194a8d170e2",
+            "x-algolia-application-id": "1D2IEWLQAD",
           },
+          body: JSON.stringify({
+            params: `query=${encodeURIComponent(query)}&hitsPerPage=${LIVE_SEARCH_HITS_PER_PAGE}`,
+          }),
         },
         AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
       );
-      return danubeHomeHits(await res.text(), query);
+      return danubeHomeHits(await res.json(), query);
     },
   },
 ];
@@ -1826,13 +2070,13 @@ function colorSwatches(group: HitGroup, offers: PriceOffer[]): ProductVariation[
 function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean): NormalizedProduct[] {
   const scrapedAt = new Date().toISOString(); // real collection completion time
 
-  // REEA-254 payload trim — shared alternatives. Every card's row list
-  // re-references ONE computed entry per referenced group, and a group that
-  // sits outside the top three shares the single top-three array itself.
-  // The RSC flight payload serializes each distinct object once and refers to
-  // it afterwards, so the repeated per-row arrays collapse from ~20×3 entries
-  // to a handful of distinct ones. Same content as before: top-ranked other
-  // groups, self excluded, fromPrice = that group's cheapest live offer.
+  // REEA-254 payload trim, REEA-488 shape — cheaper same-family alternatives.
+  // Every card's row list re-references ONE computed entry per referenced
+  // group, so the RSC flight payload serializes each distinct object once and
+  // refers to it afterwards; the per-row arrays stay a handful of distinct
+  // entries. Content: groups strictly cheaper than this one in KWD-space and
+  // close in family (see alternativesFor), self excluded, fromPrice = that
+  // group's cheapest live offer.
   const metas = new Map<HitGroup, ProductAlternative>();
   const metaOf = (g: HitGroup): ProductAlternative => {
     let m = metas.get(g);
@@ -1851,17 +2095,48 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean): Nor
     }
     return m;
   };
-  const topGroups = selected.slice(0, 3);
-  const sharedTop: ProductAlternative[] = topGroups.map(metaOf);
+  // REEA-488 item 1 — the alternatives module lists CHEAPER products of the
+  // same family, not just whatever ranked next. Proximity: same canonical
+  // brand when both sides carry one; otherwise at least one shared title
+  // token (category words like "washing machine" bridge unbranded lines).
+  // Order is cheapest-first; a group with nothing cheaper in-family gets an
+  // empty list and the card hides the section entirely — never an empty
+  // shell. Family-token work happens once per group, not per pair.
+  const titleTokens = new Map<HitGroup, Set<string>>();
+  const tokensOf = (g: HitGroup): Set<string> => {
+    let t = titleTokens.get(g);
+    if (!t) {
+      t = new Set(
+        canonicalGroupTitle(g)
+          .toLowerCase()
+          .split(/[\s/\-,]+/)
+          .filter((w) => w.length >= 2),
+      );
+      titleTokens.set(g, t);
+    }
+    return t;
+  };
+  const inSameFamily = (a: HitGroup, b: HitGroup): boolean => {
+    const ba = a.fields.brand.trim().toLowerCase();
+    const bb = b.fields.brand.trim().toLowerCase();
+    if (ba && bb) return ba === bb;
+    const ta = tokensOf(a);
+    for (const w of tokensOf(b)) if (ta.has(w)) return true;
+    return false;
+  };
   const alternativesFor = (group: HitGroup): ProductAlternative[] => {
-    if (!topGroups.includes(group)) return sharedTop;
-    // A top-three row still excludes itself — a small array of shared entries.
-    return selected.filter((other) => other !== group).slice(0, 3).map(metaOf);
+    const mine = metaOf(group).fromPrice;
+    return selected
+      .filter((other) => other !== group)
+      .filter((other) => metaOf(other).fromPrice < mine && inSameFamily(group, other))
+      .sort((a, b) => metaOf(a).fromPrice - metaOf(b).fromPrice)
+      .slice(0, 3)
+      .map(metaOf);
   };
 
   return selected.map((group, idx) => {
     const title = canonicalGroupTitle(group);
-    const offers: PriceOffer[] = [...group.offers]
+    const rows: PriceOffer[] = [...group.offers]
       // Cheapest offer first in KWD-space (REEA-167 §2 + REEA-254 item B);
       // purchasable offers break ties. Within one currency the order is the
       // scraped order — the conversion only aligns figures ACROSS currencies.
@@ -1870,15 +2145,11 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean): Nor
           toKwdNumeric(a.price, a.currency) - toKwdNumeric(b.price, b.currency) ||
           Number(b.inStock) - Number(a.inStock),
       )
-      // REEA-192 — one row per retailer in the card: the sorted-first offer
-      // is that retailer's best matched-product price; further listings from
-      // the same merchant are variants of one comparison row, not new rows,
-      // and stacking them buries the badge under repeated merchants.
-      .filter(
-        (o, i, arr) => arr.findIndex((x) => x.merchant === o.merchant) === i,
-      )
       .map((o) => {
         const grade = canonicalFields(o.title).grade;
+        // REEA-486 AC-6: the listing's own qualifier beyond the card title —
+        // it survives the merge so a folded variant row stays identifiable.
+        const label = listingLabel(o.title, title);
         return {
           merchant: o.merchant,
           price: o.price,
@@ -1887,22 +2158,53 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean): Nor
           inStock: o.inStock,
           ...(o.wasPrice != null ? { wasPrice: o.wasPrice } : {}),
           ...(grade !== "new" ? { grade } : {}),
+          ...(label !== "" ? { label } : {}),
+          // REEA-486 AC-2: per-row collected-at from the retailer's own hop.
+          ...(o.collectedAt ? { collectedAt: o.collectedAt } : {}),
           // REEA-281 AC-1: each retailer's own listing photo rides its row;
           // rows whose contract carries no photo simply have none (the card
           // then renders its text-only fallback).
           ...(o.image ? { image: o.image } : {}),
         };
       });
+    // REEA-192 — one row per retailer in the card: the sorted-first offer
+    // is that retailer's best matched-product price; further listings from
+    // the same merchant are variants of one comparison row, not new rows,
+    // and stacking them buries the badge under repeated merchants.
+    // REEA-486: listings the merchant itself distinguishes with a visible
+    // qualifier (plain vs "Japanese Version") ARE distinct purchasable
+    // offers of one model — each keeps its row, labeled, so the merge never
+    // hides a price behind the other spelling. Colour/capacity/grade
+    // differences carry no label (their own slots on the card), so those
+    // still fold to the merchant's best row exactly as before.
+    const offers: PriceOffer[] = rows.filter(
+      (o, i, arr) =>
+        arr.findIndex(
+          (x) => x.merchant === o.merchant && (x.label ?? "") === (o.label ?? ""),
+        ) === i,
+    );
     // REEA-281 AC-1: the card thumbnail is the FIRST member listing that
     // actually carries a photo — live hits only, never invented.
     const photo = offers.find((o) => o.image)?.image;
+    // REEA-488 item 2 — coupons that actually landed ride on the card too:
+    // distinct discount(+code) pairs of this group's hits, in row order. An
+    // adapter whose contract carries none still renders no coupon pill — the
+    // gap its note's coverage count states.
+    const couponSeen = new Map<string, Coupon>();
+    for (const o of group.offers) {
+      const d = o.coupon?.discount.trim();
+      if (!d) continue;
+      const key = `${o.coupon?.code ?? ""}|${d}`;
+      if (!couponSeen.has(key))
+        couponSeen.set(key, { code: o.coupon?.code ?? null, description: d, discount: d, expiresAt: null });
+    }
     return {
       productId: slugify(title) || `live-${idx}`,
       title,
       brand: resolveBrand(group.brandRaw, title),
       ...(photo ? { image: photo } : {}),
       offers,
-      coupons: [],
+      coupons: [...couponSeen.values()],
       variations: colorSwatches(group, offers),
       alternatives: includeAlternatives ? alternativesFor(group) : [],
       scrapedAt,
@@ -1963,51 +2265,11 @@ function slugify(title: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-export interface LiveSearchResult {
-  products: NormalizedProduct[];
-  /** Per-retailer notes for the diagnostics panel; failures included. */
-  notes: { merchant: string; hits: number; error?: string }[];
-  /** Empty-match suggestion set (REEA-114); every snapshot carries its own. */
-  suggestions?: NormalizedProduct[];
-}
+/* LiveSearchResult moved to ./coverage.ts (see the note below). */
 
-/**
- * REEA-290 — the per-query coverage sentence the results page states in plain
- * text: which retailers answered this search and which did not, straight from
- * the run's own notes (no second fetch, no bundled registry — a note is only
- * ever written by the live fan-out that produced the offers on screen).
- * Names follow the fixed COLLECTORS order (REEA-254 determinism: the same
- * settled set reads as the same sentence on consecutive loads, whatever the
- * completion order was). A retailer that answered with zero matching hits DID
- * respond — its empty shelf is an answer, not a gap — so only notes carrying
- * an error land on the "did not respond" side. An empty notes list (nothing
- * collected yet) yields an empty string: no line, no flicker.
- */
-export function coverageLine(notes: LiveSearchResult["notes"], locale?: "en" | "ar"): string {
-  const ordered = [...notes].sort(
-    (a, b) => adapterRank(a.merchant) - adapterRank(b.merchant),
-  );
-  const failed: string[] = [];
-  const answered: string[] = [];
-  for (const n of ordered) {
-    (n.error ? failed : answered).push(n.merchant);
-  }
-  // REEA-279: the two sentence shapes live in the static table so the stamp
-  // matches the shell language; EN keeps the exact figures it had before.
-  const ar = locale === "ar";
-  const parts: string[] = [];
-  if (failed.length > 0)
-    parts.push(ar ? `${joinNames(failed, ar)} لم يستجب لهذا البحث.` : `${joinNames(failed)} did not respond on this search.`);
-  if (answered.length > 0)
-    parts.push(ar ? `أسعار من ${joinNames(answered, ar)}.` : `Prices from ${joinNames(answered)}.`);
-  return parts.join(" ");
-}
-
-/** Plain-text name list: "Xcite" / "Xcite and Blink" / "Xcite, Blink and Eureka". */
-function joinNames(names: string[], ar = false): string {
-  if (names.length <= 1) return names.join("");
-  return `${names.slice(0, -1).join(", ")}${ar ? " و" : " and "}${names[names.length - 1]}`;
-}
+/* coverageLine + joinNames moved to ./coverage.ts so the client-rendered
+   results shell imports them without dragging this server-only module (and
+   its jsdom clearance hop) into the browser bundle. */
 
 /**
  * REEA-178 — progressive per-retailer collection for the results page.
@@ -2034,8 +2296,19 @@ function joinNames(names: string[], ar = false): string {
  */
 export interface LiveSearchStages {
   stages: Promise<LiveSearchResult>[];
-  /** Same promise as the last stage: the converged full-ranked snapshot. */
+  /** Same promise as the last stage: the converged full-ranked snapshot —
+   *  or, once the completion budget expired (REEA-398), the finalized
+   *  snapshot-so-far with its honest coverage notes. */
   final: Promise<LiveSearchResult>;
+  /**
+   * REEA-398 — resolves once EVERY adapter has landed (also the late ones
+   * that arrived after the finalized `final`). Its chain deepens the silent
+   * merchants and overwrites the cache entry with the complete live answer,
+   * so the follow-up feed and the next identical query get the full set.
+   * Callers schedule it with Next's `after()` to keep the hop round-trips
+   * alive behind the finalized response.
+   */
+  allSettled: Promise<void>;
 }
 
 type SettledAdapter = { merchant: string; hits: SearchHit[]; error?: string };
@@ -2053,6 +2326,15 @@ type SettledAdapter = { merchant: string; hits: SearchHit[]; error?: string };
  * a plain throw never had. Amazon.eg throws only after BOTH of its attempts
  * failed, so its worst case stays within the budget the signal enforces.
  */
+/** REEA-486 AC-2 — one collected-at stamp per retailer answer, applied at the
+ *  shared settle point so every adapter carries it symmetrically (hits come
+ *  from each parser at its hop's completion, so the stamp is that retailer's
+ *  real fetch time, not a later render time). */
+function stampCollected(hits: SearchHit[]): SearchHit[] {
+  const iso = new Date().toISOString();
+  return hits.map((h) => (h.collectedAt ? h : { ...h, collectedAt: iso }));
+}
+
 async function collectSettled(
   c: RetailerCollector,
   q: string,
@@ -2061,12 +2343,12 @@ async function collectSettled(
   const asError = (err: unknown): string =>
     err instanceof Error ? err.message : String(err);
   try {
-    return { merchant: c.merchant, hits: await c.collect(q, fetchImpl) };
+    return { merchant: c.merchant, hits: stampCollected(await c.collect(q, fetchImpl)) };
   } catch (err) {
     const firstError = asError(err);
     await new Promise((r) => setTimeout(r, AMAZON_RETRY_BACKOFF_MS));
     try {
-      return { merchant: c.merchant, hits: await c.collect(q, fetchImpl) };
+      return { merchant: c.merchant, hits: stampCollected(await c.collect(q, fetchImpl)) };
     } catch (retryErr) {
       // Both attempts down: report the LAST error — it is the state the
       // final snapshot actually served. Fall back to the first message when
@@ -2092,7 +2374,17 @@ function filterNotes(
     // tests); with scoped collectors this is already a tautology.
     const kept = country ? s.hits.filter((h) => h.country === country) : s.hits;
     hits.push(...kept);
-    notes.push({ merchant: s.merchant, hits: kept.length, ...(s.error ? { error: s.error } : {}) });
+    // REEA-488 item 2 — coupon coverage per merchant stage: offers that
+    // carried coupon info vs the merchant's total kept hits. The counts ride
+    // every note a stage emits (staged and converged alike), so a gap is
+    // measurable straight from the run's own diagnostics.
+    const couponed = kept.reduce((n, h) => n + (h.coupon?.discount.trim() ? 1 : 0), 0);
+    notes.push({
+      merchant: s.merchant,
+      hits: kept.length,
+      coupons: couponed,
+      ...(s.error ? { error: s.error } : {}),
+    });
   }
   return { hits, notes };
 }
@@ -2114,11 +2406,48 @@ function stagedSnapshot(
   settledSoFar: SettledAdapter[],
 ): LiveSearchResult {
   const { hits, notes } = filterNotes(country, settledSoFar);
-  // REEA-254 payload trim: intermediate flushes render through the card
-  // variant, which never reads `alternatives`; the converged snapshot carries
-  // the shared row list. Every staged flush re-serialized the same arrays.
-  const products = groupHits(q, hits, false);
+  // REEA-254 payload trim + REEA-488 item 1: staged flushes render through
+  // the card variant, which NOW reads `alternatives` — so every flush carries
+  // the cheaper same-family list from the hits collected so far. The trim the
+  // flush needs is the ENTRY sharing in finalizeGroups (one distinct object
+  // per referenced group, referred to afterwards), not an empty array.
+  const products = groupHits(q, hits);
   return { products, notes, suggestions: products.slice(0, 3) };
+}
+
+/**
+ * REEA-398 — finalized state, served when the completion budget expired while
+ * adapters were still answering: snapshot-so-far plus one honest note per
+ * merchant that had not answered at finalize time, so the coverage line names
+ * every gap of the FINALIZED page and carries the budget as its reason (the
+ * note's error field — the same diagnosable shape a failed hop gets). A late
+ * hop that lands later folds into the page through the follow-up feed, which
+ * re-renders this line honestly from its own settled set.
+ */
+function finalizedSnapshot(
+  q: string,
+  country: CountryCode | null,
+  collectors: RetailerCollector[],
+  settledSoFar: SettledAdapter[],
+  deadlineMs: number,
+): LiveSearchResult {
+  const snap = stagedSnapshot(q, country, settledSoFar);
+  const answered = new Set(snap.notes.map((n) => n.merchant));
+  for (const c of collectors) {
+    if (!answered.has(c.merchant)) {
+      snap.notes.push({
+        merchant: c.merchant,
+        hits: 0,
+        coupons: 0,
+        error: `no answer within the ${deadlineMs} ms completion budget`,
+      });
+    }
+  }
+  // REEA-437 — hops are still landing behind this response, so its count is
+  // provisional: mark the snapshot as not-settled and let the heading keep
+  // its skeleton until the converged answer (or the follow-up feed) lands.
+  snap.settled = false;
+  return snap;
 }
 
 /**
@@ -2127,15 +2456,6 @@ function stagedSnapshot(
  * existing offer never depends on this round, and when every merchant already
  * answered there is nothing to deepen, so it stays a single round. Runs
  * inside the FINAL stage only, so mid-stream flushes stay single-hop.
- *
- * REEA-399 adds the coverage-gate branch: when the round-one set is thinly
- * covered (fewer than half the retailers contributed hits — queryGatePasses
- * false), the Arabic generic lane widens the silent merchants one bounded
- * time with the brand-less Arabic form ("لابتوب ديل" → "لابتوب"): Arabic
- * indexes key on the category word, so the brand half is what blanks them.
- * The lane also runs when NOTHING answered (every merchant silent on an
- * Arabic query), where enrichedQuery has no live title to normalize off.
- * Latin-only queries keep the enriched path exactly as before.
  */
 async function deepenSilent(
   q: string,
@@ -2145,26 +2465,15 @@ async function deepenSilent(
   const firstHits: SearchHit[] = [];
   for (const s of settled) firstHits.push(...s.hits);
   const missing = settled.filter((s) => s.hits.length === 0);
-  if (missing.length === 0) return;
-  const thin = !queryGatePasses(settled.length - missing.length, settled.length);
+  if (firstHits.length === 0 || missing.length === 0) return;
   const enriched = enrichedQuery(firstHits, q);
-  const generic = arabicGenericQuery(q);
-  // Pick the widening form: normalized live title when one exists, else the
-  // Arabic generic form on thinly covered runs. Same-bounded-query rule as
-  // before — one extra collect() per silent merchant, no more rounds.
-  const widenWith =
-    enriched && enriched.toLowerCase() !== q.toLowerCase()
-      ? enriched
-      : thin && generic !== "" && generic.toLowerCase() !== q.toLowerCase()
-        ? generic
-        : "";
-  if (widenWith === "") return;
+  if (!enriched || enriched.toLowerCase() === q.toLowerCase()) return;
   await Promise.all(
     missing.map(async (s) => {
       const collector = COLLECTORS.find((c) => c.merchant === s.merchant);
       if (!collector) return;
       try {
-        const hits = await collector.collect(widenWith, fetchImpl);
+        const hits = await collector.collect(enriched, fetchImpl);
         if (hits.length > 0) {
           s.hits = hits;
           s.error = undefined;
@@ -2176,25 +2485,47 @@ async function deepenSilent(
   );
 }
 
-/** Converged snapshot: full groupHits ranking + relaxed-query suggestions. */
+/** Converged snapshot: full groupHits ranking + widened-query retry + suggestions. */
 async function finalSnapshot(
   q: string,
   country: CountryCode | null,
   settled: SettledAdapter[],
   fetchImpl: FetchImpl,
+  widenedRetry = false,
 ): Promise<LiveSearchResult> {
   const { hits, notes } = filterNotes(country, settled);
-  const products = groupHits(q, hits);
-  let suggestions = products.slice(0, 3);
-  if (q && products.length === 0) {
-    // Zero matches: re-collect once with the leading token so the empty state
-    // suggests real live titles, not catalog fixtures.
-    const relaxed = q.split(/\s+/)[0] ?? q;
-    if (relaxed && relaxed !== q) {
-      suggestions = (await collectLiveResults(relaxed, { fetchImpl, country })).products.slice(0, 3);
+  let products = groupHits(q, hits);
+  let servedNotes = notes;
+  let attemptedQueries: string[] | undefined;
+  if (q && products.length === 0 && !widenedRetry) {
+    // REEA-437 — one widened retry before declaring empty: whole phrases can
+    // answer thin on a cold hop (retailer engines match nearly-exact phrases
+    // — the same quirk REEA-357/REEA-408 worked around per adapter), so the
+    // zero answer gets ONE bounded re-collect with trimmed query tokens.
+    // A single-token code ("WH-1000XM6") keeps its form — there the second
+    // bounded attempt itself is what a cold handshake needs: measured on the
+    // deployed path, the immediate re-fetch after a budget-cut zero answers
+    // fine once the discovery/handshake caches are warm. Whatever the retry
+    // returns IS live data from this run — still no bundled snapshot.
+    const wider = widerQuery(q);
+    attemptedQueries = wider === q ? [q] : [q, wider];
+    const retry = await collectLiveResults(wider, { fetchImpl, country, widenedRetry: true });
+    if (retry.products.length > 0) {
+      products = retry.products;
+      // Coverage honesty: a merchant whose retry hop answered overwrites its
+      // round-one note (the coverage line describes what the served cards
+      // actually came from); merchants that stayed silent keep their note.
+      const answeredAgain = new Map(retry.notes.map((n) => [n.merchant, n] as const));
+      servedNotes = notes.map((n) => {
+        const r = answeredAgain.get(n.merchant);
+        return r && r.hits > 0 && !r.error ? r : n;
+      });
+      for (const r of retry.notes) {
+        if (!servedNotes.some((n) => n.merchant === r.merchant)) servedNotes.push(r);
+      }
     }
   }
-  return { products, notes, suggestions };
+  return { products, notes: servedNotes, suggestions: products.slice(0, 3), attemptedQueries };
 }
 
 /** Options shared by the staged and blocking collection entries. */
@@ -2208,6 +2539,22 @@ export interface StagedCollectOptions {
    *  A cached answer still serves as the first flush (stale path), but the
    *  live fan-out always re-runs behind it so collection timestamps update. */
   refresh?: boolean;
+  /**
+   * REEA-398 — completion-budget ceiling in ms for the STREAM: the deadline
+   * at which every stage is finalized (RESULTS_COMPLETION_BUDGET_MS by
+   * default; the blocking chain passes its LIVE_SEARCH_BUDGET_MS here so the
+   * finalize never cuts the blocking answer short of its documented budget).
+   * Also the reason text carried by the coverage notes of a finalized-at-
+   * budget snapshot. Hop fetches themselves stay bounded by opts.signal /
+   * LIVE_SEARCH_BUDGET_MS so late hops can still land behind the response.
+   */
+  deadlineMs?: number;
+  /**
+   * REEA-437 — set by the widened zero-result retry itself: the retry chain
+   * never widens again, so a genuinely empty shelf costs exactly TWO bounded
+   * rounds (whole query + one trimmed form) instead of recursing per level.
+   */
+  widenedRetry?: boolean;
 }
 
 /** Always-miss cache used when the caller injects its own fetchImpl: a
@@ -2227,10 +2574,25 @@ export function collectLiveResultsStaged(
   const baseFetch: FetchImpl = opts.fetchImpl ?? ((u, init) => fetch(u, init));
   // REEA-224 F4 — thread the overall budget signal into every hop: each hop
   // still carries its own attempt window, whichever expires first aborts.
-  const budget = opts.signal;
-  const fetchImpl: FetchImpl = budget
-    ? (u, init) => baseFetch(u, { ...init, signal: joinSignals(budget, init?.signal ?? undefined) })
-    : baseFetch;
+  // REEA-398 — TWO clocks on the staged path. The hop chain keeps the
+  // documented LIVE_SEARCH_BUDGET_MS ceiling (late hops must still LAND
+  // behind the finalized response, so the follow-up feed and the next query
+  // get the complete live answer from the same single fan-out), while the
+  // STREAM closes on the completion deadline: whatever answered by
+  // RESULTS_COMPLETION_BUDGET_MS is finalized into the served document with
+  // honest coverage notes, and the stream closes instead of waiting on the
+  // slowest adapter. The blocking path aligns both clocks through opts.signal.
+  const deadlineMs = opts.deadlineMs ?? RESULTS_COMPLETION_BUDGET_MS;
+  // REEA-466 — on the staged page path the behind-the-response tail rides the
+  // SAME clock the document closes on (deadline + STAGE_TAIL_HEADROOM_MS):
+  // every adapter flushes as it resolves, whatever is still in flight at the
+  // finalize lands inside the headroom, and the after() tail settles right
+  // behind the last flush instead of holding the stream open on the 16 s
+  // blocking ceiling. Callers that WAIT on the full settled answer keep their
+  // documented LIVE_SEARCH_BUDGET_MS ceiling through opts.signal.
+  const hopCeiling = opts.signal ?? AbortSignal.timeout(deadlineMs + STAGE_TAIL_HEADROOM_MS);
+  const fetchImpl: FetchImpl = (u, init) =>
+    baseFetch(u, { ...init, signal: joinSignals(hopCeiling, init?.signal ?? undefined) });
   const q = query.trim();
   const country = opts.country ?? null;
   const collectors = country
@@ -2261,7 +2623,7 @@ export function collectLiveResultsStaged(
     hit && opts.refresh && !hit.stale ? { ...hit, stale: true } : hit;
   if (cached && !cached.stale) {
     const served = Promise.resolve(cached.value);
-    return { stages: [served], final: served };
+    return { stages: [served], final: served, allSettled: Promise.resolve() };
   }
 
   // Round one: every retailer is contacted once, in parallel, at call time —
@@ -2294,35 +2656,120 @@ export function collectLiveResultsStaged(
     return new Promise<void>((resolve) => waiting.push({ need: target, resolve }));
   }
 
-  for (const c of collectors) {
-    void collectSettled(c, q, fetchImpl).then((s) => {
+  const runs = collectors.map((c) => collectSettled(c, q, fetchImpl));
+  for (const p of runs) {
+    void p.then((s) => {
       settled.push(s);
       wakeReady();
     });
   }
 
+  // REEA-398 finalize clock: every stage ALSO resolves on this timer, so the
+  // streamed document closes inside the completion budget even while slow
+  // hops are still in flight. At finalize time the snapshot carries everything
+  // that landed plus one budget note per merchant still silent — the coverage
+  // line a shopper reads at the Moment of Truth is the honest state of the
+  // finalized page. Late hops keep appending to the CONVERGED chain below:
+  // one fan-out feeds the finalized document, the follow-up feed, and the
+  // response-cache write-through.
+  const finalizeAtDeadline: Promise<LiveSearchResult> = new Promise<void>((resolve) =>
+    setTimeout(resolve, deadlineMs),
+  ).then(() => finalizedSnapshot(q, country, collectors, settled.slice(), deadlineMs));
+  const converged: Promise<LiveSearchResult> = Promise.all(runs)
+    .then(() => deepenSilent(q, settled, fetchImpl))
+    .then(() => finalSnapshot(q, country, settled, fetchImpl, opts.widenedRetry === true));
+
   const stages: Promise<LiveSearchResult>[] = collectors.map(async (_c, k) => {
-    await untilArrivals(k + 1);
-    if (k < collectors.length - 1) return stagedSnapshot(q, country, settled.slice());
-    await deepenSilent(q, settled, fetchImpl);
-    return finalSnapshot(q, country, settled, fetchImpl);
+    if (k < collectors.length - 1) {
+      return await Promise.race([
+        untilArrivals(k + 1).then(() => stagedSnapshot(q, country, settled.slice())),
+        finalizeAtDeadline,
+      ]);
+    }
+    return await Promise.race([converged, finalizeAtDeadline]);
   });
   const final: Promise<LiveSearchResult> = stages[stages.length - 1] ?? Promise.resolve(stagedSnapshot(q, country, settled));
 
-  // Write-through carries the converged LIVE answer only (products with their
-  // scrapedAt stamps included). A converged-empty set is usually a blip inside
-  // the bounded window rather than a real answer, so it stays uncached and the
-  // next caller re-collects live instead of re-serving the blip.
-  void final.then((snap) => {
-    if (snap.products.length > 0) cache.write(cacheKey, snap);
-  });
+  // Write-through carries the LIVE answer only (products with their scrapedAt
+  // stamps included). REEA-466 (QA REEA-467 findings 2/3): the warm repeat
+  // must render the COMPLETE answer, so the converged chain ALWAYS writes —
+  // every hop plus the bounded widen round have answered by then, which makes
+  // even its empty result an honest final state rather than a blip, and the
+  // no-result page is cached like any other answer. The finalized snapshot
+  // still writes as soon as it lands so an immediate repeat never re-pays the
+  // fan-out — it defers only when it is a PROVISIONAL empty: hops may still
+  // answer, and that run's converged snapshot overwrites it moments later
+  // anyway (the hop tail now rides the completion clock). No snapshots are
+  // bundled: both writes are this run's own live fetches.
+  const writeLiveAnswer = (snap: LiveSearchResult): void => {
+    if (snap.products.length > 0 || snap.settled !== false) cache.write(cacheKey, snap);
+  };
+  void final.then(writeLiveAnswer);
+  void converged.then(writeLiveAnswer, () => {});
+  registerFollowUp(cacheKey, converged);
+  // Resolves once every hop of this run has landed (the late ones too) — the
+  // results page schedules it with Next's `after()` so hop round-trips stay
+  // alive behind the finalized response instead of dying with the stream.
+  // REEA-466 — the after() wait is itself bounded (QA REEA-467 finding 1):
+  // a hop's INTERNAL retries (challenge handshake, jsdom clearance passes)
+  // keep succeeding round after round, so the abort signal cannot cut a
+  // straggler that is slow-but-healthy — measured ~19-21 s until the last
+  // collector settles, which held the stream open exactly that long because
+  // after() awaits this promise. The race caps the behind-the-response wait
+  // at the run's own ceiling plus one short margin; both chains keep running
+  // either way, so late offers still land in the follow-up feed and the memo
+  // while the document closes on the completion clock.
+  const tailCapMs =
+    (opts.signal ? opts.deadlineMs ?? LIVE_SEARCH_BUDGET_MS : deadlineMs + STAGE_TAIL_HEADROOM_MS) +
+    500;
+  const allSettled: Promise<void> = Promise.race([
+    converged.then(
+      () => undefined,
+      () => undefined,
+    ),
+    new Promise<void>((resolve) => setTimeout(resolve, tailCapMs)),
+  ]);
 
   if (cached) {
     // Stale window only reaches here (fresh returns above): cache-first flush,
     // live stages behind it, converged full-ranked final.
-    return { stages: [Promise.resolve(cached.value), ...stages], final };
+    return { stages: [Promise.resolve(cached.value), ...stages], final, allSettled };
   }
-  return { stages, final };
+  return { stages, final, allSettled };
+}
+
+/**
+ * REEA-398 — pending finalized runs, one per normalized query: when a staged
+ * page finalizes on the completion budget while hops are still in flight, the
+ * follow-up feed (/api/results-followup) reads THIS run's converged chain to
+ * fold the late offers into the open page in place — the same promise that
+ * write-throughs the response cache, so one live fan-out serves the finalized
+ * document, the follow-up merge, and the next identical query. Oldest-first
+ * eviction keeps the map bounded (same ceiling as the response cache); reads
+ * past the cache ceiling drop the entry instead of stalling the feed.
+ */
+const followUpRuns = new Map<string, { snap: Promise<LiveSearchResult>; startedAt: number }>();
+
+function registerFollowUp(key: string, snap: Promise<LiveSearchResult>): void {
+  followUpRuns.set(key, { snap, startedAt: Date.now() });
+  if (followUpRuns.size > QUERY_CACHE_MAX_ENTRIES) {
+    const oldest = followUpRuns.keys().next().value;
+    if (oldest !== undefined) followUpRuns.delete(oldest);
+  }
+}
+
+/** Pending converged snapshot for a query, or null when nothing is in flight.
+ *  The follow-up route awaits it with its own bounded wait; a failed chain
+ *  resolves to null so the finalized page simply stands on its own. */
+export function followUpSnapshot(query: string): Promise<LiveSearchResult | null> | null {
+  const key = queryCacheKey(query);
+  const run = followUpRuns.get(key);
+  if (!run) return null;
+  if (Date.now() - run.startedAt > QUERY_CACHE_MAX_AGE_MS) {
+    followUpRuns.delete(key);
+    return null;
+  }
+  return run.snap.catch(() => null);
 }
 
 /**
@@ -2354,6 +2801,11 @@ export async function collectLiveResults(
   return await collectLiveResultsStaged(query, {
     ...opts,
     signal: opts.signal ?? AbortSignal.timeout(LIVE_SEARCH_BUDGET_MS),
+    // REEA-398 — the blocking caller waits for the FULL settled answer, so
+    // its finalize clock rides the same hop budget: the budget-finalized
+    // snapshot only replaces the converged one when the chain itself runs
+    // past its own ceiling, which is the honest terminal state either way.
+    deadlineMs: opts.deadlineMs ?? LIVE_SEARCH_BUDGET_MS,
   }).final;
 }
 
@@ -2377,6 +2829,21 @@ export function enrichedQuery(hits: SearchHit[], query: string): string {
     }
   }
   return best.trim();
+}
+
+/**
+ * REEA-437 — the widened query form for the one bounded zero-result retry:
+ * trim one trailing token so phrases a retailer engine matches too narrowly
+ * ("iPhone 17 Pro" thin on some indexes while "iPhone 17" answers) still get
+ * one broader live answer before the page declares an empty shelf. A
+ * single-token query keeps its exact form — for model codes the widening is
+ * the retry itself, the second bounded attempt behind warm hop caches. Shared
+ * by the converged retry and its tests.
+ */
+export function widerQuery(query: string): string {
+  const tokens = query.split(/\s+/).filter(Boolean);
+  if (tokens.length <= 1) return query.trim();
+  return tokens.slice(0, -1).join(" ");
 }
 
 
