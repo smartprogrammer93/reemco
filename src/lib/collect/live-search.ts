@@ -1058,8 +1058,9 @@ const COLLECTORS: RetailerCollector[] = [
           // answered; a stale non-ok entry must not short-circuit the fresh
           // bare attempt below.
           if (cached.ok) {
+            const parsed = asItems(JSON.parse(await cached.text()));
             answered = true;
-            return asItems(JSON.parse(await cached.text()));
+            return parsed;
           }
         } catch {
           // Cache-first miss (or a squeezed window) — the uncached JSON attempt
@@ -1082,8 +1083,9 @@ const COLLECTORS: RetailerCollector[] = [
             jsonWindow,
           );
           if (jsonRes.ok) {
+            const parsed = asItems(JSON.parse(await jsonRes.text()));
             answered = true;
-            return asItems(JSON.parse(await jsonRes.text()));
+            return parsed;
           }
         } catch {
           // Handshake spent the window — the bare attempt below still gets
@@ -1096,8 +1098,9 @@ const COLLECTORS: RetailerCollector[] = [
             signal: jsonWindow,
           } as RequestInit);
           if (bare.ok) {
+            const parsed = asItems(JSON.parse(await bare.text()));
             answered = true;
-            return asItems(JSON.parse(await bare.text()));
+            return parsed;
           }
         } catch {
           // Malformed JSON or the window spent — the archive page below
