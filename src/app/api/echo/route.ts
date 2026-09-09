@@ -55,7 +55,7 @@ async function probeZone(
 export async function GET(): Promise<Response> {
   // The hop identity rides verbatim to the echo services, so what they report
   // IS what the retailer zones see from this runtime (headers + source IP).
-  const hopEcho = fetch(HEADER_ECHO_URL, {
+  const hopEcho: Promise<{ headers: Record<string, string>; originIp: string; error?: string }> = fetch(HEADER_ECHO_URL, {
     headers: VERIFIED_BOT_HEADERS,
     cache: "no-store",
     signal: AbortSignal.timeout(ECHO_WINDOW_MS),
