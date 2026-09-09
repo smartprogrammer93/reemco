@@ -19,7 +19,10 @@ export const metadata = {
 // REEA-114: identities not in the catalog resolve through the live fan-out,
 // so the page must render per request (server builds), not be pre-baked.
 export const dynamic = "force-dynamic";
-export const maxDuration = 20;
+// Same measured-walk headroom tier as the results segment (REEA-391): the
+// detail page runs its own live collection on cold visits, and the QA repro
+// on the health funnel measured this walk past the old 20 s ceiling too.
+export const maxDuration = 45;
 
 /* Static export: pre-render one page per catalog product. */
 export function generateStaticParams() {

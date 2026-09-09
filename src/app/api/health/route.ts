@@ -22,10 +22,11 @@ import type { NextRequest } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// REEA-369: the funnel hops themselves cap at maxDuration 20 (results and
-// product pages), and a cold cron call walks home + results + product after
-// a cold start — measured ~26 s end to end on the first request after a
-// deploy. The function gets headroom above that sum.
+// REEA-369: the funnel hops walk pages whose segment ceilings now sit at the
+// measured-walk headroom tier (results and product pages; REEA-391), and a
+// cold cron call runs home + results + product after a cold start — measured
+// ~26 s end to end on the first request after a deploy. The function gets
+// headroom above that sum.
 export const maxDuration = 60;
 
 const FIXTURE_QUERY = process.env.SMOKE_FIXTURE_QUERY || "sony";
