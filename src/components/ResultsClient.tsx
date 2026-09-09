@@ -583,6 +583,35 @@ function StagedResults(props: {
     };
   }, [finalPromise]);
 
+  // REEA-398 — late offers fold into the finalized page IN PLACE, no reload.
+  // The server run closes the stream on its completion budget; merchants that
+  // answer after that keep running behind the response and are handed to the
+  // open page by the follow-up feed (/api/results-followup — the SAME run's
+  // converged chain, not a second fan-out). One bounded fetch per view: a
+  // richer live snapshot replaces the finalized one; an equal, older, or
+  // absent answer keeps what is already rendered. The coverage line re-renders
+  // from the merged notes, so a merchant named as "no answer within budget"
+  // moves to the answered side exactly when its offers appear.
+  const followedQueryRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (followedQueryRef.current === query) return;
+    followedQueryRef.current = query;
+    const controller = new AbortController();
+    fetch(`/api/results-followup?q=${encodeURIComponent(query)}`, { signal: controller.signal })
+      .then((res) => (res.ok ? (res.json() as Promise<LiveSearchResult | null>) : null))
+      .then((late) => {
+        if (!late || !Array.isArray(late.products)) return;
+        setFinalSnap((current) =>
+          late.products.length >= (current?.products.length ?? 0) ? late : current,
+        );
+      })
+      .catch(() => {
+        /* feed unavailable — the finalized document already carries every
+           offer that landed inside the completion budget */
+      });
+    return () => controller.abort();
+  }, [query]);
+
   // REEA-37 funnel events fire once per CONVERGED result set (identity with
   // the REEA-186 stock selection included), so partial flushes never emit
   // half-count impression storms.

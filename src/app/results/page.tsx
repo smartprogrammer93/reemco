@@ -7,6 +7,7 @@ import { buildResultsMeta } from "@/lib/results-meta";
 import { sanitizeSearchQuery, sanitizePage } from "@/lib/search-params";
 import { sanitizeShowOutOfStock } from "@/lib/stock";
 import type { Metadata } from "next";
+import { after } from "next/server";
 import { cookies, headers } from "next/headers";
 
 type ResultsSearchParams = Promise<{ [key: string]: string | string[] | undefined }>;
@@ -51,14 +52,16 @@ export async function generateMetadata({
  * render, live-per-query fetch preserved, no bundled/static snapshot.
  */
 export const dynamic = "force-dynamic";
-// Ceiling for the whole query-time walk: bounded collector window (REEA-224)
-// plus cold-start setup and final-stream serialization. Measured on the
-// deployed artifact the full staged walk lands at ~21 s warm and up to ~26 s
-// cold (same funnel walk REEA-371 measured for the uptime probe), so the
-// ceiling sits above that sum — same headroom tier as the probe's 45 s. At
-// 20 s the platform closed the stream right when the last staged boundary was
-// flushing (React #412 "Connection closed" + error card; QA REEA-391), which
-// truncated exactly the converged snapshot the shopper is waiting for.
+// Ceiling for the whole query-time walk. REEA-398: the RESPONSE closes on the
+// per-query completion budget (~4.5 s finalize), but the hops still in flight
+// at finalize keep running behind it via after()/allSettled — hop ceiling
+// LIVE_SEARCH_BUDGET_MS plus converge and cache write-through — and the
+// follow-up feed reads that same run right after. The ceiling keeps the whole
+// behind-the-response tail inside the same warm window — same headroom tier
+// as the probe's 45 s. At 20 s the platform closed the stream right when the
+// last staged boundary was flushing (React #412 "Connection closed" + error
+// card; QA REEA-391), which truncated exactly the converged snapshot the
+// shopper is waiting for.
 export const maxDuration = 45;
 
 /** Request-time preference layers (REEA-280). Both reads are request-time
@@ -127,6 +130,15 @@ export default async function ResultsPage({
   // The ONE exception is the explicit Refresh action (REFRESH_COOKIE), which
   // always re-runs the live collection so its timestamps move.
   const staged = collectLiveResultsStaged(query, { refresh: hint.refresh });
+  // REEA-398 — keep the hops still in flight alive BEHIND the finalized
+  // response: after() runs the run's allSettled chain once the document is
+  // sent, so late offers converge into the cache and the follow-up feed
+  // (which the hydrated page reads to fold them in in place) instead of
+  // dying when the stream closes on the completion budget. Same single
+  // live fan-out; no second round of requests.
+  after(async () => {
+    await staged.allSettled;
+  });
 
   return (
     <div
