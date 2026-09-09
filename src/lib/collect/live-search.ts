@@ -649,6 +649,55 @@ export function zayoomHits(payload: unknown, query: string): SearchHit[] {
   return shopifyStoreHits(payload, query, "Zayoom", "https://zayoom.com");
 }
 
+/**
+ * Aster Pharmacy (REEA-378): hydration records of the SSR search page on the
+ * Aster Online storefront (myaster.com). The island embeds each product
+ * record inline — `sku`,`name`,`brand`,`inStock`,`currency`,`price`,
+ * `special_price`,`productUrl` — so the hop parses the payload text directly,
+ * the way the other HTML storefronts scan their cards. `special_price` is the
+ * running promo: it carries the effective price and the list price becomes
+ * wasPrice (the quadra convention). `currency` is passed through verbatim
+ * like the PC Kuwait hop does — the storefront stamps it per record.
+ */
+export function asterHits(html: string, query: string): SearchHit[] {
+  const out: SearchHit[] = [];
+  const seen = new Set<string>();
+  const re = /"sku":"([^"]{1,24})","name":"([^"]+)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const sku = m[1];
+    if (seen.has(sku)) continue;
+    seen.add(sku);
+    // Windowed read of the rest of the record: observed records stay well
+    // under this span, and first-match field reads inside the window always
+    // belong to the current record.
+    const w = html.slice(m.index, m.index + 900);
+    const title = m[2].replace(/\\u0026/g, "&");
+    if (brandAwareCoverage(title, query) < MIN_SCORE) continue;
+    const base = Number(/"price":([0-9.]+)/.exec(w)?.[1]);
+    if (!Number.isFinite(base) || base <= 0) continue;
+    const specialRaw = /"special_price":([0-9.]+)/.exec(w)?.[1];
+    const special = specialRaw != null ? Number(specialRaw) : NaN;
+    const running = Number.isFinite(special) && special > 0 && special < base;
+    const urlPath = /"productUrl":"([^"]+)"/.exec(w)?.[1] ?? "";
+    const currency = /"currency":"([A-Z]{2,4})"/.exec(w)?.[1];
+    const inStock = /"inStock":(true|false)/.exec(w)?.[1] !== "false";
+    const brand = /"brand":"([^"]*)"/.exec(w)?.[1]?.trim();
+    out.push({
+      title,
+      merchant: "Aster Pharmacy",
+      country: "KW",
+      ...(brand ? { brand } : {}),
+      price: running ? special : base,
+      currency: currency ?? "KWD",
+      url: `https://www.myaster.com${urlPath}`,
+      inStock,
+      ...(running ? { wasPrice: base } : {}),
+    });
+  }
+  return out;
+}
+
 /** Yousifi Kuwait (www.yousifi.com.kw): WooCommerce archive cards. */
 export function yousifiHits(html: string, query: string): SearchHit[] {
   const out: SearchHit[] = [];
@@ -1213,6 +1262,32 @@ const COLLECTORS: RetailerCollector[] = [
         AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
       );
       return yousifiHits(await res.text(), query);
+    },
+  },
+  {
+    merchant: "Aster Pharmacy",
+    country: "KW",
+    collect: async (query, fetchImpl) => {
+      // REEA-378 — Aster's shopping hop is the Aster Online storefront
+      // (asterpharmacy.com itself lands on the corporate shell; myaster.com
+      // carries the priced listings). The SSR search page answers scripted
+      // GETs on the first attempt — measured live 2026-09-09: HTTP/~100 KB/
+      // ~0.4 s with the browser-shaped Accept combo — so the hop stays a
+      // plain fetchChecked without the challenge handshake.
+      const res = await fetchChecked(
+        fetchImpl,
+        `https://www.myaster.com/en/online-pharmacy/searchresult?q=${encodeURIComponent(query)}`,
+        {
+          headers: {
+            accept: "text/html,application/xhtml+xml",
+            "accept-language": "en",
+            "accept-encoding": "gzip, deflate, br",
+            "user-agent": "Mozilla/5.0",
+          },
+        },
+        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
+      );
+      return asterHits(await res.text(), query);
     },
   },
 ];

@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { PER_RETAILER_TIMEOUT_MS } from "@/lib/collect/types";
 import {
+  asterHits,
   astoreHits,
   amazonEgHits,
   blinkHits,
@@ -1380,8 +1381,8 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     resetDiscoveryCache();
     const staged = collectLiveResultsStaged("samsung", { fetchImpl: mixedSpeedFetch(), country: "KW" });
 
-    // One boundary per KW retailer in the run (thirteen since the REEA-270 batch).
-    expect(staged.stages).toHaveLength(13);
+    // One boundary per KW retailer in the run (fourteen since REEA-378).
+    expect(staged.stages).toHaveLength(14);
 
     const first = await staged.stages[0];
     expect(first.products).toHaveLength(1);
@@ -1402,9 +1403,9 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     expect(finalSnap.products[0].offers.map((o) => o.price)).toEqual([379, 385, 390, 399]);
     expect(merchants.has("Eureka")).toBe(true);
     expect(merchants.has("Sultan Center")).toBe(true);
-    // Merchants whose mocks never answer are all reported as notes (thirteen
-    // of the fifteen retailers).
-    expect(finalSnap.notes).toHaveLength(13);
+    // Merchants whose mocks never answer are all reported as notes (fourteen
+    // of the sixteen retailers).
+    expect(finalSnap.notes).toHaveLength(14);
   });
 
   it("the final flush equals the blocking path on the same live answers", async () => {
@@ -1652,8 +1653,8 @@ describe("whole-chain budget signal (REEA-224 F4)", () => {
     expect(elapsed).toBeGreaterThanOrEqual(LIVE_SEARCH_TIMEOUT_MS * 2 - 1_500);
     expect(elapsed).toBeLessThan(LIVE_SEARCH_BUDGET_MS + 2_000);
     // Graceful degradation: every silent retailer is still reported (all
-    // thirteen KW collectors are stalled here, REEA-270 batch included).
-    expect(notes).toHaveLength(13);
+    // fourteen KW collectors are stalled here, REEA-378 included).
+    expect(notes).toHaveLength(14);
   }, 25_000);
 });
 
@@ -1832,6 +1833,34 @@ describe("REEA-270 — Kuwait batch two adapters", () => {
       price: 2.25,
       currency: "KWD",
       url: "https://www.yousifi.com.kw/shop/nestle-nescafe-classic/",
+    });
+  });
+
+  it("asterHits reads hydration records off the Aster search SSR payload", () => {
+    // Record shape measured live 2026-09-09 off the myaster.com search hop:
+    // inline sku/name/brand/inStock records, promo price as special_price
+    // under the list price, productUrl as a /p/<slug>/<sku> path, titles
+    // carrying \u0026 escapes. A second record with no query coverage must
+    // stay out of the hits.
+    const html =
+      '<div id="__next"><script>{"sku":"1068110","name":"Vichy Dercos Serum 90ml \\u0026 more",' +
+      '"brand":"Vichy","quantity":3,"inStock":true,' +
+      '"productUrl":"/p/vichy-serum/1068110","itemLabels":["NONRX"],"currency":"KD",' +
+      '"price":9.9,"special_price":7.4,"media_gallery_entries":[{"url":"https://media.myaster.com/x.jpg"}]},' +
+      '{"sku":"1068111","name":"Duracell batteries AA","brand":"Duracell","quantity":2,"inStock":false,' +
+      '"productUrl":"/p/duracell/1068111","currency":"KD","price":4}</script></div>';
+    const hits = asterHits(html, "vichy serum");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({
+      title: "Vichy Dercos Serum 90ml & more",
+      merchant: "Aster Pharmacy",
+      country: "KW",
+      brand: "Vichy",
+      price: 7.4,
+      wasPrice: 9.9,
+      currency: "KD",
+      url: "https://www.myaster.com/p/vichy-serum/1068110",
+      inStock: true,
     });
   });
 });
