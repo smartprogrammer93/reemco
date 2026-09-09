@@ -23,8 +23,15 @@ jobs:
         run: |
           BASE="https://reemco.vercel.app"
           FAIL=""
+          # REEA-371: budget must sit above the measured funnel walk, not below
+          # it. Cold-ish arrivals walk home + staged results + product hops in
+          # ~30s (measured 04:20-06:10Z); with --max-time 15 the probe false-
+          # failed on healthy-but-walking requests since ~02:18Z. Same reason
+          # the smoke-check hop budgets were widened in REEA-369: monitoring
+          # ceilings stricter than the thing they observe burn error budget on
+          # noise (MTTR). Keep-warm's own ping already uses --max-time 60.
           for CHECK in "/" "/search" "/results?q=iPhone%2017%20Pro"; do
-            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$BASE$CHECK" || echo 000)
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 45 "$BASE$CHECK" || echo 000)
             echo "$CHECK -> $CODE"
             case "$CODE" in 200|301|302) ;; *) FAIL="$FAIL $CHECK($CODE)";; esac
           done
