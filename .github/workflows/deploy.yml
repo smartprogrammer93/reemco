@@ -207,9 +207,12 @@ jobs:
           # trailing extras as deploy paths otherwise). Evidence only.
           SCOPE_ARGS=""
           if [ -n "${VERCEL_TEAM_ID:-}" ]; then SCOPE_ARGS="--scope $VERCEL_TEAM_ID"; fi
+          # REEA-375: auth comes from the VERCEL_TOKEN env injected by the step;
+          # the CLI reads it automatically. No --token CLI arg: it shows up in
+          # ephemeral-runner process listings while env is already sufficient.
           for CMD in "kv add reemco-collect" "kv list" "env ls"; do
             echo "--- vercel $CMD"
-            timeout --signal=INT 5m npx -y vercel@59.11.7 --yes --token "$VERCEL_TOKEN" $SCOPE_ARGS $CMD > /tmp/kvcmd.txt 2>&1 || echo "exit=$?"
+            timeout --signal=INT 5m npx -y vercel@59.11.7 --yes $SCOPE_ARGS $CMD > /tmp/kvcmd.txt 2>&1 || echo "exit=$?"
             echo "cli output $(wc -c < /tmp/kvcmd.txt 2>/dev/null || echo 0) bytes; KV_REST_API_URL=$(grep -q KV_REST_API_URL /tmp/kvcmd.txt 2>/dev/null && echo yes || echo no) KV_REST_API_TOKEN=$(grep -q KV_REST_API_TOKEN /tmp/kvcmd.txt 2>/dev/null && echo yes || echo no)"
           done
           CODE=$(curl -s -o "$LIST_JSON" -w '%{http_code}' -m 30 -H "$AUTH" "$BASE/v9/projects/reemco/env$Q" || echo 000)
@@ -283,7 +286,7 @@ jobs:
           export VERCEL_TELEMETRY_DISABLED=1
           set -o pipefail
           timeout --signal=INT 20m npx -y vercel@59.11.7 deploy --prod --yes --cwd "$GITHUB_WORKSPACE" \
-            --token "$VERCEL_TOKEN" $SCOPE_ARGS 2>&1 | tee /tmp/vercel-deploy.log
+            $SCOPE_ARGS 2>&1 | tee /tmp/vercel-deploy.log
           URL=$(grep -oE 'https://[a-z0-9.-]+\.vercel\.app' /tmp/vercel-deploy.log | tail -1)
           echo "VERCEL_DEPLOY_URL=$URL" >> "$GITHUB_STEP_SUMMARY"
           echo "Vercel production URL: $URL"
