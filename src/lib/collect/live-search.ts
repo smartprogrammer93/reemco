@@ -722,6 +722,39 @@ async function collectShopifyKuwait(
   return hits;
 }
 
+/**
+ * REEA-369 (QA addendum) — handshake hop with a cache-first replay for the
+ * HTML storefronts (Next Store, Lulu). Same option-2 shape the PC Kuwait JSON
+ * hop already carries: with an explicit `force-cache` + bounded revalidate the
+ * Next data cache keeps the SSR payload across serverless invocations even
+ * inside the force-dynamic results segment, so ONE cleared hop keeps the
+ * merchant serving hits while the next cold instance replays the cached
+ * answer instead of re-paying the managed-challenge handshake — that replay
+ * is what removes the intermittent zero-hit note QA saw on cold fetches
+ * (dell laptop at ~02:55Z). The replay is gated on `cached.ok`: a stored
+ * interstitial (the CF answer is HTTP 403 + challenge page) must not count
+ * as an answer, so the handshake below still runs and a real block stays
+ * honestly visible. The window is the doubled one every CF-fronted hop
+ * carries; a cache-hit spends milliseconds of it and a miss keeps the full
+ * handshake budget.
+ */
+async function challengeHtmlHop(fetchImpl: FetchImpl, url: string): Promise<string> {
+  const window = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
+  try {
+    const cached = await fetchImpl(url, {
+      cache: "force-cache",
+      next: { revalidate: 300 },
+      signal: window,
+    } as RequestInit);
+    if (cached.ok) return await cached.text();
+  } catch {
+    // Cache miss (cold cache, eviction, squeezed window) — the handshake
+    // below answers exactly as before.
+  }
+  const res = await fetchThroughChallenge(fetchImpl, url, {}, window);
+  return await res.text();
+}
+
 const COLLECTORS: RetailerCollector[] = [
   {
     merchant: "Xcite",
@@ -948,13 +981,17 @@ const COLLECTORS: RetailerCollector[] = [
       // fetchThroughChallenge's bounded identity-alternating retry without its
       // own header set. The attempt window mirrors eureka's two-step hop — the
       // challenge handshake needs a little more room than a plain API answer.
-      const res = await fetchThroughChallenge(
+      // REEA-369 addendum: cache-first replay (challengeHtmlHop) so a cold
+      // fetch replays the last cleared SSR page instead of recording a
+      // zero-hit note mid-handshake. Measured 2026-09-09 from a cold
+      // datacenter hop: the verified-crawler identity answers this zone in
+      // ~0.3 s (plain accept-only does NOT here — unlike pckuwait — so the
+      // rotation order inside fetchThroughChallenge stands as-is).
+      const html = await challengeHtmlHop(
         fetchImpl,
         `https://www.nextstore.com.kw/catalogsearch/result/index/?q=${encodeURIComponent(query)}`,
-        {},
-        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
       );
-      return nextStoreHits(await res.text(), query);
+      return nextStoreHits(html, query);
     },
   },
   {
@@ -1079,14 +1116,17 @@ const COLLECTORS: RetailerCollector[] = [
       // SSR search page; same identity-alternating managed-challenge retry
       // as the Next Store hop (verified live 2026-09-08), and on a still-
       // blocked answer the note explains the gap while the other retailers
-      // serve (graceful degradation).
-      const res = await fetchThroughChallenge(
+      // serve (graceful degradation). REEA-369 addendum: rides the same
+      // cache-first replay — measured 2026-09-09, this zone answers the
+      // managed challenge differently per egress (from this container all
+      // three rotating identities landed on the interstitial; the cleared
+      // replay lets the first hop that passes keep the merchant serving for
+      // the revalidate window instead of re-paying the handshake per query).
+      const html = await challengeHtmlHop(
         fetchImpl,
         `https://www.luluhypermarket.com/en/search?query=${encodeURIComponent(query)}`,
-        {},
-        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
       );
-      return luluHits(await res.text(), query);
+      return luluHits(html, query);
     },
   },
   {
