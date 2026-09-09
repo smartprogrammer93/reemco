@@ -25,18 +25,34 @@ function SkeletonCard() {
 import { getStrings } from "@/lib/i18n";
 import { sanitizeSearchQuery } from "@/lib/search-params";
 import { resolveRequestLocale } from "@/lib/i18n-server";
+import { headers } from "next/headers";
 
-export default async function ResultsLoading({
-  searchParams,
-}: {
-  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-}) {
+/**
+ * Query hint for the flash locale, read from request headers instead of a
+ * props bag: loading.tsx renders WITHOUT the page's `searchParams` prop, so
+ * the settled page's prop route reads as undefined here and the whole
+ * boundary throws. `next-url` carries the full path+query on Next's own
+ * navigation renders; when it is absent the query link simply drops out and
+ * the chain keeps cookie → Accept-Language → "en" (same silent-fallback
+ * guard as the home shell), never a crash.
+ */
+async function readQueryHint(): Promise<string | undefined> {
+  try {
+    const nextUrl = (await headers()).get("next-url");
+    if (!nextUrl) return undefined;
+    const raw = new URL(nextUrl, "http://localhost").searchParams.get("q");
+    return sanitizeSearchQuery(raw) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export default async function ResultsLoading() {
   // REEA-279 — the loading stamp is chrome: it comes from the table too.
   // REEA-448 G2 — same chain as the settled page: with no cookie and no
   // Accept-Language header the Arabic-script query decides the flash locale,
   // so the loading chrome never flashes English under an Arabic title.
-  const params = await searchParams;
-  const locale = await resolveRequestLocale(sanitizeSearchQuery(params.q) ?? undefined);
+  const locale = await resolveRequestLocale(await readQueryHint());
   const t = getStrings(locale);
   return (
     <div
