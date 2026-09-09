@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import ProductResultCard from "@/components/ProductResultCard";
 import CollectionPanel from "@/components/CollectionPanel";
 import { startProductCollectionStaged } from "@/lib/collect/runner";
-import { PRODUCTS, resolveProductIdentity } from "@/lib/feed";
+import { PRODUCTS } from "@/lib/feed";
+import { resolveProductIdentity } from "@/lib/product-identity";
 import {
   buildResultsHref,
   filterProductsByCountry,

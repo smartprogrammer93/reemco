@@ -25,7 +25,7 @@ import {
 import { trackEvents } from "@/lib/telemetry";
 import { PRODUCTS } from "@/lib/feed";
 import { isAccessoryTitle, partitionForQuery } from "@/lib/relevance";
-import { coverageLine, type LiveSearchResult } from "@/lib/collect/live-search";
+import { coverageLine, type LiveSearchResult } from "@/lib/collect/coverage";
 import { markLiveRefresh, withRefreshBypass } from "@/lib/query-cache";
 import { clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
 import type { NormalizedProduct } from "@/types/product";

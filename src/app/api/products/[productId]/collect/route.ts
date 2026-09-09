@@ -8,7 +8,7 @@
  * with mode "cache" — no scrape is triggered (AC5).
  */
 import { after } from "next/server";
-import { resolveProductIdentity } from "@/lib/feed";
+import { resolveProductIdentity } from "@/lib/product-identity";
 import { runCollection, startCollection } from "@/lib/collect/runner";
 
 export const dynamic = "force-dynamic";
