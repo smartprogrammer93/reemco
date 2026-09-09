@@ -12,6 +12,7 @@ import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetSessionCacheForTests, useCollection } from "@/lib/collect/useCollection";
+import type { CollectJob } from "@/lib/collect/types";
 
 type Route =
   | { match: "start"; jobId: string }
@@ -148,5 +149,91 @@ describe("useCollection", () => {
     });
     await first;
     expect(calls.filter((c) => c.startsWith("POST"))).toHaveLength(1);
+  });
+});
+
+describe("useCollection attach path (REEA-248)", () => {
+  const offer = {
+    merchant: "Alpha",
+    domain: "alpha.example",
+    price: 11.5,
+    currency: "KWD",
+    url: "https://alpha.example/p/1",
+    inStock: true,
+    collectedAt: "2026-01-01T00:00:00.000Z",
+    method: "live" as const,
+  };
+
+  it("continues a server-started job by polling only — no POST on mount", async () => {
+    const seeded: CollectJob = {
+      jobId: "j9",
+      productId: "p1",
+      status: "collecting",
+      mode: "live",
+      startedAt: new Date().toISOString(),
+      subtasks: [],
+      offers: [offer],
+    };
+    routes.push({ match: "job", status: "complete" });
+    const { result } = renderHook(() => useCollection("p1", seeded));
+    // First paint already shows the server snapshot (initializer seed).
+    expect(result.current.state).toEqual({ kind: "polling", job: seeded });
+    // Hydration mirrors CollectionPanel's mount effect: attach to the job —
+    // polling continues it to convergence with no re-POST (AC2).
+    await act(async () => {
+      result.current.attach(seeded);
+    });
+    await waitFor(() => expect(result.current.state.kind).toBe("terminal"));
+    expect(calls).toEqual(["GET /api/collect-jobs/j9"]);
+  });
+
+  it("renders a server-completed snapshot with zero fetches", async () => {
+    const done: CollectJob = {
+      jobId: "j10",
+      productId: "p2",
+      status: "complete",
+      mode: "live",
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      subtasks: [],
+      offers: [offer],
+    };
+    const { result } = renderHook(() => useCollection("p2", done));
+    await act(async () => {
+      result.current.attach(done); // hydration-time attach: snapshot is final
+    });
+    expect(result.current.state).toEqual({ kind: "terminal", job: done });
+    expect(calls).toEqual([]);
+  });
+
+  it("keeps the labeled-repeat revalidation when a same-tab snapshot exists", async () => {
+    const done: CollectJob = {
+      jobId: "j11",
+      productId: "p3",
+      status: "complete",
+      mode: "live",
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      subtasks: [],
+      offers: [offer],
+    };
+    // First visit: attaching a completed job fills the same-tab snapshot.
+    const firstVisit = renderHook(() => useCollection("p3", done));
+    await act(async () => {
+      firstVisit.result.current.attach(done);
+    });
+    cleanup();
+    // Repeat visit with a server snapshot too: existing REEA-95 repeat wins —
+    // the cached snapshot renders and a background POST revalidates.
+    const seeded: CollectJob = { ...done, jobId: "j12", status: "collecting" };
+    routes.push({ match: "start", jobId: "j13" }, { match: "job", status: "collecting" });
+    const { result } = renderHook(() => useCollection("p3", seeded));
+    await act(async () => {
+      result.current.attach(seeded);
+    });
+    // The cached snapshot renders labeled and the background POST revalidates;
+    // the label only clears when a FRESH collection lands (still collecting).
+    expect(result.current.cachedNoticeAt).toBe(done.finishedAt ?? null);
+    expect(calls[0]).toBe("POST /api/products/p3/collect");
   });
 });

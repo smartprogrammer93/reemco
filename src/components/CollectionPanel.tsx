@@ -11,7 +11,7 @@
  * data lands. On a failed live run the last completed collection is fetched
  * and rendered labeled with its age — never a silent empty state.
  */
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState, use } from "react";
 import { useCollection, type CollectionPhase } from "@/lib/collect/useCollection";
 import type { CollectJob, LiveOffer } from "@/lib/collect/types";
 import { collectedAgoLabel } from "@/lib/collect/types";
@@ -79,21 +79,66 @@ function sortOffers(offers: LiveOffer[]): LiveOffer[] {
   return [...offers].sort((a, b) => toKwdNumeric(a.price, a.currency) - toKwdNumeric(b.price, b.currency));
 }
 
-export default function CollectionPanel({
-  productId,
-  currency,
-  country = null,
-  locale,
-}: {
+export default function CollectionPanel(props: {
   productId: string;
   currency: string;
   /** REEA-170 active country selection; LiveOffer rows carry their currency. */
   country?: CountryCode | null;
   /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
   locale?: Locale;
+  /** REEA-248 first-offer stage of the collection the server render started. */
+  firstStage?: Promise<CollectJob>;
+}) {
+  return (
+    <Suspense fallback={<PanelFallback locale={props.locale} />}>
+      <CollectionPanelBody {...props} />
+    </Suspense>
+  );
+}
+
+/* Streaming fallback = today's pre-offer shell: the live-collection label with
+   the manual Collect-now control, so the panel area never reads blank while
+   the server-started first offer is still in flight (REEA-248 AC1 — same
+   grace shape the results page uses for its skeleton). Reload re-runs the
+   server render, which re-attaches to (or starts) the live job. */
+function PanelFallback({ locale }: { locale?: Locale }) {
+  const t = getStrings(locale ?? clientLocale());
+  return (
+    <section aria-label={t.liveCollectionAria} style={{ marginTop: 16 }}>
+      <p style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
+        {t.startingLive}{" "}
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="hover:underline"
+          style={{ font: "var(--rc-text-body)", color: "var(--rc-primary)" }}
+        >
+          {t.collectNow}
+        </button>
+      </p>
+    </section>
+  );
+}
+
+function CollectionPanelBody({
+  productId,
+  currency,
+  country = null,
+  locale,
+  firstStage,
+}: {
+  productId: string;
+  currency: string;
+  country?: CountryCode | null;
+  locale?: Locale;
+  firstStage?: Promise<CollectJob>;
 }) {
   const t = getStrings(locale ?? clientLocale());
-  const { state, cachedNoticeAt, start, retryRetailer } = useCollection(productId);
+  // Server-started staged snapshot (REEA-248): the boundary flushes with the
+  // first retailer's answer already in hand; without a server stage (static
+  // preview host) this stays the old client-initiated path.
+  const snap = firstStage ? use(firstStage) : null;
+  const { state, cachedNoticeAt, start, retryRetailer, attach } = useCollection(productId, snap);
   const [staleFallback, setStaleFallback] = useState<CollectJob | null>(null);
   // Ticking clock for the elapsed label — updates via interval, never during render.
   const [now, setNow] = useState(() => Date.now());
@@ -104,11 +149,14 @@ export default function CollectionPanel({
     return () => clearInterval(t);
   }, [collecting]);
 
-  // Always-collect (realtime-policy §4): selecting a product ALWAYS starts a
-  // live run. With a same-tab snapshot the hook renders it labeled while this
-  // revalidation runs in the background; cold mounts show the starting state.
+  // Always-collect (realtime-policy §4): selecting a product ALWAYS runs live.
+  // REEA-248: when the server render already started this product's job the
+  // client ATTACHES to it — polling continues the same job, so first paint
+  // never double-fetches (AC2) and the manual Collect-now stays a refresh
+  // control. Without a server stage the mount starts the run as before.
   useEffect(() => {
-    void start();
+    if (snap) attach(snap);
+    else void start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productId]);
 

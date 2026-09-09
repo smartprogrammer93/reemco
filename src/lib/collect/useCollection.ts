@@ -38,12 +38,21 @@ export type CollectionPhase =
   | { kind: "polling"; job: CollectJob }
   | { kind: "terminal"; job: CollectJob };
 
-export function useCollection(productId: string) {
+export function useCollection(productId: string, initialJob?: CollectJob | null) {
   // Same-tab repeat: render the previous completed snapshot immediately, with
-  // a visible cache label that clears once fresh data lands.
+  // a visible cache label that clears once fresh data lands. Without a same-tab
+  // snapshot, the server-started staged snapshot (REEA-248) seeds the first
+  // paint — the first offer is already visible in the served HTML, so the
+  // client only CONTINUES that job by polling, never re-POSTs on mount.
   const [state, setState] = useState<CollectionPhase>(() => {
     const cached = sessionJobs.get(productId);
-    return cached ? { kind: "terminal", job: cached } : { kind: "idle" };
+    if (cached) return { kind: "terminal", job: cached };
+    if (initialJob) {
+      return initialJob.status === "collecting"
+        ? { kind: "polling", job: initialJob }
+        : { kind: "terminal", job: initialJob };
+    }
+    return { kind: "idle" };
   });
   const [cachedNoticeAt, setCachedNoticeAt] = useState<string | null>(() => {
     const cached = sessionJobs.get(productId);
@@ -219,5 +228,25 @@ export function useCollection(productId: string) {
     [poll],
   );
 
-  return { state, cachedNoticeAt, start, retryRetailer };
+  // REEA-248 — continue a job the SERVER render already started: same job id,
+  // poll-only (no second POST on first paint, AC2). A same-tab snapshot keeps
+  // its existing labeled-repeat behavior: background revalidation via POST.
+  const attach = useCallback(
+    (job: CollectJob) => {
+      if (sessionJobs.get(productId)) {
+        void startRef.current?.();
+        return;
+      }
+      restartsRef.current = 0;
+      if (job.status === "complete") sessionJobs.set(productId, job);
+      setState(job.status === "collecting" ? { kind: "polling", job } : { kind: "terminal", job });
+      if (job.status === "collecting" && !busyRef.current) {
+        busyRef.current = true; // dedupe a Collect-now click while the attach polls
+        poll(job.jobId);
+      }
+    },
+    [productId, poll],
+  );
+
+  return { state, cachedNoticeAt, start, retryRetailer, attach };
 }

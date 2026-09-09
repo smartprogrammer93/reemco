@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import ProductResultCard from "@/components/ProductResultCard";
 import CollectionPanel from "@/components/CollectionPanel";
+import { startProductCollectionStaged } from "@/lib/collect/runner";
 import { PRODUCTS, resolveProductIdentity } from "@/lib/feed";
 import {
   buildResultsHref,
@@ -44,6 +45,15 @@ export default async function ProductPage({
   // Catalog identities carry bundled offers — apply the same selection the
   // live path applies before grouping (idempotent on live-resolved products).
   const shown = filterProductsByCountry([product], country)[0];
+  // REEA-248 — start the live per-product collection during the server render
+  // (the detail-page sibling of results-page streaming): the panel's first
+  // retailer offer rides the streamed HTML with no click needed, and the
+  // client only continues the same job by polling afterwards — no second POST
+  // on first paint. The static preview host keeps its old client-initiated
+  // path (no shared job store there; see CollectionPanel AC10 note).
+  const staged = process.env.STATIC_EXPORT
+    ? null
+    : await startProductCollectionStaged(shown);
 
   return (
     <div
@@ -60,6 +70,7 @@ export default async function ProductPage({
         currency={shown.offers[0]?.currency ?? "KWD"}
         country={country}
         locale={locale}
+        firstStage={staged?.firstStage}
       />
       <p style={{ marginTop: "var(--rc-space-4)" }}>
         <Link

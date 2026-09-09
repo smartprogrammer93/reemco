@@ -35,6 +35,12 @@ export interface StartResult {
   servedFromCache: boolean;
 }
 
+/** Snapshot handed to a stage listener: shallow copy so later in-place
+ *  mutation of the running job never rewrites an already-flushed chunk. */
+function stageSnapshot(job: CollectJob): CollectJob {
+  return { ...job, subtasks: [...job.subtasks], offers: [...job.offers] };
+}
+
 /**
  * Entry point for POST /api/products/:id/collect. Returns in well under 300 ms:
  * it only creates/looks up registry entries; the scrape itself is scheduled by
@@ -68,6 +74,57 @@ export async function startCollection(
   return { job, deduped: false, servedFromCache: false };
 }
 
+/** Staged product collection for the /product/... server render (REEA-248). */
+export interface StagedProductCollection {
+  jobId: string;
+  /** Resolves with the snapshot as soon as the FIRST retailer answer lands
+   *  (or the run turns terminal with none) — the detail-page first offer. */
+  firstStage: Promise<CollectJob>;
+  /** Resolves with the terminal snapshot when the whole run settles. */
+  finalStage: Promise<CollectJob>;
+}
+
+/**
+ * REEA-248 — server-side staged collection for the product detail page, the
+ * per-product sibling of the results-page streaming (REEA-178): the run is
+ * started during the server render, and `firstStage` flushes the first landed
+ * retailer offer into the streamed HTML so a shopper sees a real price with no
+ * click and without waiting for hydration. The job rides the shared KV store
+ * exactly like the POST/poll path, so the client can CONTINUE the same job by
+ * polling its id — no second POST on first paint (AC2). Dedupe, the per-
+ * retailer 4 s ceilings and the overall budget all live in runCollection and
+ * apply unchanged. The returned promises never reject: a stage that cannot
+ * land settles on the terminal snapshot instead, so the boundary degrades to
+ * the existing Collect-now fallback rather than blanking the panel.
+ */
+export async function startProductCollectionStaged(
+  product: NormalizedProduct,
+  opts: { fetchImpl?: FetchImpl } = {},
+): Promise<StagedProductCollection> {
+  const { job, deduped } = await startCollection(product);
+  let resolveFirst: ((job: CollectJob) => void) | null = null;
+  const firstStage = new Promise<CollectJob>((resolve) => {
+    resolveFirst = resolve;
+  });
+  const onStage = (snap: CollectJob) => {
+    resolveFirst?.(snap);
+  };
+  // Dedupe hit (REEA-92): an earlier request already owns this in-flight run —
+  // attach its current snapshot and let the client's polling converge; never
+  // fan out a duplicate scrape of the same retailers.
+  const run = deduped
+    ? Promise.resolve(stageSnapshot(job))
+    : runCollection(job, product, { fetchImpl: opts.fetchImpl, onStage }).then(
+        (final) => stageSnapshot(final),
+        () => stageSnapshot(job), // bounded: the runner swallows failures itself
+      );
+  const finalStage = run.then((snap) => {
+    resolveFirst?.(snap); // a dedupe/single-flush run still feeds stage one
+    return snap;
+  });
+  return { jobId: job.jobId, firstStage, finalStage };
+}
+
 /**
  * Execute the fan-out for a job. Fire-and-forget from the POST route via
  * `after()`; mutates the shared job object in place so GET polling sees
@@ -76,7 +133,7 @@ export async function startCollection(
 export async function runCollection(
   job: CollectJob,
   product: NormalizedProduct,
-  opts: { fetchImpl?: FetchImpl; overallBudgetMs?: number; now?: number } = {},
+  opts: { fetchImpl?: FetchImpl; overallBudgetMs?: number; now?: number; onStage?: (job: CollectJob) => void } = {},
 ): Promise<CollectJob> {
   const budgetMs = opts.overallBudgetMs ?? OVERALL_BUDGET_MS;
   const retailers = product.offers.map((o) => ({
@@ -145,8 +202,14 @@ export async function runCollection(
           scrape(retailer, job.subtasks[i]),
           new Promise<null>((resolve) => setTimeout(() => resolve(null), remaining)),
         ]);
-        if (offers === null) return; // watchdog already marked the subtask
+        if (offers === null) {
+          // Watchdog already marked the subtask — publish the state so a
+          // staged page flush never waits on a hung scrape.
+          opts.onStage?.(stageSnapshot(job));
+          return;
+        }
         job.offers.push(...offers);
+        opts.onStage?.(stageSnapshot(job));
       }),
     );
     clearTimeout(budgetTimer);
@@ -185,6 +248,9 @@ export async function runCollection(
   } finally {
     await finishJob(job);
     await touchJob(job);
+    // Final flush: guarantees a staged consumer always gets a terminal snapshot
+    // even when every retailer failed (empty cascade must still render).
+    opts.onStage?.(stageSnapshot(job));
   }
   return job;
 }
