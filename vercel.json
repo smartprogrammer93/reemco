@@ -7,8 +7,5 @@
       "path": "/api/health",
       "schedule": "17 8 * * *"
     }
-  ],
-  "functions": {
-    "src/app/**/route.ts": { "minInstances": 1 }
-  }
+  ]
 }

@@ -9,12 +9,15 @@ name: Keep production alias warm
 # also keeps functioning as the funnel liveness check (Observability-before-Launch).
 #
 # Mechanism split (issue decision rule: "minimum instances if the plan
-# supports it, otherwise scheduled pre-warm"): `vercel.json` carries a
-# minInstances floor on the route-handler functions as the quiet-hours
-# backstop; this workflow covers the rest with curl-only pings that also act
-# as the funnel liveness check the Vercel cron already carries. Blast radius
-# is one GET on a read-only route; worst failure mode is a cold first hit,
-# exactly the pre-existing status quo.
+# supports it, otherwise scheduled pre-warm"): the minInstances floor was
+# tried first (vercel.json functions block). It REGRESSED the deploy path on
+# this host - deploys with the key failed the platform validator (@06:11Z and
+# @06:18Z runs, red at the Deploy step) while the identical app code without
+# the key was green (@05:35Z), matching the REEA-322 precedent that Vercel
+# validates this file strictly (additionalProperties:false). The plan-supported
+# branch is unavailable here, so the scheduled/push pre-warm below is the
+# operative mechanism. Blast radius: one GET on a read-only route; worst
+# failure mode is a cold first hit, exactly the pre-existing status quo.
 #
 # Cadence (measured 2026-09-09, probe ladder at ~04:20-04:41Z): the fast answer
 # window after a hit is ~5 min — arrivals 4-6 min after the last tick answered
