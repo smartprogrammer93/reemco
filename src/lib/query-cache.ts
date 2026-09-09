@@ -177,6 +177,17 @@ export const defaultQueryCache = createQueryCache();
  * the identity: the country/stock selections filter the already-loaded
  * payload at render time (ResultsClient), so one live answer per query
  * serves every shopper. Market preferences must not fork the memo.
+ *
+ * Cache-busting path (QA REEA-411, documented per the handoff options): extra
+ * request params — `cb=…` busters, sort/toggle flags — intentionally do NOT
+ * join the identity. They only filter the already-loaded answer at render
+ * time, and unique-per-request busters would fork the memo and re-run the
+ * full fan-out on every hit (hostile to the retailers' endpoints). The bust
+ * lever is the explicit Refresh action: the one-shot `rc_refresh` cookie
+ * (REEA-291 AC4) re-collects live even inside the fresh window, so the
+ * freshness stamp moves on demand. Otherwise the entry ages honestly — fresh
+ * window, then stale-while-revalidate, then ceiling expiry. Curl repro for a
+ * cold render of one query: `curl -b 'rc_refresh=1' <same-url>`.
  */
 export function queryCacheKey(query: string, country?: string | null): string {
   const folded = query.trim().toLowerCase();
