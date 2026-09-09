@@ -31,7 +31,7 @@
  * Search endpoints only — small page sizes, one call per retailer per run.
  */
 
-import { matchesQueryToken, queryMatchTokens } from "@/lib/relevance";
+import { arabicBrandIntent, matchesQueryToken, queryMatchTokens } from "@/lib/relevance";
 import type { FetchImpl } from "@/lib/collect/scraper";
 import { getSharedKv } from "@/lib/collect/kv";
 
@@ -376,6 +376,29 @@ export function brandAwareCoverage(hitTitle: string, query: string): number {
   let matched = 0;
   for (const t of wanted) if (matchesQueryToken(hitTokens, t)) matched += 1;
   return matched / wanted.length;
+}
+
+/**
+ * REEA-399 — the coverage gate every hit parser applies, with the Arabic
+ * generic lane. Token coverage scores Arabic-script query tokens against
+ * retailer titles; the REEA-195 alias bridge keeps BRANDED Arabic queries
+ * ("سماعة أبل") discriminating on the Latin brand form, but a generic Arabic
+ * query ("أرز بسمتي", "لابتوب ديل" on a storefront whose titles are Latin-only)
+ * scores exactly 0 on every record whatever the storefront answered — the
+ * whole column lands empty with a clean HTTP 200, the silent-zero shape QA
+ * measured on Sultan Center / Quadra Stores / Yousifi. When THAT is the case —
+ * zero coverage, Arabic-script query, no brand token to discriminate with —
+ * trust the storefront's own result order instead of blanking the column: the
+ * retailer's search view already ranked these records for this Arabic query.
+ * Same fallback shape parseAmazonEgSearch documents for amazon.eg's mixed-
+ * script titles. Latin-script queries keep the exact scoring path unchanged.
+ */
+export function queryGatePasses(hitTitle: string, query: string, minScore: number): boolean {
+  const score = brandAwareCoverage(hitTitle, query);
+  if (score >= minScore) return true;
+  if (score !== 0) return false;
+  if (!/[؀-ۿ]/.test(query)) return false;
+  return arabicBrandIntent(query) === null;
 }
 
 /** Parse an amazon.eg `/s?k=` results page into best-matching offer. */
