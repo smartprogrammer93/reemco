@@ -261,10 +261,10 @@ jobs:
           SCOPE_ARGS=""
           if [ -n "${VERCEL_TEAM_ID:-}" ]; then SCOPE_ARGS="--scope $VERCEL_TEAM_ID"; fi
           timeout --signal=INT 3m npx -y vercel@59.11.7 git connect \
-            --cwd "$GITHUB_WORKSPACE" --token "$VERCEL_TOKEN" $SCOPE_ARGS \
+            --cwd "$GITHUB_WORKSPACE" $SCOPE_ARGS \
             2>&1 | tail -5 || echo "git connect returned non-zero (already-connected is fine)"
           timeout --signal=INT 2m npx -y vercel@59.11.7 git inspect \
-            --cwd "$GITHUB_WORKSPACE" --token "$VERCEL_TOKEN" $SCOPE_ARGS \
+            --cwd "$GITHUB_WORKSPACE" $SCOPE_ARGS \
             2>&1 | tail -6 || echo "git inspect unavailable"
 
       - name: Deploy to Vercel production (reemco.vercel.app)
