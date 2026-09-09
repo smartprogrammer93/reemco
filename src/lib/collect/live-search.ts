@@ -1037,6 +1037,15 @@ const COLLECTORS: RetailerCollector[] = [
       const jsonWindow = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
       const asItems = (parsed: unknown): Record<string, unknown>[] =>
         Array.isArray(parsed) ? (parsed as Record<string, unknown>[]) : [];
+      // Whether the JSON endpoint itself answered at least once (array
+      // parsed, even empty). An answered-but-empty search is a valid live
+      // answer — the store simply carries nothing for the phrase — and the
+      // REEA-357 per-word re-search is the designed top-up; the HTML archive
+      // hop then only runs when the JSON endpoint itself never answered.
+      // That keeps the CF-challenge-prone archive hop off the common path
+      // (REEA-369 QA rerun: the recorded 403 notes came through it while the
+      // JSON endpoint was answering fine).
+      let answered = false;
       const apiItems = async (q: string): Promise<Record<string, unknown>[]> => {
         try {
           const cached = await fetchImpl(apiUrl(q), {
@@ -1048,28 +1057,48 @@ const COLLECTORS: RetailerCollector[] = [
           // REEA-369: a replayed cache entry only counts when it actually
           // answered; a stale non-ok entry must not short-circuit the fresh
           // bare attempt below.
-          if (cached.ok) return asItems(JSON.parse(await cached.text()));
+          if (cached.ok) {
+            answered = true;
+            return asItems(JSON.parse(await cached.text()));
+          }
         } catch {
           // Cache-first miss (or a squeezed window) — the uncached JSON attempt
           // inside the same window answers with the same payload shape.
         }
         try {
-          // REEA-369: the bare accept-only identity is what pckuwait answers
-          // fastest and most reliably (verified live from a cold datacenter
-          // hop), so it rides the uncached attempt directly; the handshake
-          // with its two shaped identities stays behind it as before.
+          // REEA-369 (QA-rerun iteration): fresh attempts lead with the SAME
+          // verified-crawler-led handshake that keeps Next Store healthy on
+          // the deployed build. Measured 2026-09-09 from a datacenter egress,
+          // a bare accept-only request is the fragile shape on CF-fronted
+          // zones (nextstore answers it with the CF interstitial while the
+          // crawler identity gets the full page), so the shaped handshake
+          // runs first and the bare attempt only follows as the cheap last
+          // try. The accept-json header rides through the handshake as a
+          // hop-level extra without disturbing the rotating identity.
+          const jsonRes = await fetchThroughChallenge(
+            fetchImpl,
+            apiUrl(q),
+            { headers: { accept: "application/json" } },
+            jsonWindow,
+          );
+          if (jsonRes.ok) {
+            answered = true;
+            return asItems(JSON.parse(await jsonRes.text()));
+          }
+        } catch {
+          // Handshake spent the window — the bare attempt below still gets
+          // whatever remains of it.
+        }
+        try {
           const bare = await fetchImpl(apiUrl(q), {
             headers: { accept: "application/json" },
             cache: "no-store",
             signal: jsonWindow,
           } as RequestInit);
-          if (bare.ok) return asItems(JSON.parse(await bare.text()));
-        } catch {
-          // Window spent — the handshake attempt follows.
-        }
-        try {
-          const jsonRes = await fetchThroughChallenge(fetchImpl, apiUrl(q), {}, jsonWindow);
-          if (jsonRes.ok) return asItems(JSON.parse(await jsonRes.text()));
+          if (bare.ok) {
+            answered = true;
+            return asItems(JSON.parse(await bare.text()));
+          }
         } catch {
           // Malformed JSON or the window spent — the archive page below
           // answers with the same data shape.
@@ -1097,7 +1126,7 @@ const COLLECTORS: RetailerCollector[] = [
           .slice(0, 3);
         for (const word of words) mergeItems(await apiItems(word));
       }
-      if (items.length > 0) return pcKuwaitApiHits(items, query);
+      if (answered) return pcKuwaitApiHits(items, query);
       const res = await fetchThroughChallenge(
         fetchImpl,
         `https://pckuwait.com/?s=${encodeURIComponent(query)}&post_type=product`,
