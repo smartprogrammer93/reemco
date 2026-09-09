@@ -18,22 +18,29 @@ name: Keep production alias warm
 # branch. Blast radius is unchanged either way: one GET on a read-only health
 # route; worst failure mode is a cold first hit, exactly today's status quo.
 #
-# Cadence: :07 and :37 hourly — two anchors per hour, off the :00 spike, max
-# gap ~30 min. REEA-71 showed single cron lines silently skip ticks; the second
-# anchor self-heals a missed one within the hour, and the smoke-scheduled
-# anchors (:17/:47 every 3h) still ping the site underneath this one. Each tick
-# is curl-only (no checkout, no node install): ~10s typical runner time.
-# Cost math (REEA-314 budget): 48 ticks/day x ~10s = ~8 min/day ~= 250
-# min/month typical, worst case with two cold-boot attempts per tick ~700
-# min/month ceiling, inside the ~2,000 min/month Hobby Actions allowance
-# alongside smoke-scheduled (~600) and per-push CI. concurrency cancels queued
-# overlaps so a burst cannot stack billable runs. Rollback: delete the two
-# `schedule:` cron lines (or the workflow file) and push — the alias keeps
-# serving from the smoke-check anchors, no other behavior depends on this file.
+# Cadence (measured 2026-09-09, probe ladder at ~04:20-04:41Z): the fast answer
+# window after a hit is ~5 min — arrivals 4-6 min after the last tick answered
+# ~2s once and ~30s once, so the pre-warm interval must stay at or under ~5
+# min to guarantee the <=5s bar at arrival. Step cron "2-59/5 * * * *" fires
+# every 5 min, off the :00 spike (REAAs 71/337 anchor hygiene). Scheduled ticks
+# skip occasionally in this environment (REEA-71), so a missed tick self-heals
+# on the next one at most 10 min later; `push` triggers the same ping because
+# push runs proved the reliable trigger here (uptime.yml pairs), and deploy
+# pushes land right when a fresh artifact most wants warming. Each tick is
+# curl-only (no checkout, no node install): ~8s typical runner time.
+# Cost math (REEA-314 budget): 288 ticks/day x ~8s = ~38 min/day ~= 1,150
+# min/month typical worst-case ceiling; with smoke-scheduled (~600) and the
+# push-triggered uptime/CI pairs this stays inside the ~2,000 min/month Hobby
+# Actions allowance. concurrency cancels queued overlaps so a push burst cannot
+# stack billable runs. Rollback: delete the `schedule:` cron line (or the whole
+# file) and push — the alias keeps serving from smoke-check + push anchors, no
+# other behavior depends on this file.
 
 on:
   schedule:
-    - cron: "7,37 * * * *" # two anchors/hr, max gap ~30min; missed tick self-heals on the next anchor
+    - cron: "2-59/5 * * * *" # every 5min off-peak; measured ~5min warm window, missed tick self-heals on next step
+  push:
+    branches: [main] # deploy pushes warm the fresh artifact immediately; reliable trigger in this environment
   workflow_dispatch:
 
 permissions:
