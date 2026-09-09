@@ -98,6 +98,33 @@ const ARABIC_BRAND_ALIASES: ReadonlyMap<string, string> = new Map([
   ["الصافي", "Al Safi"],
 ]);
 
+/** Curated Arabic category words and the Latin spellings the storefronts
+ *  actually carry (REEA-408). Kuwait zones answer Arabic-category queries
+ *  with English-titled rows — measured live 2026-09-09: Sultan Center
+ *  answers `أرز بسمتي` with priced rows titled "Country Xl Organic Basmati
+ *  Rice" &co — and a cross-script substring check scores every one of them
+ *  0, which is the silent-zero shape the fixed-query matrix kept hitting.
+ *  The REEA-399 generic lane keeps zero-score answers alive only while the
+ *  query carries no brand token, so brand+category queries like
+ *  `لابتوب ديل` still lost their real matches: a "Latitude 5440 Laptop"
+ *  row answers neither the Latin form of ديل nor a bare Arabic token.
+ *  This map gives the common category words their curated Latin form, so
+ *  the coverage gate scores the row instead of dropping it. Same
+ *  convention as ARABIC_BRAND_ALIASES: keys are compared after
+ *  normalizeArabicText(); unknown tokens keep the plain substring path. */
+const ARABIC_QUERY_ALIASES: ReadonlyMap<string, readonly string[]> = new Map([
+  ["ارز", ["rice"]],
+  ["بسمتي", ["basmati"]],
+  ["لابتوب", ["laptop", "notebook"]],
+  ["جوال", ["smartphone", "mobile phone"]],
+  ["سماعة", ["headphone", "headset", "earbud"]],
+  ["تلفاز", ["television", "smart tv"]],
+  ["ثلاجة", ["fridge", "refrigerator"]],
+  ["غسالة", ["washing machine", "washer"]],
+  ["مكيف", ["air conditioner"]],
+  ["شاشة", ["monitor", "screen"]],
+]);
+
 /** Fold the alef family + case so alias keys and storefront spellings meet in
  *  one form ("أبل"/"ابل"/"آبل" all normalize to the same shape). REEA-213:
  *  tashkeel and tatweel are stripped first so a vowelled spelling ("غسّالة")
@@ -133,8 +160,13 @@ export function matchesQueryToken(titleLower: string, token: string): boolean {
   const title = normalizeArabicText(titleLower);
   const folded = normalizeArabicText(token);
   if (folded !== "" && title.includes(folded)) return true;
+  // Brand aliases keep precedence; the curated category forms below only
+  // speak for tokens no brand alias claims (REEA-408).
   const entry = ARABIC_BRAND_ALIASES.get(folded);
-  return entry !== undefined && title.includes(entry.toLowerCase());
+  if (entry !== undefined) return title.includes(entry.toLowerCase());
+  const forms = ARABIC_QUERY_ALIASES.get(folded);
+  if (forms !== undefined) return forms.some((form) => title.includes(form));
+  return false;
 }
 
 /** Query-side brand intent for Arabic-script queries: when the query carries
