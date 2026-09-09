@@ -1061,6 +1061,29 @@ describe("collectLiveResults", () => {
     expect(offers.length).toBeGreaterThanOrEqual(1);
     expect(offers[0]).toMatchObject({ price: 45900, currency: "EGP" });
   });
+
+  it("pins an explicit empty accept-encoding on the amazon.eg hop (REEA-397)", async () => {
+    resetDiscoveryCache();
+    const cardsHtml =
+      'data-component-type="s-search-result" <h2 aria-label="LG gram 16 Notebook"></h2>' +
+      '<span class="a-offscreen">EGP 45,900</span><a href="/dp/B1LGGRM">z</a>';
+    let amazonHeaders: Headers | undefined;
+    const fetchImpl = async (url: string, init?: RequestInit): Promise<Response> => {
+      if (url.includes("amazon.eg")) {
+        amazonHeaders = new Headers(init?.headers);
+        return new Response(cardsHtml, { headers: { "content-type": "text/html" } });
+      }
+      return jsonResponse({});
+    };
+
+    await collectLiveResults("lg gram", { fetchImpl });
+
+    // The header must be PRESENT and empty: absent, the Node runtime injects
+    // `br, gzip, deflate`, and amazon.eg's edge answers that shape with
+    // instant HTTP 503s on most queries from the deployed runtime.
+    expect(amazonHeaders?.has("accept-encoding")).toBe(true);
+    expect(amazonHeaders?.get("accept-encoding")).toBe("");
+  });
 });
 
 describe("collectLiveResults depth pass (REEA-149)", () => {

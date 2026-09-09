@@ -992,6 +992,17 @@ const COLLECTORS: RetailerCollector[] = [
                 accept: "text/html,application/xhtml+xml",
                 "accept-language": "en",
                 "user-agent": "Mozilla/5.0",
+                // REEA-397 — pin accept-encoding to an EMPTY value. When the
+                // header is absent the Node runtime injects
+                // `accept-encoding: br, gzip, deflate`, and amazon.eg's edge
+                // answers that combined shape with instant HTTP 503s often
+                // enough to blank the chain on most queries (measured
+                // 2026-09-09 on the deployed path: 6-7/20 fixed queries
+                // answered; the same request minus the injected value
+                // answered 12/12). An explicit empty header survives the
+                // injection and matches the served-happy shape; the two
+                // bounded attempts + backoff stay as blip insurance.
+                "accept-encoding": "",
               },
             },
             AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
