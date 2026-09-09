@@ -106,6 +106,16 @@ function SkeletonCard() {
   );
 }
 
+/* Heading slot at the h1's own display height (same clamp math as
+   --rc-text-display × line-height 1.05) so the settled heading lands
+   without pushing anything below it. Shared by the initial fallback and
+   the REEA-437 provisional-zero state. */
+function HeadingGhost() {
+  return (
+    <div className="skeleton-block" style={{ width: "45%", height: "clamp(36px, 4.8vw, 55px)" }} aria-hidden />
+  );
+}
+
 export function LoadingFallback({ locale }: { locale?: Locale }) {
   const t = getStrings(locale ?? clientLocale());
   return (
@@ -116,10 +126,7 @@ export function LoadingFallback({ locale }: { locale?: Locale }) {
       <p className="meta-stamp" style={{ color: "var(--rc-muted)" }}>
         {t.checkingStores}
       </p>
-      {/* Heading slot at the h1's own display height (same clamp math as
-          --rc-text-display × line-height 1.05) so the settled heading lands
-          without pushing anything below it. */}
-      <div className="skeleton-block" style={{ width: "45%", height: "clamp(36px, 4.8vw, 55px)" }} aria-hidden />
+      <HeadingGhost />
       <SkeletonCard />
       <SkeletonCard />
       <SkeletonCard />
@@ -144,11 +151,16 @@ function EmptyState({
   suggestions,
   country,
   locale,
+  tries,
 }: {
   query: string;
   suggestions: NormalizedProduct[];
   country: CountryCode | null;
   locale?: Locale;
+  /** REEA-437 AC-2 — the query forms the live run issued before declaring
+   *  empty (whole query, then the trimmed-token widening), named on the card
+   *  so a zero answer states what was tried instead of just saying "none". */
+  tries?: string[];
 }) {
   const t = getStrings(locale ?? clientLocale());
   const pills = suggestions.slice(0, 3).map((p) => p.title);
@@ -166,6 +178,11 @@ function EmptyState({
       <p className="mt-2" style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
         {t.emptyBody}
       </p>
+      {tries && tries.length > 0 ? (
+        <p className="mt-2" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
+          {fill(t.triedForms, { tries: tries.join('”, “') })}
+        </p>
+      ) : null}
       <div className="mt-4 flex flex-wrap gap-2">
         {pills.map((q) => (
           <Link key={q} href={buildResultsHref(q, 1, country)} className="query-pill query-pill-on-light">
@@ -511,9 +528,17 @@ function CountHeading({ count, query, locale }: { count: number; query: string; 
    without it the late heading pushes the footer down between first paint and
    the settled grid. This boundary resolves with the FIRST staged flush (the
    same promise StageAppend index 0 consumes), so the heading rides the first
-   streamed chunk and only its count deepens as slower retailers land. */
+   streamed chunk and only its count deepens as slower retailers land.
+
+   REEA-437 AC-3 — while the count-so-far is still ZERO and more answers may
+   land (later stages pending, or this snapshot is a finalized-at-budget
+   provisional one with hops converging behind the response), the heading
+   slot keeps its skeleton instead of flashing "0 results — No matches"
+   before the cards arrive. A single settled stage answering zero is the
+   honest final answer and renders straight away. */
 function ResultsHeading(props: {
   stage: Promise<LiveSearchResult>;
+  stagesCount: number;
   query: string;
   page: number;
   country: CountryCode | null;
@@ -522,6 +547,9 @@ function ResultsHeading(props: {
 }) {
   const snap = use(props.stage);
   const visible = stagedView(snap, props.page, props.country, props.showOutOfStock);
+  if (visible.length === 0 && (props.stagesCount > 1 || snap.settled === false)) {
+    return <HeadingGhost />;
+  }
   return <CountHeading count={visible.length} query={props.query} locale={props.locale} />;
 }
 
@@ -565,6 +593,10 @@ function StagedResults(props: {
   const { stages, query, page, country, showOutOfStock, onSelectCountry, onToggleStock, onRefresh, locale } = props;
   const finalPromise = stages[stages.length - 1];
   const [finalSnap, setFinalSnap] = useState<LiveSearchResult | null>(null);
+  // REEA-437 AC-3 — one-shot flag: the follow-up feed has answered (richer
+  // snapshot or "nothing pending"), so a zero at that point is the honest
+  // settled answer and the heading may show its real count.
+  const [feedDone, setFeedDone] = useState(false);
 
   // Converge onto the full-ranked snapshot once every stage has settled.
   useEffect(() => {
@@ -608,7 +640,8 @@ function StagedResults(props: {
       .catch(() => {
         /* feed unavailable — the finalized document already carries every
            offer that landed inside the completion budget */
-      });
+      })
+      .finally(() => setFeedDone(true));
     return () => controller.abort();
   }, [query]);
 
@@ -640,13 +673,28 @@ function StagedResults(props: {
     // REEA-332 item 2: the count heading rides BOTH branches, so the zero case
     // keeps its heading + hint line exactly where the streamed shell put them —
     // only the body below changes.
+    // REEA-437 AC-2/AC-3 — a zero that a finalized-at-budget snapshot states is
+    // provisional: the heading keeps its skeleton (and the coverage line keeps
+    // naming the pending retailers) until the follow-up feed has answered; the
+    // empty state then appears only after the widened retry also came back
+    // zero, and names what was tried.
+    const provisionalZero = products.length === 0 && finalSnap.settled === false && !feedDone;
+    if (provisionalZero) {
+      return (
+        <ResultsErrorBoundary locale={locale}>
+          <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
+          <HeadingGhost />
+          <CoverageLine notes={finalSnap.notes} locale={locale} />
+        </ResultsErrorBoundary>
+      );
+    }
     return (
       <ResultsErrorBoundary locale={locale}>
         <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
         <CountHeading count={products.length} query={query} locale={locale} />
         {products.length === 0 && query.length > 0 ? (
           <>
-            <EmptyState query={query} suggestions={stagedSuggestions(finalSnap, country, showOutOfStock)} country={country} locale={locale} />
+            <EmptyState query={query} suggestions={stagedSuggestions(finalSnap, country, showOutOfStock)} country={country} locale={locale} tries={finalSnap.attemptedQueries} />
             <CoverageLine notes={finalSnap.notes} locale={locale} />
           </>
         ) : (
@@ -680,6 +728,7 @@ function StagedResults(props: {
       <Suspense fallback={null}>
         <ResultsHeading
           stage={stages[0]}
+          stagesCount={stages.length}
           query={query}
           page={page}
           country={country}

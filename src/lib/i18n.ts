@@ -125,6 +125,8 @@ const en = {
     "We check live stores — spelling matters. Try a suggested search below; your query stays in the box.",
   // REEA-332: the one hint line under the count heading when the answer is empty.
   emptyHint: "No matches — try a shorter phrase.",
+  // REEA-437 AC-2: the empty state names the query forms the live run tried.
+  triedForms: "We searched “{tries}”.",
   resultsOne: "result",
   resultsMany: "results",
   resultsForWord: "for",
@@ -259,6 +261,8 @@ const ar: typeof en = {
   emptyBody:
     "نتفقد المتاجر مباشرة — دقة الكتابة مهمة. جرّب إحدى عمليات البحث المقترحة أدناه، وسيبقى نص بحثك في الحقل.",
   emptyHint: "لا توجد نتائج — جرّب عبارة أقصر.",
+  // REEA-437 AC-2: empty state lists the search forms tried live.
+  triedForms: "بحثنا في: {tries}.",
   resultsOne: "نتيجة",
   resultsMany: "نتائج",
   resultsForWord: "عن",

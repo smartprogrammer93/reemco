@@ -682,3 +682,80 @@ describe("empty-state hint line (REEA-332 item 2)", () => {
     expect(document.body.textContent).not.toContain(HINT);
   });
 });
+
+describe("cold-start zero handling (REEA-437)", () => {
+  const FINALIZED_EMPTY: LiveSearchResult = {
+    products: [],
+    notes: [
+      { merchant: "Xcite", hits: 0, error: "no answer within the 4500 ms completion budget" },
+    ],
+    settled: false,
+  };
+
+  it("keeps the heading skeleton (no zero-count flash) while the finalized page still deepens", async () => {
+    searchParams.set("q", "wh-1000xm6");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    let resolveFeed: (v: unknown) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveFeed = resolve;
+          }),
+      ),
+    );
+    await act(async () => {
+      render(
+        <ResultsClient
+          query="wh-1000xm6"
+          page={1}
+          country={null}
+          stages={[Promise.resolve(FINALIZED_EMPTY), Promise.resolve(FINALIZED_EMPTY)]}
+        />,
+      );
+    });
+    // Provisional zero: skeleton heading instead of a flashing "0 results",
+    // while the coverage line already names the pending retailer honestly.
+    expect(document.querySelector("h1")).toBeNull();
+    expect(document.body.textContent).toContain("did not respond");
+    // The follow-up feed lands the converged live answer — heading + cards.
+    const late: LiveSearchResult = { products: SAMPLE_PRODUCTS, notes: [], suggestions: SAMPLE_PRODUCTS };
+    await act(async () => {
+      resolveFeed({ ok: true, json: async () => late });
+    });
+    const heading = document.querySelector("h1");
+    expect(heading?.textContent).toContain("wh-1000xm6");
+    expect(document.body.textContent).toContain("Sony WH-1000XM6");
+  });
+
+  it("names the query forms the widened retry tried once the answer is honestly zero", async () => {
+    searchParams.set("q", "lg gram mini");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, json: async () => null })),
+    );
+    const emptySnap: LiveSearchResult = {
+      products: [],
+      notes: [],
+      suggestions: [],
+      attemptedQueries: ["lg gram mini", "lg gram"],
+    };
+    await act(async () => {
+      render(
+        <ResultsClient
+          query="lg gram mini"
+          page={1}
+          country={null}
+          stages={[Promise.resolve(emptySnap), Promise.resolve(emptySnap)]}
+        />,
+      );
+    });
+    // Empty state after BOTH forms answered zero, naming what was tried.
+    expect(document.body.textContent).toContain("No matches for “lg gram mini” yet");
+    expect(document.body.textContent).toContain("We searched “lg gram mini”, “lg gram”.");
+  });
+});
