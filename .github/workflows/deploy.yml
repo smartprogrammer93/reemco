@@ -105,8 +105,11 @@ jobs:
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
-          KV_URL_IN: "${{ inputs.KV_URL || secrets.KV_REST_URL }}"
-          KV_TOK_IN: "${{ inputs.KV_TOKEN || secrets.KV_REST_TOKEN }}"
+          # REEA-360: repo secrets take precedence over dispatch-time plaintext
+          # inputs at both KV sites, so a stored KV pair always wins over a
+          # value pasted into the workflow_dispatch form.
+          KV_URL_IN: "${{ secrets.KV_REST_URL || inputs.KV_URL }}"
+          KV_TOK_IN: "${{ secrets.KV_REST_TOKEN || inputs.KV_TOKEN }}"
         run: |
           set -u
           if [ -z "${VERCEL_TOKEN:-}" ]; then
@@ -147,8 +150,9 @@ jobs:
           }
 
           # CEO handoff path (comment ff6ae9f3): when provisioned store creds
-          # arrive via workflow_dispatch inputs KV_URL/KV_TOKEN or repo secrets
-          # KV_REST_URL/KV_REST_TOKEN, persist that pair and verify roundtrip.
+          # arrive - repo secrets KV_REST_URL/KV_REST_TOKEN first, workflow_
+          # dispatch inputs KV_URL/KV_TOKEN only as fallback - persist that
+          # pair and verify roundtrip.
           if [ -n "${KV_URL_IN:-}" ] && [ -n "${KV_TOK_IN:-}" ]; then
             echo "attach: applying provided store credentials (url=${#KV_URL_IN} chars)"
             WIN_URL="$KV_URL_IN"; WIN_TOK="$KV_TOK_IN"

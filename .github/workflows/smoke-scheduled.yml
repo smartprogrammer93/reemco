@@ -32,7 +32,15 @@ on:
     - cron: "47 */3 * * *" # second chance when the primary tick is skipped
   workflow_dispatch:
 
-
+# REEA-360: explicit least-privilege grants (the pattern every other workflow
+# here already follows). Specifying workflow-level permissions revokes the
+# defaults, so list exactly what the job uses: checkout/npm ci read the repo,
+# the alert step opens the deduped smoke-alert issue, the parity self-heal
+# POSTs a deploy dispatch.
+permissions:
+  contents: read # checkout@v4 + npm ci
+  issues: write # deduped smoke-alert issue + comment
+  actions: write # parity self-heal dispatch of Deploy site
 
 concurrency:
   group: smoke-scheduled
