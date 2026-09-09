@@ -842,30 +842,33 @@ const COLLECTORS: RetailerCollector[] = [
       // even inside the force-dynamic results segment (REEA-272 option 2 —
       // cache that persists across invocations), so one answered hop keeps
       // the adapter serving hits while later cold instances re-run behind
-      // the revalidate window. Only a cache miss pays the hop again.
+      // the revalidate window. Both JSON attempts share ONE hop window, so
+      // the chain costs at most what the other CF-fronted hops pay; only a
+      // cache miss with a squeezed window falls to the archive page below.
+      const jsonWindow = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS);
       try {
         const cached = await fetchImpl(apiUrl, {
           headers: { accept: "application/json" },
           cache: "force-cache",
           next: { revalidate: 300 },
-          signal: AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
+          signal: jsonWindow,
         } as RequestInit);
         if (cached.ok) return pcKuwaitApiHits(JSON.parse(await cached.text()), query);
       } catch {
-        // Cache-first miss (or a squeezed window) — the uncached chain below
-        // answers with the same payload shape.
+        // Cache-first miss (or a squeezed window) — the uncached JSON attempt
+        // inside the same window answers with the same payload shape.
       }
       try {
         const jsonRes = await fetchThroughChallenge(
           fetchImpl,
           apiUrl,
           {},
-          AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
+          jsonWindow,
         );
         if (jsonRes.ok) return pcKuwaitApiHits(JSON.parse(await jsonRes.text()), query);
       } catch {
-        // Malformed JSON or a squeezed attempt window — the archive page
-        // below answers with the same data shape.
+        // Malformed JSON or the window spent — the archive page below
+        // answers with the same data shape.
       }
       const res = await fetchThroughChallenge(
         fetchImpl,
