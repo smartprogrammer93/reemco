@@ -586,7 +586,137 @@ export function luluHits(html: string, query: string): SearchHit[] {
   return out;
 }
 
+/**
+ * REEA-270 — shared Shopify mapping for the new Kuwait storefronts. Every one
+ * of them answers the documented suggest.json hop (the same filter-aware
+ * contract blink/quadra ride — products.json ignores its title filter there,
+ * answering a generic newest-products page), so normalizeShopifyProducts
+ * folds either envelope into the classic variant shape and the guard chain
+ * mirrors blinkHits: title+handle+finite price up front, then the shared
+ * brandAwareCoverage gate. compare_at_price, when above the selling price,
+ * becomes wasPrice (the quadra convention).
+ */
+function shopifyStoreHits(
+  payload: unknown,
+  query: string,
+  merchant: string,
+  origin: string,
+): SearchHit[] {
+  const products = normalizeShopifyProducts(payload);
+  const out: SearchHit[] = [];
+  for (const p of products) {
+    const variant = p.variants?.[0];
+    const price = variant?.price != null ? Number(variant.price) : NaN;
+    if (!p.title || !p.handle || !Number.isFinite(price) || price <= 0) continue;
+    if (brandAwareCoverage(p.title, query) < MIN_SCORE) continue;
+    const brand = pickBrand(p as unknown as Record<string, unknown>);
+    const img = pickImage(p);
+    const compare = variant?.compare_at_price != null ? Number(variant.compare_at_price) : NaN;
+    out.push({
+      title: p.title,
+      merchant,
+      country: "KW",
+      ...(brand ? { brand } : {}),
+      price,
+      currency: "KWD",
+      url: `${origin}/products/${p.handle}`,
+      inStock: variant?.available ?? true,
+      ...(Number.isFinite(compare) && compare > price ? { wasPrice: compare } : {}),
+      ...(img ? { image: img } : {}),
+    });
+  }
+  return out;
+}
+
+/** Switch Kuwait (switch.com.kw): Shopify hop, suggest + newest-page fold. */
+export function switchHits(payload: unknown, query: string): SearchHit[] {
+  return shopifyStoreHits(payload, query, "Switch", "https://switch.com.kw");
+}
+
+/** Wibi (wibi.com.kw): Shopify hop, suggest envelope. */
+export function wibiHits(payload: unknown, query: string): SearchHit[] {
+  return shopifyStoreHits(payload, query, "Wibi", "https://wibi.com.kw");
+}
+
+/** astore Kuwait (astorekw.com): Shopify hop, suggest + newest-page fold. */
+export function astoreHits(payload: unknown, query: string): SearchHit[] {
+  return shopifyStoreHits(payload, query, "Astore", "https://astorekw.com");
+}
+
+/** Zayoom (zayoom.com): Shopify hop, suggest envelope. */
+export function zayoomHits(payload: unknown, query: string): SearchHit[] {
+  return shopifyStoreHits(payload, query, "Zayoom", "https://zayoom.com");
+}
+
+/** Yousifi Kuwait (www.yousifi.com.kw): WooCommerce archive cards. */
+export function yousifiHits(html: string, query: string): SearchHit[] {
+  const out: SearchHit[] = [];
+  for (const card of scanWooCards(html)) {
+    if (brandAwareCoverage(card.title, query) < MIN_SCORE) continue;
+    out.push({
+      title: card.title,
+      merchant: "Yousifi",
+      country: "KW",
+      price: card.price,
+      currency: card.currency,
+      url: card.url,
+      inStock: card.inStock,
+      ...(card.wasPrice != null ? { wasPrice: card.wasPrice } : {}),
+    });
+  }
+  return out;
+}
+
 /* ---- Fetch orchestration, one collector per documented retailer endpoint. ---- */
+
+/**
+ * REEA-270 — the Shopify hop shared by the four Shopify Kuwait stores
+ * (Switch, Wibi, astore, Zayoom). suggest.json is the filter-aware hop
+ * (blink/quadra's documented contract); products.json is the newest-page
+ * top-up — its title filter is ignored server-side, so both envelopes score
+ * client-side through the parser's coverage gate and dedupe by product URL.
+ * Measured from cold datacenter egress: suggest answers richer lists but runs
+ * a tight per-IP throttle (occasional HTTP 429), products.json answers
+ * reliably — trying both in ONE TIMEOUT×2 window keeps the union the
+ * six-query QA measurement showed while one throttled hop never blanks the
+ * adapter. Only a fully empty run with every hop failing reports the error.
+ */
+async function collectShopifyKuwait(
+  origin: string,
+  query: string,
+  fetchImpl: FetchImpl,
+  parse: (payload: unknown, query: string) => SearchHit[],
+): Promise<SearchHit[]> {
+  const signal = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
+  const hits: SearchHit[] = [];
+  const seen = new Set<string>();
+  let lastError: unknown;
+  let failed = 0;
+  const urls = [
+    `${origin}/search/suggest.json?q=${encodeURIComponent(query)}&resources[type]=product&resources[limit]=${LIVE_SEARCH_HITS_PER_PAGE}`,
+    `${origin}/products.json?limit=${LIVE_SEARCH_HITS_PER_PAGE}`,
+  ];
+  for (const url of urls) {
+    try {
+      const res = await fetchChecked(
+        fetchImpl,
+        url,
+        { headers: { accept: "application/json" } },
+        signal,
+      );
+      for (const h of parse(await res.json(), query)) {
+        if (seen.has(h.url)) continue;
+        seen.add(h.url);
+        hits.push(h);
+      }
+    } catch (err) {
+      failed++;
+      lastError = err;
+    }
+  }
+  if (hits.length === 0 && failed === urls.length && lastError) throw lastError;
+  return hits;
+}
 
 const COLLECTORS: RetailerCollector[] = [
   {
@@ -896,6 +1026,50 @@ const COLLECTORS: RetailerCollector[] = [
         AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
       );
       return luluHits(await res.text(), query);
+    },
+  },
+  {
+    merchant: "Switch",
+    country: "KW",
+    collect: (query, fetchImpl) =>
+      collectShopifyKuwait("https://switch.com.kw", query, fetchImpl, switchHits),
+  },
+  {
+    merchant: "Wibi",
+    country: "KW",
+    collect: (query, fetchImpl) =>
+      collectShopifyKuwait("https://wibi.com.kw", query, fetchImpl, wibiHits),
+  },
+  {
+    merchant: "Astore",
+    country: "KW",
+    collect: (query, fetchImpl) =>
+      collectShopifyKuwait("https://astorekw.com", query, fetchImpl, astoreHits),
+  },
+  {
+    merchant: "Zayoom",
+    country: "KW",
+    collect: (query, fetchImpl) =>
+      collectShopifyKuwait("https://zayoom.com", query, fetchImpl, zayoomHits),
+  },
+  {
+    merchant: "Yousifi",
+    country: "KW",
+    collect: async (query, fetchImpl) => {
+      // WooCommerce archive hop in the PC Kuwait shape (verified live
+      // 2026-09-08): `post_type=product` lands the priced card archive — the
+      // plain blog search view carries none — over the same identity-
+      // alternating handshake the other CF-fronted stores get. Measured
+      // answer is thin (the site favors corporate content in its search
+      // views); the hop stays live-fetched and the counts are reported as
+      // measured in the closing note.
+      const res = await fetchThroughChallenge(
+        fetchImpl,
+        `https://www.yousifi.com.kw/?s=${encodeURIComponent(query)}&post_type=product`,
+        {},
+        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
+      );
+      return yousifiHits(await res.text(), query);
     },
   },
 ];

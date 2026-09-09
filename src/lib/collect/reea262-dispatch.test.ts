@@ -104,7 +104,8 @@ describe("REEA-262 staged adapter dispatch", () => {
     const staged = collectLiveResultsStaged("nescafe coffee", { fetchImpl });
     const snap = await staged.final;
 
-    // Every adapter of the ten-store set must appear in the converged notes.
+    // Every adapter of the fifteen-store set (REA-270 batch included) must
+    // appear in the converged notes.
     expect(new Set(snap.notes.map((n) => n.merchant))).toEqual(
       new Set([
         "Xcite",
@@ -117,6 +118,11 @@ describe("REEA-262 staged adapter dispatch", () => {
         "Next Store",
         "PC Kuwait",
         "Lulu Hypermarket",
+        "Switch",
+        "Wibi",
+        "Astore",
+        "Zayoom",
+        "Yousifi",
       ]),
     );
 

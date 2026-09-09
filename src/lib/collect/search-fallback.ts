@@ -23,7 +23,11 @@
  *    loop cards; the plain blog search view carries no prices.
  *  - luluhypermarket.com: Akinon SSR search page — read the JSON-LD Product
  *    records embedded in it.
- * All nine are documented retailer contracts (docs/RATE-LIMITS-AND-ROBOTS.md).
+ *  - REEA-270 batch: switch.com.kw, wibi.com.kw, astorekw.com, zayoom.com —
+ *    Shopify suggest.json hop with products.json newest-page top-up
+ *    (shopifyKuwaitOffer); www.yousifi.com.kw — WooCommerce archive
+ *    (`?s=…&post_type=product`), the pckuwait card scanner.
+ * All fifteen are documented retailer contracts (docs/RATE-LIMITS-AND-ROBOTS.md).
  * Search endpoints only — small page sizes, one call per retailer per run.
  */
 
@@ -929,6 +933,36 @@ async function postJson(
 }
 
 /**
+ * REEA-270 — Shopify hop for the four new Kuwait stores, mirroring the live
+ * collector chain in live-search.ts: suggest.json filters server-side, the
+ * products.json newest page tops it up, and the shared fold scores both
+ * envelopes client-side. suggest runs a tight per-IP throttle (occasional
+ * HTTP 429 from cold egress), so each envelope gets one bounded try and the
+ * first answered one wins.
+ */
+async function shopifyKuwaitOffer(
+  origin: string,
+  productTitle: string,
+  fetchImpl: FetchImpl,
+): Promise<FoundOffer | null> {
+  const urls = [
+    `${origin}/search/suggest.json?q=${encodeURIComponent(productTitle)}&resources[type]=product&resources[limit]=8`,
+    `${origin}/products.json?limit=8`,
+  ];
+  for (const url of urls) {
+    try {
+      const res = await fetchResponse(fetchImpl, url, { headers: { accept: "application/json" } });
+      if (!res.ok) continue;
+      const found = parseShopifyProducts(await res.json(), productTitle, origin);
+      if (found) return found;
+    } catch {
+      // Hop miss — the next envelope answers the same contract.
+    }
+  }
+  return null;
+}
+
+/**
  * Re-discover a product on its retailer by title search. Returns the best
  * matching live offer, or null when the retailer has no search adapter.
  * Any error propagates to the caller — the subtask surfaces it (AC6).
@@ -1126,6 +1160,41 @@ export async function searchRetailerFallback(
     );
     const found = parseLuluSearch(await res.text(), productTitle);
     if (!found) throw new Error("No matching product found on lulu search");
+    return found;
+  }
+  if (host.endsWith("switch.com.kw")) {
+    // Same Shopify contract as blink — suggest hop with newest-page top-up
+    // (shared helper mirrors the live collector chain, REEA-270).
+    const found = await shopifyKuwaitOffer("https://switch.com.kw", productTitle, fetchImpl);
+    if (!found) throw new Error("No matching product found on Switch search");
+    return found;
+  }
+  if (host.endsWith("wibi.com.kw")) {
+    const found = await shopifyKuwaitOffer("https://wibi.com.kw", productTitle, fetchImpl);
+    if (!found) throw new Error("No matching product found on Wibi search");
+    return found;
+  }
+  if (host.endsWith("astorekw.com")) {
+    const found = await shopifyKuwaitOffer("https://astorekw.com", productTitle, fetchImpl);
+    if (!found) throw new Error("No matching product found on astore search");
+    return found;
+  }
+  if (host.endsWith("zayoom.com")) {
+    const found = await shopifyKuwaitOffer("https://zayoom.com", productTitle, fetchImpl);
+    if (!found) throw new Error("No matching product found on Zayoom search");
+    return found;
+  }
+  if (host.endsWith("yousifi.com.kw")) {
+    // WooCommerce archive hop mirroring the live collector in live-search.ts
+    // (adapter symmetry): post_type=product lands the priced card archive.
+    const res = await fetchThroughChallenge(
+      fetchImpl,
+      `https://www.yousifi.com.kw/?s=${encodeURIComponent(productTitle)}&post_type=product`,
+      {},
+      AbortSignal.timeout(FALLBACK_TIMEOUT_MS),
+    );
+    const found = parsePcKuwaitSearch(await res.text(), productTitle);
+    if (!found) throw new Error("No matching product found on Yousifi search");
     return found;
   }
   throw new Error(`No search fallback for ${host}`);

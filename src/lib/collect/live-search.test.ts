@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { PER_RETAILER_TIMEOUT_MS } from "@/lib/collect/types";
 import {
+  astoreHits,
   amazonEgHits,
   blinkHits,
   collectLiveResults,
@@ -24,7 +25,11 @@ import {
   quadraHits,
   resetDiscoveryCache,
   sultanCenterHits,
+  switchHits,
+  wibiHits,
   xciteHits,
+  yousifiHits,
+  zayoomHits,
   type SearchHit,
 } from "@/lib/collect/live-search";
 import {
@@ -1298,8 +1303,8 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     resetDiscoveryCache();
     const staged = collectLiveResultsStaged("samsung", { fetchImpl: mixedSpeedFetch(), country: "KW" });
 
-    // One boundary per KW retailer in the run.
-    expect(staged.stages).toHaveLength(8);
+    // One boundary per KW retailer in the run (thirteen since the REEA-270 batch).
+    expect(staged.stages).toHaveLength(13);
 
     const first = await staged.stages[0];
     expect(first.products).toHaveLength(1);
@@ -1320,9 +1325,9 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     expect(finalSnap.products[0].offers.map((o) => o.price)).toEqual([379, 385, 390, 399]);
     expect(merchants.has("Eureka")).toBe(true);
     expect(merchants.has("Sultan Center")).toBe(true);
-    // Merchants whose mocks never answer are all reported as notes (eight of
-    // the ten retailers).
-    expect(finalSnap.notes).toHaveLength(8);
+    // Merchants whose mocks never answer are all reported as notes (thirteen
+    // of the fifteen retailers).
+    expect(finalSnap.notes).toHaveLength(13);
   });
 
   it("the final flush equals the blocking path on the same live answers", async () => {
@@ -1569,9 +1574,9 @@ describe("whole-chain budget signal (REEA-224 F4)", () => {
     // drift past the documented LIVE_SEARCH_BUDGET_MS ceiling.
     expect(elapsed).toBeGreaterThanOrEqual(LIVE_SEARCH_TIMEOUT_MS * 2 - 1_500);
     expect(elapsed).toBeLessThan(LIVE_SEARCH_BUDGET_MS + 2_000);
-    // Graceful degradation: every silent retailer is still reported (all ten
-    // collectors are stalled here).
-    expect(notes).toHaveLength(8);
+    // Graceful degradation: every silent retailer is still reported (all
+    // thirteen KW collectors are stalled here, REEA-270 batch included).
+    expect(notes).toHaveLength(13);
   }, 25_000);
 });
 
@@ -1644,5 +1649,112 @@ describe("REA-290 — retry once with backoff + per-query coverage line", () => 
     );
     // Nothing collected yet: no line, no flicker.
     expect(coverageLine([])).toBe("");
+  });
+});
+
+describe("REEA-270 — Kuwait batch two adapters", () => {
+  it("switchHits reads the suggest envelope with KWD figures and the KW tag", () => {
+    // Live shape (switch.com.kw/search/suggest.json, captured 2026-09-08):
+    // price/availability ride the product itself in the suggest envelope —
+    // the fold feeds them into the same guard chain as blink's hop.
+    const hits = switchHits(
+      {
+        resources: {
+          results: {
+            products: [
+              { title: "Nike Air Max Dn Mens Shoes", handle: "nike-air-max-dn", available: true, price: "25.000", vendor: "Nike" },
+              { title: "Cotton Pads 50g", handle: "cotton-pads", available: true, price: "1.000" },
+            ],
+          },
+        },
+      },
+      "nike",
+    );
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({
+      merchant: "Switch",
+      country: "KW",
+      brand: "Nike",
+      price: 25,
+      currency: "KWD",
+      url: "https://switch.com.kw/products/nike-air-max-dn",
+      inStock: true,
+    });
+  });
+
+  it("switchHits folds the classic products.json envelope too, compare-at becomes wasPrice", () => {
+    // The newest-page hop answers the classic {products:[{variants:[…]}]}
+    // shape; the shared fold keeps the wasPrice convention of quadraHits.
+    const hits = switchHits(
+      {
+        products: [
+          {
+            title: "Adidas Gazelle Trainer",
+            handle: "gazelle",
+            variants: [{ price: "19.00", compare_at_price: "29.00", available: false }],
+          },
+        ],
+      },
+      "adidas gazelle",
+    );
+    expect(hits[0]).toMatchObject({ merchant: "Switch", price: 19, wasPrice: 29, inStock: false });
+  });
+
+  it("wibiHits and zayoomHits read their suggest envelopes with store-native URLs", () => {
+    const payload = {
+      resources: {
+        results: {
+          products: [
+            { title: "Dyson V15 Detect Absolute", handle: "dyson-v15", available: true, price: "120.000", vendor: "Dyson" },
+          ],
+        },
+      },
+    };
+    expect(wibiHits(payload, "dyson v15")[0]).toMatchObject({
+      merchant: "Wibi",
+      country: "KW",
+      price: 120,
+      currency: "KWD",
+      url: "https://wibi.com.kw/products/dyson-v15",
+    });
+    expect(zayoomHits(payload, "dyson v15")[0]).toMatchObject({
+      merchant: "Zayoom",
+      country: "KW",
+      price: 120,
+      url: "https://zayoom.com/products/dyson-v15",
+    });
+  });
+
+  it("astoreHits drops handle-less rows like the other Shopify parsers", () => {
+    const hits = astoreHits(
+      {
+        products: [
+          { title: "Nescafe Classic 200g", variants: [{ price: "2.50" }] },
+          { title: "Nescafe Gold 50g", handle: "nescafe-gold", variants: [{ price: "1.25", available: true }] },
+        ],
+      },
+      "nescafe",
+    );
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ merchant: "Astore", country: "KW", price: 1.25, currency: "KWD" });
+  });
+
+  it("yousifiHits reads WooCommerce archive cards off the product search page", () => {
+    // Same WooCommerce/Electro card shape as the PC Kuwait archive hop (the
+    // shared scanWooCards scanner): loop link wraps the h2 title, lone price
+    // span when no promo runs, KD spelled as KWD.
+    const html =
+      '<li class="product"><a href="https://www.yousifi.com.kw/shop/nestle-nescafe-classic/" class="woocommerce-loop-product__link">' +
+      '<h2 class="woocommerce-loop-product__title">Nescafe Classic Coffee 200g</h2></a>' +
+      '<span class="price"><span class="woocommerce-Price-amount amount"><span class="woocommerce-Price-currencySymbol">KD</span>&nbsp;2.250</span></span></li>';
+    const hits = yousifiHits(html, "nescafe coffee");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({
+      merchant: "Yousifi",
+      country: "KW",
+      price: 2.25,
+      currency: "KWD",
+      url: "https://www.yousifi.com.kw/shop/nestle-nescafe-classic/",
+    });
   });
 });
