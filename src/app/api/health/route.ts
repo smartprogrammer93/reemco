@@ -30,12 +30,13 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const FIXTURE_QUERY = process.env.SMOKE_FIXTURE_QUERY || "sony";
-// Results pages stream staged live collections (page maxDuration 20s), so the
-// funnel fetches get generous per-hop budgets under the cron window. The hop
-// budgets must not be stricter than the page's own maxDuration ceiling: with
-// the product hop at 12 s the first cold request spent its whole chain in
-// connection setup + staged collection and aborted a page that answers in
-// well under its own 20 s ceiling right after (QA REEA-369 repro).
+// Results pages stream staged live collections (page ceilings on the 45 s
+// measured-walk tier since REEA-391), so the funnel fetches get generous
+// per-hop budgets under the cron window: they must cover the measured walk
+// (warm ~21 s / cold ~26 s), not the ceiling itself. With the product hop at
+// 12 s the first cold request spent its whole chain in connection setup +
+// staged collection and aborted a page that answers inside its own budget
+// right after (QA REEA-369 repro).
 const HOME_TIMEOUT_MS = 12000;
 const RESULTS_TIMEOUT_MS = 30000;
 const PRODUCT_TIMEOUT_MS = 25000;
