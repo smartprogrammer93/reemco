@@ -14,7 +14,7 @@ const refreshSpy = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({
   useSearchParams: () => searchParams,
   usePathname: () => "/results",
-  useRouter: () => ({ refresh: refreshSpy }),
+  useRouter: () => ({ refresh: refreshSpy, replace: refreshSpy }),
 }));
 vi.mock("next/link", () => ({
   default: ({
@@ -309,6 +309,9 @@ describe("refresh action (REEA-291 AC4)", () => {
     // stamped at click so the server render re-collects live inside the
     // memo window and the collection timestamps move.
     expect(document.cookie).toContain("rc_refresh=1");
+    // REEA-439 — the request rides a UNIQUE `_r` stamp so the bounded shared
+    // window can never answer the Refresh: guaranteed miss, newer scrapedAt.
+    expect(String(refreshSpy.mock.calls[0][0])).toContain("_r=");
     // Selection changes on the same view never go through the router either.
     const toggle = document.querySelector('[role="checkbox"]') as HTMLElement;
     await act(async () => {

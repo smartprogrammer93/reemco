@@ -43,8 +43,10 @@
  * runs the live path. Nothing is persisted or bundled.
  */
 
-/** Memoization window (REEA-291 AC5): entries this young serve immediately. */
-export const QUERY_CACHE_FRESH_MS = 90_000; // 90 s — CEO-approved 60–120 s window
+/** Memoization window (REEA-291 AC5): entries this young serve immediately.
+ *  REEA-439 tightened it to the 30–60 s band so the whole repeat path
+ *  (shared edge entry + this memo) stays under ~60 s of served age. */
+export const QUERY_CACHE_FRESH_MS = 60_000; // 60 s — top of the REEA-439 band
 /** Stale-serving ceiling (REEA-277 AC-2/AC-3): repeats inside 5 min HIT with
  *  SWR; older entries are dropped and re-collected live (≤ 15 min budget). */
 export const QUERY_CACHE_MAX_AGE_MS = 300_000;
@@ -72,6 +74,29 @@ export function markLiveRefresh(): void {
 /** Server side: is this request an explicit Refresh? */
 export function isRefreshSignal(value: string | undefined | null): boolean {
   return value === "1";
+}
+
+/** Param carrying the one-shot bypass stamp of a Refresh request (REEA-439). */
+export const REFRESH_BYPASS_PARAM = "_r";
+
+/**
+ * REEA-439 — the client half of the Refresh bypass. The shared bounded window
+ * (next.config headers) answers repeats from the LAST live render, so an
+ * explicit Refresh must not take that answer: its request rides a UNIQUE URL
+ * (`_r` stamp), and a unique URL is a guaranteed miss on the shared entry —
+ * the live fan-out re-runs and the converged write-through moves scrapedAt.
+ * Pure helper so the rule stays testable: keeps every other param, replaces a
+ * previous bypass stamp instead of stacking them.
+ */
+export function withRefreshBypass(href: string, stamp: number): string {
+  const hashAt = href.indexOf("#");
+  const hash = hashAt === -1 ? "" : href.slice(hashAt);
+  const base = hashAt === -1 ? href : href.slice(0, hashAt);
+  const qAt = base.indexOf("?");
+  const path = qAt === -1 ? base : base.slice(0, qAt);
+  const params = new URLSearchParams(qAt === -1 ? "" : base.slice(qAt + 1));
+  params.set(REFRESH_BYPASS_PARAM, String(stamp));
+  return `${path}?${params.toString()}${hash}`;
 }
 
 export interface QueryCacheHit<T> {

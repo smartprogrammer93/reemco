@@ -26,7 +26,7 @@ import { trackEvents } from "@/lib/telemetry";
 import { PRODUCTS } from "@/lib/feed";
 import { isAccessoryTitle, partitionForQuery } from "@/lib/relevance";
 import { coverageLine, type LiveSearchResult } from "@/lib/collect/live-search";
-import { markLiveRefresh } from "@/lib/query-cache";
+import { markLiveRefresh, withRefreshBypass } from "@/lib/query-cache";
 import { clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
 import type { NormalizedProduct } from "@/types/product";
 
@@ -753,10 +753,18 @@ function ResultsInner(props: {
   const onToggleStock = (next: boolean) => applySelection(country, next);
   // REEA-291 AC4 — the ONLY full live re-fetch path: stamps the one-shot
   // refresh cookie, then re-runs the server collection for this query even
-  // inside the ≤90 s memo window (AC5), so collection timestamps update while
+  // inside the ≤60 s memo window (AC5), so collection timestamps update while
   // the in-place selections above never hit the network.
+  // REEA-439 — the request also rides a UNIQUE URL (`?_r=` stamp), so the
+  // bounded shared edge entry never answers the Refresh: a unique URL is a
+  // guaranteed miss and the live walk re-runs with newer scrapedAt. Plain
+  // repeats keep the current address and may answer warm inside the window.
   const onRefresh = () => {
     markLiveRefresh();
+    if (typeof window !== "undefined") {
+      router.replace(withRefreshBypass(window.location.href, Date.now()));
+      return;
+    }
     router.refresh();
   };
 

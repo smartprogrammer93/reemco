@@ -54,6 +54,15 @@ export function proxy(request: NextRequest) {
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   response.headers.set("X-Frame-Options", "DENY"); // legacy complement to frame-ancestors
   response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  // REEA-439 — the bounded shared window (next.config headers) keys on the
+  // URL, so locale must split entries through Vary: keep each locale variant
+  // of a query in its own bounded entry ("normalized query, keep locale").
+  // Set here because the renderer overwrites the plain Vary header; the
+  // middleware vary merges with the framework's own list instead.
+  const path = request.nextUrl.pathname;
+  if (path === "/results" || path === "/search") {
+    response.headers.set("Vary", "Accept-Language");
+  }
   return response;
 }
 
