@@ -11,7 +11,11 @@
  * memory-only handshake, never to a failed hop.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { fetchThroughChallenge, VERIFIED_BOT_HEADERS } from "@/lib/collect/search-fallback";
+import {
+  fetchThroughChallenge,
+  PLAIN_FETCH_HEADERS,
+  VERIFIED_BOT_HEADERS,
+} from "@/lib/collect/search-fallback";
 
 const originalFetch = globalThis.fetch;
 
@@ -137,5 +141,33 @@ describe("identity rotation through the CF handshake (REEA-272)", () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]!.ua).toBe(VERIFIED_BOT_HEADERS["user-agent"]);
     expect(seen[0]!.cookie).toContain("__cf_bm=mirrored");
+  });
+
+  it("adds the plain identity as the third rotation step (REEA-369)", async () => {
+    const seen: Array<string> = [];
+    let calls = 0;
+    const hopFetch = async (_url: string, init?: RequestInit): Promise<Response> => {
+      calls += 1;
+      const headers = new Headers(init?.headers);
+      seen.push(`${headers.get("accept") ?? ""}|${headers.get("user-agent") ?? ""}`);
+      if (calls < 3) return new Response("challenge", { status: 403 });
+      return new Response("<html>archive</html>");
+    };
+    const res = await fetchThroughChallenge(
+      hopFetch,
+      "https://third-tier.example/search?q=dell",
+      {},
+      AbortSignal.timeout(3000),
+    );
+    expect(res.status).toBe(200);
+    expect(calls).toBe(3);
+    // Verified-crawler leads, scripted-browser follows, then the plain
+    // identity: accept-only with the runtime's own fingerprint (no UA
+    // override). That third shape is what pckuwait answers fastest from a
+    // cold datacenter hop while both shaped sets keep landing on the CF
+    // interstitial.
+    expect(seen[0]).toContain("Googlebot");
+    expect(seen[1]).toContain("Chrome/126");
+    expect(seen[2]).toBe(`${PLAIN_FETCH_HEADERS.accept}|`);
   });
 });

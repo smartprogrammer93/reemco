@@ -22,13 +22,22 @@ import type { NextRequest } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// REEA-369: the funnel hops themselves cap at maxDuration 20 (results and
+// product pages), and a cold cron call walks home + results + product after
+// a cold start — measured ~26 s end to end on the first request after a
+// deploy. The function gets headroom above that sum.
+export const maxDuration = 60;
 
 const FIXTURE_QUERY = process.env.SMOKE_FIXTURE_QUERY || "sony";
 // Results pages stream staged live collections (page maxDuration 20s), so the
-// funnel fetches get generous per-hop budgets under the cron window.
+// funnel fetches get generous per-hop budgets under the cron window. The hop
+// budgets must not be stricter than the page's own maxDuration ceiling: with
+// the product hop at 12 s the first cold request spent its whole chain in
+// connection setup + staged collection and aborted a page that answers in
+// well under its own 20 s ceiling right after (QA REEA-369 repro).
 const HOME_TIMEOUT_MS = 12000;
 const RESULTS_TIMEOUT_MS = 30000;
-const PRODUCT_TIMEOUT_MS = 12000;
+const PRODUCT_TIMEOUT_MS = 25000;
 
 // REEA-283/REEA-254 chip copy renders uppercase with the minute figure; keep
 // in sync with step 4 of scripts/smoke-check.mjs (case-insensitive, legacy
@@ -37,12 +46,27 @@ const CHIP_RE = "(?:Verified|updated)[ ]*(?:<!--[ ]-->)?[ ]*(?:\\d+[hd] ago|\\d+
 const CHIP_ALT_RE = "may be outdated|(?:updated|Verification) date unknown";
 
 async function get(origin: string, path: string, timeoutMs: number) {
-  const res = await fetch(`${origin}${path}`, {
-    redirect: "follow",
-    signal: AbortSignal.timeout(timeoutMs),
-    headers: { "user-agent": "reemco-health/1.0" },
-  });
-  return { status: res.status, html: await res.text() };
+  // REEA-369 — one bounded retry. The first request after a deploy walks a
+  // cold instance through connection setup on every hop; when a hop still
+  // spends its window, the very next attempt lands on the warmed instance
+  // and answers in about a second (measured on prod: first call ~26 s with
+  // the product hop aborted, immediate re-check HTTP 200 in ~1 s). Without
+  // the retry the cron tick reports a false failure for the whole hour.
+  let lastError = "";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(`${origin}${path}`, {
+        redirect: "follow",
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: { "user-agent": "reemco-health/1.0" },
+      });
+      const html = await res.text();
+      if (res.status === 200 || attempt === 1) return { status: res.status, html };
+    } catch (e) {
+      lastError = (e as Error).message;
+    }
+  }
+  throw new Error(lastError || "fetch failed");
 }
 
 // Offer/product cards render as <article class="result-card ..."> (see

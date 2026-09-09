@@ -987,10 +987,17 @@ const COLLECTORS: RetailerCollector[] = [
       // even inside the force-dynamic results segment (REEA-272 option 2 —
       // cache that persists across invocations), so one answered hop keeps
       // the adapter serving hits while later cold instances re-run behind
-      // the revalidate window. Both JSON attempts share ONE hop window, so
-      // the chain costs at most what the other CF-fronted hops pay; only a
-      // cache miss with a squeezed window falls to the archive page below.
-      const jsonWindow = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS);
+      // the revalidate window. REEA-369: the window is the doubled one the
+      // other CF-fronted hops get — measured 2026-09-09, the cold TLS + WP
+      // query hop to pckuwait lands ~0.7–0.9 s from a datacenter egress but
+      // a cold serverless instance can spend most of a single 4 s window on
+      // connection setup alone; when the window squeezed, EVERY attempt in
+      // the chain (whole query + the REEA-357 per-word re-search all share
+      // it) aborted without the endpoint ever being asked, and the merchant
+      // recorded its 403-shaped note while the same query answered fine on
+      // a warm hop. Only a cache miss with a squeezed window falls to the
+      // archive page below.
+      const jsonWindow = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
       const asItems = (parsed: unknown): Record<string, unknown>[] =>
         Array.isArray(parsed) ? (parsed as Record<string, unknown>[]) : [];
       const apiItems = async (q: string): Promise<Record<string, unknown>[]> => {
@@ -1001,10 +1008,27 @@ const COLLECTORS: RetailerCollector[] = [
             next: { revalidate: 300 },
             signal: jsonWindow,
           } as RequestInit);
+          // REEA-369: a replayed cache entry only counts when it actually
+          // answered; a stale non-ok entry must not short-circuit the fresh
+          // bare attempt below.
           if (cached.ok) return asItems(JSON.parse(await cached.text()));
         } catch {
           // Cache-first miss (or a squeezed window) — the uncached JSON attempt
           // inside the same window answers with the same payload shape.
+        }
+        try {
+          // REEA-369: the bare accept-only identity is what pckuwait answers
+          // fastest and most reliably (verified live from a cold datacenter
+          // hop), so it rides the uncached attempt directly; the handshake
+          // with its two shaped identities stays behind it as before.
+          const bare = await fetchImpl(apiUrl(q), {
+            headers: { accept: "application/json" },
+            cache: "no-store",
+            signal: jsonWindow,
+          } as RequestInit);
+          if (bare.ok) return asItems(JSON.parse(await bare.text()));
+        } catch {
+          // Window spent — the handshake attempt follows.
         }
         try {
           const jsonRes = await fetchThroughChallenge(fetchImpl, apiUrl(q), {}, jsonWindow);

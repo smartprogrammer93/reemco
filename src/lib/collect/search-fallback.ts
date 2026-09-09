@@ -767,6 +767,22 @@ export const VERIFIED_BOT_HEADERS = {
 };
 
 /**
+ * REEA-369 — plain request identity for the third rotation step. Verified
+ * live 2026-09-09 from a cold datacenter hop: pckuwait answers a bare
+ * accept-only GET in well under a second, while the scripted-browser set
+ * (whose pinned Chrome/126 hints age against the runtime's actual TLS/H2
+ * fingerprint) and the crawler UA both still land on the CF interstitial in
+ * some zones. No `user-agent` override: undici's own fingerprint rides the
+ * request, which is exactly what these zones pass. The handshake tries this
+ * identity after the two shaped ones, so zones that already pass on the
+ * first attempt are unaffected.
+ */
+export const PLAIN_FETCH_HEADERS = {
+  accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "accept-language": "en-US,en;q=0.9",
+};
+
+/**
  * Challenge-tolerant GET for the Cloudflare-fronted retailers: every attempt
  * presents one of the two shared identities — verified-crawler headers lead,
  * the scripted-browser set follows on odd attempts — because the CF rules on
@@ -861,10 +877,15 @@ async function runAttempts(
     if (signal.aborted) break;
     // REEA-272 identity rotation: verified-crawler identity leads (it is the
     // answer these CF zones give a pass to within the hop window), the
-    // scripted-browser identity follows on odd attempts for zones whose rules
-    // carry no bot allow. Both ride the same cookie jar, so whichever hop
-    // clears the challenge, later attempts replay that clearance.
-    const headers = new Headers(attempt % 2 === 0 ? VERIFIED_BOT_HEADERS : CHALLENGE_HEADERS);
+    // scripted-browser identity follows next for zones whose rules carry no
+    // bot allow. REEA-369 adds the plain identity as the third step: a bare
+    // accept-only request riding the runtime's own TLS/H2 fingerprint, which
+    // some CF-fronted storefronts (pckuwait measures fastest on it) answer
+    // while both shaped sets keep landing on the interstitial. All three ride
+    // the same cookie jar, so whichever hop clears the challenge, later
+    // attempts replay that clearance.
+    const identities = [VERIFIED_BOT_HEADERS, CHALLENGE_HEADERS, PLAIN_FETCH_HEADERS];
+    const headers = new Headers(identities[attempt % identities.length]);
     for (const [k, v] of Object.entries(extraHeaders)) headers.set(k, v);
     if (jar.size > 0) headers.set("cookie", [...jar].map(([k, v]) => `${k}=${v}`).join("; "));
     const res = await fetchImpl(url, { ...init, headers, cache: "no-store", signal });
