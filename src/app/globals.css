@@ -295,6 +295,36 @@ a:focus-visible {
   background: var(--rc-primary-deep);
 }
 
+/* REEA-448 G4 — the retailer-row status cluster keeps an explicit 8px gutter
+   between the lowest-listed badge and the stock dot+label; it was measured
+   flush at 1280 on the deployed shell, so the row states its own gutter with
+   the shared token instead of relying on utility order. Applies in both flex
+   directions, so the stacked (<sm) shape gets the same breathing room. */
+.offer-row {
+  gap: var(--rc-space-2);
+}
+
+/* REEA-448 G3 — store-button squeeze. The button label ("Go to store" /
+   "إلى المتجر") is short and must never wrap, at any width; the squeeze part —
+   tightened inline padding and the 36px floor, with the approx-conversion
+   stamp (.price-alt, the SAR/EGP + approx-KWD side of Jarir / Amazon.eg rows)
+   absorbing it via min-width:0 — is scoped >=1280px per the spec. Unlayered
+   rules like these win over the utility classes on the same element. */
+.offer-row .btn-primary {
+  white-space: nowrap;
+}
+
+@media (min-width: 1280px) {
+  .offer-row .btn-primary {
+    padding-inline: var(--rc-space-3); /* 12px */
+    min-height: 36px;
+  }
+
+  .offer-row .price-alt {
+    min-width: 0;
+  }
+}
+
 /* Outline action: CTA on non-best offer cards */
 .btn-outline {
   display: inline-flex;

@@ -352,7 +352,7 @@ export default function ProductResultCard({
                      the action cluster onto its own line like a wrap would). The
                      label column absorbs its own wraps; the action cluster keeps
                      its intrinsic width so every row shares one baseline. */
-                  className="flex flex-col justify-between gap-1 py-1 sm:flex-row sm:items-center sm:gap-x-2"
+                  className="offer-row flex flex-col justify-between gap-1 py-1 sm:flex-row sm:items-center sm:gap-x-2"
                   style={{ borderTop: "1px solid var(--rc-line)" }}
                 >
                   {/* REEA-224 item 1 (measured on the deployed shell): the
