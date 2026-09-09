@@ -68,8 +68,9 @@ README, not in the JSON file.
 1. `curl -fsS https://reemco.vercel.app/__commit.txt` — prints the SHA the live artifact was stamped with at build time.
 2. Compare with the intended HEAD: the run's `github.sha`, or `rollback_sha` on a rollback run. A failing run never promotes the alias, so the stamp equals the last green deploy's SHA until the next green run. Edge cache can hold an old stamp briefly (`age` header); retry after ~30 s before judging a mismatch real.
 3. Record both values in the deploy comment: `served=<sha> intended=<sha> match|no-match`. On no-match the new build is not live — treat the deploy as failed and rerun with `rollback_sha` = last known-good commit. QA (REEA-293) and Security (REEA-275) verification passes start only after this parity line exists.
+4. Stamp-check pair (REEA-366): immediately after the alias flip, record stamp SHA + served-content fingerprint together — `curl -fsS https://reemco.vercel.app/ | grep -o '/_next/static/[^"]*' | head -3` (asset paths move with every build). Both move to the new artifact at the flip; when one leads the other, re-check after ~30 s and note the seconds between observations as the edge-cache lag window instead of filing a mismatch. Measured window and both verified pairs: see REEA-366.
 
-The "Post-deploy artifact check" step in `.github/workflows/deploy.yml` runs the same comparison automatically and fails the job on mismatch; steps 1–3 are the human-side record for the deploy comment. Blast radius of a mismatch is one alias flip, verified against the stamped artifact.
+The "Post-deploy artifact check" step in `.github/workflows/deploy.yml` runs the same comparison automatically and fails the job on mismatch; steps 1–4 are the human-side record for the deploy comment. Blast radius of a mismatch is one alias flip, verified against the stamped artifact.
 
 ## Funnel instrumentation (REEA-37)
 
