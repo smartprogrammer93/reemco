@@ -165,6 +165,12 @@ const en = {
   contactLead: "Questions, corrections, or a retailer we should add? Email us.",
   contactReply: "We aim to reply within one business day.",
   contactInclude: "Include the product name and the retailer you saw.",
+  // REEA-400 — per-query results-page metadata: the title carries the query so
+  // each query becomes its own indexed landing surface. {q} query, {country}
+  // resolved market label; empty queries substitute allProducts for {q}.
+  metaTitle: "{q} prices in {country} - Reemco",
+  metaDescription:
+    "Compare live prices, coupons and stock for {q} across retailers in {country}. Offers are collected the moment you search — best effective price wins.",
 };
 
 /** The AR dictionary is checked against the EN shape at compile time. */
@@ -292,6 +298,9 @@ const ar: typeof en = {
   contactLead: "أسئلة أو تصحيحات أو متجر نقترح إضافته؟ راسلنا.",
   contactReply: "نحرص على الرد خلال يوم عمل واحد.",
   contactInclude: "أرفق اسم المنتج والمتجر الذي رأيت فيه السعر.",
+  metaTitle: "أسعار {q} في {country} - ريمكو",
+  metaDescription:
+    "قارن الأسعار والكوبونات وحالة التوافر لـ{q} عبر متاجر {country}. تُجمع العروض لحظة بحثك — أفضل سعر فعلي يفوز.",
 };
 
 export type Strings = typeof en;

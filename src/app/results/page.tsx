@@ -3,13 +3,37 @@ import { collectLiveResultsStaged } from "@/lib/collect/live-search";
 import { MARKET_COOKIE, resolveCountrySelection } from "@/lib/country";
 import { LOCALE_COOKIE, resolveUiLocale } from "@/lib/i18n";
 import { isRefreshSignal, REFRESH_COOKIE } from "@/lib/query-cache";
+import { buildResultsMeta } from "@/lib/results-meta";
 import { sanitizeSearchQuery, sanitizePage } from "@/lib/search-params";
 import { sanitizeShowOutOfStock } from "@/lib/stock";
+import type { Metadata } from "next";
 import { cookies, headers } from "next/headers";
 
-export const metadata = {
-  title: "Results — Reemco",
-};
+type ResultsSearchParams = Promise<{ [key: string]: string | string[] | undefined }>;
+
+/**
+ * REEA-400 — each results query is its own indexed landing surface: the
+ * title carries the query ("<query> prices in <country> - Reemco"; Arabic:
+ * "أسعار <query> في الكويت - ريمكو") plus a short matching description.
+ * Composition is the pure buildResultsMeta helper on the same request-time
+ * signals the page body already reads (rc_locale / rc_market cookies, the
+ * coarse Accept-Language hint, `?q=` / `?c=`); the empty-query fallback keeps
+ * a market-scoped title instead of a bare "Results" shell. Replaces the old
+ * static `metadata` object — one export per segment (generate-metadata docs).
+ */
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams: ResultsSearchParams;
+}): Promise<Metadata> {
+  const params = await searchParams;
+  const query = sanitizeSearchQuery(params.q) ?? "";
+  const hint = await readPreferenceHint();
+  const country = resolveCountrySelection(params.c, hint.cookie, hint.acceptLanguage);
+  const locale = resolveUiLocale(hint.localeCookie, hint.acceptLanguage);
+  const meta = buildResultsMeta({ query, country, locale });
+  return { title: meta.title, description: meta.description };
+}
 
 /**
  * REEA-114 — results are collected LIVE at query time. This handler runs per
@@ -27,8 +51,15 @@ export const metadata = {
  * render, live-per-query fetch preserved, no bundled/static snapshot.
  */
 export const dynamic = "force-dynamic";
-// Headroom above the collector's bounded window on slow cold starts.
-export const maxDuration = 20;
+// Ceiling for the whole query-time walk: bounded collector window (REEA-224)
+// plus cold-start setup and final-stream serialization. Measured on the
+// deployed artifact the full staged walk lands at ~21 s warm and up to ~26 s
+// cold (same funnel walk REEA-371 measured for the uptime probe), so the
+// ceiling sits above that sum — same headroom tier as the probe's 45 s. At
+// 20 s the platform closed the stream right when the last staged boundary was
+// flushing (React #412 "Connection closed" + error card; QA REEA-391), which
+// truncated exactly the converged snapshot the shopper is waiting for.
+export const maxDuration = 45;
 
 /** Request-time preference layers (REEA-280). Both reads are request-time
  *  APIs, so on a prerendered/static host they fall back silently to the
