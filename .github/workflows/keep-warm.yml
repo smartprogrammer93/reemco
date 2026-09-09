@@ -8,15 +8,13 @@ name: Keep production alias warm
 # /api/health endpoint — same route the Vercel cron already uses, so the ping
 # also keeps functioning as the funnel liveness check (Observability-before-Launch).
 #
-# Why scheduled pre-warm instead of minimum instances (issue decision rule:
-# "minimum instances if the plan supports it, otherwise scheduled pre-warm"):
-# minInstances keeps compute permanently allocated; on the Hobby included
-# usage that burns the monthly function allowance just to hold one instance
-# idle 24/7, and support for the key differs by plan tier. The guarded-cron
-# pattern this repo already runs (REAAs 71/314/337) fits the ~2,000 min/month
-# Actions allowance deterministically instead, so the pre-warm is the plan-safe
-# branch. Blast radius is unchanged either way: one GET on a read-only health
-# route; worst failure mode is a cold first hit, exactly today's status quo.
+# Mechanism split (issue decision rule: "minimum instances if the plan
+# supports it, otherwise scheduled pre-warm"): `vercel.json` carries a
+# minInstances floor on the route-handler functions as the quiet-hours
+# backstop; this workflow covers the rest with curl-only pings that also act
+# as the funnel liveness check the Vercel cron already carries. Blast radius
+# is one GET on a read-only route; worst failure mode is a cold first hit,
+# exactly the pre-existing status quo.
 #
 # Cadence (measured 2026-09-09, probe ladder at ~04:20-04:41Z): the fast answer
 # window after a hit is ~5 min — arrivals 4-6 min after the last tick answered
