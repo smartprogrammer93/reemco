@@ -1,7 +1,7 @@
 /**
  * REEA-37 — anonymous funnel event schema.
  *
- * Four funnel events, all anonymous: no cookies, no sessions, no PII, no
+ * Five funnel events, all anonymous: no cookies, no sessions, no PII, no
  * persistent identifiers. Event ids are random per event and assigned
  * server-side on ingestion (client-supplied id/ts are ignored).
  *
@@ -15,6 +15,8 @@ export const EVENT_TYPES = [
   "result_impressed",
   "item_clicked",
   "zero_results",
+  // REEA-541 Bet B — the share-summary Copy button fired once per copy.
+  "summary_copied",
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
@@ -83,6 +85,9 @@ const eventSchema = z.object(baseShape).superRefine((ev, ctx) => {
       need(ev.outbound_url !== undefined, "outbound_url required", "outbound_url");
       break;
     case "zero_results":
+      break;
+    case "summary_copied":
+      // No extra fields: query (+ optional item_id) is the whole event.
       break;
   }
 });

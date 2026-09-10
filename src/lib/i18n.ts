@@ -115,6 +115,11 @@ const en = {
   staleTitle: "Last verified more than 7 days ago — the price may be outdated.",
   copyLabel: "Copy",
   copyAriaLead: "Copy coupon code",
+  // REEA-541 Bet B — share-summary line: lead word before the offer list, the
+  // verified word before the freshness bucket label (buildShareSummary).
+  shareSummaryAria: "Copy price comparison summary",
+  shareBestNowLead: "best now",
+  shareVerifiedWord: "verified",
   couponMoreSuffix: "more",
   couponNoneLabel: "No coupon available",
   errorTitle: "Something went wrong",
@@ -263,6 +268,10 @@ const ar: typeof en = {
   staleTitle: "آخر تحقق قبل أكثر من 7 أيام — قد يكون السعر غير محدَّث.",
   copyLabel: "نسخ",
   copyAriaLead: "انسخ رمز الخصم",
+  // REEA-541 Bet B: same share-summary slots as EN, one layout for both locales.
+  shareSummaryAria: "انسخ ملخص مقارنة الأسعار",
+  shareBestNowLead: "أفضل سعر الآن",
+  shareVerifiedWord: "تم التحقق",
   couponMoreSuffix: "أخرى",
   couponNoneLabel: "لا توجد قسيمة متاحة",
   errorTitle: "حدث خطأ ما",

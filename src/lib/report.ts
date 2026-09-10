@@ -6,6 +6,7 @@
  *
  * Metric definitions (per REEA-24 / PM spec):
  * - click-out rate  = item_clicked events / search_submitted events
+ * - copy-rate = summary_copied events / search_submitted events (REEA-541)
  * - zero-result rate = zero_results events / search_submitted events
  * - top queries = most frequent non-empty search queries in the window
  *
@@ -28,6 +29,8 @@ export interface WeeklyReport {
   searches: number;
   click_outs: number;
   click_out_rate: number | null; // null when no searches in window
+  copies: number;
+  copy_rate: number | null; // REEA-541: summary_copied per search, beside click_out_rate
   zero_results: number;
   zero_result_rate: number | null;
   top_queries: { query: string; count: number }[];
@@ -54,6 +57,7 @@ export function aggregateWeekly(
 
   let searches = 0;
   let clickOuts = 0;
+  let copies = 0;
   let zeroResults = 0;
   const queryCounts = new Map<string, number>();
   const rankCounts = new Map<number, number>();
@@ -66,6 +70,8 @@ export function aggregateWeekly(
       }
     } else if (e.type === "zero_results") {
       zeroResults += 1;
+    } else if (e.type === "summary_copied") {
+      copies += 1;
     } else if (e.type === "item_clicked") {
       clickOuts += 1;
       // Schema guarantees rank on item_clicked; guard anyway so hand-written
@@ -93,6 +99,8 @@ export function aggregateWeekly(
     searches,
     click_outs: clickOuts,
     click_out_rate: searches > 0 ? clickOuts / searches : null,
+    copies,
+    copy_rate: searches > 0 ? copies / searches : null,
     zero_results: zeroResults,
     zero_result_rate: searches > 0 ? Math.min(1, zeroResults / searches) : null,
     top_queries: topQueries,

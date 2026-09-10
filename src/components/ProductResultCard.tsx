@@ -6,6 +6,7 @@ import { effectivePrice, formatCountryPrice, formatKdDigits, formatPrimaryPrice,
 import { gradeBadgeLabel } from "@/lib/collect/canonical-product";
 import { collectedClock, relativeAge } from "@/lib/relative-time";
 import CouponBadge from "@/components/CouponBadge";
+import ShareSummaryButton from "@/components/ShareSummaryButton";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import { resolveOfferUrl } from "@/lib/links";
 import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
@@ -221,6 +222,10 @@ export default function ProductResultCard({
         {product.brand ? <RetailerChip>{product.brand}</RetailerChip> : null}
         {!detail && best && <StockDot state={best.inStock ? "in" : "out"} locale={locale} />}
         {!detail && <FreshnessBadge scrapedAt={product.scrapedAt} renderStartMs={renderStartMs} locale={locale} />}
+        {/* REEA-541 Bet B: the one-tap share summary rides the header row of
+            BOTH variants — the results card and the detail page's hero card —
+            on the pill styling already shared with the selection chips. */}
+        <ShareSummaryButton product={product} query={query} country={country} locale={locale} />
       </div>
 
       {/* REEA-75 (M4): flex-wrap lets the price drop under a long title on

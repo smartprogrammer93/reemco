@@ -20,5 +20,5 @@ console.log(`Event store: ${EVENTS_DIR} (${events.length} retained events, ${pru
 console.log(JSON.stringify(report, null, 2));
 const rate = (r: number | null) => (r == null ? "n/a" : `${(r * 100).toFixed(1)}%`);
 console.log(
-  `\nSearch->click-out rate: ${rate(report.click_out_rate)} · zero-result rate: ${rate(report.zero_result_rate)}`,
+  `\nSearch->click-out rate: ${rate(report.click_out_rate)} · copy-rate: ${rate(report.copy_rate)} · zero-result rate: ${rate(report.zero_result_rate)}`,
 );

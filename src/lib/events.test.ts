@@ -4,7 +4,7 @@ import { validateEvent, validateEventBatch, MAX_EVENTS_PER_REQUEST } from "@/lib
 const base = { query: "iphone 15 case" };
 
 describe("validateEvent", () => {
-  it("accepts all four funnel event shapes with correct fields", () => {
+  it("accepts all five funnel event shapes with correct fields", () => {
     expect(validateEvent({ type: "search_submitted", ...base, result_count: 12 })).toMatchObject({
       ok: true,
     });
@@ -21,6 +21,11 @@ describe("validateEvent", () => {
       }),
     ).toMatchObject({ ok: true });
     expect(validateEvent({ type: "zero_results", ...base })).toMatchObject({ ok: true });
+    // REEA-541: the fifth type rides query (+ optional item_id) only.
+    expect(validateEvent({ type: "summary_copied", ...base })).toMatchObject({ ok: true });
+    expect(
+      validateEvent({ type: "summary_copied", ...base, item_id: "p-1" }),
+    ).toMatchObject({ ok: true });
   });
 
   it("rejects search_submitted without result_count", () => {

@@ -124,10 +124,11 @@ describe("weekly report aggregation (AC-4)", () => {
   ): Parameters<typeof aggregateWeekly>[0][number] =>
     ({ id: "x", ts, type, query: "q", ...extra }) as never;
 
-  it("computes click-out rate, zero-result rate and top queries", () => {
+  it("computes click-out rate, copy-rate beside it, zero-result rate and top queries", () => {
     const events = [
       ev("2026-09-05T01:00:00Z", "search_submitted", { query: "iphone", result_count: 5 }),
       ev("2026-09-05T01:01:00Z", "item_clicked", { query: "iphone", rank: 0, item_id: "p1" }),
+      ev("2026-09-05T01:01:30Z", "summary_copied", { query: "iphone", item_id: "p1" }),
       ev("2026-09-04T01:00:00Z", "search_submitted", { query: "pixel", result_count: 0 }),
       ev("2026-09-04T01:00:30Z", "zero_results", { query: "pixel" }),
       ev("2026-09-04T02:00:00Z", "search_submitted", { query: "iphone", result_count: 3 }),
@@ -137,6 +138,8 @@ describe("weekly report aggregation (AC-4)", () => {
     expect(report.searches).toBe(3);
     expect(report.click_outs).toBe(1);
     expect(report.click_out_rate).toBeCloseTo(1 / 3);
+    expect(report.copies).toBe(1);
+    expect(report.copy_rate).toBeCloseTo(1 / 3);
     expect(report.zero_results).toBe(1);
     expect(report.zero_result_rate).toBeCloseTo(1 / 3);
     expect(report.top_queries[0]).toEqual({ query: "iphone", count: 2 });
@@ -146,6 +149,7 @@ describe("weekly report aggregation (AC-4)", () => {
     const report = aggregateWeekly([], { now });
     expect(report.searches).toBe(0);
     expect(report.click_out_rate).toBeNull();
+    expect(report.copy_rate).toBeNull();
     expect(report.zero_result_rate).toBeNull();
     expect(report.click_rank_histogram).toEqual([]);
   });

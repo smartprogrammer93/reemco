@@ -230,3 +230,17 @@ describe("REEA-468 G3 coupon-slot copy", () => {
     expect(container.textContent).toContain("لا توجد قسيمة متاحة");
   });
 });
+
+describe("REEA-541 Bet B — share-summary button placement", () => {
+  it("rides the header of the results card AND the detail variant alike", () => {
+    const list = render(<ProductResultCard product={product(false)} query="xm6" rank={0} />);
+    expect(
+      list.getByRole("button", { name: "Copy price comparison summary" }),
+    ).toBeTruthy();
+    cleanup();
+    const detail = render(<ProductResultCard product={product(false)} variant="detail" />);
+    expect(
+      detail.getByRole("button", { name: "Copy price comparison summary" }),
+    ).toBeTruthy();
+  });
+});
