@@ -2116,14 +2116,14 @@ describe("REA-290 — retry once with backoff + per-query coverage line", () => 
         { merchant: "Jarir", hits: 0, error: "HTTP 403" },
         { merchant: "Xcite", hits: 2 },
       ]),
-    ).toBe("Jarir did not respond on this search. Prices from Xcite and Blink.");
+    ).toBe("No response from Jarir. Prices from Xcite and Blink.");
     // A zero-hit answer is still an answer — only errors mark a gap.
     expect(coverageLine([{ merchant: "Eureka", hits: 0 }])).toBe("Prices from Eureka.");
     expect(coverageLine([{ merchant: "Xcite", hits: 2 }, { merchant: "Blink", hits: 1 }])).toBe(
       "Prices from Xcite and Blink.",
     );
     expect(coverageLine([{ merchant: "Blink", hits: 0, error: "timeout" }, { merchant: "Xcite", hits: 0, error: "timeout" }])).toBe(
-      "Xcite and Blink did not respond on this search.",
+      "No response from Xcite and Blink.",
     );
     // Nothing collected yet: no line, no flicker.
     expect(coverageLine([])).toBe("");

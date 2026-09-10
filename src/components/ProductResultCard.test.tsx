@@ -227,6 +227,6 @@ describe("REEA-468 G3 coupon-slot copy", () => {
     const { container } = render(
       <ProductResultCard product={noCoupon} query="كيبورد" rank={0} locale="ar" />,
     );
-    expect(container.textContent).toContain("لا يتوفر كوبون");
+    expect(container.textContent).toContain("لا توجد قسيمة متاحة");
   });
 });

@@ -282,8 +282,8 @@ export default function ProductResultCard({
       {/* REEA-468 G3 — the coupon slot stays explicit when it is empty: a
           card whose live offers answer but carry no promo says "No coupon
           available" (t.couponNoneLabel), while a merchant that never
-          answered is named by the coverage line ("did not respond on this
-          search"). The two states never read as each other. Same text-small
+          answered is named by the coverage line ("No response from
+          {merchant}"). The two states never read as each other. Same text-small
           muted treatment as the other chrome captions. */}
       {!primaryCoupon && offers.length > 0 && (
         <p className="mt-3" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>

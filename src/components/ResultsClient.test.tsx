@@ -616,7 +616,7 @@ describe("coverage line (REEA-290)", () => {
     });
     const html = document.body.innerHTML;
     // The failing retailer is named on the page…
-    expect(html).toContain("Jarir did not respond on this search.");
+    expect(html).toContain("No response from Jarir.");
     // …while the responding retailer's live offer still renders beside it.
     expect(html).toContain("Prices from Xcite.");
     expect(html).toContain("Sony WH-1000XM6");
@@ -633,7 +633,7 @@ describe("coverage line (REEA-290)", () => {
       );
     });
     // Nothing collected yet is not a coverage story — no empty stamp lands.
-    expect(document.body.innerHTML).not.toContain("did not respond");
+    expect(document.body.innerHTML).not.toContain("No response from");
   });
 });
 
@@ -725,7 +725,7 @@ describe("cold-start zero handling (REEA-437)", () => {
     // Provisional zero: skeleton heading instead of a flashing "0 results",
     // while the coverage line already names the pending retailer honestly.
     expect(document.querySelector("h1")).toBeNull();
-    expect(document.body.textContent).toContain("did not respond");
+    expect(document.body.textContent).toContain("No response from");
     // The follow-up feed lands the converged live answer — heading + cards.
     const late: LiveSearchResult = { products: SAMPLE_PRODUCTS, notes: [], suggestions: SAMPLE_PRODUCTS };
     await act(async () => {

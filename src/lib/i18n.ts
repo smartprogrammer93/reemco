@@ -264,7 +264,7 @@ const ar: typeof en = {
   copyLabel: "نسخ",
   copyAriaLead: "انسخ رمز الخصم",
   couponMoreSuffix: "أخرى",
-  couponNoneLabel: "لا يتوفر كوبون",
+  couponNoneLabel: "لا توجد قسيمة متاحة",
   errorTitle: "حدث خطأ ما",
   errorBody:
     "تعذّر إكمال تحميل هذه الصفحة. تحقق من اتصالك ثم أعد المحاولة — سيبقى بحثك كما هو.",

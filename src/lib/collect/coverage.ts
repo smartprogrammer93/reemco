@@ -99,7 +99,10 @@ export function coverageLine(
   const ar = locale === "ar";
   const parts: string[] = [];
   if (failed.length > 0)
-    parts.push(ar ? `${joinNames(failed, ar)} لم يستجب لهذا البحث.` : `${joinNames(failed)} did not respond on this search.`);
+    // REEA-468 G3 (PM copy decision): short-form scans faster at the grid
+    // slot — "No response from X" pairs with the coupon badge as its
+    // counterpart, instead of the longer sentence.
+    parts.push(ar ? `لا يوجد رد من ${joinNames(failed, ar)}.` : `No response from ${joinNames(failed)}.`);
   if (answered.length > 0)
     parts.push(ar ? `أسعار من ${joinNames(answered, ar)}.` : `Prices from ${joinNames(answered)}.`);
   return parts.join(" ");
