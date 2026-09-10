@@ -25,6 +25,7 @@ vi.mock("next/link", () => ({
   ),
 }));
 
+import { COVERAGE_ORDER } from "@/lib/collect/coverage";
 import AboutPage from "@/app/about/page";
 import PrivacyPage from "@/app/privacy/page";
 import ContactPage from "@/app/contact/page";
@@ -38,10 +39,17 @@ describe("static trust pages (REEA-181)", () => {
     expect(screen.getByRole("heading", { name: "About Reemco" })).toBeTruthy();
     expect(screen.getByText(/price-comparison site for shopping in Kuwait/)).toBeTruthy();
     expect(
-      screen.getByText(
-        "Xcite · Jarir · Eureka · Sultan Center · Blink · Lulu Hypermarket · Quadra Stores · Next Store · PC Kuwait.",
-      ),
+      screen.getByText(`${COVERAGE_ORDER.join(" · ")}.`),
     ).toBeTruthy();
+    // REEA-468 G4 parity: the About roster equals the live adapter roster —
+    // every merchant that can answer a result page is named here. The final
+    // "." is the sentence terminator around the roster, not part of the last
+    // merchant name — strip it before the per-name comparison.
+    const rendered = screen
+      .getByText(`${COVERAGE_ORDER.join(" · ")}.`)
+      .textContent!.replace(/\.$/, "")
+      .split(" · ");
+    expect(rendered).toEqual([...COVERAGE_ORDER]);
     expect(screen.getByText(/fetched live from each retailer/)).toBeTruthy();
   });
 
