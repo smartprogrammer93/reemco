@@ -50,13 +50,16 @@ describe("resolveUiLocale query-text step (REEA-448 G2)", () => {
     expect(resolveUiLocale(undefined, null)).toBe("en");
   });
 
-  it("chain order holds: cookie > stated header > query text", () => {
+  it("chain order holds: cookie > ar-starting header > Arabic query > en header", () => {
     // Stated cookie outranks everything…
     expect(resolveUiLocale("en", null, "آيفون")).toBe("en");
-    // …then a header that states a served language…
-    expect(resolveUiLocale(undefined, "en-US", "آيفون")).toBe("en");
+    // …then a header that starts with ar…
     expect(resolveUiLocale(undefined, "ar-KW", "iPhone")).toBe("ar");
-    // …then the query text; an unheld header alone never blocks it.
+    // …then the Arabic-script query. Per REEA-451 F2 an explicit en header
+    // never blocks it: an Arabic query resolves ar even with Accept-Language:
+    // en, while a Latin query on the same header still lands on en.
+    expect(resolveUiLocale(undefined, "en-US", "آيفون")).toBe("ar");
+    expect(resolveUiLocale(undefined, "en-US", "iPhone")).toBe("en");
     expect(resolveUiLocale(undefined, "fr-FR", "آيفون")).toBe("ar");
     expect(resolveUiLocale(undefined, "fr-FR", "iPhone")).toBe("en");
   });

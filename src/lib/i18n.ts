@@ -397,8 +397,11 @@ export function localeFromQueryText(
 }
 
 /** The one chain every surface shares (REEA-448 order): stated cookie first,
- *  then the coarse Accept-Language hint, then an Arabic-script query text,
- *  then the "en" default. Same shape as resolveCountrySelection. */
+ *  then a header that starts with ar, then an Arabic-script query text, then
+ *  an explicit en header or the "en" default. Per REEA-451 F2 an explicit en
+ *  header does NOT block the query-script step: an Arabic query resolves ar
+ *  even when Accept-Language says en (or is absent). Same shape as
+ *  resolveCountrySelection. */
 export function resolveUiLocale(
   cookieRaw: unknown,
   acceptLanguage: string | null | undefined,
@@ -407,8 +410,10 @@ export function resolveUiLocale(
   const stated = normalizeLocaleCookie(cookieRaw);
   if (stated) return stated;
   const hint = hintLocaleFromAcceptLanguage(acceptLanguage);
-  if (hint) return hint;
-  return localeFromQueryText(queryText) ?? "en";
+  if (hint === "ar") return hint;
+  const fromQuery = localeFromQueryText(queryText);
+  if (fromQuery) return fromQuery;
+  return hint ?? "en";
 }
 
 /** The cookie read behind everything (mirrors readMarketCookie). */
