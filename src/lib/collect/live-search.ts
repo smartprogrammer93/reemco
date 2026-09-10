@@ -47,6 +47,7 @@ import {
   brandIsNamed,
   isAccessoryTitle,
   isModelExtended,
+  latinQueryForms,
   matchesQueryToken,
   queryMatchTokens,
   relevanceTier,
@@ -1626,12 +1627,16 @@ export const COLLECTORS: RetailerCollector[] = [
       };
       mergeItems(await apiItems(query));
       if (items.length === 0) {
-        // Empty whole-query answer: one bounded per-word re-search (longest
-        // words first are the most selective), still riding the JSON window.
-        const words = query
-          .split(/\s+/)
-          .filter((w) => w.length > 1)
-          .slice(0, 3);
+        // Empty whole-query answer: one bounded per-word re-search, still
+        // riding the JSON window. REEA-416 — curated Latin forms of Arabic
+        // tokens lead the set: this Latin-title catalog answers `rice` while
+        // every Arabic spelling returns a bare []. Forms ride ahead of the
+        // raw words in the SAME bounded cap; the shared gate still scores
+        // rows against the ORIGINAL query, so near-miss titles drop exactly
+        // as before.
+        const words = Array.from(
+          new Set([...latinQueryForms(query), ...query.split(/\s+/).filter((w) => w.length > 1)]),
+        ).slice(0, 3);
         for (const word of words) mergeItems(await apiItems(word));
       }
       // An empty answer after the whole-query + per-word pass is NOT proof

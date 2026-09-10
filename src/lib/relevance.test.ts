@@ -10,6 +10,7 @@ import {
   arabicBrandIntent,
   brandIsNamed,
   curatedBrandInTitle,
+  latinQueryForms,
   isAccessoryTitle,
   isModelExtended,
   matchesQueryToken,
@@ -154,6 +155,15 @@ describe("Arabic brand-token matching (REEA-195)", () => {
     expect(matchesQueryToken("Dove Beauty Cream Bar Soap Pink", "صابون")).toBe(true);
     expect(matchesQueryToken("nescafe classic 2 in 1 instant coffee", "دوف")).toBe(false);
     expect(arabicBrandIntent("دوف صابون")).toBe("Dove");
+  });
+
+  it("latinQueryForms bridges Arabic probe tokens for Latin-only JSON catalogs (REEA-416)", () => {
+    expect(latinQueryForms("ارز بسمتي")).toEqual(["rice", "basmati"]);
+    expect(latinQueryForms("دوف صابون")).toEqual(["dove", "soap"]);
+    expect(latinQueryForms("كيبورد")).toEqual(["keyboard"]);
+    // Latin queries keep their untouched path; unaliased tokens add nothing.
+    expect(latinQueryForms("keyboard")).toEqual([]);
+    expect(latinQueryForms("سماعة بلوتوث")).toEqual(["headphone", "headset", "earbud"]);
   });
 
   it("Arabic brand queries name the brand for lead ordering", () => {

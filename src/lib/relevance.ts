@@ -121,6 +121,7 @@ const ARABIC_QUERY_ALIASES: ReadonlyMap<string, readonly string[]> = new Map([
   ["ارز", ["rice"]],
   ["بسمتي", ["basmati"]],
   ["صابون", ["soap"]],
+  ["كيبورد", ["keyboard"]],
   ["لابتوب", ["laptop", "notebook"]],
   ["جوال", ["smartphone", "mobile phone"]],
   ["سماعة", ["headphone", "headset", "earbud"]],
@@ -156,6 +157,29 @@ export function queryMatchTokens(query: string): string[] {
         .filter((t) => t.length >= 2),
     ),
   );
+}
+
+/** Curated Latin spellings of the Arabic-script tokens in a query, in token
+ *  order (brand alias value first, then curated category forms). JSON
+ *  storefronts whose catalogs are Latin-only answer these spellings while
+ *  the Arabic one comes back empty — measured live on pckuwait: `ارز` → a
+ *  bare [] from the Store API, `rice` → priced rows. Tokens without an
+ *  alias are skipped: the caller's own per-word re-search still covers
+ *  them. Purely-Latin queries return []. */
+export function latinQueryForms(query: string): string[] {
+  const forms: string[] = [];
+  for (const t of queryMatchTokens(query)) {
+    if (!/[\u0600-\u06FF]/.test(t)) continue;
+    const folded = normalizeArabicText(t);
+    const brand = ARABIC_BRAND_ALIASES.get(folded);
+    if (brand !== undefined) {
+      forms.push(brand.toLowerCase());
+      continue;
+    }
+    const cats = ARABIC_QUERY_ALIASES.get(folded);
+    if (cats !== undefined) forms.push(...cats);
+  }
+  return Array.from(new Set(forms));
 }
 
 /** True when one query token is answered by the title: substring match on the

@@ -359,6 +359,41 @@ describe("hit parsers", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("PC Kuwait Arabic probe re-searches the curated Latin forms (REEA-416)", async () => {
+    resetDiscoveryCache();
+    // Measured live: the Store API answers `keyboard` with priced rows while
+    // every Arabic spelling (phrase or single token) returns a bare []. The
+    // curated Latin forms lead the SAME bounded re-search set; the shared
+    // gate still scores rows against the ORIGINAL Arabic query through the
+    // alias bridge (كيبورد → keyboard).
+    const seenQ: string[] = [];
+    const { notes } = await collectLiveResults("كيبورد", {
+      fetchImpl: async (url) => {
+        if (url.includes("wp-json/wc/store/v1/products")) {
+          const q = decodeURIComponent(url.match(/[?&]search=([^&]*)/)?.[1] ?? "");
+          seenQ.push(q);
+          const rows =
+            q === "keyboard"
+              ? [
+                  {
+                    name: "Keychron Q16 HE Mechanical Keyboard",
+                    permalink: "https://pckuwait.com/product/q16-he/",
+                    is_in_stock: true,
+                    prices: { price: "64000", currency_code: "KWD", currency_minor_unit: 3 },
+                  },
+                ]
+              : [];
+          return new Response(JSON.stringify(rows), { headers: { "content-type": "application/json" } });
+        }
+        return new Response("{}");
+      },
+    });
+    expect(seenQ).toContain("keyboard");
+    const note = notes.find((n) => n.merchant === "PC Kuwait");
+    expect((note?.hits ?? 0)).toBeGreaterThanOrEqual(1);
+    expect(note?.error).toBeUndefined();
+  });
+
   it("luluHits lifts JSON-LD offers and honours schema.org availability (REEA-238)", () => {
     // Shape captured from the luluhypermarket.com SSR search page 2026-09-08:
     // ItemList wrapper, relative offer URLs, explicit InStock/OutOfStock.
