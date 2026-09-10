@@ -35,3 +35,21 @@ export function isTenMinutesOld(iso: string | undefined, now: number = Date.now(
   if (Number.isNaN(t)) return true;
   return now - t >= 10 * 60 * 1000;
 }
+
+/**
+ * REEA-510 — absolute collection clock for labeled last-seen fallback rows:
+ * "collected HH:MM" (UTC hour:minute). Snapshot rows age past the relative
+ * ladder's useful range quickly, so a filled column states the moment the
+ * offers were actually collected rather than an age; missing/invalid stamps
+ * return null and the caller falls back to the regular relative age. Pure +
+ * deterministic so SSR and hydration always agree (REEA-283 clock discipline).
+ */
+export function collectedClock(iso: string | undefined): string | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  const d = new Date(t);
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}

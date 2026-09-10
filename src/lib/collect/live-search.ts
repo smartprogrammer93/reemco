@@ -38,6 +38,7 @@ import {
 } from "@/lib/query-cache";
 import type { FetchImpl } from "@/lib/collect/scraper";
 import type { CountryCode } from "@/lib/country";
+import { fillSilentFromLastSeen, rememberRound } from "@/lib/collect/last-seen";
 import { sanitizeExternalUrl } from "@/lib/safe-url";
 import { toKwdNumeric } from "@/lib/format";
 import { canonicalFields, compatibleFields, listingLabel, type CanonicalFields } from "@/lib/collect/canonical-product";
@@ -163,6 +164,13 @@ export interface SearchHit {
    * freshness reads from its retailer, not just the run's completion stamp.
    */
   collectedAt?: string;
+  /**
+   * REEA-510 — true when this row was replayed from the ≤24 h last-seen
+   * snapshot because the retailer's LIVE pass stayed silent for this query.
+   * Flagged rows sort below every live row and render their snapshot
+   * collection clock, so a filled column never masquerades as a fresh answer.
+   */
+  fromSnapshot?: boolean;
   /**
    * REEA-488 item 2 — the listing's coupon info when its retailer contract
    * carries any: the machine-readable discount value ("10% off", "5 KWD off")
@@ -2140,8 +2148,11 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean): Nor
       // Cheapest offer first in KWD-space (REEA-167 §2 + REEA-254 item B);
       // purchasable offers break ties. Within one currency the order is the
       // scraped order — the conversion only aligns figures ACROSS currencies.
+      // REEA-510: snapshot rows always ride BELOW the live answers — the flag
+      // leads the ladder, price orders inside each tier.
       .sort(
         (a, b) =>
+          (a.fromSnapshot ? 1 : 0) - (b.fromSnapshot ? 1 : 0) ||
           toKwdNumeric(a.price, a.currency) - toKwdNumeric(b.price, b.currency) ||
           Number(b.inStock) - Number(a.inStock),
       )
@@ -2161,6 +2172,9 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean): Nor
           ...(label !== "" ? { label } : {}),
           // REEA-486 AC-2: per-row collected-at from the retailer's own hop.
           ...(o.collectedAt ? { collectedAt: o.collectedAt } : {}),
+          // REEA-510: the snapshot marker rides to the rendered row so the
+          // card can show its collection clock instead of the fresh age.
+          ...(o.fromSnapshot ? { fromSnapshot: true } : {}),
           // REEA-281 AC-1: each retailer's own listing photo rides its row;
           // rows whose contract carries no photo simply have none (the card
           // then renders its text-only fallback).
@@ -2411,6 +2425,9 @@ function stagedSnapshot(
   // the cheaper same-family list from the hits collected so far. The trim the
   // flush needs is the ENTRY sharing in finalizeGroups (one distinct object
   // per referenced group, referred to afterwards), not an empty array.
+  // REEA-510: intermediate flushes stay pure-live on purpose — a merchant
+  // that has not answered yet at flush time is still in flight, not silent;
+  // the last-seen fill lands with the converged snapshot only (finalSnapshot).
   const products = groupHits(q, hits);
   return { products, notes, suggestions: products.slice(0, 3) };
 }
@@ -2492,11 +2509,13 @@ async function finalSnapshot(
   settled: SettledAdapter[],
   fetchImpl: FetchImpl,
   widenedRetry = false,
+  snapshotsEnabled = true,
 ): Promise<LiveSearchResult> {
   const { hits, notes } = filterNotes(country, settled);
   let products = groupHits(q, hits);
   let servedNotes = notes;
   let attemptedQueries: string[] | undefined;
+  let widenedWithAnswers = false;
   if (q && products.length === 0 && !widenedRetry) {
     // REEA-437 — one widened retry before declaring empty: whole phrases can
     // answer thin on a cold hop (retailer engines match nearly-exact phrases
@@ -2512,6 +2531,7 @@ async function finalSnapshot(
     const retry = await collectLiveResults(wider, { fetchImpl, country, widenedRetry: true });
     if (retry.products.length > 0) {
       products = retry.products;
+      widenedWithAnswers = true;
       // Coverage honesty: a merchant whose retry hop answered overwrites its
       // round-one note (the coverage line describes what the served cards
       // actually came from); merchants that stayed silent keep their note.
@@ -2524,6 +2544,20 @@ async function finalSnapshot(
         if (!servedNotes.some((n) => n.merchant === r.merchant)) servedNotes.push(r);
       }
     }
+  }
+  // REEA-510 — genuine empties only: merchants whose live pass kept zero
+  // offers (or stayed down after both bounded attempts) fill from their ≤24 h
+  // last-seen snapshot, BELOW the live rows (finalizeGroups sorts flagged
+  // rows last). Only on the CONVERGED snapshot: at intermediate flushes a
+  // missing merchant is still in flight, not silent. A widened retry already
+  // ran the whole chain for the trimmed form — its answer carries its own
+  // honest fill, so the merge is skipped when it produced products.
+  // Snapshot state rides the shared last-seen store; a diagnostic chain with
+  // its own injected fetchImpl observes its own hops (same rule as NO_CACHE)
+  // unless it opts in explicitly through opts.snapshots.
+  if (snapshotsEnabled && !widenedWithAnswers) {
+    const fill = await fillSilentFromLastSeen(q, country, settled);
+    if (fill.length > 0) products = groupHits(q, [...hits, ...fill]);
   }
   return { products, notes: servedNotes, suggestions: products.slice(0, 3), attemptedQueries };
 }
@@ -2555,6 +2589,14 @@ export interface StagedCollectOptions {
    * rounds (whole query + one trimmed form) instead of recursing per level.
    */
   widenedRetry?: boolean;
+  /**
+   * REEA-510 — last-seen snapshot participation. Default follows the memo
+   * rule: production calls (no injected fetchImpl) use the shared snapshot
+   * store; a diagnostic chain with its own fetchImpl observes only its own
+   * hops. `true` opts a stubbed run in explicitly (tests of the fill path),
+   * `false` opts a production-shaped run out.
+   */
+  snapshots?: boolean;
 }
 
 /** Always-miss cache used when the caller injects its own fetchImpl: a
@@ -2599,6 +2641,10 @@ export function collectLiveResultsStaged(
     ? COLLECTORS.filter((c) => c.country === country)
     : COLLECTORS;
   const cache = opts.cache ?? (opts.fetchImpl ? NO_CACHE : defaultQueryCache);
+  // REEA-510 — same injected-fetch isolation as NO_CACHE above: stubbed runs
+  // observe only their own hops; production runs share the last-seen store.
+  // Tests of the fill path opt in through opts.snapshots.
+  const snapshotsEnabled = opts.snapshots ?? opts.fetchImpl === undefined;
   // REEA-291 AC5 — memo identity is the NORMALIZED QUERY STRING ONLY: the
   // collected answer is per query; viewer-side selections filter the loaded
   // payload at render time (ResultsClient), never fork the memo.
@@ -2677,7 +2723,12 @@ export function collectLiveResultsStaged(
   ).then(() => finalizedSnapshot(q, country, collectors, settled.slice(), deadlineMs));
   const converged: Promise<LiveSearchResult> = Promise.all(runs)
     .then(() => deepenSilent(q, settled, fetchImpl))
-    .then(() => finalSnapshot(q, country, settled, fetchImpl, opts.widenedRetry === true));
+    // REEA-510 — publish this round's live answers as last-seen snapshots on
+    // the SAME converged tail the response cache write-through rides (the
+    // after() window): one write per run, behind the finalized response, so
+    // the next silent pass for a retailer+query has its labeled fallback.
+    .then(() => (snapshotsEnabled ? rememberRound(q, settled) : undefined))
+    .then(() => finalSnapshot(q, country, settled, fetchImpl, opts.widenedRetry === true, snapshotsEnabled));
 
   const stages: Promise<LiveSearchResult>[] = collectors.map(async (_c, k) => {
     if (k < collectors.length - 1) {

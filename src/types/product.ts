@@ -36,6 +36,15 @@ export interface PriceOffer {
    * just to the card's completion stamp. Absent on catalog-fallback rows.
    */
   collectedAt?: string;
+  /**
+   * REEA-510 — true when the row was replayed from the retailer's ≤24 h
+   * last-seen snapshot after its LIVE pass stayed silent for the query.
+   * Flagged rows sort below every live row and render their snapshot
+   * collection clock ("collected HH:MM"), so a filled column never reads as
+   * a fresh answer. The live path stays primary: a fresh live answer replaces
+   * the snapshot automatically on the next query.
+   */
+  fromSnapshot?: boolean;
 }
 
 export interface Coupon {

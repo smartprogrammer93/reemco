@@ -185,11 +185,13 @@ export function formatCountryPrice(
   };
 }
 
-/** Sort offers so in-stock items come first, then cheapest. REEA-254: the
+/** Sort offers so live answers lead (REEA-510: snapshot rows always ride
+ *  below every live row), then in-stock items, then cheapest. REEA-254: the
  *  cheapest comparison runs in KWD-space (toKwdNumeric) so a SAR listing is
  *  compared against KWD listings on the same scale, not on raw numerics. */
 export function sortOffers(offers: PriceOffer[]): PriceOffer[] {
   return [...offers].sort((a, b) => {
+    if (!!a.fromSnapshot !== !!b.fromSnapshot) return a.fromSnapshot ? 1 : -1;
     if (a.inStock !== b.inStock) return a.inStock ? -1 : 1;
     return toKwdNumeric(a.price, a.currency) - toKwdNumeric(b.price, b.currency);
   });

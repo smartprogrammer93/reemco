@@ -4,7 +4,7 @@ import type { Coupon, NormalizedProduct, PriceOffer } from "@/types/product";
 import { buildResultsHref, type CountryCode } from "@/lib/country";
 import { effectivePrice, formatCountryPrice, formatKdDigits, formatPrimaryPrice, sortOffers, toKwdNumeric } from "@/lib/format";
 import { gradeBadgeLabel } from "@/lib/collect/canonical-product";
-import { relativeAge } from "@/lib/relative-time";
+import { collectedClock, relativeAge } from "@/lib/relative-time";
 import CouponBadge from "@/components/CouponBadge";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import { resolveOfferUrl } from "@/lib/links";
@@ -346,6 +346,14 @@ export default function ProductResultCard({
               // REEA-486 AC-2: the row's own hop stamp, aged against the same
               // baked render clock the freshness chip uses (hydration-stable).
               const age = relativeAge(o.collectedAt, renderStartMs);
+              // REEA-510 — snapshot-filled rows state their ABSOLUTE
+              // collection moment ("collected HH:MM") instead of a bare age:
+              // the column was filled by this retailer+query's last live
+              // answer, and the label says WHEN that happened. No usable
+              // clock falls back to the plain age — never an empty qualifier.
+              const clock = collectedClock(o.collectedAt);
+              const stampLabel =
+                o.fromSnapshot && clock != null ? `${t.collectedWord} ${clock}` : age;
               return (
                 <li
                   key={`${o.merchant}-${o.url}`}
@@ -432,8 +440,9 @@ export default function ProductResultCard({
                       {/* REEA-486 AC-2: this row's own collected-at, aged —
                           muted like the converted stamp, so the figure keeps
                           the crown but every offer reads traceable to its
-                          hop. */}
-                      {age != null && <span className="price-alt">{age}</span>}
+                          hop. REEA-510: snapshot rows print their absolute
+                          collection clock instead (see stampLabel). */}
+                      {stampLabel != null && <span className="price-alt">{stampLabel}</span>}
                     </span>
                     {/* REEA-13: render scraped hrefs only through validation;
                         REEA-116: direct retailer product URLs for every
