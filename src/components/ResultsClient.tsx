@@ -727,7 +727,15 @@ function StagedResults(props: {
       <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
       <Suspense fallback={null}>
         <ResultsHeading
-          stage={stages[0]}
+          // REEA-382 AC-1 — the count reads from the FINAL stage, the same
+          // snapshot the appended flushes converge onto, so the delivered
+          // document's heading number equals the rendered card count. Stage
+          // zero used to feed it: the shell then kept a stage-one count while
+          // later flushes kept stacking cards under it ("20 results" over a
+          // 67-card grid at the nineteen-store set). The skeleton covers the
+          // gap exactly like the REEA-437 zero case — the number that lands
+          // is already true when it lands.
+          stage={finalPromise}
           stagesCount={stages.length}
           query={query}
           page={page}

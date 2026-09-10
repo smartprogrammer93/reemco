@@ -391,6 +391,12 @@ describe("staged progressive results (REEA-178)", () => {
     expect(html).toContain("Sony WH-CH720N");
     // Converged view: full count heading with the merged 2-result set.
     expect(document.body.textContent).toContain("2 results for");
+    // REEA-382 AC-1 — the heading number equals the rendered card count in
+    // the same markup: two products, exactly two article.result-card
+    // elements. The heading reading the FINAL snapshot (not stage zero) is
+    // what keeps the served document self-consistent under append-only
+    // flushes at the nineteen-store row counts.
+    expect(document.querySelectorAll("article.result-card")).toHaveLength(2);
 
     const evts = eventsSent();
     const search = evts.find((e) => e.type === "search_submitted");
