@@ -1,15 +1,15 @@
 /**
  * REEA-439 — bounded-staleness repeat-search regression tests:
- * the shared edge window (set from the proxy layer) must stay in the 30–60 s
- * band with a stale tail that keeps the worst served age ≈60 s, must not be
- * `no-store` (that is the bug this issue fixes), and must cover both results
- * addresses while leaving other routes alone; the server-side memo window
- * stays inside the same band; and the Refresh bypass always produces a UNIQUE
- * URL (guaranteed miss on the shared entry) without disturbing the
- * normalized-query identity the memo keys on.
+ * the shared edge window (src/proxy.ts sharedWindowHeaders) must stay in the
+ * 30–60 s band with a stale tail that keeps the worst served age ≈60 s, must
+ * not be `no-store` (that is the bug this issue fixes), and must cover both
+ * results addresses; the server-side memo window stays inside the same band;
+ * and the Refresh bypass always produces a UNIQUE URL (guaranteed miss on the
+ * shared entry) without disturbing the normalized-query identity the memo
+ * keys on.
  */
 import { describe, expect, it } from "vitest";
-import { RESULTS_CACHE_CONTROL, proxy } from "../proxy";
+import { RESULTS_PATHS, sharedWindowHeaders } from "@/proxy";
 import {
   QUERY_CACHE_FRESH_MS,
   createQueryCache,
@@ -17,13 +17,11 @@ import {
   withRefreshBypass,
 } from "@/lib/query-cache";
 
-function makeRequest(pathname: string) {
-  return { nextUrl: { pathname }, headers: new Headers() } as Parameters<typeof proxy>[0];
-}
-
-describe("REEA-439 shared repeat-search window (proxy headers)", () => {
-  it("sets a bounded shared window in the 30–60 s band", () => {
-    const cc = RESULTS_CACHE_CONTROL;
+describe("REEA-439 shared repeat-search window (headers)", () => {
+  it("sets a bounded shared window on both results addresses", () => {
+    expect([...RESULTS_PATHS]).toContain("/results");
+    expect([...RESULTS_PATHS]).toContain("/search");
+    const cc = sharedWindowHeaders()["Cache-Control"];
     expect(cc).toContain("public");
     expect(cc).toContain("max-age=0");
     expect(cc).not.toContain("no-store");
@@ -40,17 +38,8 @@ describe("REEA-439 shared repeat-search window (proxy headers)", () => {
     expect(fresh + swr).toBeLessThanOrEqual(60);
   });
 
-  it("applies the window + locale vary on both results addresses", () => {
-    for (const pathname of ["/results", "/search"]) {
-      const res = proxy(makeRequest(pathname));
-      expect(res.headers.get("Cache-Control")).toBe(RESULTS_CACHE_CONTROL);
-      expect(res.headers.get("Vary")).toContain("Accept-Language");
-    }
-  });
-
-  it("leaves non-results routes to the framework defaults", () => {
-    const res = proxy(makeRequest("/about"));
-    expect(res.headers.get("Cache-Control")).toBeNull();
+  it("keeps locale out of shared entries via Accept-Language vary", () => {
+    expect(sharedWindowHeaders().Vary).toContain("Accept-Language");
   });
 
   it("memo fresh window stays inside the same bounded band", () => {

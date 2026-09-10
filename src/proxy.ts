@@ -12,10 +12,6 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const CSP_MODE = (process.env.CSP_MODE ?? "enforce").toLowerCase(); // "enforce" | "report-only"
 
-/** REEA-439 shared repeat-search window: 45 s fresh + 15 s SWR tail (≤ 60 s). */
-export const RESULTS_CACHE_CONTROL =
-  "public, max-age=0, s-maxage=45, stale-while-revalidate=15";
-
 export function buildCsp(nonce: string, mode: string = CSP_MODE): string {
   const directives = [
     `default-src 'self'`,
@@ -44,6 +40,28 @@ export function buildCsp(nonce: string, mode: string = CSP_MODE): string {
   return policy;
 }
 
+/**
+ * REEA-439 — bounded shared window for repeat identical searches, moved here
+ * from the next.config headers block so BOTH results-address response headers
+ * (the window plus its locale Vary) are set together in middleware: the
+ * renderer overwrites plain framework headers, so the pair belongs in one
+ * place. The window keys on the URL — the query string IS the normalized
+ * search — so each locale variant of a query keeps its own bounded entry
+ * ("normalized query, keep locale"), and Refresh bypasses with a unique
+ * `?_r=` stamp (see src/lib/query-cache.ts).
+ */
+export const RESULTS_PATHS = ["/results", "/search"] as const;
+
+export function sharedWindowHeaders(): { "Cache-Control": string; Vary: string } {
+  return {
+    "Cache-Control": "public, max-age=0, s-maxage=45, stale-while-revalidate=15",
+    // Carries Accept-Language first (locale must not share entries) plus the
+    // framework's own vary terms so the combined list survives wherever the
+    // renderer does not rewrite Vary itself.
+    Vary: "Accept-Language, rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch, Accept-Encoding",
+  };
+}
+
 export function proxy(request: NextRequest) {
   const nonce = crypto.randomUUID().replace(/-/g, "");
   const csp = buildCsp(nonce);
@@ -58,26 +76,14 @@ export function proxy(request: NextRequest) {
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   response.headers.set("X-Frame-Options", "DENY"); // legacy complement to frame-ancestors
   response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  // REEA-439 — bounded shared window for repeat identical searches. The
-  // results walk is slow (~21 s warm, up to ~26 s cold) and the served
-  // response carried `private, no-cache, no-store`, so every repeat of the
-  // SAME query paid the full cold fetch (measured before: p95 ~19 s, MISS on
-  // every repeat). These headers let the shared edge layer answer a repeat
-  // inside the window from the SAME live render — same scrapedAt stays
-  // visible — while every miss still runs the live-per-query fan-out
-  // (REEA-114 live-at-query-time policy untouched). Fresh window 45 s +
-  // stale-serving tail 15 s bounds served age at ~60 s plus one fetch cycle
-  // (issue AC-3); `max-age=0` keeps the browser honest. The URL query IS the
-  // normalized search identity (`?q=` plus the `c`/`oos`/`page` view params);
-  // locale stays a separate entry through the Accept-Language Vary, and the
-  // Refresh button bypasses with a unique `?_r=` stamp (see ResultsClient).
-  // Set here (not via next.config headers()) because the renderer overwrites
-  // both Cache-Control and Vary during render — the middleware values are
-  // what survive onto the final response on the platform.
+  // REEA-439 — bounded shared window + locale Vary ride together on both
+  // results addresses (sharedWindowHeaders above); middleware-set headers
+  // merge with the framework's own list instead of being overwritten.
   const path = request.nextUrl.pathname;
-  if (path === "/results" || path === "/search") {
-    response.headers.set("Cache-Control", RESULTS_CACHE_CONTROL);
-    response.headers.set("Vary", "Accept-Language");
+  if (RESULTS_PATHS.some((source) => path === source)) {
+    for (const [key, value] of Object.entries(sharedWindowHeaders())) {
+      response.headers.set(key, value);
+    }
   }
   return response;
 }
