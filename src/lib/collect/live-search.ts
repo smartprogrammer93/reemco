@@ -1142,6 +1142,42 @@ export async function jsdClearedHtml(fetchImpl: FetchImpl, url: string): Promise
   }
 }
 
+/** Curated anycast IPv4s for the Lulu Kuwait zone (resolved from the
+ *  storefront host 2026-09-10 — Cloudflare-fronted, so these ride the same
+ *  edge but each connection gets its own challenge decision). */
+const LULU_KUWAIT_IPS: readonly string[] = ["104.18.40.47", "172.64.147.209"];
+
+/**
+ * REEA-416 — bounded Static-IPs hop: when both identity paths on the Lulu
+ * zone miss on this egress, reach the same search view through the host's
+ * static IPs with the Host header pinned. The zone answers the managed
+ * challenge per connection, so a fresh per-IP decision can land past the
+ * interstitial the hostname rotation kept hitting on the one shared egress
+ * fingerprint (measured 2026-09-10: container and edge both saw the shell
+ * on the hostname hop across every rotating identity). Plain-http scheme on
+ * purpose: an IP-addressed https fetch carries the IP as TLS SNI and every
+ * shape measured fails the handshake that way; on port 80 the pinned Host
+ * reaches the zone's rules unchanged. Keeps the first body that carries
+ * real JSON-LD content; best-effort like every hop here — an empty string
+ * lets the caller keep whatever the identity path produced.
+ */
+async function staticIpHtml(fetchImpl: FetchImpl, url: string): Promise<string> {
+  const target = new URL(url);
+  const path = `${target.pathname}${target.search}`;
+  const window = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
+  for (const ip of LULU_KUWAIT_IPS) {
+    if (window.aborted) break;
+    try {
+      const res = await fetchImpl(`http://${ip}${path}`, { headers: { host: target.host }, cache: "no-store", signal: window } as RequestInit);
+      const body = await res.text();
+      if (body.includes("application/ld+json")) return body;
+    } catch {
+      // One bounded pass per IP; the next IP still gets its own decision.
+    }
+  }
+  return "";
+}
+
 export const COLLECTORS: RetailerCollector[] = [
   {
     merchant: "Xcite",
@@ -1646,7 +1682,13 @@ export const COLLECTORS: RetailerCollector[] = [
       }
       if (html !== "" && !html.includes("cf-error-details")) return luluHits(html, query);
       const cleared = await jsdClearedHtml(fetchImpl, searchUrl);
-      return luluHits(cleared !== "" ? cleared : html, query);
+      if (cleared !== "" && !cleared.includes("cf-error-details")) return luluHits(cleared, query);
+      // REEA-416 — Static-IPs fallback per the batch-4 recipe: both identity
+      // paths missed on this egress, the per-IP passes still get fresh CF
+      // decisions. Whatever answers rides the same luluHits gate; a miss
+      // here keeps the old degraded-note shape unchanged.
+      const viaIp = await staticIpHtml(fetchImpl, searchUrl);
+      return luluHits(viaIp !== "" ? viaIp : cleared !== "" ? cleared : html, query);
     },
   },
   {

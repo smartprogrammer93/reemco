@@ -1465,6 +1465,46 @@ describe("collectLiveResults page width (REEA-156)", () => {
       expect(seen.some((u) => u.includes("amazon.eg"))).toBe(false);
     });
 
+    it("Lulu falls through to the Static-IPs hop when both identity paths land on the interstitial (REEA-416)", async () => {
+      resetDiscoveryCache();
+      // Measured shape 2026-09-10: from cloud egress every rotating identity
+      // on the hostname hop returns the CF interstitial, while the per-IP
+      // passes (fresh challenge decision per connection) can answer the real
+      // JSON-LD page. The Arabic grocery probe must then score the basmati
+      // row through the shared gate (ارز/بسمتي → rice/basmati).
+      const seen: string[] = [];
+      const ld = JSON.stringify({
+        "@type": "ItemList",
+        itemListElement: [
+          {
+            "@type": "Item",
+            item: {
+              "@type": "Product",
+              name: "Country Xl Organic Basmati Rice",
+              offers: {
+                "@type": "Offer",
+                price: "2.3100",
+                priceCurrency: "KWD",
+                availability: "https://schema.org/InStock",
+                url: "/en/country-xl-organic-basmati-rice-2-kg",
+              },
+            },
+          },
+        ],
+      });
+      const fetchImpl = async (url: string): Promise<Response> => {
+        seen.push(url);
+        if (url.startsWith("http://")) {
+          return new Response(`<html><head><script type="application/ld+json">${ld}</script></head><body>ok</body></html>`);
+        }
+        return new Response('<html><head><script>document.cookie="cf_clearance=t"</script></head><body>cf-error-details</body></html>');
+      };
+      const { notes } = await collectLiveResults("\u0627\u0631\u0632 \u0628\u0633\u0645\u062a\u064a", { fetchImpl, country: "KW" });
+      const lulu = notes.find((n) => n.merchant === "Lulu Hypermarket");
+      expect(lulu?.hits ?? 0).toBeGreaterThanOrEqual(1);
+      expect(seen.some((u) => /^http:\/\/\d/.test(u))).toBe(true);
+    });
+
     it("without a selection every adapter keeps serving (default unchanged)", async () => {
       resetDiscoveryCache();
       const fetchImpl = async (url: string): Promise<Response> => {
