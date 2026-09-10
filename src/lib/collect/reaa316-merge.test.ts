@@ -100,13 +100,16 @@ describe("REEA-316 merged Scope II X card through the live pipeline", () => {
     expect(keyboards).toHaveLength(1);
     const card = keyboards[0];
 
-    // One row per retailer (REEA-192), cheapest first in KWD-space: Blink's
-    // best listing leads; the RX sibling folds in as the same card's second
-    // Blink listing and only the cheaper row survives.
+    // One card for the identity, cheapest first in KWD-space. REEA-486 AC-6:
+    // the second Blink listing is the merchant's OWN distinguished sibling
+    // (RX switch / Arabic layout — visible qualifiers), so it keeps its
+    // labelled row instead of hiding behind the cheaper X spelling; every
+    // other retailer still folds to its best row (REEA-192).
     expect(card.offers.map((o) => `${o.merchant}:${o.price}`)).toEqual([
       "Blink:37.5",
       "Xcite:37.9",
       "Quadra Stores:37.9",
+      "Blink:39.5",
       "Jarir:519",
     ]);
     // Was-price survives the merge on the Xcite row (savings pill feed).

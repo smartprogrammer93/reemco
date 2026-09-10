@@ -578,7 +578,7 @@ export function compatibleFields(a: CanonicalFields, b: CanonicalFields): boolea
  */
 export function listingLabel(listingTitle: string, cardTitle: string): string {
   const bare = (w: string): string =>
-    w.toLowerCase().replace(/^[(\[{]+/, "").replace(/[)\]},.;:!؟]+$/, "");
+    w.toLowerCase().replace(/^[(\[{“"'‘]+/, "").replace(/[)\]},.;:!؟”"'’]+$/, "");
   const words = (t: string): string[] => t.trim().replace(/\s+/g, " ").split(" ").filter(Boolean);
   const carried = new Set(words(cardTitle).map(bare).filter((w) => w !== ""));
   const kept: string[] = [];
