@@ -12,6 +12,10 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const CSP_MODE = (process.env.CSP_MODE ?? "enforce").toLowerCase(); // "enforce" | "report-only"
 
+/** REEA-439 shared repeat-search window: 45 s fresh + 15 s SWR tail (≤ 60 s). */
+export const RESULTS_CACHE_CONTROL =
+  "public, max-age=0, s-maxage=45, stale-while-revalidate=15";
+
 export function buildCsp(nonce: string, mode: string = CSP_MODE): string {
   const directives = [
     `default-src 'self'`,
@@ -54,13 +58,25 @@ export function proxy(request: NextRequest) {
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   response.headers.set("X-Frame-Options", "DENY"); // legacy complement to frame-ancestors
   response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  // REEA-439 — the bounded shared window (next.config headers) keys on the
-  // URL, so locale must split entries through Vary: keep each locale variant
-  // of a query in its own bounded entry ("normalized query, keep locale").
-  // Set here because the renderer overwrites the plain Vary header; the
-  // middleware vary merges with the framework's own list instead.
+  // REEA-439 — bounded shared window for repeat identical searches. The
+  // results walk is slow (~21 s warm, up to ~26 s cold) and the served
+  // response carried `private, no-cache, no-store`, so every repeat of the
+  // SAME query paid the full cold fetch (measured before: p95 ~19 s, MISS on
+  // every repeat). These headers let the shared edge layer answer a repeat
+  // inside the window from the SAME live render — same scrapedAt stays
+  // visible — while every miss still runs the live-per-query fan-out
+  // (REEA-114 live-at-query-time policy untouched). Fresh window 45 s +
+  // stale-serving tail 15 s bounds served age at ~60 s plus one fetch cycle
+  // (issue AC-3); `max-age=0` keeps the browser honest. The URL query IS the
+  // normalized search identity (`?q=` plus the `c`/`oos`/`page` view params);
+  // locale stays a separate entry through the Accept-Language Vary, and the
+  // Refresh button bypasses with a unique `?_r=` stamp (see ResultsClient).
+  // Set here (not via next.config headers()) because the renderer overwrites
+  // both Cache-Control and Vary during render — the middleware values are
+  // what survive onto the final response on the platform.
   const path = request.nextUrl.pathname;
   if (path === "/results" || path === "/search") {
+    response.headers.set("Cache-Control", RESULTS_CACHE_CONTROL);
     response.headers.set("Vary", "Accept-Language");
   }
   return response;

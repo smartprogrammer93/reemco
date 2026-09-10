@@ -1,15 +1,15 @@
 /**
  * REEA-439 — bounded-staleness repeat-search regression tests:
- * the shared edge window (next.config headers) must stay in the 30–60 s band
- * with a stale tail that keeps the worst served age ≈60 s, must not be
+ * the shared edge window (set from the proxy layer) must stay in the 30–60 s
+ * band with a stale tail that keeps the worst served age ≈60 s, must not be
  * `no-store` (that is the bug this issue fixes), and must cover both results
- * addresses; the server-side memo window stays inside the same band; and the
- * Refresh bypass always produces a UNIQUE URL (guaranteed miss on the shared
- * entry) without disturbing the normalized-query identity the memo keys on.
+ * addresses while leaving other routes alone; the server-side memo window
+ * stays inside the same band; and the Refresh bypass always produces a UNIQUE
+ * URL (guaranteed miss on the shared entry) without disturbing the
+ * normalized-query identity the memo keys on.
  */
 import { describe, expect, it } from "vitest";
-// eslint-disable-next-line import/no-relative-packages -- config lives at the repo root by Next convention
-import nextConfig from "../../next.config";
+import { RESULTS_CACHE_CONTROL, proxy } from "../proxy";
 import {
   QUERY_CACHE_FRESH_MS,
   createQueryCache,
@@ -17,44 +17,40 @@ import {
   withRefreshBypass,
 } from "@/lib/query-cache";
 
-function headerFor(entry: { headers: { key: string; value: string }[] }, key: string): string {
-  return entry.headers.find((h) => h.key === key)?.value ?? "";
+function makeRequest(pathname: string) {
+  return { nextUrl: { pathname }, headers: new Headers() } as Parameters<typeof proxy>[0];
 }
 
-describe("REEA-439 shared repeat-search window (headers)", () => {
-  const entries = (nextConfig.headers ? nextConfig.headers() : Promise.resolve([])) as Promise<
-    { source: string; headers: { key: string; value: string }[] }[]
-  >;
+describe("REEA-439 shared repeat-search window (proxy headers)", () => {
+  it("sets a bounded shared window in the 30–60 s band", () => {
+    const cc = RESULTS_CACHE_CONTROL;
+    expect(cc).toContain("public");
+    expect(cc).toContain("max-age=0");
+    expect(cc).not.toContain("no-store");
+    const smatch = cc.match(/s-maxage=(\d+)/);
+    const swrMatch = cc.match(/stale-while-revalidate=(\d+)/);
+    expect(smatch).not.toBeNull();
+    expect(swrMatch).not.toBeNull();
+    const fresh = Number(smatch![1]);
+    const swr = Number(swrMatch![1]);
+    // Issue: the window is about a minute (30–60 s band).
+    expect(fresh).toBeGreaterThanOrEqual(30);
+    expect(fresh).toBeLessThanOrEqual(60);
+    // AC-3: worst served age ≈ 60 s plus one fetch cycle.
+    expect(fresh + swr).toBeLessThanOrEqual(60);
+  });
 
-  it("sets a bounded shared window on both results addresses", async () => {
-    const list = await entries;
-    const sources = list.map((e) => e.source);
-    expect(sources).toContain("/results");
-    expect(sources).toContain("/search");
-    for (const entry of list) {
-      const cc = headerFor(entry, "Cache-Control");
-      expect(cc).toContain("public");
-      expect(cc).toContain("max-age=0");
-      expect(cc).not.toContain("no-store");
-      const smatch = cc.match(/s-maxage=(\d+)/);
-      const swrMatch = cc.match(/stale-while-revalidate=(\d+)/);
-      expect(smatch).not.toBeNull();
-      expect(swrMatch).not.toBeNull();
-      const fresh = Number(smatch![1]);
-      const swr = Number(swrMatch![1]);
-      // Issue: the window is about a minute (30–60 s band).
-      expect(fresh).toBeGreaterThanOrEqual(30);
-      expect(fresh).toBeLessThanOrEqual(60);
-      // AC-3: worst served age ≈ 60 s plus one fetch cycle.
-      expect(fresh + swr).toBeLessThanOrEqual(60);
+  it("applies the window + locale vary on both results addresses", () => {
+    for (const pathname of ["/results", "/search"]) {
+      const res = proxy(makeRequest(pathname));
+      expect(res.headers.get("Cache-Control")).toBe(RESULTS_CACHE_CONTROL);
+      expect(res.headers.get("Vary")).toContain("Accept-Language");
     }
   });
 
-  it("keeps locale out of shared entries via Accept-Language vary", async () => {
-    const list = await entries;
-    for (const entry of list) {
-      expect(headerFor(entry, "Vary")).toContain("Accept-Language");
-    }
+  it("leaves non-results routes to the framework defaults", () => {
+    const res = proxy(makeRequest("/about"));
+    expect(res.headers.get("Cache-Control")).toBeNull();
   });
 
   it("memo fresh window stays inside the same bounded band", () => {

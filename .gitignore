@@ -36,6 +36,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# build-time commit stamp (written by buildCommand from VERCEL_GIT_COMMIT_SHA)
+/public/__commit.txt
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
