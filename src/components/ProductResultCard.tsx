@@ -377,7 +377,9 @@ export default function ProductResultCard({
                       as whole units, never half-wrap their own text. */}
                   <span className="flex min-w-[160px] items-center gap-2">
                     <span style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
-                      {o.merchant}
+                      {/* REEA-451 F6 — bidi isolation around the Latin store name
+                          so bidi reordering can't flip it inside Arabic chrome. */}
+                      <bdi>{o.merchant}</bdi>
                     </span>
                     {/* REEA-486 AC-6: the merged card keeps each listing's own
                         qualifier visible — the label the retailer wrote

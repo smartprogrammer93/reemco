@@ -142,10 +142,13 @@ export default function OfferCard({
   const href = safeHref(url) ?? "";
   return (
     <article className={`result-card${isBest ? " is-best" : ""}`}>
-      {/* Retailer name first, calm (§5.3 order) */}
+      {/* Retailer name first, calm (§5.3 order). REEA-451 F6 — the Latin name +
+          domain ride a bidi isolate so RTL chrome never reorders them. */}
       <p className="label-token" style={{ color: "var(--rc-muted)" }}>
-        {merchant}
-        {domain ? ` · ${domain}` : ""}
+        <bdi>
+          {merchant}
+          {domain ? ` · ${domain}` : ""}
+        </bdi>
       </p>
 
       {/* Chips row: availability + coupon value (§5.4) */}
