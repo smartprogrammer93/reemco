@@ -27,6 +27,7 @@ import {
   LIVE_SEARCH_BUDGET_MS,
   LIVE_SEARCH_HITS_PER_PAGE,
   LIVE_SEARCH_TIMEOUT_MS,
+  PCK_BARE_HEDGE_MS,
   nextStoreHits,
   ounassHits,
   pcKuwaitApiHits,
@@ -435,6 +436,53 @@ describe("hit parsers", () => {
     // Second attempt: the KV replay with the crawler identity.
     expect(attempts[1].cache).toBe("force-cache");
     expect(attempts[1].headerKeys.length).toBeGreaterThan("accept".length);
+    const note = notes.find((n) => n.merchant === "PC Kuwait");
+    expect(note?.hits).toBe(1);
+    expect(note?.error).toBeUndefined();
+  });
+
+  it("PC Kuwait hop rides the KV replay concurrently when the bare GET is silent past the hedge slice (REEA-550)", async () => {
+    resetDiscoveryCache();
+    // Measured on the deployed stamp: on cold instances the bare accept-only
+    // GET spends the whole finalize window on TLS + WP setup before it
+    // answers, so every round closed with a budget note while the endpoint
+    // itself answered fine from a warm line. The hedge: while bare is STILL
+    // pending past PCK_BARE_HEDGE_MS, the KV replay starts alongside it and
+    // whichever shape answers first wins. Here bare is deliberately slower
+    // than the slice, the replay answers immediately — and must start BEFORE
+    // bare has answered, not after.
+    let bareDone = false;
+    let replaySawBarePending: boolean | undefined;
+    const attempts: string[] = [];
+    const { notes } = await collectLiveResults("iphone", {
+      fetchImpl: async (url, init) => {
+        if (!url.includes("wp-json/wc/store/v1/products")) return new Response("{}");
+        const cache = String((init as { cache?: string } | undefined)?.cache ?? "");
+        attempts.push(cache);
+        if (cache === "no-store") {
+          // Bare leads but only answers after the hedge slice has fired.
+          await new Promise((r) => setTimeout(r, PCK_BARE_HEDGE_MS + 150));
+          bareDone = true;
+        } else {
+          replaySawBarePending = !bareDone;
+        }
+        const rows = [
+          {
+            name: "Apple iPhone 15 128GB",
+            permalink: "https://pckuwait.com/product/iphone-15/",
+            is_in_stock: true,
+            prices: { price: "185000", currency_code: "KWD", currency_minor_unit: 3 },
+          },
+        ];
+        return new Response(JSON.stringify(rows), {
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    // Bare led alone first, the replay only joined once the slice expired —
+    // and it joined WHILE bare was still in flight, not after.
+    expect(attempts.slice(0, 2)).toEqual(["no-store", "force-cache"]);
+    expect(replaySawBarePending).toBe(true);
     const note = notes.find((n) => n.merchant === "PC Kuwait");
     expect(note?.hits).toBe(1);
     expect(note?.error).toBeUndefined();

@@ -132,6 +132,15 @@ export const LIVE_SEARCH_HITS_PER_PAGE = 24;
  * while keeping attempt+backoff+attempt inside the TIMEOUT×2 hop window.
  */
 export const AMAZON_RETRY_BACKOFF_MS = 200;
+/**
+ * REEA-550 — the slice a still-silent PC Kuwait bare GET tolerates before
+ * the warm KV replay joins it concurrently (see apiRound). 500 ms is under
+ * the measured warm-line answer time (~0.5–0.9 s from a warm instance the
+ * replay is often a cache read), so the hedge only stacks when the cold
+ * handshake really is eating the finalize budget. Exported so the guardrail
+ * test can pace its mock against the same slice.
+ */
+export const PCK_BARE_HEDGE_MS = 500;
 
 export interface SearchHit {
   title: string;
@@ -1598,43 +1607,63 @@ export const COLLECTORS: RetailerCollector[] = [
       // zones keep the handshake-led order (nextstore answers THAT shape),
       // this one is per-zone.
       const apiRound = async (q: string): Promise<Record<string, unknown>[] | null> => {
-        try {
+        const bareAttempt = async (): Promise<Record<string, unknown>[] | null> => {
           const bare = await fetchImpl(apiUrl(q), {
             headers: { accept: "application/json" },
             cache: "no-store",
             signal: jsonWindow,
           } as RequestInit);
-          if (bare.ok) {
-            const parsed = asItems(JSON.parse(await bare.text()));
-            answered = true;
-            return parsed;
-          }
-        } catch {
-          // Window spent or malformed JSON — the replay below still gets
-          // whatever remains of it.
-        }
-        try {
+          if (!bare.ok) return null;
+          const parsed = asItems(JSON.parse(await bare.text()));
+          answered = true;
+          return parsed;
+        };
+        const replayAttempt = async (): Promise<Record<string, unknown>[] | null> => {
+          // REEA-369: a replayed cache entry only counts when it actually
+          // answered; a stale non-ok entry must not short-circuit the
+          // handshake below.
           const cached = await fetchImpl(apiUrl(q), {
             headers: { ...VERIFIED_BOT_HEADERS, accept: "application/json" },
             cache: "force-cache",
             next: { revalidate: 300 },
             signal: jsonWindow,
           } as RequestInit);
-          // REEA-369: a replayed cache entry only counts when it actually
-          // answered; a stale non-ok entry must not short-circuit the
-          // handshake below.
-          if (cached.ok) {
-            const parsed = asItems(JSON.parse(await cached.text()));
-            answered = true;
-            return parsed;
-          }
-        } catch {
-          // Cache miss (or a squeezed window) — the bounded handshake
-          // inside the same window answers with the same payload shape.
+          if (!cached.ok) return null;
+          const parsed = asItems(JSON.parse(await cached.text()));
+          answered = true;
+          return parsed;
+        };
+        // REEA-550 hedge — the bare shape still leads, and it leads ALONE
+        // on the fast path. A cold deploy instance pays the full TLS + WP
+        // setup before the bare accept-only GET lands, and measured on the
+        // deployed edge that alone crosses the finalize cutoff every round
+        // (standing budget/abort notes while the endpoint itself answers in
+        // well under a second from a warm line). So only while bare is
+        // STILL silent past a short slice does the warm KV replay join it
+        // concurrently — whichever answered shape lands first wins, one
+        // merged round either way. A blip inside the slice keeps today's
+        // sequential order: replay right after, handshake last. Malformed
+        // JSON falls to the replay like before.
+        const bareP = bareAttempt().catch(() => null);
+        let hedgeTimer: ReturnType<typeof setTimeout> | undefined;
+        const hedged = new Promise<"hedged">((resolve) => {
+          hedgeTimer = setTimeout(() => resolve("hedged"), PCK_BARE_HEDGE_MS);
+        });
+        const first = await Promise.race([bareP.then((v) => v ?? ("blip" as const)), hedged]);
+        clearTimeout(hedgeTimer);
+        let result: Record<string, unknown>[] | null;
+        if (first === "hedged") {
+          const replayP = replayAttempt().catch(() => null);
+          result = await Promise.race([bareP, replayP]);
+        } else if (first !== "blip") {
+          result = first;
+        } else {
+          result = await replayAttempt().catch(() => null);
         }
+        if (result) return result;
         try {
           // REEA-369: the identity-alternating handshake as the bounded
-          // fallback for rounds where the plain shape gets a transient blip.
+          // fallback for rounds where both plain shapes only blipped.
           const jsonRes = await fetchThroughChallenge(
             fetchImpl,
             apiUrl(q),
@@ -1740,13 +1769,22 @@ export const COLLECTORS: RetailerCollector[] = [
       // would otherwise record a standing zero-hit note for the whole page.
       // The JSD clearance hop is therefore the FIRST thing that runs behind a
       // shell-or-blank answer — including the case where the handshake threw.
+      // REEA-550 — tiers START together, join in tier order. Sequential tier
+      // chaining measured ~5–6 s on the deploy compute (REA-572 builder log),
+      // so the finalize cutoff closed before the tier that could answer even
+      // began; concurrent starts keep the hop near a single tier round-trip
+      // while the early return keeps the tier preference unchanged. Each tier
+      // carries its own bounded window, and every join below still applies
+      // the same qualification gates.
       let html = "";
-      try {
-        html = await challengeHtmlHop(fetchImpl, searchUrl);
-      } catch {
+      const identityP = challengeHtmlHop(fetchImpl, searchUrl).catch(() => {
         // Handshake spent its window on the block-page shapes — the bounded
         // clearance hop below still gets its own window.
-      }
+        return "";
+      });
+      const clearedP = jsdClearedHtml(fetchImpl, searchUrl);
+      const viaIpP = staticIpHtml(fetchImpl, searchUrl);
+      html = await identityP;
       // REEA-526 — hop BEFORE parse: this zone's CF interstitial (~5.5 KB,
       // ZERO application/ld+json blocks) passes a plain length check and
       // would return a silent zero-hit column before the clearance hops
@@ -1758,13 +1796,13 @@ export const COLLECTORS: RetailerCollector[] = [
       const answersWithLdJson = (h: string) =>
         h !== "" && !h.includes("cf-error-details") && h.includes("application/ld+json");
       if (answersWithLdJson(html)) return luluHits(html, query);
-      const cleared = await jsdClearedHtml(fetchImpl, searchUrl);
+      const cleared = await clearedP;
       if (answersWithLdJson(cleared)) return luluHits(cleared, query);
       // REEA-416 — Static-IPs fallback per the batch-4 recipe: both identity
       // paths missed on this egress, the per-IP passes still get fresh CF
       // decisions. Whatever answers rides the same luluHits gate; a miss
       // here keeps the old degraded-note shape unchanged.
-      const viaIp = await staticIpHtml(fetchImpl, searchUrl);
+      const viaIp = await viaIpP;
       return luluHits(viaIp !== "" ? viaIp : cleared !== "" ? cleared : html, query);
     },
   },
