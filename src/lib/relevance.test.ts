@@ -219,3 +219,25 @@ describe("named-brand signal (REEA-213)", () => {
     expect(brandIsNamed(undefined, "Ceramic Mug White")).toBe(false);
   });
 });
+
+describe("brand-field conflict rule (REEA-487)", () => {
+  it("a conflicting merchant field yields to the brand the title shows", () => {
+    // Live Quadra shape: the Shopify `Manufacturer` option stamps whole
+    // import batches with one stale value; both observed titles carried ACER.
+    expect(resolveBrand("ACER", "RAZER HUNTSMAN V3 PRO MINI 60% Analog Optical Esports Keyboard US - Black")).toBe("Razer");
+    expect(resolveBrand("ACER", "STEELSERIES ARCTIS NOVA PRO Wireless Gaming Headset - Black")).toBe("SteelSeries");
+    // The vendor fallback shape of the same hop carries the store's own name;
+    // the title-brand still wins over the disagreement.
+    expect(resolveBrand("Prince Computers LLC (1.0 Units - 47.281 KD)", "RAZER HUNTSMAN V3 PRO MINI 60% Analog Optical Esports Keyboard US - Black")).toBe("Razer");
+  });
+
+  it("agreeing merchant values are kept, unknown ones stay verbatim when the title is silent", () => {
+    // Agreement keeps the curated casing of the merchant value.
+    expect(resolveBrand("acer", "Acer Nitro V15 ANV15-41 Gaming Laptop")).toBe("Acer");
+    expect(resolveBrand("ASUS", "ASUS TUF Gaming F16 FX607JVR")).toBe("Asus");
+    // No curated brand readable from either side → the field stands as-is.
+    expect(resolveBrand("Zowie", "S25 XL2566K Gaming Monitor")).toBe("Zowie");
+    // Curated field, curated title brand, no conflict: casing only changes.
+    expect(resolveBrand("SONY", "Sony WH-CH720N Wireless Headphones")).toBe("Sony");
+  });
+});

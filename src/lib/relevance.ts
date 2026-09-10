@@ -24,6 +24,10 @@ export const CURATED_BRANDS: readonly string[] = [
   "Panasonic", "Hisense", "TCL", "Sharp", "Fujifilm", "Dyson", "Braun",
   "DeLonghi", "Nespresso", "Tefal", "Kenwood", "Electrolux", "NILLKIN",
   "Araree", "RINGKE", "GRABIST", "GravaStar", "PanzerGlass",
+  // Gaming peripherals Quadra Stores carries (REEA-487 brand audit).
+  "Razer", "SteelSeries", "Logitech", "Corsair",
+  // Desk/display brands from the same audit (fills the list to the cap).
+  "Nanoleaf", "PNY", "Keychron", "BenQ",
   // Grocery / household (Sultan Center)
   "Almarai", "Al Safi", "Tamanies", "Nada", "Inver", "Cowbell", "Lipton",
   "Nescafe", "Nestle", "Kellogg's", "Nature Valley", "Coca-Cola", "Pepsi",
@@ -236,19 +240,32 @@ export function curatedBrandInTitle(title: string): string | null {
  * Rule 1 chain. `brandField` is the retailer's own brand value (may be
  * absent); `title` is the card title. Returns the brand line text, or "" to
  * mean "render the title with no brand line".
+ *
+ * REEA-487 extends the field branch: a populated field keeps the lead only
+ * while it AGREES with the brand the title itself shows. Quadra's Shopify
+ * `Manufacturer` option stamps whole import batches with one stale value —
+ * a "RAZER HUNTSMAN V3 PRO MINI ..." keyboard and a "STEELSERIES ARCTIS NOVA
+ * PRO" headset both arrived carrying `ACER` — and the misbrand then steers
+ * brand grouping, brand filters and the named-brand ranking tier. When the
+ * field and the title's curated brand disagree, the title-derived brand wins;
+ * when they agree the merchant value stays (with curated casing). Titles no
+ * curated entry can name keep the old field-first precedence unchanged.
  */
 export function resolveBrand(brandField: string | undefined, title: string): string {
   const field = (brandField ?? "").trim();
   if (field !== "") {
     const stop = BRAND_STOP_VALUES.some((s) => s.toLowerCase() === field.toLowerCase());
     if (!stop) {
-      // Casing normalization against the curated list: SONY/Sony → Sony.
-      // Unknown brand values stay exactly as they arrived.
+      // Curated casing of the field itself: SONY/Sony → Sony. Unknown brand
+      // values stay exactly as they arrived.
       const lower = field.toLowerCase();
+      let curatedField: string | undefined;
       for (const entry of CURATED_BRANDS) {
-        if (entry.toLowerCase() === lower) return entry;
+        if (entry.toLowerCase() === lower) curatedField = entry;
       }
-      return field;
+      const titleBrand = curatedBrandInTitle(title);
+      if (titleBrand && curatedField !== titleBrand) return titleBrand;
+      return curatedField ?? field;
     }
   }
   return curatedBrandInTitle(title) ?? "";
