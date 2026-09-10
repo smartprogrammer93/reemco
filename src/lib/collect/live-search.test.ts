@@ -440,6 +440,52 @@ describe("hit parsers", () => {
     expect(note?.error).toBeUndefined();
   });
 
+  it("PC Kuwait hop falls through to the archive page when the Store API answers an HTML shell (REEA-432)", async () => {
+    resetDiscoveryCache();
+    // Measured on the deployed stamp: this CF-fronted zone sometimes answers
+    // the JSON Store endpoint with its interstitial HTML shell (HTTP-ok, not
+    // JSON). A malformed body is NOT an answer — the hop-global flag must
+    // stay unset so the designed archive HTML hop still runs and the
+    // merchant keeps hits instead of recording hits:0 every round.
+    const storeCalls: string[] = [];
+    const archiveCalls: string[] = [];
+    const { notes } = await collectLiveResults("iphone", {
+      fetchImpl: async (url) => {
+        if (url.includes("/wp-json/wc/store/v1/products")) {
+          storeCalls.push(url);
+          // The realistic production shape of the blip: a CF-interstitial
+          // HTML body with an ok status on the JSON endpoint.
+          return new Response(
+            '<!DOCTYPE html><html><head><title>Just a moment...</title></head><body><div id="cf-error-details">Just a moment...</div></body></html>',
+            { headers: { "content-type": "text/html; charset=utf-8" } },
+          );
+        }
+        if (url.includes("post_type=product")) {
+          archiveCalls.push(url);
+          // The archive hop answers with live WooCommerce loop cards.
+          return new Response(
+            '<li class="product-type-simple"><a href="https://pckuwait.com/shop/apple-iphone-15/" class="woocommerce-loop-product__link"><img alt="Apple iPhone 15" />' +
+              '<h2 class="woocommerce-loop-product__title">Apple iPhone 15 128GB</h2></a>' +
+              '<span class="price"><span class="woocommerce-Price-amount amount"><span class="woocommerce-Price-currencySymbol">KD</span>&nbsp;325.000</span></span></li>',
+            { headers: { "content-type": "text/html; charset=utf-8" } },
+          );
+        }
+        return new Response("{}");
+      },
+    });
+    // The JSON attempts were made (live-at-query-time kept), and the archive
+    // hop ran for the ORIGINAL phrase against the WooCommerce search view.
+    expect(storeCalls.length).toBeGreaterThan(0);
+    expect(archiveCalls.length).toBeGreaterThan(0);
+    expect(archiveCalls[0]).toContain("s=iphone");
+    expect(archiveCalls[0]).toContain("post_type=product");
+    const note = notes.find((n) => n.merchant === "PC Kuwait");
+    // The archive-sourced cards land despite the malformed JSON answer —
+    // hits > 0 with the archive title through the shared relevance gate.
+    expect((note?.hits ?? 0)).toBeGreaterThan(0);
+    expect(note?.error).toBeUndefined();
+  });
+
   it("Quadra hop tops up the over-narrow suggest envelope from the newest page (REEA-526)", async () => {
     resetDiscoveryCache();
     // Measured live 2026-09-10: this zone's suggest answers `iPhone 17 Pro`
