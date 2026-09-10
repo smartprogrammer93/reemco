@@ -1094,6 +1094,12 @@ export async function jsdClearedHtml(fetchImpl: FetchImpl, url: string): Promise
     } as RequestInit);
     const shell = await first.text();
     if (window.aborted) return "";
+    // Bodies without an embedded script cannot carry the CF clearance
+    // handshake — skip the poll/XHR rounds and hand the body back as-is
+    // (the caller's ld+json presence check decides whether it answers).
+    // On the checkpoint shapes here the solver always ships inline; a
+    // script-less body is just a page or a stub, worth no jsdom round.
+    if (!/<script/i.test(shell)) return shell;
     const dom = new JSDOM(shell, {
       url,
       runScripts: "dangerously",
@@ -1477,16 +1483,19 @@ export const COLLECTORS: RetailerCollector[] = [
   {
     merchant: "Quadra Stores",
     country: "KW",
-    collect: async (query, fetchImpl) => {
-      // Shopify contract, same shape as blink's hop (verified live 2026-09-08).
-      const res = await fetchChecked(
-        fetchImpl,
-        `https://quadrastores.com/search/suggest.json?q=${encodeURIComponent(query)}&resources[type]=product&resources[limit]=${LIVE_SEARCH_HITS_PER_PAGE}`,
-        { headers: { accept: "application/json" } },
-        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
-      );
-      return quadraHits(await res.json(), query);
-    },
+    collect: (query, fetchImpl) =>
+      // REEA-526 — ride the shared Shopify pair shape (suggest + newest-page
+      // top-up inside ONE doubled window) that Switch/Wibi/Astore/Zayoom
+      // carry. This zone's suggest over-narrows on full phrases — measured
+      // on the deployed path 2026-09-10: `iPhone 17 Pro` answers a bare
+      // empty resources array while `iPhone 17` / `iPhone` land full
+      // envelopes — so a one-shot suggest hop blanks the column on exactly
+      // the head queries of the fixed set (QA: hits:0 EN+AR, zero rendered
+      // rows, no error). The products.json top-up keeps the shelf filled
+      // and the shared gate still scores every merged row against the
+      // ORIGINAL query — same shape the baseline stamp served when this
+      // column measured passing with seven hits.
+      collectShopifyKuwait("https://quadrastores.com", query, fetchImpl, quadraHits),
   },
   {
     merchant: "Next Store",
@@ -1575,38 +1584,21 @@ export const COLLECTORS: RetailerCollector[] = [
       // answers fine in those cases. Rounds stay inside the doubled window —
       // the joined signal cuts the chain at the ceiling either way, and a
       // spent window skips the retry instead of stacking on top of it.
+      // REEA-526 — attempt order inside one round: BARE GET first, cache
+      // replay second, rotating handshake last. Measured on the deployed
+      // path: the completion-budget note stood 40/40 fetches while the same
+      // bare accept-only GET against this endpoint answered in ~0.5 s /
+      // 72 KB — the replay-led chain burned the finalize budget on the
+      // crawler-shaped attempt before the network answer ever landed on a
+      // cold instance. The bare shape is this zone's fastest identity from
+      // BOTH egresses (REEA-408's echo finding + the REEA-369 note itself),
+      // so it now leads and the KV replay rides second: a warm entry still
+      // shortens the hop when the bare attempt blips, and the handshake
+      // stays the bounded fallback for odd cold-window cases. Other CF
+      // zones keep the handshake-led order (nextstore answers THAT shape),
+      // this one is per-zone.
       const apiRound = async (q: string): Promise<Record<string, unknown>[] | null> => {
         try {
-          const cached = await fetchImpl(apiUrl(q), {
-            headers: { ...VERIFIED_BOT_HEADERS, accept: "application/json" },
-            cache: "force-cache",
-            next: { revalidate: 300 },
-            signal: jsonWindow,
-          } as RequestInit);
-          // REEA-369: a replayed cache entry only counts when it actually
-          // answered; a stale non-ok entry must not short-circuit the fresh
-          // bare attempt below.
-          if (cached.ok) {
-            const parsed = asItems(JSON.parse(await cached.text()));
-            answered = true;
-            return parsed;
-          }
-        } catch {
-          // Cache-first miss (or a squeezed window) — the uncached JSON attempt
-          // inside the same window answers with the same payload shape.
-        }
-        try {
-          // REEA-408 (from the deployed path): this JSON endpoint answers a
-          // bare accept-only GET on the first hop — measured the same day on
-          // the REEA-394 echo run, where the crawler-led handshake burned its
-          // whole rotation on instant HTTP 403s from the deployed edge egress
-          // while this exact bare shape returned the full array in well under
-          // a second from cold datacenter egress (the REEA-369 note itself
-          // records pckuwait as fastest on the plain identity). So the cheap
-          // plain attempt rides SECOND here — right after the cache replay —
-          // and the rotating handshake stays as the bounded fallback for the
-          // odd cold-window blip. Other CF zones keep the handshake-led
-          // order (nextstore answers THAT shape), this one is per-zone.
           const bare = await fetchImpl(apiUrl(q), {
             headers: { accept: "application/json" },
             cache: "no-store",
@@ -1618,8 +1610,27 @@ export const COLLECTORS: RetailerCollector[] = [
             return parsed;
           }
         } catch {
-          // Window spent or malformed JSON — the handshake below still gets
+          // Window spent or malformed JSON — the replay below still gets
           // whatever remains of it.
+        }
+        try {
+          const cached = await fetchImpl(apiUrl(q), {
+            headers: { ...VERIFIED_BOT_HEADERS, accept: "application/json" },
+            cache: "force-cache",
+            next: { revalidate: 300 },
+            signal: jsonWindow,
+          } as RequestInit);
+          // REEA-369: a replayed cache entry only counts when it actually
+          // answered; a stale non-ok entry must not short-circuit the
+          // handshake below.
+          if (cached.ok) {
+            const parsed = asItems(JSON.parse(await cached.text()));
+            answered = true;
+            return parsed;
+          }
+        } catch {
+          // Cache miss (or a squeezed window) — the bounded handshake
+          // inside the same window answers with the same payload shape.
         }
         try {
           // REEA-369: the identity-alternating handshake as the bounded
@@ -1673,11 +1684,22 @@ export const COLLECTORS: RetailerCollector[] = [
         // every Arabic spelling returns a bare []. Forms ride ahead of the
         // raw words in the SAME bounded cap; the shared gate still scores
         // rows against the ORIGINAL query, so near-miss titles drop exactly
-        // as before.
+        // as before. REEA-550 — the word hops are independent round-trips,
+        // so fire them together (same concurrent pattern the Sultan Center
+        // hop carries): on the completion-budget clock a SEQUENTIAL chain of
+        // whole-query + up to three word rounds is what recorded the standing
+        // "no answer within the completion budget" note for this merchant on
+        // every deploy-edge round, even though a single Store API GET answers
+        // in well under a second. Concurrent rounds ride the SAME joined
+        // window: one phrase round-trip plus the slowest word hop. Failed
+        // hops contribute nothing; mergeItems dedups by permalink.
         const words = Array.from(
           new Set([...latinQueryForms(query), ...query.split(/\s+/).filter((w) => w.length > 1)]),
         ).slice(0, 3);
-        for (const word of words) mergeItems(await apiItems(word));
+        const hops = await Promise.allSettled(words.map((word) => apiItems(word)));
+        for (const hop of hops) {
+          if (hop.status === "fulfilled") mergeItems(hop.value);
+        }
       }
       // An empty answer after the whole-query + per-word pass is NOT proof
       // the store carries nothing (measured 2026-09-09: the Store API
@@ -1725,9 +1747,19 @@ export const COLLECTORS: RetailerCollector[] = [
         // Handshake spent its window on the block-page shapes — the bounded
         // clearance hop below still gets its own window.
       }
-      if (html !== "" && !html.includes("cf-error-details")) return luluHits(html, query);
+      // REEA-526 — hop BEFORE parse: this zone's CF interstitial (~5.5 KB,
+      // ZERO application/ld+json blocks) passes a plain length check and
+      // would return a silent zero-hit column before the clearance hops
+      // ever run — the shape QA measured on every round. Only a body that
+      // already carries the contract's ld+json blocks may answer from the
+      // identity hop; anything else falls through to the bounded clearance
+      // and per-IP hops, which keep the first body with real content (the
+      // same presence rule staticIpHtml applies to its own passes).
+      const answersWithLdJson = (h: string) =>
+        h !== "" && !h.includes("cf-error-details") && h.includes("application/ld+json");
+      if (answersWithLdJson(html)) return luluHits(html, query);
       const cleared = await jsdClearedHtml(fetchImpl, searchUrl);
-      if (cleared !== "" && !cleared.includes("cf-error-details")) return luluHits(cleared, query);
+      if (answersWithLdJson(cleared)) return luluHits(cleared, query);
       // REEA-416 — Static-IPs fallback per the batch-4 recipe: both identity
       // paths missed on this egress, the per-IP passes still get fresh CF
       // decisions. Whatever answers rides the same luluHits gate; a miss

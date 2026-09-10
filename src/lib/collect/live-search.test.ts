@@ -394,6 +394,93 @@ describe("hit parsers", () => {
     expect(note?.error).toBeUndefined();
   });
 
+  it("PC Kuwait hop leads with the bare GET and rides the KV replay second (REEA-526)", async () => {
+    resetDiscoveryCache();
+    // Measured on the deployed path: the bare accept-only GET answers the
+    // Store API in well under a second while the completion-budget note
+    // stood on every fetch — the replay-led chain burned the finalize
+    // window before the network answer landed. The attempt ORDER is the
+    // fix: bare first, cache replay second, handshake last. This mock blips
+    // the bare attempt once (503) so the replay behind it answers; the
+    // recorded shape per attempt asserts the order.
+    const attempts: { cache: string; headerKeys: string }[] = [];
+    const { notes } = await collectLiveResults("iphone", {
+      fetchImpl: async (url, init) => {
+        if (url.includes("wp-json/wc/store/v1/products")) {
+          attempts.push({
+            cache: String((init as { cache?: string } | undefined)?.cache ?? ""),
+            headerKeys: Object.keys((init?.headers as Record<string, string>) ?? {}).join(","),
+          });
+          const rows = [
+            {
+              name: "Apple iPhone 15 128GB",
+              permalink: "https://pckuwait.com/product/iphone-15/",
+              is_in_stock: true,
+              prices: { price: "185000", currency_code: "KWD", currency_minor_unit: 3 },
+            },
+          ];
+          // First attempt blips, the ride-along replay answers.
+          if (attempts.length === 1) return new Response("[]", { status: 503 });
+          return new Response(JSON.stringify(rows), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response("{}");
+      },
+    });
+    expect(attempts.length).toBeGreaterThanOrEqual(2);
+    // Lead attempt: bare accept-only identity, uncached.
+    expect(attempts[0].headerKeys).toBe("accept");
+    expect(attempts[0].cache).toBe("no-store");
+    // Second attempt: the KV replay with the crawler identity.
+    expect(attempts[1].cache).toBe("force-cache");
+    expect(attempts[1].headerKeys.length).toBeGreaterThan("accept".length);
+    const note = notes.find((n) => n.merchant === "PC Kuwait");
+    expect(note?.hits).toBe(1);
+    expect(note?.error).toBeUndefined();
+  });
+
+  it("Quadra hop tops up the over-narrow suggest envelope from the newest page (REEA-526)", async () => {
+    resetDiscoveryCache();
+    // Measured live 2026-09-10: this zone's suggest answers `iPhone 17 Pro`
+    // with a bare empty resources array while the phrase-titled rows sit in
+    // the plain products.json feed. The shared Shopify pair hop (suggest +
+    // newest-page top-up, one window) refills the shelf; the gate scores
+    // every merged row against the ORIGINAL phrase.
+    const seenUrls: string[] = [];
+    const { notes } = await collectLiveResults("iPhone 17 Pro", {
+      fetchImpl: async (url) => {
+        seenUrls.push(url);
+        if (url.includes("suggest.json")) {
+          return new Response(JSON.stringify({ resources: { results: { products: [] } } }), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url.includes("products.json")) {
+          return new Response(
+            JSON.stringify({
+              products: [
+                {
+                  title: "APPLE iPhone 17 Pro Max 256GB Smartphone",
+                  handle: "iphone-17-pro-max-256",
+                  vendor: "Apple",
+                  variants: [{ price: "459.000", option1: "Apple", available: true }],
+                },
+              ],
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response("{}");
+      },
+    });
+    expect(seenUrls.some((u) => u.includes("suggest.json"))).toBe(true);
+    expect(seenUrls.some((u) => u.includes("products.json"))).toBe(true);
+    const quadra = notes.find((n) => n.merchant === "Quadra Stores");
+    expect(quadra?.hits ?? 0).toBeGreaterThanOrEqual(1);
+    expect(quadra?.error).toBeUndefined();
+  });
+
   it("Blink Arabic probe re-searches the curated Latin forms on the suggest hop (REEA-416)", async () => {
     resetDiscoveryCache();
     // Measured live: suggest.json answers `دوف` with a thin fuzzy set and the
@@ -1573,6 +1660,50 @@ describe("collectLiveResults page width (REEA-156)", () => {
       const { notes } = await collectLiveResults("\u0627\u0631\u0632 \u0628\u0633\u0645\u062a\u064a", { fetchImpl, country: "KW" });
       const lulu = notes.find((n) => n.merchant === "Lulu Hypermarket");
       expect(lulu?.hits ?? 0).toBeGreaterThanOrEqual(1);
+      expect(seen.some((u) => /^http:\/\/\d/.test(u))).toBe(true);
+    });
+
+    it("Lulu keeps hopping past a JSON-LD-less CF shell without an error marker (REEA-526)", async () => {
+      resetDiscoveryCache();
+      // Measured shape on the deployed path 2026-09-10: the CF interstitial
+      // (~5.5 KB) carries ZERO application/ld+json blocks and no
+      // cf-error-details marker, so a length-and-marker check alone returns
+      // it as an answer and the column goes silently zero. Presence of the
+      // contract's ld+json blocks is what qualifies a body for the parse;
+      // until then the bounded clearance / per-IP hops keep running.
+      const seen: string[] = [];
+      const ld = JSON.stringify({
+        "@type": "ItemList",
+        itemListElement: [
+          {
+            "@type": "Item",
+            item: {
+              "@type": "Product",
+              name: "Country Xl Organic Basmati Rice",
+              offers: {
+                "@type": "Offer",
+                price: "2.3100",
+                priceCurrency: "KWD",
+                availability: "https://schema.org/InStock",
+                url: "/en/country-xl-organic-basmati-rice-2-kg",
+              },
+            },
+          },
+        ],
+      });
+      const fetchImpl = async (url: string): Promise<Response> => {
+        seen.push(url);
+        if (url.startsWith("http://")) {
+          return new Response(`<html><head><script type="application/ld+json">${ld}</script></head><body>ok</body></html>`);
+        }
+        // Interstitial shell: no ld+json block, no error marker. The inline
+        // cookie script lets the bounded clearance pass settle quickly.
+        return new Response('<html><head><script>document.cookie="cf_clearance=t"</script></head><body>Verifying your browser</body></html>');
+      };
+      const { notes } = await collectLiveResults("\u0627\u0631\u0632 \u0628\u0633\u0645\u062a\u064a", { fetchImpl, country: "KW" });
+      const lulu = notes.find((n) => n.merchant === "Lulu Hypermarket");
+      expect(lulu?.hits ?? 0).toBeGreaterThanOrEqual(1);
+      expect(lulu?.error).toBeUndefined();
       expect(seen.some((u) => /^http:\/\/\d/.test(u))).toBe(true);
     });
 
