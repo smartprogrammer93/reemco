@@ -1285,10 +1285,19 @@ export const COLLECTORS: RetailerCollector[] = [
           .split(/\s+/)
           .filter((w) => w.length > 1)
           .slice(0, 3);
+        // REEA-416 — the word hops are independent round-trips, so fire them
+        // together. Measured live: the storefront's FIRST call costs ~4s cold
+        // (~0.7–3s warm), so on top of the phrase miss three SEQUENTIAL word
+        // hops add up past the doubled collector window under deploy-edge
+        // load — the recorded hits:0 shape for `iPhone 17 Pro` while the
+        // single-shot `Nescafe coffee` answer survived. Concurrent hops ride
+        // the SAME window: one phrase round-trip plus the slowest word hop.
+        // Aborted or failed hops contribute nothing; the merge dedups by sku.
+        const hops = await Promise.allSettled(words.map((word) => sultanSearch(word)));
         const seen = new Set<string>();
-        for (const word of words) {
-          if (window.aborted) break;
-          for (const item of productList(await sultanSearch(word))) {
+        for (const hop of hops) {
+          if (hop.status !== "fulfilled") continue;
+          for (const item of productList(hop.value)) {
             const key = String(item.sku ?? item.name ?? "");
             if (!key || seen.has(key)) continue;
             seen.add(key);

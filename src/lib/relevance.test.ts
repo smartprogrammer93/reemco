@@ -144,6 +144,18 @@ describe("Arabic brand-token matching (REEA-195)", () => {
     expect(matchesQueryToken("nescafé classic jar 200g", "telecaf")).toBe(false);
   });
 
+  it("Arabic grocery probes score the Latin-titled grocery rows (REEA-416)", () => {
+    // Sultan Center's grocery zone lists its Dove stock under English
+    // titles — measured live: `دوف` answers "Dove White Beauty Bar Soap"
+    // &co. With the alias entries the coverage gate SCORES those rows
+    // (brand lead ordering included) instead of leaning on the generic
+    // Arabic lane; a different brand's row still misses.
+    expect(matchesQueryToken("Dove White Beauty Bar Soap", "دوف")).toBe(true);
+    expect(matchesQueryToken("Dove Beauty Cream Bar Soap Pink", "صابون")).toBe(true);
+    expect(matchesQueryToken("nescafe classic 2 in 1 instant coffee", "دوف")).toBe(false);
+    expect(arabicBrandIntent("دوف صابون")).toBe("Dove");
+  });
+
   it("Arabic brand queries name the brand for lead ordering", () => {
     expect(arabicBrandIntent("سماعة أبل")).toBe("Apple");
     expect(arabicBrandIntent("آيفون 17")).toBe("Apple");

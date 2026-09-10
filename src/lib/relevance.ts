@@ -98,6 +98,7 @@ const ARABIC_BRAND_ALIASES: ReadonlyMap<string, string> = new Map([
   ["هايسنس", "Hisense"],
   ["شارب", "Sharp"],
   ["دايسون", "Dyson"],
+  ["دوف", "Dove"],
   ["المراعي", "Almarai"],
   ["الصافي", "Al Safi"],
 ]);
@@ -119,6 +120,7 @@ const ARABIC_BRAND_ALIASES: ReadonlyMap<string, string> = new Map([
 const ARABIC_QUERY_ALIASES: ReadonlyMap<string, readonly string[]> = new Map([
   ["ارز", ["rice"]],
   ["بسمتي", ["basmati"]],
+  ["صابون", ["soap"]],
   ["لابتوب", ["laptop", "notebook"]],
   ["جوال", ["smartphone", "mobile phone"]],
   ["سماعة", ["headphone", "headset", "earbud"]],
