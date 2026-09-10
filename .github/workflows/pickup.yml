@@ -6,13 +6,19 @@ name: Pickup production stamp
 # dashboard/dispatch hop are no longer needed.
 #
 # Mechanism (settings/hooks only, no product-code changes): push event -> this
-# job -> `vercel deploy --prod` (the same verified deploy.yml path, same repo
-# secrets VERCEL_TOKEN / VERCEL_TEAM_ID via env injection only) -> poll-verify
+# job -> `vercel deploy --prod` (same verified deploy.yml path, secrets
+# VERCEL_TOKEN / VERCEL_TEAM_ID via env injection only) -> poll-verify
 # https://reemco.vercel.app/__commit.txt against the pushed SHA. The lint +
 # test + `next build` gate stays where it already is: vercel.json buildCommand
-# on Vercel compute, so this job adds ~1 hosted minute per push burst and zero
-# npm work. Existing checks keep working: /__commit.txt is stamped with the
-# pushed SHA before upload, /api/health `build` field comes from the artifact.
+# on Vercel compute, so this job only submits the deploy and watches. Existing
+# checks keep working: /__commit.txt is stamped with the pushed SHA before
+# upload, /api/health `build` field comes from the artifact.
+#
+# Timeout sizing (measured 2026-09-10, push 18:45:37Z -> Ready ~18:52Z):
+# remote build reaches Ready ~6-7 min after the push. The CLI `timeout` is a
+# stream ceiling, NOT the success bar: hitting it does not cancel the remote
+# build, and the stamp poll below is the authoritative verify. CLI ceiling 9m,
+# job ceiling 12m, poll window ~4 min after the CLI step returns.
 #
 # Concurrency: bursts (coder harness pushes several commits quickly) collapse —
 # cancel-in-progress keeps only the newest run, whose deploy carries the full
@@ -35,4 +41,52 @@ concurrency:
   group: pickup-${{ github.ref }}
   cancel-in-progress: true
 
+jobs:
+  pickup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
 
+      - name: Deploy pushed head to the production alias
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+        run: |
+          set -u -o pipefail
+          export VERCEL_TELEMETRY_DISABLED=1
+          if [ -z "${VERCEL_TOKEN:-}" ]; then
+            echo "::error::Repo secret VERCEL_TOKEN is not set - cannot pick up the push. Unblock owner: repo admin (CEO)."
+            exit 1
+          fi
+          # Same stamp convention as deploy.yml / vercel.json buildCommand so
+          # /__commit.txt and the health `build` field keep their meaning.
+          echo "${GITHUB_SHA}" > public/__commit.txt
+          SCOPE_ARGS=""
+          if [ -n "${VERCEL_TEAM_ID:-}" ]; then SCOPE_ARGS="--scope $VERCEL_TEAM_ID"; fi
+          # Pinned CLI + stream ceiling (REEA-75 hardening). The ceiling is not
+          # decisive: when it trips, the remote build still finishes and the
+          # next step verifies the alias by polling. `|| true` keeps the
+          # ceiling from redding a run whose stamp actually landed.
+          timeout --signal=INT 9m npx -y vercel@59.11.7 deploy --prod --yes \
+            --cwd "$GITHUB_WORKSPACE" $SCOPE_ARGS 2>&1 | tee /tmp/vercel-pickup.log \
+            || echo "CLI stream ended early - stamp poll decides."
+
+      - name: Verify served stamp matches the pushed head (authoritative)
+        run: |
+          set -u
+          WANT="${GITHUB_SHA}"
+          OK=0
+          for i in $(seq 1 24); do
+            S=$(curl -fsS -m 10 https://reemco.vercel.app/__commit.txt 2>/dev/null | tr -d '[:space:]' || true)
+            if [ "$S" = "$WANT" ]; then OK=1; echo "stamp parity after poll $i (~$((i*10))s): $S"; break; fi
+            sleep 10
+          done
+          if [ "$OK" != 1 ]; then
+            echo "::error::reemco.vercel.app still serves ${S:-nothing} after ~4 min, want $WANT. Rollback: rerun Deploy site with rollback_sha = last known-good commit."
+            exit 1
+          fi
+          H=$(curl -fsS -m 10 https://reemco.vercel.app/api/health || true)
+          echo "health: $H"
+          echo "$H" | grep -q "${WANT:0:12}" || echo "::warning::health build field does not carry the new sha yet: $H"
+          echo "PICKUP OK: alias serves $WANT; __commit.txt verified, health build checked." | tee -a "$GITHUB_STEP_SUMMARY"
