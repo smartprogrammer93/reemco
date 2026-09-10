@@ -1208,13 +1208,52 @@ export const COLLECTORS: RetailerCollector[] = [
       // suggest.json is the filter-aware Shopify hop: products.json ignores
       // its title parameter (answers a generic newest-products page), which
       // is what left blink/quadra coverage at 0–5 hits. Same hop for quadra.
-      const res = await fetchChecked(
-        fetchImpl,
-        `https://blink.com.kw/search/suggest.json?q=${encodeURIComponent(query)}&resources[type]=product&resources[limit]=${LIVE_SEARCH_HITS_PER_PAGE}`,
-        { headers: { accept: "application/json" } },
-        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
-      );
-      return blinkHits(await res.json(), query);
+      const window = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
+      const hopJson = async (q: string): Promise<unknown> => {
+        const res = await fetchChecked(
+          fetchImpl,
+          `https://blink.com.kw/search/suggest.json?q=${encodeURIComponent(q)}&resources[type]=product&resources[limit]=${LIVE_SEARCH_HITS_PER_PAGE}`,
+          { headers: { accept: "application/json" } },
+          window,
+        );
+        return await res.json();
+      };
+      const whole = await hopJson(query);
+      const products = normalizeShopifyProducts(whole);
+      if (products.length === 0 && !window.aborted) {
+        // REEA-416 — empty whole-query answer: one bounded re-search of the
+        // curated Latin forms ahead of the raw words, riding the SAME window.
+        // This hop answers Latin spellings of Arabic probes (measured live:
+        // `dove` → 10 rows, `soap` → 10 rows, while `دوف` sits at the ~41B
+        // empty-answer zone and the Arabic phrase comes back []), so the
+        // bridge is the source-side half of the Arabic lane for this zone.
+        // The shared gate scores the merged rows against the ORIGINAL query,
+        // so fuzzy near-misses drop exactly as before. Failed hops inside a
+        // squeezed window just contribute nothing.
+        const words = Array.from(
+          new Set([...latinQueryForms(query), ...query.split(/\s+/).filter((w) => w.length > 1)]),
+        ).slice(0, 3);
+        const seen = new Set<string>();
+        const merged = normalizeShopifyProducts([]);
+        for (const w of words) {
+          if (window.aborted) break;
+          try {
+            merged.push(...normalizeShopifyProducts(await hopJson(w)));
+          } catch {
+            // Window spent mid-merge — keep what arrived so far.
+          }
+        }
+        const deduped = merged.filter((p) => {
+          const key = String((p as { handle?: unknown })?.handle ?? "");
+          if (!key || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        // Legacy envelope on purpose: blinkHits re-normalizes through the same
+        // helper, whose legacy branch takes a {products:[…]} shape directly.
+        return blinkHits({ products: deduped }, query);
+      }
+      return blinkHits(whole, query);
     },
   },
   {

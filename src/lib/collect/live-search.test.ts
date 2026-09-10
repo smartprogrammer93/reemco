@@ -394,6 +394,42 @@ describe("hit parsers", () => {
     expect(note?.error).toBeUndefined();
   });
 
+  it("Blink Arabic probe re-searches the curated Latin forms on the suggest hop (REEA-416)", async () => {
+    resetDiscoveryCache();
+    // Measured live: suggest.json answers `دوف` with a thin fuzzy set and the
+    // Arabic phrase with a bare envelope, while `dove`/`soap` answer priced
+    // rows — the curated Latin forms lead the bounded re-search and the
+    // shared gate scores the merged rows against the original Arabic query.
+    const seenQ: string[] = [];
+    const { notes } = await collectLiveResults("\u062f\u0648\u0641 \u0635\u0627\u0628\u0648\u0646", {
+      fetchImpl: async (url) => {
+        if (url.includes("blink.com.kw/search/suggest.json")) {
+          const q = decodeURIComponent(url.match(/[?&]q=([^&]*)/)?.[1] ?? "");
+          seenQ.push(q);
+          const rows =
+            q === "dove" || q === "soap"
+              ? [
+                  {
+                    title: "Dove Beauty Bar Soap",
+                    handle: "dove-beauty-bar-soap",
+                    price: "1.77",
+                    variants: [{ price: "1.77", available: true }],
+                  },
+                ]
+              : [];
+          return new Response(JSON.stringify({ resources: { results: { products: rows } } }), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response("{}");
+      },
+    });
+    expect(seenQ).toContain("dove");
+    const note = notes.find((n) => n.merchant === "Blink");
+    expect((note?.hits ?? 0)).toBeGreaterThanOrEqual(1);
+    expect(note?.error).toBeUndefined();
+  });
+
   it("luluHits lifts JSON-LD offers and honours schema.org availability (REEA-238)", () => {
     // Shape captured from the luluhypermarket.com SSR search page 2026-09-08:
     // ItemList wrapper, relative offer URLs, explicit InStock/OutOfStock.
