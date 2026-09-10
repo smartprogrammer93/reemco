@@ -100,14 +100,39 @@ async function measure(q) {
     } else if (snap.heading !== null && snap.heading !== "") {
       stableRun++;
     }
-    // Completion clock: the stream-closed moment. Keep the heading-stability
-    // trail in headingVals for the warm-vs-cold count comparison.
+    // Completion clock: the stream-closed moment — finalize inside the
+    // deadline is what this gate polices.
     if (completeAt === null && snap.rs !== "loading") {
       completeAt = now;
+      lastCount = snap.heading;
+      headingVals = snap.heading ? [Number(snap.heading)] : [];
       cards = snap.cards;
+      stableRun = 1;
       break;
     }
     await new Promise((r) => setTimeout(r, 60));
+  }
+  // REEA-523 — settled count read AFTER finalize: late retailer waves stream
+  // in behind the closed document via the follow-up feed, so the count a
+  // shopper actually reads lands within ~1-2 s of close. Read heading + cards
+  // once they stop changing (3 consecutive samples, grace capped at 3 s) —
+  // that is the number the warm-vs-cold count match must compare, and it
+  // keeps the comparison honest instead of freezing the partial close-time
+  // count. The completion clock itself stays the close moment above.
+  const settleDeadline = Date.now() + 3000;
+  while (Date.now() < settleDeadline) {
+    await new Promise((r) => setTimeout(r, 60));
+    const snap = await page.evaluate(() => {
+      const cardEls = [...document.querySelectorAll("article.result-card")].filter((c) => c.getAttribute("aria-hidden") !== "true" && c.getAttribute("aria-hidden") !== "");
+      const tab = document.querySelector("h1 .tabular, span.tabular");
+      return { cards: cardEls.length, heading: tab ? tab.textContent.trim() : null };
+    }).catch(() => null);
+    if (!snap || snap.heading === null || snap.heading === "") continue;
+    if (snap.heading === lastCount) stableRun++;
+    else { stableRun = 1; lastCount = snap.heading; }
+    headingVals = [Number(snap.heading)];
+    cards = snap.cards;
+    if (stableRun >= 3) break;
   }
   return { firstOffer, completeMs: completeAt, headingVals, cards };
 }
