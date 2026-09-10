@@ -1909,9 +1909,10 @@ export function groupHits(
   query: string,
   hits: SearchHit[],
   includeAlternatives = true,
+  locale?: "en" | "ar",
 ): NormalizedProduct[] {
   const groups = buildGroups(query, hits);
-  return finalizeGroups(rankByRelevance(query, groups), includeAlternatives);
+  return finalizeGroups(rankByRelevance(query, groups), includeAlternatives, locale);
 }
 
 /**
@@ -2113,19 +2114,28 @@ function buildGroups(query: string, hits: SearchHit[]): HitGroup[] {
   return groups;
 }
 
+/** Arabic-script probe (same ranges relevance.ts uses, plus the
+ *  presentation-forms block some scraped titles arrive in). */
+const ARABIC_SCRIPT_RE = /[\u0600-\u06FF\uFE70-\uFEFF]/;
+function hasArabicScript(text: string): boolean {
+  return ARABIC_SCRIPT_RE.test(text);
+}
+
 /**
  * Canonical slug selection (REEA-167 §2): the member title with the fewest
  * tokens, tie-break the alphabetically smallest slug — identical however
  * the shopper arrived, so every spelling of the same device lands on one
  * stable view and old links converge instead of forking. Shared by the
  * ranking pass (the visible card decides the extended-match flag) and the
- * finalization below.
+ * finalization below. With the Arabic locale the same rule runs inside the
+ * Arabic-script answers (G5 Arabic-only titles), falling back to the full
+ * set when the group was answered only in Latin.
  */
-function canonicalGroupTitle(group: HitGroup): string {
+function canonicalGroupTitle(group: HitGroup, locale?: "en" | "ar"): string {
   let title = "";
   let titleTokens = Infinity;
   let titleSlug = "";
-  for (const t of group.titles) {
+  const consider = (t: string): void => {
     const tokens = t.split(/\s+/).length;
     const slug = slugify(t);
     if (tokens < titleTokens || (tokens === titleTokens && slug < titleSlug)) {
@@ -2133,7 +2143,17 @@ function canonicalGroupTitle(group: HitGroup): string {
       titleTokens = tokens;
       titleSlug = slug;
     }
+  };
+  if (locale === "ar") {
+    // REEA-468 G5 — Arabic-only titles on the Arabic results page: when the
+    // merged card collected an Arabic-script title from any retailer, that
+    // answer is the card's representative title; a group answered only in
+    // Latin keeps its Latin answer (nothing is ever invented). Same shortest
+    // rule inside, so AR and EN runs of one query still rank identically.
+    for (const t of group.titles) if (hasArabicScript(t)) consider(t);
+    if (title !== "") return title;
   }
+  for (const t of group.titles) consider(t);
   return title;
 }
 
@@ -2170,7 +2190,7 @@ function colorSwatches(group: HitGroup, offers: PriceOffer[]): ProductVariation[
     }));
 }
 
-function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean): NormalizedProduct[] {
+function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, locale?: "en" | "ar"): NormalizedProduct[] {
   const scrapedAt = new Date().toISOString(); // real collection completion time
 
   // REEA-254 payload trim, REEA-488 shape — cheaper same-family alternatives.
@@ -2184,7 +2204,7 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean): Nor
   const metaOf = (g: HitGroup): ProductAlternative => {
     let m = metas.get(g);
     if (!m) {
-      const otherTitle = canonicalGroupTitle(g);
+      const otherTitle = canonicalGroupTitle(g, locale);
       m = {
         productId: slugify(otherTitle),
         title: otherTitle,
@@ -2210,7 +2230,7 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean): Nor
     let t = titleTokens.get(g);
     if (!t) {
       t = new Set(
-        canonicalGroupTitle(g)
+        canonicalGroupTitle(g, locale)
           .toLowerCase()
           .split(/[\s/\-,]+/)
           .filter((w) => w.length >= 2),
@@ -2238,7 +2258,7 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean): Nor
   };
 
   return selected.map((group, idx) => {
-    const title = canonicalGroupTitle(group);
+    const title = canonicalGroupTitle(group, locale);
     const rows: PriceOffer[] = [...group.offers]
       // Cheapest offer first in KWD-space (REEA-167 §2 + REEA-254 item B);
       // purchasable offers break ties. Within one currency the order is the
@@ -2509,10 +2529,59 @@ function filterNotes(
  * camera-first arrival order of the fastest retailer was what curl-only
  * inspection ever saw).
  */
+/**
+ * REEA-468 G4 — nearest-match suggestions for the empty state, derived from
+ * the titles THIS live run already collected (never bundled data): when the
+ * grouping found nothing to serve, the raw hits are still the honest
+ * near-match pool. Distinct titles, ranked by the shared symmetric fit-score
+ * against the query, capped at `limit`; each suggestion carries its best
+ * listing so the client-side country/stock passes keep honoring the
+ * shopper's selections. Empty stays empty — the category-pill floor in the
+ * EmptyState then takes over, same as before.
+ */
+export function nearMatchSuggestions(
+  query: string,
+  hits: SearchHit[],
+  limit = 3,
+): NormalizedProduct[] {
+  const scrapedAt = new Date().toISOString();
+  const best = new Map<string, { title: string; hit: SearchHit; score: number }>();
+  for (const h of hits) {
+    const title = h.title.trim();
+    if (!title) continue;
+    const key = title.toLowerCase();
+    const score = titleMatchScore(title, query);
+    const cur = best.get(key);
+    if (!cur || score > cur.score) best.set(key, { title, hit: h, score });
+  }
+  return [...best.values()]
+    .sort((a, b) => b.score - a.score || a.title.localeCompare(b.title))
+    .slice(0, limit)
+    .map(({ title, hit }, i) => ({
+      productId: slugify(title) || `suggest-${i}`,
+      title,
+      brand: resolveBrand(hit.brand, title),
+      offers: [
+        {
+          merchant: hit.merchant,
+          price: hit.price,
+          currency: hit.currency,
+          url: hit.url,
+          inStock: hit.inStock,
+        },
+      ],
+      coupons: [],
+      variations: [],
+      alternatives: [],
+      scrapedAt,
+    })) satisfies NormalizedProduct[];
+}
+
 function stagedSnapshot(
   q: string,
   country: CountryCode | null,
   settledSoFar: SettledAdapter[],
+  locale?: "en" | "ar",
 ): LiveSearchResult {
   const { hits, notes } = filterNotes(country, settledSoFar);
   // REEA-254 payload trim + REEA-488 item 1: staged flushes render through
@@ -2523,8 +2592,12 @@ function stagedSnapshot(
   // REEA-510: intermediate flushes stay pure-live on purpose — a merchant
   // that has not answered yet at flush time is still in flight, not silent;
   // the last-seen fill lands with the converged snapshot only (finalSnapshot).
-  const products = groupHits(q, hits);
-  return { products, notes, suggestions: products.slice(0, 3) };
+  const products = groupHits(q, hits, true, locale);
+  // REEA-468 G4 — a zero-answer flush still carries near-match pills derived
+  // from the titles this run collected; only when those are empty too does
+  // the empty state fall back to its category-pill floor.
+  const suggestions = products.length > 0 ? products.slice(0, 3) : nearMatchSuggestions(q, hits);
+  return { products, notes, suggestions };
 }
 
 /**
@@ -2542,8 +2615,9 @@ function finalizedSnapshot(
   collectors: RetailerCollector[],
   settledSoFar: SettledAdapter[],
   deadlineMs: number,
+  locale?: "en" | "ar",
 ): LiveSearchResult {
-  const snap = stagedSnapshot(q, country, settledSoFar);
+  const snap = stagedSnapshot(q, country, settledSoFar, locale);
   const answered = new Set(snap.notes.map((n) => n.merchant));
   for (const c of collectors) {
     if (!answered.has(c.merchant)) {
@@ -2605,11 +2679,13 @@ async function finalSnapshot(
   fetchImpl: FetchImpl,
   widenedRetry = false,
   snapshotsEnabled = true,
+  locale?: "en" | "ar",
 ): Promise<LiveSearchResult> {
   const { hits, notes } = filterNotes(country, settled);
-  let products = groupHits(q, hits);
+  let products = groupHits(q, hits, true, locale);
   let servedNotes = notes;
   let attemptedQueries: string[] | undefined;
+  let retrySuggestions: NormalizedProduct[] | undefined;
   let widenedWithAnswers = false;
   if (q && products.length === 0 && !widenedRetry) {
     // REEA-437 — one widened retry before declaring empty: whole phrases can
@@ -2623,7 +2699,8 @@ async function finalSnapshot(
     // returns IS live data from this run — still no bundled snapshot.
     const wider = widerQuery(q);
     attemptedQueries = wider === q ? [q] : [q, wider];
-    const retry = await collectLiveResults(wider, { fetchImpl, country, widenedRetry: true });
+    const retry = await collectLiveResults(wider, { fetchImpl, country, widenedRetry: true, locale });
+    retrySuggestions = retry.suggestions?.length ? retry.suggestions : retry.products.slice(0, 3);
     if (retry.products.length > 0) {
       products = retry.products;
       widenedWithAnswers = true;
@@ -2650,11 +2727,24 @@ async function finalSnapshot(
   // Snapshot state rides the shared last-seen store; a diagnostic chain with
   // its own injected fetchImpl observes its own hops (same rule as NO_CACHE)
   // unless it opts in explicitly through opts.snapshots.
+  let nearPool = hits;
   if (snapshotsEnabled && !widenedWithAnswers) {
     const fill = await fillSilentFromLastSeen(q, country, settled);
-    if (fill.length > 0) products = groupHits(q, [...hits, ...fill]);
+    if (fill.length > 0) {
+      nearPool = [...hits, ...fill];
+      products = groupHits(q, nearPool, true, locale);
+    }
   }
-  return { products, notes: servedNotes, suggestions: products.slice(0, 3), attemptedQueries };
+  // REEA-468 G4 — the converged zero answer still carries ≥1 near-match pill:
+  // the widened retry's own suggestions when that round collected anything,
+  // otherwise the distinct titles THIS chain already collected. Bundled data
+  // never rides in — every entry here came from this run's hops.
+  const suggestions = products.length > 0
+    ? products.slice(0, 3)
+    : retrySuggestions && retrySuggestions.length > 0
+      ? retrySuggestions
+      : nearMatchSuggestions(q, nearPool);
+  return { products, notes: servedNotes, suggestions, attemptedQueries };
 }
 
 /** Options shared by the staged and blocking collection entries. */
@@ -2692,6 +2782,14 @@ export interface StagedCollectOptions {
    * `false` opts a production-shaped run out.
    */
   snapshots?: boolean;
+  /**
+   * REEA-468 G5 — resolved request locale. Only the script PREFERENCE differs
+   * between locales ("ar" prefers the Arabic-script representative title of a
+   * merged card); the offer set, ranking and coverage notes are identical, so
+   * an Arabic query answers with the same offers and the same average count
+   * as its English equivalent.
+   */
+  locale?: "en" | "ar";
 }
 
 /** Always-miss cache used when the caller injects its own fetchImpl: a
@@ -2740,10 +2838,16 @@ export function collectLiveResultsStaged(
   // observe only their own hops; production runs share the last-seen store.
   // Tests of the fill path opt in through opts.snapshots.
   const snapshotsEnabled = opts.snapshots ?? opts.fetchImpl === undefined;
+  // REEA-468 G5 — the request locale only steers the representative-title
+  // preference (Arabic-script title wins inside a merged card when the run
+  // collected one); "en"/absent keeps today's pick untouched. The memo forks
+  // per locale (below) so an Arabic answer never serves the Latin-selected
+  // snapshot of an English run of the same query — or vice versa.
+  const locale = opts.locale === "ar" ? ("ar" as const) : undefined;
   // REEA-291 AC5 — memo identity is the NORMALIZED QUERY STRING ONLY: the
   // collected answer is per query; viewer-side selections filter the loaded
   // payload at render time (ResultsClient), never fork the memo.
-  const cacheKey = queryCacheKey(q);
+  const cacheKey = queryCacheKey(q, undefined, locale);
 
   // REEA-277 AC-2 — stale-while-revalidate in front of the fan-out. Entries
   // only ever hold responses a live fan-out produced (scrapedAt and the
@@ -2815,7 +2919,7 @@ export function collectLiveResultsStaged(
   // response-cache write-through.
   const finalizeAtDeadline: Promise<LiveSearchResult> = new Promise<void>((resolve) =>
     setTimeout(resolve, deadlineMs),
-  ).then(() => finalizedSnapshot(q, country, collectors, settled.slice(), deadlineMs));
+  ).then(() => finalizedSnapshot(q, country, collectors, settled.slice(), deadlineMs, locale));
   const converged: Promise<LiveSearchResult> = Promise.all(runs)
     .then(() => deepenSilent(q, settled, fetchImpl))
     // REEA-510 — publish this round's live answers as last-seen snapshots on
@@ -2823,18 +2927,18 @@ export function collectLiveResultsStaged(
     // after() window): one write per run, behind the finalized response, so
     // the next silent pass for a retailer+query has its labeled fallback.
     .then(() => (snapshotsEnabled ? rememberRound(q, settled) : undefined))
-    .then(() => finalSnapshot(q, country, settled, fetchImpl, opts.widenedRetry === true, snapshotsEnabled));
+    .then(() => finalSnapshot(q, country, settled, fetchImpl, opts.widenedRetry === true, snapshotsEnabled, locale));
 
   const stages: Promise<LiveSearchResult>[] = collectors.map(async (_c, k) => {
     if (k < collectors.length - 1) {
       return await Promise.race([
-        untilArrivals(k + 1).then(() => stagedSnapshot(q, country, settled.slice())),
+        untilArrivals(k + 1).then(() => stagedSnapshot(q, country, settled.slice(), locale)),
         finalizeAtDeadline,
       ]);
     }
     return await Promise.race([converged, finalizeAtDeadline]);
   });
-  const final: Promise<LiveSearchResult> = stages[stages.length - 1] ?? Promise.resolve(stagedSnapshot(q, country, settled));
+  const final: Promise<LiveSearchResult> = stages[stages.length - 1] ?? Promise.resolve(stagedSnapshot(q, country, settled, locale));
 
   // Write-through carries the LIVE answer only (products with their scrapedAt
   // stamps included). REEA-466 (QA REEA-467 findings 2/3): the warm repeat
@@ -2907,8 +3011,8 @@ function registerFollowUp(key: string, snap: Promise<LiveSearchResult>): void {
 /** Pending converged snapshot for a query, or null when nothing is in flight.
  *  The follow-up route awaits it with its own bounded wait; a failed chain
  *  resolves to null so the finalized page simply stands on its own. */
-export function followUpSnapshot(query: string): Promise<LiveSearchResult | null> | null {
-  const key = queryCacheKey(query);
+export function followUpSnapshot(query: string, locale?: "en" | "ar"): Promise<LiveSearchResult | null> | null {
+  const key = queryCacheKey(query, undefined, locale);
   const run = followUpRuns.get(key);
   if (!run) return null;
   if (Date.now() - run.startedAt > QUERY_CACHE_MAX_AGE_MS) {
