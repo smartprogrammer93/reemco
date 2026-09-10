@@ -159,9 +159,20 @@ export function queryMatchTokens(query: string): string[] {
 /** True when one query token is answered by the title: substring match on the
  *  alef-folded pair (so "أبل"/"ابل" spellings meet), or — for Arabic-script
  *  brand spellings — the curated Latin form of the brand ("أبل" ⇄ "Apple").
- *  Tokens without an alias behave exactly like the plain substring check. */
+ *  Tokens without an alias behave exactly like the plain substring check.
+ *
+ *  REEA-416 — the title side also folds LATIN combining marks (é → e, ü → u)
+ *  so an ASCII query token meets an accented storefront spelling. The query
+ *  tokenizer (queryMatchTokens) already reduces query-side accents to their
+ *  ASCII stem; without the title-side fold "NESCAFÉ CLASSIC JAR" scores 0 on
+ *  the query "Nescafe coffee" — the gate blanks a column the storefront had
+ *  answered, the silent-zero shape measured for Quadra Stores on the deployed
+ *  path (HTTP 200, populated payload, empty column). Arabic diacritics stay
+ *  handled by normalizeArabicText; the Latin fold is a no-op there. */
 export function matchesQueryToken(titleLower: string, token: string): boolean {
-  const title = normalizeArabicText(titleLower);
+  const title = normalizeArabicText(titleLower)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036F]/g, "");
   const folded = normalizeArabicText(token);
   if (folded !== "" && title.includes(folded)) return true;
   // Brand aliases keep precedence; the curated category forms below only

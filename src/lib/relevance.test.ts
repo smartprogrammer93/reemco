@@ -133,6 +133,17 @@ describe("Arabic brand-token matching (REEA-195)", () => {
     expect(matchesQueryToken("سماعة القرآن للأطفال", "سماعة")).toBe(true);
   });
 
+  it("an ASCII token answers an accented Latin title (REEA-416 accent fold)", () => {
+    // Deployed shape: Quadra titles carry "NESCAFÉ"/"Café" while the shopper
+    // query — tokenized to ASCII stems — reads "nescafe". Without the
+    // title-side fold the coverage score is 0 on every record and the whole
+    // column goes silent despite a populated live payload.
+    expect(matchesQueryToken("nescafé classic jar 200g", "nescafe")).toBe(true);
+    expect(matchesQueryToken("L'OR CAFÉ capsules", "cafe")).toBe(true);
+    // The fold must not invent matches: a different stem still misses.
+    expect(matchesQueryToken("nescafé classic jar 200g", "telecaf")).toBe(false);
+  });
+
   it("Arabic brand queries name the brand for lead ordering", () => {
     expect(arabicBrandIntent("سماعة أبل")).toBe("Apple");
     expect(arabicBrandIntent("آيفون 17")).toBe("Apple");
