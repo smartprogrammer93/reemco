@@ -1751,7 +1751,13 @@ describe("collectLiveResults page width (REEA-156)", () => {
       expect(lulu?.hits ?? 0).toBeGreaterThanOrEqual(1);
       expect(lulu?.error).toBeUndefined();
       expect(seen.some((u) => /^http:\/\/\d/.test(u))).toBe(true);
-    });
+      // Timeout sizing: the hop chain behind this assertion (identity hop ->
+      // bounded JSD clearance poll -> per-IP passes) rides fixed 250/700 ms
+      // cadences after the completion clock, measured ~5-6 s on the Vercel
+      // builder (REEA-572 pickup log: this case red at 5005 ms there while
+      // green on a local shell). Give it a window above the default 5 s so
+      // the deploy gate measures the hop logic, not runner speed.
+    }, 15000);
 
     it("without a selection every adapter keeps serving (default unchanged)", async () => {
       resetDiscoveryCache();
