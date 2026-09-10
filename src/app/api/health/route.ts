@@ -38,6 +38,7 @@
  */
 import type { NextRequest } from "next/server";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { invalidateTrendingChips } from "@/lib/trending-chips";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -162,6 +163,11 @@ function verdictResponse(ok: boolean): Response {
 }
 
 export async function GET(req: NextRequest): Promise<Response> {
+  // REEA-542 AC2 — this hourly tick is the trending-chip invalidation hook:
+  // drop the baked homepage chip row so the next render re-reads the event
+  // feed. Before the limiter gate on purpose — the bump is a memory-only
+  // assignment, so even a replayed-verdict hit still advances the chip hour.
+  invalidateTrendingChips();
   // REEA-377: reuse the REEA-37 limiter on the GET path. Inside the window
   // the funnel runs (and caches its verdict); past it the cached verdict is
   // replayed so repeated hits do not each re-walk home → results → product.
