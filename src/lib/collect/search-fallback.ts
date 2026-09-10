@@ -79,8 +79,22 @@ export function titleMatchScore(hitTitle: string, productTitle: string): number 
   const hits = matchTokens(hitTitle);
   const wanted = matchTokens(productTitle);
   if (hits.size === 0 || wanted.size === 0) return 0;
+  const hitList = [...hits];
   let matched = 0;
-  for (const t of wanted) if (hits.has(t)) matched += 1;
+  for (const t of wanted) {
+    if (hits.has(t)) {
+      matched += 1;
+      continue;
+    }
+    // REEA-468 G4 — model-number containment: typing `xm6` names the model
+    // carried inside a hyphenated model token ("WH-1000XM6" tokenizes to
+    // `wh` + `1000xm6`), so the pair meets on the model suffix instead of
+    // losing to generic brand rows. Only digit-carrying tokens act as the
+    // container and only while exactly one of them ends with the wanted
+    // stem — short words never swamp long titles. Same model-token
+    // philosophy as MODEL_TOKEN_RE in relevance.ts.
+    if (hitList.filter((h) => /\p{Nd}/u.test(h) && h.endsWith(t)).length === 1) matched += 1;
+  }
   return (2 * matched) / (wanted.size + hits.size);
 }
 
