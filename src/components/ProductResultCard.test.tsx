@@ -244,3 +244,47 @@ describe("REEA-541 Bet B — share-summary button placement", () => {
     ).toBeTruthy();
   });
 });
+
+describe("REEA-540 Bet A — seen-recently confidence line", () => {
+  const withRange = (): NormalizedProduct => ({
+    ...product(false),
+    seenRange: {
+      min: { price: 4099, currency: "KWD" },
+      max: { price: 4350, currency: "KWD" },
+    },
+  });
+
+  it("the results card shows the range in EN, formatted like every other figure", () => {
+    const { container } = render(
+      <ProductResultCard product={withRange()} query="iphone 17 pro" rank={0} locale="en" />,
+    );
+    expect(container.textContent).toContain("Seen recently:");
+    expect(container.textContent).toContain("KD 4,099\u2013KD 4,350");
+    expect(container.textContent).toContain("last 14 days");
+  });
+
+  it("the Arabic locale rides the SAME line from the shared static table", () => {
+    const { container } = render(
+      <ProductResultCard product={withRange()} query="آيفون" rank={0} locale="ar" />,
+    );
+    expect(container.textContent).toContain("شوهد مؤخرًا:");
+    // Figures keep the formatter's lead — only the chrome translates.
+    expect(container.textContent).toContain("KD 4,099\u2013KD 4,350");
+    expect(container.textContent).toContain("آخر 14 يومًا");
+  });
+
+  it("the detail variant keeps its hierarchy — the line does not ride it", () => {
+    const { container } = render(
+      <ProductResultCard product={withRange()} variant="detail" />,
+    );
+    expect(container.textContent).not.toContain("Seen recently:");
+    expect(container.textContent).not.toContain("شوهد");
+  });
+
+  it("a thin window (field unset) renders NOTHING — never interpolated", () => {
+    const { container } = render(
+      <ProductResultCard product={product(false)} query="xm6" rank={0} />,
+    );
+    expect(container.textContent).not.toContain("Seen recently");
+  });
+});

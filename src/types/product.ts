@@ -82,6 +82,21 @@ export interface NormalizedProduct {
    * collected. Missing/undefined renders "Verification date unknown".
    */
   scrapedAt?: string;
+  /**
+   * REEA-540 Bet A — the results-list confidence line: min/max of the
+   * merchant-day observations the last-seen store kept for this query
+   * (REEA-510 rows) inside the rolling 14-day window. Computed SERVER-side
+   * when the snapshot is built (src/lib/seen-range.ts); absent when the
+   * window holds fewer than 3 distinct observation days — the card then
+   * renders nothing. The detail view keeps its hierarchy and never shows it.
+   */
+  seenRange?: SeenRange;
+}
+
+/** REEA-540 Bet A — one endpoint: the native figure and its scraped currency. */
+export interface SeenRange {
+  min: { price: number; currency: string };
+  max: { price: number; currency: string };
 }
 
 export interface SearchResult {

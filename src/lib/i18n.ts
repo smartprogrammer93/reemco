@@ -67,6 +67,10 @@ const en = {
   saveLead: "Save",
   effectiveLead: "Effective",
   effectiveTail: "with coupon",
+  // REEA-540 Bet A — confidence-line pair on results cards:
+  // "Seen recently: KD 4,099–KD 4,350 · last 14 days".
+  seenRecentlyLead: "Seen recently:",
+  seenRecentlyWindow: "last 14 days",
   viewAtLead: "View at",
   goToStore: "Go to store",
   pricesSectionAria: "Prices and availability by retailer",
@@ -220,6 +224,9 @@ const ar: typeof en = {
   saveLead: "وفّر",
   effectiveLead: "السعر بعد الخصم",
   effectiveTail: "بالكوبون",
+  // REEA-540 Bet A — AR counterpart of the results-card confidence pair.
+  seenRecentlyLead: "شوهد مؤخرًا:",
+  seenRecentlyWindow: "آخر 14 يومًا",
   viewAtLead: "افتح لدى",
   goToStore: "إلى المتجر",
   pricesSectionAria: "الأسعار والتوافر حسب المتجر",

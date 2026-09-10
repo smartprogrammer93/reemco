@@ -9,6 +9,7 @@ import CouponBadge from "@/components/CouponBadge";
 import ShareSummaryButton from "@/components/ShareSummaryButton";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import { resolveOfferUrl } from "@/lib/links";
+import { formatSeenRangeLabel } from "@/lib/seen-range";
 import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
 import FreshnessBadge from "@/components/FreshnessBadge";
 
@@ -305,6 +306,22 @@ export default function ProductResultCard({
           <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
             {formatCountryPrice(best.price, best.currency, country).primary}
           </span>
+        </p>
+      )}
+
+      {/* REEA-540 Bet A — ONE confidence line per product card, results-list
+          surfaces only (the detail view keeps its hierarchy). The figure is
+          computed SERVER-side when the snapshot is built (lib/seen-range.ts)
+          from the query's stored last-seen observations — no client fetch, no
+          recompute. Fewer than 3 observation days leave the field unset and
+          NOTHING renders here — never an interpolated guess. Same muted
+          text-small caption treatment as the other chrome lines; figures ride
+          through the existing country-led formatter. */}
+      {!detail && product.seenRange != null && (
+        <p className="mt-1" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
+          {`${t.seenRecentlyLead} `}
+          <span className="tabular">{formatSeenRangeLabel(product.seenRange, country)}</span>
+          {` · ${t.seenRecentlyWindow}`}
         </p>
       )}
 

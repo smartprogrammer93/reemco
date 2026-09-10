@@ -38,7 +38,8 @@ import {
 } from "@/lib/query-cache";
 import type { FetchImpl } from "@/lib/collect/scraper";
 import type { CountryCode } from "@/lib/country";
-import { fillSilentFromLastSeen, rememberRound } from "@/lib/collect/last-seen";
+import { fillSilentFromLastSeen, readSeenObservations, rememberRound } from "@/lib/collect/last-seen";
+import { attachSeenRanges, type SeenRow } from "@/lib/seen-range";
 import { sanitizeExternalUrl } from "@/lib/safe-url";
 import { toKwdNumeric } from "@/lib/format";
 import { canonicalFields, compatibleFields, listingLabel, type CanonicalFields } from "@/lib/collect/canonical-product";
@@ -2582,6 +2583,7 @@ function stagedSnapshot(
   country: CountryCode | null,
   settledSoFar: SettledAdapter[],
   locale?: "en" | "ar",
+  observations: SeenRow[] = [],
 ): LiveSearchResult {
   const { hits, notes } = filterNotes(country, settledSoFar);
   // REEA-254 payload trim + REEA-488 item 1: staged flushes render through
@@ -2593,6 +2595,11 @@ function stagedSnapshot(
   // that has not answered yet at flush time is still in flight, not silent;
   // the last-seen fill lands with the converged snapshot only (finalSnapshot).
   const products = groupHits(q, hits, true, locale);
+  // REEA-540 Bet A — confidence-line roll-up over the STORED observations
+  // (window/dedup/threshold in lib/seen-range.ts). Purely additive: the
+  // best-price badge and cheapest-first sort above are untouched. An empty
+  // observation set leaves the cards exactly as they are (renders nothing).
+  attachSeenRanges(products, observations, { country });
   // REEA-468 G4 — a zero-answer flush still carries near-match pills derived
   // from the titles this run collected; only when those are empty too does
   // the empty state fall back to its category-pill floor.
@@ -2616,8 +2623,9 @@ function finalizedSnapshot(
   settledSoFar: SettledAdapter[],
   deadlineMs: number,
   locale?: "en" | "ar",
+  observations: SeenRow[] = [],
 ): LiveSearchResult {
-  const snap = stagedSnapshot(q, country, settledSoFar, locale);
+  const snap = stagedSnapshot(q, country, settledSoFar, locale, observations);
   const answered = new Set(snap.notes.map((n) => n.merchant));
   for (const c of collectors) {
     if (!answered.has(c.merchant)) {
@@ -2680,6 +2688,7 @@ async function finalSnapshot(
   widenedRetry = false,
   snapshotsEnabled = true,
   locale?: "en" | "ar",
+  observations: SeenRow[] = [],
 ): Promise<LiveSearchResult> {
   const { hits, notes } = filterNotes(country, settled);
   let products = groupHits(q, hits, true, locale);
@@ -2739,6 +2748,7 @@ async function finalSnapshot(
   // the widened retry's own suggestions when that round collected anything,
   // otherwise the distinct titles THIS chain already collected. Bundled data
   // never rides in — every entry here came from this run's hops.
+  attachSeenRanges(products, observations, { country });
   const suggestions = products.length > 0
     ? products.slice(0, 3)
     : retrySuggestions && retrySuggestions.length > 0
@@ -2871,6 +2881,19 @@ export function collectLiveResultsStaged(
     return { stages: [served], final: served, allSettled: Promise.resolve() };
   }
 
+  // REEA-540 Bet A — load this query's STORED last-seen observations once per
+  // run, in parallel with the hop fan-out: same keys REEA-510 already writes,
+  // no new collection round. The converged and finalized snapshots await it
+  // (it rides behind the completion clock, not in front of it); intermediate
+  // flushes use whatever has landed, so the first paint never waits on this
+  // read and the ≤5 s gate (REEA-523) keeps the whole budget for the hops.
+  let seenRows: SeenRow[] = [];
+  const seenRowsP: Promise<SeenRow[]> = snapshotsEnabled
+    ? readSeenObservations(q, collectors.map((c) => c.merchant), { country }).then((rows) => {
+        seenRows = rows;
+        return rows;
+      })
+    : Promise.resolve<SeenRow[]>([]);
   // Round one: every retailer is contacted once, in parallel, at call time —
   // same single request per retailer as the blocking path, same bounded
   // per-collector timeouts (REEA-156). Completions append to the accumulator
@@ -2919,7 +2942,7 @@ export function collectLiveResultsStaged(
   // response-cache write-through.
   const finalizeAtDeadline: Promise<LiveSearchResult> = new Promise<void>((resolve) =>
     setTimeout(resolve, deadlineMs),
-  ).then(() => finalizedSnapshot(q, country, collectors, settled.slice(), deadlineMs, locale));
+  ).then(async () => finalizedSnapshot(q, country, collectors, settled.slice(), deadlineMs, locale, await seenRowsP));
   const converged: Promise<LiveSearchResult> = Promise.all(runs)
     .then(() => deepenSilent(q, settled, fetchImpl))
     // REEA-510 — publish this round's live answers as last-seen snapshots on
@@ -2927,18 +2950,18 @@ export function collectLiveResultsStaged(
     // after() window): one write per run, behind the finalized response, so
     // the next silent pass for a retailer+query has its labeled fallback.
     .then(() => (snapshotsEnabled ? rememberRound(q, settled) : undefined))
-    .then(() => finalSnapshot(q, country, settled, fetchImpl, opts.widenedRetry === true, snapshotsEnabled, locale));
+    .then(async () => finalSnapshot(q, country, settled, fetchImpl, opts.widenedRetry === true, snapshotsEnabled, locale, await seenRowsP));
 
   const stages: Promise<LiveSearchResult>[] = collectors.map(async (_c, k) => {
     if (k < collectors.length - 1) {
       return await Promise.race([
-        untilArrivals(k + 1).then(() => stagedSnapshot(q, country, settled.slice(), locale)),
+        untilArrivals(k + 1).then(() => stagedSnapshot(q, country, settled.slice(), locale, seenRows)),
         finalizeAtDeadline,
       ]);
     }
     return await Promise.race([converged, finalizeAtDeadline]);
   });
-  const final: Promise<LiveSearchResult> = stages[stages.length - 1] ?? Promise.resolve(stagedSnapshot(q, country, settled, locale));
+  const final: Promise<LiveSearchResult> = stages[stages.length - 1] ?? Promise.resolve(stagedSnapshot(q, country, settled, locale, seenRows));
 
   // Write-through carries the LIVE answer only (products with their scrapedAt
   // stamps included). REEA-466 (QA REEA-467 findings 2/3): the warm repeat
