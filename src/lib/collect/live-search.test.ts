@@ -3,6 +3,7 @@
  * contract, cross-retailer grouping, and the bounded fan-out with injected
  * fetch (one failing retailer must not lose the others' offers).
  */
+import "./test-cache-dir";
 import { describe, expect, it } from "vitest";
 import { PER_RETAILER_TIMEOUT_MS } from "@/lib/collect/types";
 import { COVERAGE_ORDER } from "@/lib/collect/coverage";
