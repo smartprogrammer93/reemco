@@ -14,11 +14,15 @@ name: Pickup production stamp
 # checks keep working: /__commit.txt is stamped with the pushed SHA before
 # upload, /api/health `build` field comes from the artifact.
 #
-# Timeout sizing (measured 2026-09-10, push 18:45:37Z -> Ready ~18:52Z):
-# remote build reaches Ready ~6-7 min after the push. The CLI `timeout` is a
-# stream ceiling, NOT the success bar: hitting it does not cancel the remote
-# build, and the stamp poll below is the authoritative verify. CLI ceiling 9m,
-# job ceiling 12m, poll window ~4 min after the CLI step returns.
+# Timeout sizing (measured 2026-09-10): morning path pushed 18:45:37Z -> Ready
+# ~18:52Z (~6-7 min). Evening queue (REEA-578: pushes 21:12Z and 21:42Z) showed
+# the alias still serving the previous artifact ~12 min after submit, so both
+# pickup runs died at the old ceilings before the stamp could flip. Ceilings
+# raised: CLI stream ceiling 14m, job ceiling 18m, poll window up to ~6 min via
+# the health fallback. The CLI `timeout` stays a stream ceiling, NOT the success
+# bar: hitting it does not cancel the remote build, and the stamp poll below is
+# the authoritative verify. A stuck queue is drained with Actions > Run
+# workflow on this file (workflow_dispatch) instead of a filler push.
 #
 # Concurrency: bursts (coder harness pushes several commits quickly) collapse —
 # cancel-in-progress keeps only the newest run, whose deploy carries the full
@@ -33,6 +37,7 @@ name: Pickup production stamp
 on:
   push:
     branches: [main]
+  workflow_dispatch: # REEA-578 drain: rerun the pickup for the current head without needing a filler push
 
 permissions:
   contents: read
@@ -44,7 +49,7 @@ concurrency:
 jobs:
   pickup:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
 
@@ -68,7 +73,7 @@ jobs:
           # decisive: when it trips, the remote build still finishes and the
           # next step verifies the alias by polling. `|| true` keeps the
           # ceiling from redding a run whose stamp actually landed.
-          timeout --signal=INT 9m npx -y vercel@59.11.7 deploy --prod --yes \
+          timeout --signal=INT 14m npx -y vercel@59.11.7 deploy --prod --yes \
             --cwd "$GITHUB_WORKSPACE" $SCOPE_ARGS 2>&1 | tee /tmp/vercel-pickup.log \
             || echo "CLI stream ended early - stamp poll decides."
 
@@ -76,14 +81,22 @@ jobs:
         run: |
           set -u
           WANT="${GITHUB_SHA}"
+          WANT12="${WANT:0:12}"
           OK=0
-          for i in $(seq 1 24); do
+          for i in $(seq 1 36); do
             S=$(curl -fsS -m 10 https://reemco.vercel.app/__commit.txt 2>/dev/null | tr -d '[:space:]' || true)
-            if [ "$S" = "$WANT" ]; then OK=1; echo "stamp parity after poll $i (~$((i*10))s): $S"; break; fi
+            if [ "$S" = "$WANT" ] || [ "$S" = "$WANT12" ]; then OK=1; echo "stamp parity after poll $i (~$((i*10))s): $S"; break; fi
+            # REEA-578: edge nodes intermittently answer the stamp route with
+            # the Vercel Security Checkpoint interstitial instead of the
+            # artifact stamp; /api/health is not challenged and its build
+            # field is stamped from the same source commit, so treat a health
+            # build-prefix match as the same authority and keep polling.
+            H=$(curl -fsS -m 10 https://reemco.vercel.app/api/health 2>/dev/null || true)
+            case "$H" in *"$WANT12"*) OK=1; echo "stamp parity via health build after poll $i (~$((i*10))s): $H"; break;; esac
             sleep 10
           done
           if [ "$OK" != 1 ]; then
-            echo "::error::reemco.vercel.app still serves ${S:-nothing} after ~4 min, want $WANT. Rollback: rerun Deploy site with rollback_sha = last known-good commit."
+            echo "::error::reemco.vercel.app still serves ${S:-nothing} after ~6 min, want $WANT. Rollback: rerun Deploy site with rollback_sha = last known-good commit."
             exit 1
           fi
           H=$(curl -fsS -m 10 https://reemco.vercel.app/api/health || true)
