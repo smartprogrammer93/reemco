@@ -189,11 +189,15 @@ export const defaultQueryCache = createQueryCache();
  * window, then stale-while-revalidate, then ceiling expiry. Curl repro for a
  * cold render of one query: `curl -b 'rc_refresh=1' <same-url>`.
  */
-export function queryCacheKey(query: string, country?: string | null): string {
+export function queryCacheKey(query: string, country?: string | null, locale?: "en" | "ar"): string {
   const folded = query.trim().toLowerCase();
   // Country scopes the LIVE fan-out itself (REEA-170 — COLLECTORS are
   // filtered to the adapters tagged for the selection), so the collected
   // payload really differs per selection and its identity must too. Callers
-  // without a selection keep the plain query-only key.
-  return country ? `${country}|${folded}` : folded;
+  // without a selection keep the plain query-only key. REEA-468 G5: the
+  // Arabic locale selects the Arabic-script representative title inside the
+  // snapshot (nearMatchTitles/groupHits), so it joins the identity too —
+  // never as a per-request buster, only from the resolved request locale.
+  const scope = [country, locale].filter((p): p is string => Boolean(p));
+  return scope.length > 0 ? `${scope.join("|")}|${folded}` : folded;
 }

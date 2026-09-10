@@ -29,6 +29,7 @@
 import type { LiveSearchResult } from "@/lib/collect/live-search";
 import { collectLiveResultsStaged, followUpSnapshot } from "@/lib/collect/live-search";
 import { sanitizeSearchQuery } from "@/lib/search-params";
+import { LOCALE_COOKIE, resolveUiLocale } from "@/lib/i18n";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,18 +44,25 @@ const FOLLOW_UP_WAIT_MS = 8_000;
 export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const query = sanitizeSearchQuery(url.searchParams.get("q")) ?? "";
+  // REEA-468 G5 — same resolution chain as the page (rc_locale cookie → coarse
+  // Accept-Language → Arabic-script query), so the feed's snapshot selects the
+  // representative titles for the SAME locale the shopper is looking at.
+  const localeCookie = (req.headers.get("cookie") ?? "").match(
+    new RegExp(`(?:^|;\\s*)${LOCALE_COOKIE}=([^;]+)`),
+  )?.[1];
+  const locale = resolveUiLocale(localeCookie, req.headers.get("accept-language"), query);
 
   // Same-worker fast path: the page's own run is still pending on this
   // thread — await its converged chain, no extra hop traffic at all.
-  let pending = query ? followUpSnapshot(query) : null;
+  let pending = query ? followUpSnapshot(query, locale) : null;
   let fallbackFinal: Promise<LiveSearchResult> | null = null;
   if (!pending && query) {
     // Cross-worker path: re-collect live for this query on THIS thread.
     // Inside the REEA-291 fresh window the memo serves the last live answer
     // immediately; past it the fan-out runs again — always live-at-query-time.
-    const staged = collectLiveResultsStaged(query);
+    const staged = collectLiveResultsStaged(query, { locale });
     fallbackFinal = staged.final;
-    pending = followUpSnapshot(query);
+    pending = followUpSnapshot(query, locale);
   }
 
   const waited = pending ?? fallbackFinal;

@@ -135,7 +135,7 @@ export default async function ResultsPage({
   // signals. Coverage notes describe the whole fan-out the page actually ran.
   // The ONE exception is the explicit Refresh action (REFRESH_COOKIE), which
   // always re-runs the live collection so its timestamps move.
-  const staged = collectLiveResultsStaged(query, { refresh: hint.refresh });
+  const staged = collectLiveResultsStaged(query, { refresh: hint.refresh, locale });
   // REEA-398 — keep the hops still in flight alive BEHIND the finalized
   // response: after() runs the run's allSettled chain once the document is
   // sent, so late offers converge into the cache and the follow-up feed
