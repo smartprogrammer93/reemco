@@ -1,8 +1,45 @@
 import { currencyForCountry, type CountryCode } from "@/lib/country";
 import type { PriceOffer } from "@/types/product";
 
-/** Format a price with its currency, e.g. "89.99 USD" -> "$89.99". */
+/**
+ * REEA-488 item 3 — Kuwaiti display convention for KD figures: at most TWO
+ * meaningful decimals; fils (the third decimal) ride along ONLY when nonzero;
+ * whole amounts render bare ("KD 349", never "KD 349.000"). The digit count
+ * also fixes the padded length, so a hundredths figure keeps its second
+ * decimal ("KD 14.90", not "KD 14.9"). Applied to price, wasPrice
+ * strikethrough and the savings pill, in both locales — the label space is
+ * ASCII on every view. `maxDecimals` caps the derived (converted) side at the
+ * REEA-281 ≤2 rule; KWD-native figures use the full 3.
+ */
+function kdDigitCount(value: number, maxDecimals: number): number {
+  const mille = Math.round(Math.abs(value) * 1000);
+  const frac = mille % 1000; // the three decimal places alone
+  if (frac === 0) return 0; // whole amount — no decimals, no trailing-zero noise
+  if (maxDecimals === 3 && frac % 10 !== 0) return 3; // nonzero fils stays
+  return 2; // any other fraction pads to hundredths: 14.9 → "14.90"
+}
+
+/** Plain KD-space digits for a figure (grouping kept, no currency prefix) —
+ *  also used by the detail-page swatch chips so one rounding rule covers
+ *  every rendered KD number. */
+export function formatKdDigits(value: number, maxDecimals = 3): string {
+  const digits = kdDigitCount(value, maxDecimals);
+  try {
+    return new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(value);
+  } catch {
+    return value.toFixed(digits);
+  }
+}
+
+/** Format a price with its currency. KWD renders in the Kuwaiti convention —
+ *  "KD 349" / "KD 14.90" (REEA-488); every other ISO code keeps its Intl
+ *  currency stamp as before. */
 export function formatPrice(price: number, currency: string): string {
+  const code = currency.trim().toUpperCase();
+  if (!code || code === "KWD") return `KD ${formatKdDigits(price, 3)}`;
   try {
     return new Intl.NumberFormat("en-US", {
       style: "currency",
@@ -54,8 +91,11 @@ export function toKwdNumeric(price: number, currency: string): number {
 
 /** Converted-side render of a reference conversion: at most two decimals —
  *  the exact fils precision belongs to KWD-native figures only (REEA-281 AC-2),
- *  a derived number must not read like a third decimal was measured. */
+ *  a derived number must not read like a third decimal was measured. KWD lands
+ *  as the REEA-488 KD form ("KD 40.72", whole figures bare — no trailing-zero
+ *  noise on the derived side either); other codes keep their Intl stamp. */
 function formatConverted(value: number, code: string): string {
+  if (code === "KWD") return `KD ${formatKdDigits(value, 2)}`;
   try {
     return new Intl.NumberFormat("en-US", {
       style: "currency",

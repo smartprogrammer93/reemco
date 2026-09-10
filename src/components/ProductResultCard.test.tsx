@@ -84,14 +84,14 @@ describe("REEA-281 AC-2 — converted price on the rendered card", () => {
     const { container } = render(<ProductResultCard product={product(false)} query="headphones" />);
     const text = (container.textContent ?? "").replace(/\s+/g, " ");
     // SAR 499 → 40.7184 KD: the rendered reference shows ≈ and two decimals.
-    expect(text).toMatch(/≈\s?KWD 40\.72(?![\d.])/);
+    expect(text).toMatch(/≈\s?KD 40\.72(?![\d.])/);
     // The scraped SAR stamp keeps its exact rendered precision beside it.
     expect(text).toContain("SAR 499.00");
-    // KWD-native 99 leads untouched — Intl's own fils width (three decimals
-    // for KWD) is what "precision unchanged" means on the rendered row, and
-    // the native figure carries no ≈ of its own.
-    expect(text).toMatch(/KWD 99\.000(?![\d])/);
-    expect(/≈\s?KWD 99/.test(text)).toBe(false);
+    // KWD-native 99 leads untouched — REEA-488: whole amounts render bare in
+    // the KD form (no trailing-zero noise on round figures), and the native
+    // figure carries no ≈ of its own.
+    expect(text).toMatch(/KD 99(?![.\d])/);
+    expect(/≈\s?KD 99/.test(text)).toBe(false);
   });
 });
 
@@ -129,7 +129,7 @@ describe("REEA-283 — country-led price rows (hero + retailer rows)", () => {
     const alt = Array.from(container.querySelectorAll(".price-alt"));
     expect(alt.length).toBeGreaterThanOrEqual(2);
     for (const span of alt) {
-      expect(span.textContent?.replace(/\s+/g, " ")).toMatch(/^· ≈?\s?KWD\b/);
+      expect(span.textContent?.replace(/\s+/g, " ")).toMatch(/^· ≈?\s?KD\b/);
     }
     // Hero treatment on the PRIMARY span only: price font + savings colour;
     // the retailer-row primary carries 600/ink; the muted stamp is pure CSS.
