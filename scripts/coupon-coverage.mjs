@@ -28,7 +28,9 @@ function notesArrays(html){let s=html;for(let i=0;i<4;i++){const t=s.replace(/\\
  *  `"productId":` entry; its alternatives are non-empty when the field opens
  *  with an object (`[{`) or a flight reference (`"$`) — REEA-254 shares one
  *  alternatives entry across sibling products, and a referenced entry counts
- *  as filled for every product reading it. */
+ *  as filled for every product reading it. Counted across every serialized
+ *  snapshot of a query (each staged flush delivers its cards), so the rate
+ *  reads over DELIVERED cards — the weekly number is a plain count pair. */
 function fillStats(html){let s=html;for(let i=0;i<4;i++){const t=s.replace(/\\"/g,'"');if(t===s)break;s=t;}let seen=0,filled=0;const re=/"productId":"([^"]*)"[\s\S]{0,6000}?"alternatives":(\[\]|\[\{|\\"\$|\$)/g;let m;while((m=re.exec(s))!==null){seen+=1;if(m[2]!=="[]")filled+=1;}return{seen,filled};}
 
 /* The edge sometimes answers with the Vercel Security Checkpoint (HTTP 403,
