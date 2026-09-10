@@ -13,8 +13,11 @@ import type { NormalizedProduct } from "@/types/product";
 
 export interface LiveSearchResult {
   products: NormalizedProduct[];
-  /** Per-retailer notes for the diagnostics panel; failures included. */
-  notes: { merchant: string; hits: number; error?: string }[];
+  /** Per-retailer notes for the diagnostics panel; failures included.
+   *  REEA-488 item 2: `coupons` counts that merchant's kept offers carrying
+   *  coupon info among `hits` — coupon coverage per stage, so under-delivery
+   *  by a specific adapter is measurable instead of guessed. */
+  notes: { merchant: string; hits: number; coupons?: number; error?: string }[];
   /** Empty-match suggestion set (REEA-114); every snapshot carries its own. */
   suggestions?: NormalizedProduct[];
   /**
@@ -106,4 +109,60 @@ export function coverageLine(
 function joinNames(names: string[], ar = false): string {
   if (names.length <= 1) return names.join("");
   return `${names.slice(0, -1).join(", ")}${ar ? " و" : " and "}${names[names.length - 1]}`;
+}
+
+/** REEA-488 item 2 — per-merchant coupon coverage rolled up over the notes
+ *  of many snapshots (one weekly export). Merchants sum across snapshots in
+ *  the fixed adapter order; `coverage` is couponOffers/offers, null when the
+ *  merchant kept no offers at all in the window. */
+export interface MerchantCouponCoverage {
+  merchant: string;
+  offers: number;
+  couponOffers: number;
+  coverage: number | null;
+}
+
+export function aggregateCouponCoverage(
+  noteSets: Iterable<LiveSearchResult["notes"]>,
+): MerchantCouponCoverage[] {
+  const totals = new Map<string, { offers: number; couponOffers: number }>();
+  for (const notes of noteSets) {
+    for (const n of notes) {
+      const t = totals.get(n.merchant) ?? { offers: 0, couponOffers: 0 };
+      t.offers += n.hits;
+      t.couponOffers += n.coupons ?? 0;
+      totals.set(n.merchant, t);
+    }
+  }
+  return [...totals.entries()]
+    .sort((a, b) => coverageRank(a[0]) - coverageRank(b[0]))
+    .map(([merchant, t]) => ({
+      merchant,
+      offers: t.offers,
+      couponOffers: t.couponOffers,
+      coverage: t.offers > 0 ? t.couponOffers / t.offers : null,
+    }));
+}
+
+/** REEA-488 metrics — alternatives fill rate over served products: one entry
+ *  per snapshot's product list, counted as simple weekly numbers (AC: the
+ *  non-empty rate on the top queries). */
+export interface AlternativesFill {
+  productsSeen: number;
+  productsWithAlternatives: number;
+  nonEmptyRate: number | null;
+}
+
+export function aggregateAlternativesFill(
+  productSets: Iterable<NormalizedProduct[]>,
+): AlternativesFill {
+  let seen = 0;
+  let filled = 0;
+  for (const products of productSets) {
+    for (const p of products) {
+      seen += 1;
+      if (p.alternatives.length > 0) filled += 1;
+    }
+  }
+  return { productsSeen: seen, productsWithAlternatives: filled, nonEmptyRate: seen > 0 ? filled / seen : null };
 }
