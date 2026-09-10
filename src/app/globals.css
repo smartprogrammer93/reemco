@@ -279,6 +279,15 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+/* REEA-451 F8 — Arabic-session meta-stamp override: the converted-price stamp
+   reads as body text — body-size line (13px/1.5), plain case and tracking. */
+html[lang="ar"] .price-alt {
+  font-size: 13px;
+  line-height: 1.5;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
 /* Primary action (Search / Go to store / Retry) */
 .btn-primary {
   display: inline-flex;
@@ -390,6 +399,9 @@ a:focus-visible {
   color: var(--rc-dark-ink);
   padding: 6px 14px;
   font: var(--rc-text-small);
+  /* REEA-451 F3 — pill floor: the 13px/1.5 label + 6px pads computed ~31.5px;
+     keep the touch height at the shared 36px control floor. */
+  min-height: 36px;
   transition: background var(--rc-motion-fast) var(--rc-ease-out);
 }
 
@@ -472,7 +484,11 @@ a:focus-visible {
 
 .pulse-bar-fill {
   position: absolute;
-  inset: 0 auto 0 0;
+  /* REEA-451 F7 — logical inset so the fill anchors the writing-direction's
+     start edge automatically: right-first under dir=rtl, left under ltr
+     (was physical inset:0 auto 0 0 = left-only at every dir). */
+  inset-block: 0;
+  inset-inline: 0 auto;
   border-radius: var(--rc-radius-pill);
   background: var(--rc-primary);
   transition: width var(--rc-motion-arrival) var(--rc-ease-out);
