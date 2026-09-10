@@ -23,6 +23,19 @@ export interface PriceOffer {
    * rows then render text-only (the graceful fallback), never a placeholder.
    */
   image?: string;
+  /**
+   * REEA-486 AC-6 — the listing's own qualifier beyond the merged card
+   * title ("Japanese Version", "eSIM"), so folding several spellings of one
+   * model into one card never loses what distinguishes a row inside it.
+   * Absent when the listing says nothing beyond the card title.
+   */
+  label?: string;
+  /**
+   * REEA-486 AC-2 — ISO stamp of the moment THIS retailer's answer landed in
+   * the live run, so each row's freshness is traceable to its own hop, not
+   * just to the card's completion stamp. Absent on catalog-fallback rows.
+   */
+  collectedAt?: string;
 }
 
 export interface Coupon {

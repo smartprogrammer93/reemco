@@ -28,6 +28,8 @@
  *     spelling covers the retailer-tailed long spelling of the same line.
  */
 
+import { normalizeArabicText } from "@/lib/relevance";
+
 export interface CanonicalFields {
   brand: string;
   modelLine: string;
@@ -67,6 +69,9 @@ const COLOR_PREFIXES = new Set([
   // arrive as modifier + base; they close the colour exactly like the
   // existing prefix pairs, not as extra model-line words.
   "eclipse", "twilight",
+  // REEA-486: Apple-style "Deep Blue"/"Deep Purple" — same modifier + base
+  // pair; the modifier must not fork the short spelling into a second card.
+  "deep",
 ]);
 
 const GRADE_WORDS = new Set(["new", "renewed", "refurbished", "opened"]);
@@ -125,14 +130,54 @@ const NOISE = new Set([
   // Line-defining series words (TUF, VivoBook, …) are NOT in this class —
   // they stay visible in the model line.
   "rog",
+  // REEA-486: region/version qualifiers — the same listing-chrome class as
+  // "global"/"version"/"unlocked". A tail like "Japanese Version (eSIM)"
+  // restates the line the head already carries; the short spelling must
+  // cover it while the qualifier survives INSIDE the merged card as the
+  // offer's own label (see listingLabel). Latin and Arabic spellings of one
+  // device read through the same fold (noised()).
+  "japanese", "american", "chinese", "korean", "european", "british",
+  "edition", "intl",
+  "نسخة", "اصدار", "ياباني", "يابانية", "امريكي", "امريكية", "صيني",
+  "صينية", "كوري", "كورية",
+]);
+
+/** Qualifier words that fold out of the identity tuple yet stay visible as
+ *  the offer label inside the merged card (REA-486 AC-6): they carry no
+ *  identity — the model line above them decides the card — but they tell the
+ *  shopper WHICH listing of that line a row is ("Japanese Version", "eSIM").
+ *  Marketing noise ("with Face ID", "Tax Paid") is NOT in this set; it rides
+ *  off with the rest of the restatements. Keys are stored in the folded
+ *  Arabic form normalizeArabicText produces. */
+const LABEL_QUALIFIERS: ReadonlySet<string> = new Set([
+  "japanese", "american", "chinese", "korean", "european", "british",
+  "edition", "version", "intl", "international", "esim", "sim",
+  "نسخة", "اصدار", "ياباني", "يابانية",
 ]);
 
 /** NOISE membership that reads back joined word+digit tokens: the tokenizer
  *  glues a trailing figure onto its word ("Windows 10" → `windows10`), so a
  *  restatement word stays recognized after the join pass. Plain model codes
- *  keep discriminating — `air11` is not noise because "air" is not either. */
+ *  keep discriminating — `air11` is not noise because "air" is not either.
+ *  REEA-486: Arabic-script tokens are looked up through the same fold the
+ *  Arabic matching paths use (normalizeArabicText + a leading "ال" strip), so
+ *  a qualifier spelled with or without the article/hamza variants lands on
+ *  the same recognition the Latin spelling gets — the Arabic card mirrors the
+ *  Latin structure exactly. */
+function arabicNoise(token: string): boolean {
+  if (!/[\u0600-\u06FF]/.test(token)) return false;
+  const folded = normalizeArabicText(token);
+  if (NOISE.has(folded)) return true;
+  const stripped = folded.replace(/^ال/, "");
+  return stripped.length >= 3 && NOISE.has(stripped);
+}
+
 function noised(token: string): boolean {
-  return NOISE.has(token) || (/^\p{L}+\d+$/u.test(token) && NOISE.has(token.replace(/\d+$/g, "")));
+  return (
+    NOISE.has(token) ||
+    (/^\p{L}+\d+$/u.test(token) && NOISE.has(token.replace(/\d+$/g, ""))) ||
+    arabicNoise(token)
+  );
 }
 
 const STORAGE_RE = /^(\d+(?:\.\d+)?)(gb|tb)$/;
@@ -454,7 +499,7 @@ function isCodeShape(token: string): boolean {
 
 /** A lone chrome word may ride after the shared head of the shorter line. */
 function isChromeWord(token: string): boolean {
-  return NOISE.has(token) || COLORS.has(token) || COLOR_PREFIXES.has(token) || /^[a-z]$/.test(token);
+  return noised(token) || COLORS.has(token) || COLOR_PREFIXES.has(token) || /^[a-z]$/.test(token);
 }
 
 /** Two shelf codes of one family agree when the SHORTER one's digit run and
@@ -518,9 +563,54 @@ export function compatibleFields(a: CanonicalFields, b: CanonicalFields): boolea
   return true;
 }
 
+/**
+ * REEA-486 AC-6 — the per-listing qualifier that survives the merge. Once
+ * several retailer spellings fold onto one card, the words THIS listing
+ * carries beyond the card's own title ("Japanese Version", "eSIM") keep each
+ * offer distinguishable inside the merged card. Words that already have their
+ * own slot on the card ride off instead of forking one merchant's rows:
+ * colours (the swatch chips), capacities (they split the tier themselves),
+ * grades (the grade badge) and plain marketing restatements (the NOISE
+ * class). A qualifier word from LABEL_QUALIFIERS stays visible even though it
+ * is NOISE for matching — it restates nothing the shopper must compare.
+ * Pure word-set difference on the two verbatim titles: same inputs, same
+ * label, every render — Arabic and Latin titles run the identical path.
+ */
+export function listingLabel(listingTitle: string, cardTitle: string): string {
+  const bare = (w: string): string =>
+    w.toLowerCase().replace(/^[(\[{]+/, "").replace(/[)\]},.;:!؟]+$/, "");
+  const words = (t: string): string[] => t.trim().replace(/\s+/g, " ").split(" ").filter(Boolean);
+  const carried = new Set(words(cardTitle).map(bare).filter((w) => w !== ""));
+  const kept: string[] = [];
+  for (const word of words(listingTitle)) {
+    const t = bare(word);
+    if (t === "" || carried.has(t)) continue;
+    // Pure punctuation ("-", "/") is layout, not information.
+    if (!/[\p{L}\p{N}]/u.test(t)) continue;
+    if (COLORS.has(t) || COLOR_PREFIXES.has(t)) continue; // swatches own colours
+    if (GRADE_WORDS.has(t) || GRADE_LETTERS.has(t) || t === "grade") continue; // the badge chip
+    if (STORAGE_RE.test(t) || RAM_QUANTITY_RE.test(t) || RAM_WORDS.has(t)) continue; // tier + RAM restatement
+    if (/^(gb|tb|mb)$/i.test(t)) continue; // unit words belong to the size tier
+    // Qualifier words read first: they fold out of the identity tuple yet
+    // stay the visible label (both scripts), before any restatement filter.
+    if (LABEL_QUALIFIERS.has(t) || LABEL_QUALIFIERS.has(normalizeArabicText(t))) {
+      kept.push(word.trim());
+      continue;
+    }
+    if (arabicNoise(t) || NOISE.has(t)) continue; // restatements ride off
+    kept.push(word.trim());
+  }
+  // Count-only numbers ("(256" of "256 GB", the "2" of "2 Years") restate
+  // slots the card already owns — the label starts and ends on words.
+  const numericOnly = (w: string): boolean => /^\p{N}+(?:[.,]\p{N}+)?$/u.test(bare(w));
+  while (kept.length > 0 && numericOnly(kept[0])) kept.shift();
+  while (kept.length > 0 && numericOnly(kept[kept.length - 1])) kept.pop();
+  // A bounded single-line chip — the qualifier, not the whole scraped title.
+  return kept.join(" ").slice(0, 48);
+}
+
 /** Badge copy for the grade chip: renewed-grade-b → "Renewed Grade B". */
-export function gradeBadgeLabel(grade: string): string | null {
-  if (!grade || grade === "new") return null;
+export function gradeBadgeLabel(grade: string): string | null {  if (!grade || grade === "new") return null;
   return grade
     .split("-")
     .map((p) => p.charAt(0).toUpperCase() + p.slice(1))

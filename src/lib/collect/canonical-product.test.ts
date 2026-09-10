@@ -11,7 +11,7 @@
  * table, no precomputed merged-product row.
  */
 import { describe, expect, it } from "vitest";
-import { canonicalKey, canonicalFields, compatibleFields } from "@/lib/collect/canonical-product";
+import { canonicalKey, canonicalFields, compatibleFields, listingLabel } from "@/lib/collect/canonical-product";
 import { groupHits, type SearchHit } from "@/lib/collect/live-search";
 
 const A4_TITLES = [
@@ -184,5 +184,56 @@ describe("REEA-310 merge gate — spec pipeline edges", () => {
     expect(canonicalKey("ASUS XA14 ROG STRIX SCOPE II X Wired Gaming Keyboard - Black")).toBe(
       canonicalKey("ASUS ROG STRIX SCOPE II X Wired Gaming Keyboard - Black"),
     );
+  });
+});
+
+describe("REEA-486 merge gate — one card per model identity", () => {
+  it("a region/version tail folds onto the short spelling of one line", () => {
+    // "Japanese Version (eSIM)" restates the listing, not the SKU: both
+    // spellings of the plain Pro must land on ONE key, and the two spellings
+    // of the Pro Max on their own — the tail is chrome after the shared head.
+    expect(canonicalKey("Apple iPhone 17 Pro - Japanese Version (eSIM)")).toBe(
+      canonicalKey("Apple iPhone 17 Pro - eSIM"),
+    );
+    expect(canonicalKey("Apple iPhone 17 Pro Max - Japanese Version")).toBe(
+      canonicalKey("Apple iPhone 17 Pro Max - eSIM"),
+    );
+  });
+
+  it("the fold never blends model lines: Pro ≠ Pro Max ≠ case", () => {
+    const pro = canonicalFields("Apple iPhone 17 Pro - eSIM");
+    const max = canonicalFields("Apple iPhone 17 Pro Max - eSIM");
+    const kase = canonicalFields("Apple iPhone 17 Pro Silicone Case");
+    expect(compatibleFields(pro, max)).toBe(false);
+    expect(compatibleFields(pro, kase)).toBe(false);
+    expect(compatibleFields(max, kase)).toBe(false);
+  });
+
+  it("Arabic mirror: the qualifier folds in Arabic titles exactly as in Latin", () => {
+    // Same structure for Arabic-script retailer titles (REEA-486 AC-5): the
+    // version/region tail rides off, the line itself still discriminates.
+    expect(canonicalKey("آيفون 17 برو - نسخة يابانية")).toBe(canonicalKey("آيفون 17 برو"));
+    expect(
+      compatibleFields(canonicalFields("آيفون 17 برو"), canonicalFields("آيفون 17 برو ماكس")),
+    ).toBe(false);
+  });
+
+  it("listingLabel keeps the distinguishing qualifier and rides off restatements", () => {
+    // The qualifier survives the merge …
+    expect(
+      listingLabel("Apple iPhone 17 Pro - Japanese Version (eSIM)", "Apple iPhone 17 Pro - eSIM"),
+    ).toBe("Japanese Version");
+    // … while words with their own slot on the card stay off the row: colour
+    // swatches, capacities and grade badges keep single rows per merchant.
+    expect(
+      listingLabel("Apple iPhone 17 Pro Max 256GB Deep Blue", "Apple iPhone 17 Pro Max 256GB Silver"),
+    ).toBe("");
+    // Marketing tails ("with Face ID | Tax Paid …") are restatements, gone.
+    expect(
+      listingLabel(
+        "Apple iPhone 17 Pro (256 GB) - Silver with Face ID | Tax Paid | 2 Years Official Warranty",
+        'Apple iPhone 17 Pro 6.3" 256GB - Silver',
+      ),
+    ).toBe("");
   });
 });

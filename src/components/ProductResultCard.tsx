@@ -2,8 +2,9 @@ import Link from "next/link";
 import Image from "next/image";
 import type { Coupon, NormalizedProduct, PriceOffer } from "@/types/product";
 import { buildResultsHref, type CountryCode } from "@/lib/country";
-import { effectivePrice, formatCountryPrice, formatPrimaryPrice, sortOffers, toKwdNumeric } from "@/lib/format";
+import { effectivePrice, formatCountryPrice, formatKdDigits, formatPrimaryPrice, sortOffers, toKwdNumeric } from "@/lib/format";
 import { gradeBadgeLabel } from "@/lib/collect/canonical-product";
+import { relativeAge } from "@/lib/relative-time";
 import CouponBadge from "@/components/CouponBadge";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import { resolveOfferUrl } from "@/lib/links";
@@ -342,6 +343,9 @@ export default function ProductResultCard({
               const isLowest = i === 0 && o.inStock;
               // REEA-283: country-led lead figure + muted converted stamp.
               const row = formatCountryPrice(o.price, o.currency, country);
+              // REEA-486 AC-2: the row's own hop stamp, aged against the same
+              // baked render clock the freshness chip uses (hydration-stable).
+              const age = relativeAge(o.collectedAt, renderStartMs);
               return (
                 <li
                   key={`${o.merchant}-${o.url}`}
@@ -367,6 +371,20 @@ export default function ProductResultCard({
                     <span style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
                       {o.merchant}
                     </span>
+                    {/* REEA-486 AC-6: the merged card keeps each listing's own
+                        qualifier visible — the label the retailer wrote
+                        ("Japanese Version"), never folded away. Same chip
+                        shape as the grade badge; long labels clip with an
+                        ellipsis (title attr carries the full text). */}
+                    {o.label ? (
+                      <span
+                        className="label-token inline-flex min-w-0 max-w-[28ch] items-center whitespace-nowrap overflow-hidden text-ellipsis rounded px-2 py-0.5"
+                        title={o.label}
+                        style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px solid var(--rc-line)" }}
+                      >
+                        {o.label}
+                      </span>
+                    ) : null}
                     {/* REEA-167 §2: condition grade rides its own row badge —
                         renewed/refurbished offers stay distinguishable, never
                         blended into the new-condition price list. */}
@@ -411,6 +429,11 @@ export default function ProductResultCard({
                         {row.primary}
                       </span>
                       {row.alt && <span className="price-alt">{`· ${row.alt}`}</span>}
+                      {/* REEA-486 AC-2: this row's own collected-at, aged —
+                          muted like the converted stamp, so the figure keeps
+                          the crown but every offer reads traceable to its
+                          hop. */}
+                      {age != null && <span className="price-alt">{age}</span>}
                     </span>
                     {/* REEA-13: render scraped hrefs only through validation;
                         REEA-116: direct retailer product URLs for every
@@ -458,7 +481,7 @@ export default function ProductResultCard({
                 {v.priceDelta !== 0 && (
                   <span className="tabular ml-1">
                     {v.priceDelta > 0 ? "+" : "−"}
-                    {Math.abs(v.priceDelta).toFixed(2)}
+                    {formatKdDigits(Math.abs(v.priceDelta), 2)}
                   </span>
                 )}
               </li>
@@ -467,8 +490,12 @@ export default function ProductResultCard({
         </section>
       )}
 
-      {/* §3.4 alternatives: 48px rows, right-aligned tabular price, hairline separators */}
-      {detail && product.alternatives.length > 0 && (
+      {/* §3.4 alternatives: 48px rows, right-aligned tabular price, hairline
+          separators. REEA-488 item 1: the module rides BOTH variants now —
+          the results card is where the homepage promise is cashed, and the
+          server fills the list from cheaper same-family collected groups. An
+          empty list still renders NOTHING — never an empty shell. */}
+      {product.alternatives.length > 0 && (
         <section aria-label={t.alternativesLabel} className="mt-4">
           <h3 className="label-token mb-2" style={{ color: "var(--rc-body-text)" }}>
             {t.alternativesLabel}
