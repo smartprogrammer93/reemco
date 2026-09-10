@@ -146,7 +146,7 @@ const en = {
   aboutTitle: "About Reemco",
   aboutWhatLabel: "WHAT WE DO",
   aboutWhatBody:
-    "Reemco is a price-comparison site for shopping in Kuwait. Search one product and see its price, stock, coupons and cheaper alternatives across retailers in one list.",
+    "Reemco is a price-comparison site for shopping in Kuwait. Search one product and see its price, stock, coupons and cheaper alternatives across retailers in one list. Kuwait-first; KSA and Egypt as secondary.",
   aboutWhoLabel: "WHO WE COMPARE",
   aboutWhoBody:
     "Xcite · Jarir · Eureka · Sultan Center · Blink · Lulu Hypermarket · Quadra Stores · Next Store · PC Kuwait.",
@@ -288,7 +288,7 @@ const ar: typeof en = {
   aboutTitle: "عن ريمكو",
   aboutWhatLabel: "ما نفعله",
   aboutWhatBody:
-    "ريمكو موقع لمقارنة الأسعار للتسوق في الكويت. ابحث عن منتج واحد وشاهد سعره وتوافره وكوبوناته وبدائله الأرخص عبر المتاجر في قائمة واحدة.",
+    "ريمكو موقع لمقارنة الأسعار للتسوق في الكويت. ابحث عن منتج واحد وشاهد سعره وتوافره وكوبوناته وبدائله الأرخص عبر المتاجر في قائمة واحدة. الكويت أولا، ثم السعودية ومصر.",
   aboutWhoLabel: "من نقارن بينهم",
   aboutWhoBody: en.aboutWhoBody,
   aboutFreshLabel: "مدى حداثة الأسعار",
