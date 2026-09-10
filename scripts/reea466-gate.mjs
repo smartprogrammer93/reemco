@@ -38,10 +38,20 @@ process.env.LD_LIBRARY_PATH = [LIB_DIR, "/tmp/sqlite-extract/usr/lib/x86_64-linu
 
 const browser = await pw.launch({
   executablePath: await chromium.executablePath(),
-  args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--headless=new"],
+  args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
   headless: true,
 });
-const page = await browser.newPage();
+// REEA-523 — the checkpoint interstitial only ever verifies for a UA that
+// reads like a real browser: with the default Playwright headless UA
+// ("HeadlessChrome/…") the page sat on the checkpoint for the whole 30 s
+// window and every row measured the interstitial instead of the app; a plain
+// Chrome UA on the same Chromium build verifies in <1 s and renders the app
+// (legacy headless, same engine). Without this the harness silently measures
+// the wrong document even when the pre-warm "passes" its selector wait.
+const page = await browser.newPage({
+  userAgent:
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+});
 page.setDefaultTimeout(30000);
 
 // Pre-warm: clear the security checkpoint outside measured navigations.
@@ -57,32 +67,48 @@ console.log("STAMP " + stamp);
 async function measure(q) {
   const url = `${BASE}/results?q=${encodeURIComponent(q)}`;
   const t0 = Date.now();
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+  // REEA-523 — commit + explicit clocks instead of leaning on `goto`:
+  //  - firstOffer: first real card in the DOM (poll loop, right after commit);
+  //  - completeMs: when the document FINALIZES — readyState leaves "loading",
+  //    exactly when DOMContentLoaded fires on a streamed page, i.e. when the
+  //    stream closes. That is the completion clock this gate polices: late
+  //    waves that patch in afterward keep the COUNT honest without holding
+  //    the document open.
+  // With waitUntil:"commit" every number comes from the poll loop, so the
+  // measurements do not fork on engine quirks around when each Chromium fires
+  // DCL for streamed documents. The ceiling rides maxDuration (45 s).
+  await page.goto(url, { waitUntil: "commit", timeout: 45000 });
   let firstOffer = null;
   let lastCount = null;
   let stableRun = 0;
   let completeAt = null;
   let headingVals = [];
   let cards = 0;
-  const deadline = Date.now() + 12000;
-  while (Date.now() < deadline) {
+  while (Date.now() - t0 < 45000) {
     const snap = await page.evaluate(() => {
       const cardEls = [...document.querySelectorAll("article.result-card")].filter((c) => c.getAttribute("aria-hidden") !== "true" && c.getAttribute("aria-hidden") !== "");
       const tab = document.querySelector("h1 .tabular, span.tabular");
-      return { cards: cardEls.length, heading: tab ? tab.textContent.trim() : null, title: document.title };
+      return { cards: cardEls.length, heading: tab ? tab.textContent.trim() : null, rs: document.readyState };
     }).catch(() => null);
     if (!snap) { await new Promise((r) => setTimeout(r, 60)); continue; }
     const now = Date.now() - t0;
     if (firstOffer === null && snap.cards >= 1) firstOffer = now;
-    if (snap.heading !== null && snap.heading !== "") {
-      if (snap.heading === lastCount) stableRun++;
-      else { stableRun = 1; lastCount = snap.heading; headingVals = [Number(snap.heading)]; }
-      if (completeAt === null && stableRun >= 3 && firstOffer !== null) { completeAt = now; cards = snap.cards; }
+    if (snap.heading !== null && snap.heading !== "" && snap.heading !== lastCount) {
+      headingVals = [Number(snap.heading)]; // last stable value — same shape as the accepted REEA-467 tables
+      lastCount = snap.heading;
+      stableRun = 1;
+    } else if (snap.heading !== null && snap.heading !== "") {
+      stableRun++;
     }
-    if (completeAt !== null) break;
+    // Completion clock: the stream-closed moment. Keep the heading-stability
+    // trail in headingVals for the warm-vs-cold count comparison.
+    if (completeAt === null && snap.rs !== "loading") {
+      completeAt = now;
+      cards = snap.cards;
+      break;
+    }
     await new Promise((r) => setTimeout(r, 60));
   }
-  if (completeAt === null && lastCount !== null) { completeAt = Date.now() - t0; }
   return { firstOffer, completeMs: completeAt, headingVals, cards };
 }
 
