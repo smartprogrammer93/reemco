@@ -203,3 +203,30 @@ describe("REEA-283 — freshness digit ships in the first render", () => {
     expect(chipOf(container)).toContain("may be outdated");
   });
 });
+
+describe("REEA-468 G3 coupon-slot copy", () => {
+  const noCoupon = product(false);
+  const withCoupon: NormalizedProduct = {
+    ...noCoupon,
+    coupons: [{ code: "SAVE10", description: "10% off", discount: "10% off", expiresAt: null }],
+  };
+
+  it("an answered card without promos states 'No coupon available'", () => {
+    const { container } = render(<ProductResultCard product={noCoupon} query="xm6" rank={0} />);
+    expect(container.textContent).toContain("No coupon available");
+    expect(container.querySelector(".coupon-badge")).toBeNull();
+  });
+
+  it("a promo listing shows the coupon pill instead of the empty-slot line", () => {
+    const { container } = render(<ProductResultCard product={withCoupon} query="xm6" rank={0} />);
+    expect(container.querySelector(".coupon-badge")?.textContent).toContain("10% off");
+    expect(container.textContent).not.toContain("No coupon available");
+  });
+
+  it("the Arabic locale mirrors the same distinction", () => {
+    const { container } = render(
+      <ProductResultCard product={noCoupon} query="كيبورد" rank={0} locale="ar" />,
+    );
+    expect(container.textContent).toContain("لا يتوفر كوبون");
+  });
+});

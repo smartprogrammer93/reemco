@@ -27,6 +27,8 @@
  * Components that use them (see src/lib/i18n-server.ts).
  */
 
+import { COVERAGE_ORDER } from "./collect/coverage";
+
 export type Locale = "en" | "ar";
 
 /** The single language-preference cookie. No other persistent storage. */
@@ -114,6 +116,7 @@ const en = {
   copyLabel: "Copy",
   copyAriaLead: "Copy coupon code",
   couponMoreSuffix: "more",
+  couponNoneLabel: "No coupon available",
   errorTitle: "Something went wrong",
   errorBody:
     "We couldn't finish loading this page. Check your connection and try again — your search stays put.",
@@ -148,8 +151,11 @@ const en = {
   aboutWhatBody:
     "Reemco is a price-comparison site for shopping in Kuwait. Search one product and see its price, stock, coupons and cheaper alternatives across retailers in one list. Kuwait-first; KSA and Egypt as secondary.",
   aboutWhoLabel: "WHO WE COMPARE",
-  aboutWhoBody:
-    "Xcite · Jarir · Eureka · Sultan Center · Blink · Lulu Hypermarket · Quadra Stores · Next Store · PC Kuwait.",
+  // REEA-468 G4 — the About list IS the live adapter roster: derived from the
+  // shared COVERAGE_ORDER (pinned to COLLECTORS by live-search.test.ts) so it
+  // equals the merchants that actually answer result pages, and a new adapter
+  // batch cannot leave this string behind again.
+  aboutWhoBody: `${COVERAGE_ORDER.join(" · ")}.`,
   aboutFreshLabel: "HOW FRESH PRICES ARE",
   aboutFreshBody:
     "Offers are fetched live from each retailer the moment you search, not from a stale snapshot. Every result shows when its price was collected.",
@@ -258,6 +264,7 @@ const ar: typeof en = {
   copyLabel: "نسخ",
   copyAriaLead: "انسخ رمز الخصم",
   couponMoreSuffix: "أخرى",
+  couponNoneLabel: "لا يتوفر كوبون",
   errorTitle: "حدث خطأ ما",
   errorBody:
     "تعذّر إكمال تحميل هذه الصفحة. تحقق من اتصالك ثم أعد المحاولة — سيبقى بحثك كما هو.",
