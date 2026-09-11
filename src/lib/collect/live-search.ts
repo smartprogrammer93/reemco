@@ -41,6 +41,7 @@ import {
 import type { FetchImpl } from "@/lib/collect/scraper";
 import type { CountryCode } from "@/lib/country";
 import { fillSilentFromLastSeen, readSeenObservations, rememberRound } from "@/lib/collect/last-seen";
+import { readCappedResponse } from "@/lib/collect/read-body";
 import { attachSeenRanges, type SeenRow } from "@/lib/seen-range";
 import { sanitizeExternalUrl } from "@/lib/safe-url";
 import { toKwdNumeric } from "@/lib/format";
@@ -277,7 +278,9 @@ async function fetchChecked(
 ): Promise<Response> {
   const res = await fetchImpl(url, { ...init, cache: "no-store", signal });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res;
+  // REEA-376: every hop body rides the shared bounded read; callers keep the
+  // Response shape via a buffered view, overflow aborts with an error note.
+  return await readCappedResponse(res);
 }
 
 /* ---- Per-retailer hit extraction (documented contracts only). ---- */

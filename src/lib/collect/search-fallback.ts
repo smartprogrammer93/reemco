@@ -38,6 +38,7 @@
 import { arabicBrandIntent, matchesQueryToken, queryMatchTokens } from "@/lib/relevance";
 import type { FetchImpl } from "@/lib/collect/scraper";
 import { getSharedKv } from "@/lib/collect/kv";
+import { readCappedResponse } from "@/lib/collect/read-body";
 
 
 const FALLBACK_TIMEOUT_MS = 8_000;
@@ -1107,7 +1108,11 @@ async function fetchResponse(
     // no-store: Next server-side fetch may otherwise replay the direct-fetch
     // response (same URL) for fallback retries, so a transient apology page
     // would survive into every attempt. Fallback reads must be fresh.
-    return await fetchImpl(url, { ...init, cache: "no-store", signal: controller.signal });
+    const res = await fetchImpl(url, { ...init, cache: "no-store", signal: controller.signal });
+    // REEA-376: consume the body through the shared bounded read so every
+    // fallback hop's json()/text() lands capped; callers keep the Response
+    // shape (ok/status/headers ride the buffered view, non-OK passes through).
+    return await readCappedResponse(res);
   } finally {
     clearTimeout(timer);
   }

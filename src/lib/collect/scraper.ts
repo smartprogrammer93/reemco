@@ -13,6 +13,7 @@
 import type { LiveOffer, RetailerSubtask } from "@/lib/collect/types";
 import { PER_RETAILER_TIMEOUT_MS } from "@/lib/collect/types";
 import { searchRetailerFallback } from "@/lib/collect/search-fallback";
+import { readBodyCapped } from "@/lib/collect/read-body";
 
 export function domainOf(url: string): string {
   try {
@@ -76,7 +77,9 @@ export async function fetchWithTimeout(
       },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.text();
+    // REEA-376: bounded read — an oversized upstream document aborts with an
+    // error note instead of buffering whole into the scrape budget.
+    return await readBodyCapped(res);
   } finally {
     clearTimeout(timer);
   }

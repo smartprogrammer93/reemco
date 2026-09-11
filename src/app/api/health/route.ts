@@ -39,6 +39,7 @@
 import type { NextRequest } from "next/server";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { invalidateTrendingChips } from "@/lib/trending-chips";
+import { MAX_RESPONSE_BODY_BYTES, readBodyCapped } from "@/lib/collect/read-body";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -97,25 +98,10 @@ async function readHop(
         signal: AbortSignal.timeout(timeoutMs),
         headers: { "user-agent": "reemco-health/1.0" },
       });
-      let html = "";
-      if (until && res.body) {
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          html += decoder.decode(value, { stream: true });
-          if (until(html)) {
-            // First flush carried every assertion input — stop reading the
-            // rest of the staged document.
-            await reader.cancel().catch(() => {});
-            break;
-          }
-        }
-        html += decoder.decode();
-      } else {
-        html = await res.text();
-      }
+      // REEA-376: both hop shapes now ride the shared bounded read — the
+      // shell-first short-circuit on `until`, or a fully drained body, always
+      // capped at ~2 MB with an error note on overflow instead of buffering.
+      const html = await readBodyCapped(res, MAX_RESPONSE_BODY_BYTES, until);
       if (res.status === 200 || attempt === 1) return { status: res.status, html };
     } catch (e) {
       lastError = (e as Error).message;
