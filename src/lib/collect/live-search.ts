@@ -3397,6 +3397,21 @@ export function collectLiveResultsStaged(
   // instead of memoizing a blip. Nothing is bundled: writes are live fetches.
   const writeLiveAnswer = (snap: LiveSearchResult): void => {
     if (snap.products.length === 0 && snap.settled === false) return;
+    // REEA-674 AC4 round 2 — preserveFreshWrite: inside the fresh window the
+    // FIRST completed write owns the entry. Two back-to-back rounds of one
+    // query can converge differently (whole chain inside the completion
+    // window vs the settled-only finalize), and fix-4 alone still let each
+    // round's FINAL swap the shape underneath the repeats already served
+    // from it — round 2 measured the ~49/~20 alternation exactly there. The
+    // guard pins the served shape for the window: later FINALs keep riding
+    // the follow-up feed and this round's last-seen writes for the OPEN page
+    // (unchanged), and the entry refreshes itself honestly on the next
+    // stale-window round or past the ceiling. The explicit Refresh stays the
+    // one deliberate re-stamper (REA-291 AC4): it moves scrapedAt on intent,
+    // not on racing rounds. Nothing is bundled: every write here is still a
+    // live fan-out answer of its own run.
+    const current = cache.read<LiveSearchResult>(cacheKey);
+    if (current && !current.stale && !opts.refresh) return;
     cache.write(cacheKey, snap);
     // REEA-602 — mirror the FINAL write-through into the shared layer so the
     // next recycled instance replays instead of re-paying the fan-out. Same

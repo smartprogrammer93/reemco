@@ -54,7 +54,7 @@ import {
 import { isAccessoryTitle, partitionForQuery } from "@/lib/relevance";
 import { bestBadgeIndex } from "@/lib/stock";
 import { toKwdNumeric } from "@/lib/format";
-import { createQueryCache } from "@/lib/query-cache";
+import { createQueryCache, QUERY_CACHE_FRESH_MS } from "@/lib/query-cache";
 
 /**
  * REEA-626 — boundary slots open on their OWN arrival threshold, so an early
@@ -2135,6 +2135,102 @@ describe("query memo window (REEA-291 AC5)", () => {
     const finalSnap = await refreshed.final;
     expect(calls.length).toBeGreaterThan(coldCalls);
     expect(finalSnap.products).toHaveLength(1);
+  });
+});
+
+describe("memo stabilize guard (REA-674 AC4 round 2)", () => {
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+  }
+
+  // One query, per-round card shape: `count` merchants answer (Xcite first,
+  // then Blink, then the Sultan hop), optionally behind a small hop delay so
+  // two overlapping rounds finish in a fixed order. All three titles merge
+  // into ONE REEA-486 card whose offer rows tell the rounds apart — same
+  // cross-merchant merge the late-tail fixture above pins.
+  function shapedFetch(count: number, delayMs = 0) {
+    return async (url: string): Promise<Response> => {
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      if (url.includes("xcite.com")) {
+        return jsonResponse({
+          results: [{ hits: [{ name: "Sony WH-1000XM6", slug: "xm6", price: 199, currency: "KWD", inStock: true }] }],
+        });
+      }
+      if (count >= 2 && url.includes("blink.com.kw")) {
+        return jsonResponse({
+          resources: { results: { products: [{ title: "Sony WH-1000XM6", handle: "xm6", available: true, price: "189.000" }] } },
+        });
+      }
+      if (count >= 3 && url.includes("algolia.net")) {
+        return jsonResponse({ hits: [{ itmn: "Sony WH-1000XM6", objectID: "xm6-s", clprc: 179, avaqt: 2 }] });
+      }
+      return jsonResponse({});
+    };
+  }
+
+  // Card shape read the way the shopper sees it: the offer rows behind the
+  // merged identities (same series titles merge into one REEA-486 card, so
+  // identity count alone would not tell the rounds apart).
+  function offerCount(snap: { products: { offers: unknown[] }[] } | null): number {
+    return snap === null ? -1 : snap.products.reduce((n, p) => n + p.offers.length, 0);
+  }
+
+  it("the later FINAL of overlapping rounds preserves the fresh write, riding the feed instead", async () => {
+    resetDiscoveryCache();
+    const cache = createQueryCache();
+
+    // Two GETs of the SAME cold query in one tick (page load + follow-up,
+    // or two shoppers): both miss, both run live. Round A answers instantly
+    // with two offer rows; round B answers 30 ms later with one row.
+    const a = collectLiveResultsStaged("xm6", { fetchImpl: shapedFetch(2), cache });
+    const b = collectLiveResultsStaged("xm6", { fetchImpl: shapedFetch(1, 30), cache });
+
+    const aFinal = await a.final;
+    expect(offerCount(aFinal)).toBe(2);
+    const bFinal = await b.final;
+    expect(offerCount(bFinal)).toBe(1);
+
+    // preserveFreshWrite: round A's FINAL owns the fresh window, round B's
+    // differently-shaped FINAL does NOT swap it underneath the repeats that
+    // are already serving A — the round-2 ~49/~20 alternation came exactly
+    // from that swap. B's own answer still closes its caller and lands in
+    // this round's follow-up feed for the OPEN page.
+    const memo = cache.read<{ products: { offers: unknown[] }[] }>("xm6");
+    expect(memo).not.toBeNull();
+    expect(offerCount(memo!.value)).toBe(2);
+    const feed = await followUpSnapshot("xm6");
+    expect(feed).not.toBeNull();
+    expect(offerCount(feed)).toBe(1);
+
+    // And the guard is STABLE, not a one-shot: a plain repeat inside the
+    // fresh window serves round A's shape with no second hop at all.
+    const repeat = await collectLiveResultsStaged("xm6", { fetchImpl: shapedFetch(2), cache }).final;
+    expect(offerCount(repeat)).toBe(2);
+  });
+
+  it("the deliberate stamp movers keep their teeth: Refresh past a fresh write, stale rounds past the window", async () => {
+    resetDiscoveryCache();
+    let nowMs = 0;
+    const cache = createQueryCache(() => nowMs);
+
+    // Round 1 writes the entry at t=0 with one row.
+    await collectLiveResultsStaged("xm6", { fetchImpl: shapedFetch(1), cache }).final;
+
+    // Inside the SAME fresh window, the explicit Refresh is the deliberate
+    // restamper (REA-291 AC4): its round re-runs live and its FINAL writes
+    // past the guard on intent.
+    nowMs = 1_000;
+    const refreshed = await collectLiveResultsStaged("xm6", { fetchImpl: shapedFetch(2), cache, refresh: true }).final;
+    expect(offerCount(refreshed)).toBe(2);
+    expect(offerCount(cache.read<{ products: { offers: unknown[] }[] }>("xm6")!.value)).toBe(2);
+
+    // Past the fresh edge a plain round refreshes honestly, so age never
+    // exceeds the documented serving band — the guard protects a FRESH
+    // entry, not a stale one. (Age is measured against the Refresh write
+    // at t=1_000, so the clock steps just past FRESH + that stamp.)
+    nowMs = QUERY_CACHE_FRESH_MS + 1_001;
+    await collectLiveResultsStaged("xm6", { fetchImpl: shapedFetch(1), cache }).final;
+    expect(offerCount(cache.read<{ products: { offers: unknown[] }[] }>("xm6")!.value)).toBe(1);
   });
 });
 
