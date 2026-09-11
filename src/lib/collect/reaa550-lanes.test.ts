@@ -206,8 +206,10 @@ describe("REEA-550 collector lanes", () => {
         if (url.includes("wp-json/wc/store/v1/products")) {
           // The hostname shapes (bare GET, KV replay, identity handshake)
           // land on the CF block page from the deployed egress — measured
-          // ~1.4 s per attempt, non-ok every time.
-          if (url.startsWith("http://104.") || url.startsWith("http://172.")) {
+          // ~1.4 s per attempt, non-ok every time. Per-zone reality: THIS
+          // zone's edge answers on its own pair; the other zone's pair (the
+          // Lulu edge) holds the block page for Store API traffic.
+          if (url.startsWith("http://172.67.189.78") || url.startsWith("http://104.21.81.113")) {
             const q = decodeURIComponent(url.match(/[?&]search=([^&]*)/)?.[1] ?? "");
             const rows = q === "soap" ? [dove] : [];
             return new Response(JSON.stringify(rows), { headers: { "content-type": "application/json" } });
@@ -220,7 +222,10 @@ describe("REEA-550 collector lanes", () => {
     // REEA-602 support — with every hostname shape blocked, the pinned
     // Static-IPs hop answers the Store API JSON ahead of the identity
     // rotation burning the doubled window; the lane still contributes rows.
-    expect(seenUrls.some((u) => /^https?:\/\/(104\.|172\.)/.test(u))).toBe(true);
+    // The reaching IPs are PC Kuwait's OWN pair — a flattened cross-zone
+    // pair would spend both bounded passes on the Lulu edge and starve the
+    // lane (this assertion is the regression pin for that split).
+    expect(seenUrls.some((u) => /^https?:\/\/(172\.67\.189\.78|104\.21\.81\.113)\b/.test(u))).toBe(true);
     const note = notes.find((n) => n.merchant === "PC Kuwait");
     expect((note?.hits ?? 0)).toBeGreaterThanOrEqual(1);
     expect(note?.error).toBeUndefined();

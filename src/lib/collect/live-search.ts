@@ -1242,6 +1242,14 @@ export async function jsdClearedHtml(fetchImpl: FetchImpl, url: string): Promise
  *  edge but each connection gets its own challenge decision). */
 const LULU_KUWAIT_IPS: readonly string[] = ["104.18.40.47", "172.64.147.209"];
 
+/** REEA-602 support — the PC Kuwait zone's OWN anycast pair (resolved from
+ *  the pckuwait.com host 2026-09-11). The Store API rides its own Cloudflare
+ *  edge: the managed-challenge decision made on the Lulu pair's edge says
+ *  nothing about this zone's, so one flattened cross-zone pair spends the
+ *  bounded passes on the wrong edge's answers. Each zone keeps its own pair;
+ *  each connection still gets its own decision there. */
+const PCK_KUWAIT_IPS: readonly string[] = ["172.67.189.78", "104.21.81.113"];
+
 /**
  * REEA-416 — bounded Static-IPs hop: when both identity paths on the Lulu
  * zone miss on this egress, reach the same search view through the host's
@@ -1274,9 +1282,11 @@ async function staticIpHtml(fetchImpl: FetchImpl, url: string): Promise<string> 
 }
 
 /** REEA-602 support — pinned Static-IPs tier for the PC Kuwait JSON hop, the
- *  same REEA-416 recipe Lulu already rides (one shared Cloudflare anycast
- *  pair; the edge answers the managed challenge per connection, so the
- *  pinned Host reaches the zone's rules unchanged). Measured from the
+ *  same REEA-416 recipe Lulu already rides, on THIS zone's own anycast pair
+ *  (PCK_KUWAIT_IPS — the challenge decision is per edge, so the flattened
+ *  cross-zone pair was the regression; per edge the answer is managed
+ *  challenge per connection, and the pinned Host reaches the zone's rules
+ *  unchanged). Measured from the
  *  deployed egress: the crawler-shaped identities land on the CF block page
  *  in ~1.4 s per attempt (/api/echo), so stacking the identity rotation
  *  burns the doubled JSON window while the Store API itself answers plainly
@@ -1292,7 +1302,7 @@ async function pckStaticIpJson(
 ): Promise<Record<string, unknown>[] | null> {
   const target = new URL(url);
   const path = `${target.pathname}${target.search}`;
-  for (const ip of LULU_KUWAIT_IPS) {
+  for (const ip of PCK_KUWAIT_IPS) {
     if (window.aborted) break;
     try {
       const res = await fetchImpl(`http://${ip}${path}`, { headers: { host: target.host, accept: "application/json" }, cache: "no-store", signal: window } as RequestInit);
