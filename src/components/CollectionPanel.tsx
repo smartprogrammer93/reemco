@@ -16,7 +16,7 @@ import { useCollection, type CollectionPhase } from "@/lib/collect/useCollection
 import type { CollectJob, LiveOffer } from "@/lib/collect/types";
 import { collectedAgoLabel } from "@/lib/collect/types";
 import { filterOffersByCountry, type CountryCode } from "@/lib/country";
-import { formatPrimaryPrice, toKwdNumeric } from "@/lib/format";
+import { effectivePriceKwd, formatPrimaryPrice } from "@/lib/format";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import CollectionPulse, { PulseOfferCascade } from "@/components/CollectionPulse";
 import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
@@ -73,10 +73,12 @@ function OfferRow({ offer, best, locale }: { offer: LiveOffer; best: boolean; lo
 }
 
 /** Cheapest-effective-first (REEA-254 item B): LiveOffer rows carry their own
- *  currency, so the comparison runs in KWD-space via toKwdNumeric — the same
- *  rule sortOffers applies on the results cards. */
+ *  currency, so the comparison runs on the ONE normalized effective-price key
+ *  (effectivePriceKwd — was-price evidence folded, KWD-based) — the same rule
+ *  sortOffers applies on the results cards (REEA-604). */
 function sortOffers(offers: LiveOffer[]): LiveOffer[] {
-  return [...offers].sort((a, b) => toKwdNumeric(a.price, a.currency) - toKwdNumeric(b.price, b.currency));
+  const key = (o: LiveOffer) => effectivePriceKwd(o.price, o.currency, { wasPrice: o.wasPrice });
+  return [...offers].sort((a, b) => key(a) - key(b));
 }
 
 export default function CollectionPanel(props: {

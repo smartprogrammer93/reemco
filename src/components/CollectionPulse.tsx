@@ -2,7 +2,7 @@
 
 import type { CollectJob, LiveOffer, RetailerSubtask } from "@/lib/collect/types";
 import { jobProgress } from "@/lib/collect-progress";
-import { effectivePrice, formatPrimaryPrice } from "@/lib/format";
+import { effectivePrice, effectivePriceKwd, formatPrimaryPrice } from "@/lib/format";
 import type { Coupon } from "@/types/product";
 import OfferCard from "@/components/OfferCard";
 import { clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
@@ -74,12 +74,24 @@ export function PulseOfferCascade({
   offers: (LiveOffer & { coupon?: Coupon })[];
   locale?: Locale;
 }) {
-  const prices = offers.map((o) => o.price);
-  const best = Math.min(...prices);
-  const worst = Math.max(...prices);
+  // REEA-604 — ONE normalized effective-price key (KWD-based, coupon/was-price
+  // evidence folded) decides the best card and the savings gap across mixed
+  // KWD/SAR offers: the badge lands on the cheapest-after-conversion listing,
+  // not the smallest raw numeric. Pure arithmetic on the served figures, so
+  // the same offer set always badges the same card.
+  const keyed = offers.map((offer) => ({
+    offer,
+    effKey: effectivePriceKwd(offer.price, offer.currency, {
+      wasPrice: offer.wasPrice,
+      couponDiscount: offer.coupon?.discount ?? null,
+    }),
+  }));
+  const effs = keyed.map((k) => k.effKey);
+  const best = Math.min(...effs);
+  const worst = Math.max(...effs);
   return (
     <ul className="mt-4 grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 xl:grid-cols-[repeat(2,minmax(0,1fr))]">
-      {offers.map((offer, i) => {
+      {keyed.map(({ offer, effKey }, i) => {
         const eff = effectivePrice(offer, offer.coupon);
         // REEA-195 AC-4: KWD-primary labels on the cascade cards too; the
         // count-up animates in the same KWD space it lands on.
@@ -107,10 +119,12 @@ export function PulseOfferCascade({
               url={offer.url}
               collectedAt={offer.collectedAt}
               method={offer.method}
-              isBest={offer.price === best}
+              isBest={effKey === best}
               savings={
-                offer.price === best && worst > best
-                  ? formatPrimaryPrice(worst - best, offer.currency).label
+                // Both ends of the gap are KWD-space numbers — the pill prints
+                // in the same KWD space the ranking uses.
+                effKey === best && worst > best
+                  ? formatPrimaryPrice(worst - best, "KWD").label
                   : null
               }
               locale={locale}

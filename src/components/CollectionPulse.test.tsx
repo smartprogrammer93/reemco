@@ -97,4 +97,25 @@ describe("PulseOfferCascade", () => {
     render(<PulseOfferCascade offers={[offers[0]]} />);
     expect(screen.queryByText(/Save /)).toBeNull();
   });
+
+  it("badges the cheapest-after-conversion offer on mixed-currency cascades (REEA-604)", () => {
+    // Jarir SAR 5,199 (=KD 424.24) beats Xcite KD 429.9 once both figures
+    // normalize to KWD-space. Raw numerics would badge the KD card wrongly
+    // (429.9 < 5199 reads backwards on a mixed-currency shelf).
+    const { container } = render(
+      <PulseOfferCascade
+        offers={[
+          { merchant: "Xcite", domain: "xcite.com", price: 429.9, currency: "KWD", url: "https://xcite.example/p", inStock: true, collectedAt: startedAt, method: "live" as const },
+          { merchant: "Jarir", domain: "jarir.com.sa", price: 5199, currency: "SAR", url: "https://jarir.example/p", inStock: true, collectedAt: startedAt, method: "live" as const },
+        ]}
+      />,
+    );
+    expect(screen.getAllByText("Best price")).toHaveLength(1);
+    const bestCard = Array.from(container.querySelectorAll("article")).find((a) =>
+      a.querySelector(".best-flag"),
+    );
+    expect(bestCard?.textContent).toContain("Jarir");
+    // The savings pill reads in KWD-space too — one unit for the whole gap.
+    expect(screen.getByText(/^Save /).textContent).toMatch(/^Save (≈)?KD\b/);
+  });
 });

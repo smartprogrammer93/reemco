@@ -188,13 +188,26 @@ export function formatCountryPrice(
 
 /** Sort offers so live answers lead (REEA-510: snapshot rows always ride
  *  below every live row), then in-stock items, then cheapest. REEA-254: the
- *  cheapest comparison runs in KWD-space (toKwdNumeric) so a SAR listing is
- *  compared against KWD listings on the same scale, not on raw numerics. */
-export function sortOffers(offers: PriceOffer[]): PriceOffer[] {
+ *  cheapest comparison runs in KWD-space so a SAR listing is compared against
+ *  KWD listings on the same scale, not on raw numerics. REEA-604: the single
+ *  ordering key is the NORMALIZED EFFECTIVE price (effectivePriceKwd) —
+ *  coupon/was-price evidence folded in before the KWD-space comparison — so
+ *  the ranked list promises best-effective-price-first, not lowest raw
+ *  numeric. The coupon rides as the card's own best coupon (the same one the
+ *  effective-price line prints under the hero figure). The key is pure and
+ *  total on the served figures, so repeated loads of the same fetched set
+ *  rank identically (stable Array.sort keeps the deterministic input order
+ *  built by orderByAdapter on ties). */
+export function sortOffers(
+  offers: PriceOffer[],
+  coupon?: { discount: string } | null,
+): PriceOffer[] {
+  const key = (o: PriceOffer): number =>
+    effectivePriceKwd(o.price, o.currency, { wasPrice: o.wasPrice, couponDiscount: coupon?.discount });
   return [...offers].sort((a, b) => {
     if (!!a.fromSnapshot !== !!b.fromSnapshot) return a.fromSnapshot ? 1 : -1;
     if (a.inStock !== b.inStock) return a.inStock ? -1 : 1;
-    return toKwdNumeric(a.price, a.currency) - toKwdNumeric(b.price, b.currency);
+    return key(a) - key(b);
   });
 }
 
@@ -210,6 +223,20 @@ export function formatExpiry(expiresAt: string | null): string | null {
   });
 }
 
+/** Parse a machine-readable coupon discount ("10% off" / "$5 off") onto a
+ *  figure. Returns null when the string cannot be parsed — callers must never
+ *  invent a number (spec §3.3: the effective price is always explained). */
+function applyCouponDiscount(price: number, discount: string): number | null {
+  const dollar = discount.match(/^\$\s?(\d+(?:\.\d+)?)\s+off$/i);
+  if (dollar) return Math.max(0, price - parseFloat(dollar[1]));
+  const percent = discount.match(/^(\d+(?:\.\d+)?)\s?%\s+off$/i);
+  if (percent) {
+    const pct = parseFloat(percent[1]);
+    if (pct <= 100) return Math.max(0, price * (1 - pct / 100));
+  }
+  return null;
+}
+
 /**
  * Compute the effective price for an offer given its best coupon, when the
  * coupon discount is machine-readable ("10% off" or "$5 off"). Returns null
@@ -221,12 +248,37 @@ export function effectivePrice(
   coupon?: { code: string | null; discount: string } | undefined,
 ): number | null {
   if (!coupon) return null;
-  const dollar = coupon.discount.match(/^\$\s?(\d+(?:\.\d+)?)\s+off$/i);
-  if (dollar) return Math.max(0, offer.price - parseFloat(dollar[1]));
-  const percent = coupon.discount.match(/^(\d+(?:\.\d+)?)\s?%\s+off$/i);
-  if (percent) {
-    const pct = parseFloat(percent[1]);
-    if (pct <= 100) return Math.max(0, offer.price * (1 - pct / 100));
+  return applyCouponDiscount(offer.price, coupon.discount);
+}
+
+/**
+ * REEA-604 — THE normalized effective price: one number, KWD-based, for every
+ * offer of the Kuwait-first site. It is what the shopper can actually pay:
+ * the listed figure with machine-readable coupon evidence folded in, and the
+ * retailer's own was-price honored when it reads LOWER than the listed figure
+ * (the best attested amount wins; nothing beyond what the retailer served is
+ * invented) — then converted through the REEA-195 reference table into
+ * KWD-space. Every cross-currency ORDERING decision (offer-row order, card
+ * ranking, best-price badge, savings math) runs on this number, so a KWD
+ * listing and a SAR listing compete on comparable figures instead of raw
+ * numerics ("Blink KD 349 next to Jarir SAR 79"). The key is pure arithmetic
+ * on the served figures: repeated loads of the same fetched set rank
+ * identically. Display paths keep showing the ORIGINAL stamped amount beside
+ * this figure (formatPrimaryPrice/formatCountryPrice) — every offer keeps its
+ * currency code visible, the normalized figure is additive, never a rewrite.
+ */
+export function effectivePriceKwd(
+  price: number,
+  currency: string,
+  opts?: { wasPrice?: number; couponDiscount?: string | null },
+): number {
+  let base = price;
+  // was-price evidence: when the retailer's own record shows a lower
+  // achievable figure than the listed one, that figure IS the effective price.
+  if (opts?.wasPrice != null && opts.wasPrice > 0 && opts.wasPrice < base) {
+    base = opts.wasPrice;
   }
-  return null;
+  const off = opts?.couponDiscount ? applyCouponDiscount(base, opts.couponDiscount) : null;
+  if (off != null) base = off;
+  return Math.max(0, toKwdNumeric(base, currency));
 }

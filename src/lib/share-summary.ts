@@ -34,7 +34,7 @@ export function buildShareSummary(
   const t = getStrings(opts.locale);
   const country = opts.country ?? null;
   const now = opts.now ?? Date.now();
-  const offers = sortOffers(product.offers).slice(0, SUMMARY_MAX_OFFERS);
+  const offers = sortOffers(product.offers, product.coupons[0] ?? null).slice(0, SUMMARY_MAX_OFFERS);
   const offerLine = offers
     .map((o) => `${o.merchant} ${formatCountryPrice(o.price, o.currency, country).primary}`)
     .join(" · ");

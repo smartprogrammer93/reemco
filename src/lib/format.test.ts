@@ -5,7 +5,7 @@
  * stamped label — nothing renders as a bare unexplained number.
  */
 import { describe, expect, it } from "vitest";
-import { formatCountryPrice, formatKWD, formatPrimaryPrice, sortOffers, toKwdNumeric } from "@/lib/format";
+import { effectivePriceKwd, formatCountryPrice, formatKWD, formatPrimaryPrice, sortOffers, toKwdNumeric } from "@/lib/format";
 
 describe("formatKWD — the single KD formatter (REEA-574 R2)", () => {
   it("caps every figure at two decimals with Intl half-expand rounding", () => {
@@ -152,5 +152,74 @@ describe("toKwdNumeric + sortOffers (REEA-254 item B)", () => {
     // figure (the live QA case on the iPhone 17 Pro cards).
     const sorted = sortOffers([offer(429.9, "KWD", "xcite"), offer(5199, "SAR", "jarir")]);
     expect(sorted.map((o) => o.merchant)).toEqual(["jarir", "xcite"]);
+  });
+});
+
+describe("REEA-604 — normalized effective price drives cross-currency ordering", () => {
+  const offer = (merchant: string, price: number, currency: string, extra?: { wasPrice?: number }) => ({
+    merchant,
+    price,
+    currency,
+    url: `https://example/${merchant}`,
+    inStock: true,
+    ...extra,
+  });
+
+  it("QA fixture: KWD/SAR/EGP offers order like the hand-computed reference (within 2%)", () => {
+    // The live 'iphone 15' case from the issue: Blink KD 349 next to Jarir
+    // SAR 79. Hand-computed through the REEA-195 reference table:
+    //   SAR 79    × 0.0816 = KD 6.45   (Jarir, cheapest)
+    //   EGP 1,250 × 0.0061 = KD 7.63   (Amazon.eg)
+    //   KWD 349            = KD 349    (Blink)
+    const offers = [offer("Blink", 349, "KWD"), offer("Jarir", 79, "SAR"), offer("Amazon.eg", 1250, "EGP")];
+    const reference: Record<string, number> = { Jarir: 6.45, "Amazon.eg": 7.63, Blink: 349 };
+
+    const sorted = sortOffers(offers);
+    expect(sorted.map((o) => o.merchant)).toEqual(["Jarir", "Amazon.eg", "Blink"]);
+
+    for (const o of sorted) {
+      const eff = effectivePriceKwd(o.price, o.currency);
+      const ref = reference[o.merchant];
+      expect(Math.abs(eff - ref) / ref).toBeLessThanOrEqual(0.02);
+    }
+  });
+
+  it("identical ordering across repeated loads, whatever the arrival order", () => {
+    const base = [offer("Blink", 349, "KWD"), offer("Jarir", 79, "SAR"), offer("Amazon.eg", 1250, "EGP")];
+    const shuffled = [offer("Amazon.eg", 1250, "EGP"), offer("Blink", 349, "KWD"), offer("Jarir", 79, "SAR")];
+    const first = sortOffers(base).map((o) => o.merchant);
+    expect(sortOffers(base).map((o) => o.merchant)).toEqual(first);
+    expect(sortOffers(shuffled).map((o) => o.merchant)).toEqual(first);
+  });
+
+  it("coupon evidence folds into the ordering key", () => {
+    // A $8-off card discount is worth more inside the KWD listing than inside
+    // the SAR one (it is applied in each listing's native space, then
+    // normalized): listed order [Jarir, Xcite] (KD 19.99 vs KD 20) flips to
+    // [Xcite, Jarir] once the coupon is folded (KD 12 vs ≈KD 19.34). The fold
+    // must also match the hand-computed figures, not just the permutation.
+    const xcite = offer("xcite", 20, "KWD");
+    const jarir = offer("jarir", 245, "SAR");
+    expect(sortOffers([xcite, jarir]).map((o) => o.merchant)).toEqual(["jarir", "xcite"]);
+    expect(sortOffers([xcite, jarir], { discount: "$8 off" }).map((o) => o.merchant)).toEqual([
+      "xcite",
+      "jarir",
+    ]);
+    expect(effectivePriceKwd(245, "SAR", { couponDiscount: "$8 off" })).toBeCloseTo(19.34, 2);
+    expect(effectivePriceKwd(349, "KWD", { couponDiscount: "5% off" })).toBeCloseTo(331.55, 2);
+  });
+
+  it("a lower was-price is best-attested evidence and folds in", () => {
+    // The retailer's own record shows KD 92 achievable under the KD 100
+    // listing; that figure — not the listed one — competes with KD 95.
+    const a = offer("a", 100, "KWD", { wasPrice: 92 });
+    const b = offer("b", 95, "KWD");
+    expect(sortOffers([a, b]).map((o) => o.merchant)).toEqual(["a", "b"]);
+    expect(effectivePriceKwd(100, "KWD", { wasPrice: 92 })).toBeCloseTo(92, 6);
+  });
+
+  it("unknown codes pass through their own numerics — never an invented bridge", () => {
+    expect(effectivePriceKwd(9.5, "BH")).toBe(9.5);
+    expect(effectivePriceKwd(5199, "SAR")).toBeCloseTo(424.238, 3);
   });
 });

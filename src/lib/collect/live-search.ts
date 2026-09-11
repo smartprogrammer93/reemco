@@ -45,7 +45,7 @@ import { readCappedResponse } from "@/lib/collect/read-body";
 import { attachSeenRanges, type SeenRow } from "@/lib/seen-range";
 import { sanitizeExternalUrl } from "@/lib/safe-url";
 import { SC_LANE_TIMEOUT_MS } from "@/lib/collect/types";
-import { formatPrice, toKwdNumeric } from "@/lib/format";
+import { effectivePriceKwd, formatPrice } from "@/lib/format";
 import { canonicalFields, compatibleFields, listingLabel, type CanonicalFields } from "@/lib/collect/canonical-product";
 import {
   arabicBrandIntent,
@@ -2142,6 +2142,21 @@ export function groupHits(
 }
 
 /**
+ * REEA-604 — the ONE effective-price key for every server-side comparison:
+ * the listed figure with its own was-price evidence folded in, in KWD-space
+ * (effectivePriceKwd). Cards, colour chips, alternatives and the streamed
+ * row order all sort on this number, so a SAR listing competes with a KWD
+ * listing on comparable figures — never on raw numerics. Coupons are merged
+ * only on the rendered card (they are not part of a raw hit), so this hop's
+ * key folds what the hit itself carries; the card adds its coupon on top via
+ * sortOffers. Pure arithmetic on served figures — the same fetched set
+ * always ranks identically.
+ */
+function effectiveKeyOf(o: { price: number; currency: string; wasPrice?: number }): number {
+  return effectivePriceKwd(o.price, o.currency, { wasPrice: o.wasPrice });
+}
+
+/**
  * REEA-213 — relevance-first ranking (Bet 1, REEA-211 brief): tier blocks
  * 1→4 decide the order and are never blended by price; price only breaks
  * ties inside a block. Inside a block: non-extended model match before
@@ -2178,9 +2193,9 @@ function rankByRelevance(query: string, groups: HitGroup[]): HitGroup[] {
       extended: isModelExtended(query, canonical),
       named: brandIsNamed(group.brandRaw || undefined, canonical),
       stocked: group.offers.some((o) => o.inStock),
-      // REEA-254 item B/D: best effective price of the card — KWD-space so
-      // mixed-currency cards rank on one scale.
-      cheapest: Math.min(...group.offers.map((o) => toKwdNumeric(o.price, o.currency))),
+      // REEA-254 item B/D + REEA-604: best EFFECTIVE price of the card, on the
+      // one normalized KWD-based key — mixed-currency cards rank comparable.
+      cheapest: Math.min(...group.offers.map((o) => effectiveKeyOf(o))),
     };
   });
   const insideTier = (a: Ranked, b: Ranked): number =>
@@ -2277,10 +2292,10 @@ function mergeCompatible(a: CanonicalFields, b: CanonicalFields): boolean {
 
 function buildGroups(query: string, hits: SearchHit[]): HitGroup[] {
   const groups: HitGroup[] = [];
-  // REEA-254 item B — every cheapest comparison runs in KWD-space: a SAR
-  // listing and a KWD listing on one card must compete on the same scale.
-  const cheapestOf = (g: HitGroup): number =>
-    Math.min(...g.offers.map((o) => toKwdNumeric(o.price, o.currency)));
+  // REEA-254 item B + REEA-604 — every cheapest comparison runs on the ONE
+  // normalized effective-price key: a SAR listing and a KWD listing on one
+  // card must compete on the same scale.
+  const cheapestOf = (g: HitGroup): number => Math.min(...g.offers.map((o) => effectiveKeyOf(o)));
 
   for (const hit of orderByAdapter(hits)) {
     const title = hit.title.trim();
@@ -2399,12 +2414,12 @@ function colorSwatches(group: HitGroup, offers: PriceOffer[]): ProductVariation[
   for (const o of group.offers) {
     const color = canonicalFields(o.title).color;
     if (color === "") continue;
-    const value = toKwdNumeric(o.price, o.currency);
+    const value = effectiveKeyOf(o);
     const prev = colorBest.get(color);
     if (prev === undefined || value < prev) colorBest.set(color, value);
   }
   if (colorBest.size < 2) return [];
-  const cardBest = Math.min(...offers.map((o) => toKwdNumeric(o.price, o.currency)));
+  const cardBest = Math.min(...offers.map((o) => effectiveKeyOf(o)));
   return [...colorBest.entries()]
     .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))
     .map(([color, price]) => ({
@@ -2438,7 +2453,7 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, loca
         // through formatPrimaryPrice(x, "KWD"), so mixed-currency groups show
         // the cheapest-after-conversion figure, not whichever raw numeric is
         // smallest.
-        fromPrice: Math.min(...g.offers.map((o) => toKwdNumeric(o.price, o.currency))),
+        fromPrice: Math.min(...g.offers.map((o) => effectiveKeyOf(o))),
       };
       metas.set(g, m);
     }
@@ -2516,7 +2531,7 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, loca
       .sort(
         (a, b) =>
           (a.fromSnapshot ? 1 : 0) - (b.fromSnapshot ? 1 : 0) ||
-          toKwdNumeric(a.price, a.currency) - toKwdNumeric(b.price, b.currency) ||
+          effectiveKeyOf(a) - effectiveKeyOf(b) ||
           Number(b.inStock) - Number(a.inStock),
       )
       .map((o) => {

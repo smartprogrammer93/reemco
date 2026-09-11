@@ -2,7 +2,7 @@ import Link from "next/link";
 import Image from "next/image";
 import type { Coupon, NormalizedProduct, PriceOffer } from "@/types/product";
 import { buildResultsHref, type CountryCode } from "@/lib/country";
-import { effectivePrice, formatCountryPrice, formatKWD, formatPrimaryPrice, sortOffers, toKwdNumeric } from "@/lib/format";
+import { effectivePrice, effectivePriceKwd, formatCountryPrice, formatKWD, formatPrimaryPrice, sortOffers } from "@/lib/format";
 import { gradeBadgeLabel } from "@/lib/collect/canonical-product";
 import { collectedClock, relativeAge } from "@/lib/relative-time";
 import CouponBadge from "@/components/CouponBadge";
@@ -201,15 +201,29 @@ export default function ProductResultCard({
 }) {
   const detail = variant === "detail";
   const t = getStrings(locale ?? clientLocale());
-  const offers = sortOffers(product.offers);
-  const best = offers[0];
-  // Base figure for the swatch chips (REEA-254): the cheapest listed price in
-  // KWD-space — the same base the server used for each swatch's priceDelta
-  // (toKwdNumeric), so mixed-currency cards keep one unit on the chips.
-  const cheapestListed =
-    offers.length > 0 ? Math.min(...offers.map((o) => toKwdNumeric(o.price, o.currency))) : 0;
-  const oos = best != null && !best.inStock;
+  // REEA-604 — the card's best coupon folds into the ONE ordering key: rows
+  // sort on the normalized effective price (coupon/was-price evidence folded,
+  // KWD-based), the same scale the effective-price line prints under the hero.
   const primaryCoupon = product.coupons[0];
+  const offers = sortOffers(product.offers, primaryCoupon ?? null);
+  const best = offers[0];
+  // Base figure for the swatch chips (REEA-254 + REEA-604): the cheapest
+  // EFFECTIVE figure in KWD-space on this card — the same key the rows sort
+  // on — so mixed-currency cards keep one unit on the chips. The server-side
+  // priceDelta rides on top of it; the card's coupon shifts every chip by the
+  // same evidence, it never reorders them.
+  const cheapestListed =
+    offers.length > 0
+      ? Math.min(
+          ...offers.map((o) =>
+            effectivePriceKwd(o.price, o.currency, {
+              wasPrice: o.wasPrice,
+              couponDiscount: primaryCoupon?.discount,
+            }),
+          ),
+        )
+      : 0;
+  const oos = best != null && !best.inStock;
   const extraCoupons = product.coupons.length - 1;
 
   return (
