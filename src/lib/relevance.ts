@@ -184,6 +184,38 @@ export function latinQueryForms(query: string): string[] {
   return Array.from(new Set(forms));
 }
 
+/** REEA-635 C3 — the dispatch-level LatinBridge: one whole-query Latin
+ *  spelling for an Arabic-script (or mixed-script) shopper query. Each Arabic
+ *  token is replaced by its curated Latin form (brand alias first, otherwise
+ *  the primary curated category form); Latin tokens ride in their original
+ *  order. A purely-Latin query comes back untouched.
+ *
+ *  Measured reality this mirrors: Kuwait storefronts answer Arabic queries
+ *  with English-titled rows (REEA-408), and the JSON catalogs are Latin-only
+ *  (REEA-550: `دوف صابون` → [] on pckuwait while `dove soap` answers). The
+ *  per-hop Latin rounds inside the collectors already ride this map; this
+ *  helper lets the SHARED dispatch point lead with the bridged whole-query,
+ *  so every adapter hop starts on the spelling the catalog actually carries.
+ *  Relevance scoring is unaffected — the caller keeps matching rows against
+ *  the shopper's original query. */
+export function latinBridgeDispatch(query: string): string {
+  if (!/[ء-ي]/.test(query)) return query;
+  const bridged = query
+    .split(/\s+/)
+    .filter((t) => t.length > 0)
+    .map((t) => {
+      if (!/[ء-ي]/.test(t)) return t;
+      const folded = normalizeArabicText(t);
+      const brand = ARABIC_BRAND_ALIASES.get(folded);
+      if (brand !== undefined) return brand.toLowerCase();
+      const cats = ARABIC_QUERY_ALIASES.get(folded);
+      if (cats !== undefined) return cats[0];
+      return t;
+    });
+  const joined = bridged.join(" ").trim();
+  return joined.length > 0 ? joined : query;
+}
+
 /** True when one query token is answered by the title: substring match on the
  *  alef-folded pair (so "أبل"/"ابل" spellings meet), or — for Arabic-script
  *  brand spellings — the curated Latin form of the brand ("أبل" ⇄ "Apple").

@@ -178,10 +178,49 @@ describe("REEA-550 collector lanes", () => {
         return new Response("{}");
       },
     });
-    // The curated Latin forms lead the bounded re-search behind the empty
-    // whole-query answer; the Arabic spellings ride in the same capped set.
-    expect(seenQ[0]).toBe("\u062f\u0648\u0641 \u0635\u0627\u0648\u0646");
+    // REEA-635 C3 — with the dispatch-level LatinBridge the whole-query hop
+    // LEADS bridged: the aliased token arrives in its curated Latin spelling
+    // ("dove") and the token no alias claims rides the shopper spelling —
+    // so one bounded whole-query round reaches the Store API on the spelling
+    // the Latin-only catalog carries. No empty Arabic round ahead of it; the
+    // capped word rounds behind it keep answering whatever the phrase needs.
+    expect(seenQ[0]).toBe("dove \u0635\u0627\u0648\u0646");
     expect(seenQ).toContain("dove");
+    const note = notes.find((n) => n.merchant === "PC Kuwait");
+    expect((note?.hits ?? 0)).toBeGreaterThanOrEqual(1);
+    expect(note?.error).toBeUndefined();
+  });
+
+  it("PC Kuwait JSON hop reaches the pinned Static-IPs tier ahead of the handshake rotation", async () => {
+    resetDiscoveryCache();
+    const dove = {
+      name: "Dove White Beauty Bar Soap",
+      permalink: "https://pckuwait.com/product/dove-white/",
+      is_in_stock: true,
+      prices: { price: "195", currency_code: "KWD", currency_minor_unit: 3 },
+    };
+    const seenUrls: string[] = [];
+    const { notes } = await collectLiveResults("soap", {
+      fetchImpl: async (url) => {
+        seenUrls.push(url);
+        if (url.includes("wp-json/wc/store/v1/products")) {
+          // The hostname shapes (bare GET, KV replay, identity handshake)
+          // land on the CF block page from the deployed egress — measured
+          // ~1.4 s per attempt, non-ok every time.
+          if (url.startsWith("http://104.") || url.startsWith("http://172.")) {
+            const q = decodeURIComponent(url.match(/[?&]search=([^&]*)/)?.[1] ?? "");
+            const rows = q === "soap" ? [dove] : [];
+            return new Response(JSON.stringify(rows), { headers: { "content-type": "application/json" } });
+          }
+          return new Response("Just a moment...", { status: 403, headers: { "content-type": "text/html" } });
+        }
+        return new Response("{}");
+      },
+    });
+    // REEA-602 support — with every hostname shape blocked, the pinned
+    // Static-IPs hop answers the Store API JSON ahead of the identity
+    // rotation burning the doubled window; the lane still contributes rows.
+    expect(seenUrls.some((u) => /^https?:\/\/(104\.|172\.)/.test(u))).toBe(true);
     const note = notes.find((n) => n.merchant === "PC Kuwait");
     expect((note?.hits ?? 0)).toBeGreaterThanOrEqual(1);
     expect(note?.error).toBeUndefined();

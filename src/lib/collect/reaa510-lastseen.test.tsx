@@ -248,8 +248,14 @@ describe("REEA-510 five-run coverage over the fixed query set", () => {
 
   it("أرز بسمتي: the AR query rides the same fill path", async () => {
     let run = 0;
+    // REEA-635 C3 — the dispatch-level LatinBridge lands `أرز بسمتي` on the
+    // catalogs' Latin spelling ("rice basmati"), and per the REEA-408
+    // measurement these zones answer that shape with English-titled rows
+    // ("Country Xl Organic Basmati Rice" &co). The fixtures carry the titles
+    // the storefronts actually return; the shopper-side match back onto the
+    // Arabic query rides the curated aliases in relevance.ts.
     const xciteBody = {
-      results: [{ hits: [{ name: "أرز بسمتي المصري 1 كجم", slug: "rice-ar", price: 2.4, currency: "KWD", inStock: true }] }],
+      results: [{ hits: [{ name: "Egyptian Basmati Rice 1 kg", slug: "rice-ar", price: 2.4, currency: "KWD", inStock: true }] }],
     };
     const fetchImpl = async (url: string): Promise<Response> => {
       if (url.includes("xcite.com")) {
@@ -258,7 +264,7 @@ describe("REEA-510 five-run coverage over the fixed query set", () => {
       if (url.includes("sultan-center.com")) {
         if (run === 1) {
           return new Response(
-            JSON.stringify({ status: "1", products: { product_list: [{ name: "أرز بسمتي ٥ كجم", slug: "rice-s", price: "2.1800", is_in_stock: "1" }] } }),
+            JSON.stringify({ status: "1", products: { product_list: [{ name: "Basmati Rice 5 kg", slug: "rice-s", price: "2.1800", is_in_stock: "1" }] } }),
             { headers: { "content-type": "application/json" } },
           );
         }

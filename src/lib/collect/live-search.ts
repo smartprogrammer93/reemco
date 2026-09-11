@@ -53,6 +53,7 @@ import {
   classifyAlternativeMatch,
   isAccessoryTitle,
   isModelExtended,
+  latinBridgeDispatch,
   latinQueryForms,
   matchesQueryToken,
   queryMatchTokens,
@@ -1272,6 +1273,39 @@ async function staticIpHtml(fetchImpl: FetchImpl, url: string): Promise<string> 
   return "";
 }
 
+/** REEA-602 support — pinned Static-IPs tier for the PC Kuwait JSON hop, the
+ *  same REEA-416 recipe Lulu already rides (one shared Cloudflare anycast
+ *  pair; the edge answers the managed challenge per connection, so the
+ *  pinned Host reaches the zone's rules unchanged). Measured from the
+ *  deployed egress: the crawler-shaped identities land on the CF block page
+ *  in ~1.4 s per attempt (/api/echo), so stacking the identity rotation
+ *  burns the doubled JSON window while the Store API itself answers plainly
+ *  on a clean connection. Plain-http scheme for the same reason as the Lulu
+ *  hop — an IP-addressed https fetch carries the IP as TLS SNI and fails the
+ *  handshake on every shape measured. Returns the first IP that answers a
+ *  real JSON array; best-effort like every hop here — null lets the caller
+ *  fall through to the bounded handshake it already runs. */
+async function pckStaticIpJson(
+  fetchImpl: FetchImpl,
+  url: string,
+  window: AbortSignal,
+): Promise<Record<string, unknown>[] | null> {
+  const target = new URL(url);
+  const path = `${target.pathname}${target.search}`;
+  for (const ip of LULU_KUWAIT_IPS) {
+    if (window.aborted) break;
+    try {
+      const res = await fetchImpl(`http://${ip}${path}`, { headers: { host: target.host, accept: "application/json" }, cache: "no-store", signal: window } as RequestInit);
+      if (!res.ok) continue;
+      const parsed: unknown = JSON.parse(await res.text());
+      if (Array.isArray(parsed)) return parsed as Record<string, unknown>[];
+    } catch {
+      // One bounded pass per IP; the next IP still gets its own decision.
+    }
+  }
+  return null;
+}
+
 export const COLLECTORS: RetailerCollector[] = [
   {
     merchant: "Xcite",
@@ -1744,6 +1778,19 @@ export const COLLECTORS: RetailerCollector[] = [
           result = await replayAttempt().catch(() => null);
         }
         if (result) return result;
+        // REEA-602 support — pinned Static-IPs tier AHEAD of the identity
+        // handshake rotation: both plain shapes only blipped, and on the
+        // deployed egress the rotation spends its ~1.4 s block-page attempts
+        // inside this doubled window without ever asking the API. The pinned
+        // per-connection hop reaches the same Store API answer the warm line
+        // gets, and the handshake stays the bounded fallback behind it.
+        if (!jsonWindow.aborted) {
+          const pinned = await pckStaticIpJson(fetchImpl, apiUrl(q), jsonWindow);
+          if (pinned) {
+            answered = true;
+            return pinned;
+          }
+        }
         try {
           // REEA-369: the identity-alternating handshake as the bounded
           // fallback for rounds where both plain shapes only blipped.
@@ -2752,13 +2799,24 @@ async function collectSettled(
 ): Promise<SettledAdapter> {
   const asError = (err: unknown): string =>
     err instanceof Error ? err.message : String(err);
+  // REEA-635 C3 — dispatch-level LatinBridge: Arabic-script shopper queries
+  // reach every adapter hop in their curated Latin spelling, the one the
+  // JSON catalogs actually carry (REEA-550's measured shape: `دوف صابون` →
+  // [] on pckuwait while `dove soap` answers; REEA-408: Kuwait zones answer
+  // Arabic-category queries with English-titled rows). The bridge rides at
+  // the shared settle point so every hop — JSON and SSR alike — leads on the
+  // spelling the storefront indexes, instead of each collector re-bridging
+  // behind an empty whole-query round. Purely-Latin queries pass through
+  // unchanged; relevance scoring on the settled rows still runs against the
+  // shopper's original query downstream.
+  const dq = latinBridgeDispatch(q);
   try {
-    return { merchant: c.merchant, hits: stampCollected(await c.collect(q, fetchImpl)) };
+    return { merchant: c.merchant, hits: stampCollected(await c.collect(dq, fetchImpl)) };
   } catch (err) {
     const firstError = asError(err);
     await new Promise((r) => setTimeout(r, AMAZON_RETRY_BACKOFF_MS));
     try {
-      return { merchant: c.merchant, hits: stampCollected(await c.collect(q, fetchImpl)) };
+      return { merchant: c.merchant, hits: stampCollected(await c.collect(dq, fetchImpl)) };
     } catch (retryErr) {
       // Both attempts down: report the LAST error — it is the state the
       // final snapshot actually served. Fall back to the first message when
