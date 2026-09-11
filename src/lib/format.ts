@@ -2,35 +2,33 @@ import { currencyForCountry, type CountryCode } from "@/lib/country";
 import type { PriceOffer } from "@/types/product";
 
 /**
- * REEA-488 item 3 + REEA-574 rev 1 (R2) — the ONE KD display convention for
- * every rendered figure: at most TWO decimals, half-expand rounding (the
- * Intl default), in both locales — the label space is ASCII on every view.
- * Whole amounts render bare ("KD 349", never "KD 349.000"); any fraction pads
- * to hundredths ("KD 14.90", "KD 6.50"), so a third decimal never leaks
- * (KD 559.867 → KD 559.87). The derived digit count also fixes the padded
- * length — this is the per-site minimumFractionDigits the rule keeps; every
- * KD surface (hero price, ≈ twin, offer rows, colour chips, alternatives
- * from-KD, savings pill) routes through this helper, so the chip and the
- * twin of one value print identically. `maxDecimals` stays in the call
- * signature for existing call sites; the ≤2 cap governs everywhere.
+ * REEA-488 item 3 + REEA-574 R2 — Kuwaiti display convention for KD figures:
+ * at most TWO decimals on EVERY KD output, through ONE helper. Whole amounts
+ * render bare ("KD 349" / "Save KD 3", never "KD 349.000"); any fraction
+ * rounds half-expand (Intl default) and pads to hundredths ("KD 559.87",
+ * "KD 6.50"), so the savings pill keeps its integer style while price sites
+ * keep their trailing zero. Applied to hero price, ≈ twin, offer rows, colour
+ * chips, alternatives and the savings pill, in both locales — the label space
+ * is ASCII on every view. The cap is the REEA-281 ≤2 rule extended to the
+ * KWD-native side too (spec `reea-574-craft-spec` R2): chip and twin of one
+ * value must print identically.
  */
-function kdDigitCount(value: number, maxDecimals: number): number {
+function kdDigitCount(value: number): number {
   const mille = Math.round(Math.abs(value) * 1000);
-  const frac = mille % 1000; // the three decimal places alone
-  void maxDecimals; // REEA-574: the cap is 2 everywhere — the 3rd-decimal tier is gone
-  if (frac === 0) return 0; // whole amount — no decimals, no trailing-zero noise
-  return 2; // any fraction pads to hundredths: 14.9 → "14.90"; Intl half-expands 559.867 → 559.87
+  if (mille % 1000 === 0) return 0; // whole amount — no decimals, no trailing-zero noise
+  return 2; // any fraction caps at hundredths: 559.867 → "559.87"
 }
 
-/** Plain KD-space digits for a figure (grouping kept, no currency prefix) —
- *  also used by the detail-page swatch chips so one rounding rule covers
- *  every rendered KD number. */
-export function formatKdDigits(value: number, maxDecimals = 3): string {
-  const digits = kdDigitCount(value, maxDecimals);
+/** THE KD formatter — plain KD-space digits for one figure (grouping kept, no
+ *  currency prefix, maximumFractionDigits: 2). Every KD output in the app
+ *  renders through here so one rounding rule covers hero price, twin, row,
+ *  chip, alternative and savings pill alike (REEA-574 R2). */
+export function formatKWD(value: number): string {
+  const digits = kdDigitCount(value);
   try {
     return new Intl.NumberFormat("en-US", {
       minimumFractionDigits: digits,
-      maximumFractionDigits: digits,
+      maximumFractionDigits: digits, // ≤2 decimals, Intl half-expand rounding
     }).format(value);
   } catch {
     return value.toFixed(digits);
@@ -42,7 +40,7 @@ export function formatKdDigits(value: number, maxDecimals = 3): string {
  *  currency stamp as before. */
 export function formatPrice(price: number, currency: string): string {
   const code = currency.trim().toUpperCase();
-  if (!code || code === "KWD") return `KD ${formatKdDigits(price, 3)}`;
+  if (!code || code === "KWD") return `KD ${formatKWD(price)}`;
   try {
     return new Intl.NumberFormat("en-US", {
       style: "currency",
@@ -98,7 +96,7 @@ export function toKwdNumeric(price: number, currency: string): number {
  *  as the REEA-488 KD form ("KD 40.72", whole figures bare — no trailing-zero
  *  noise on the derived side either); other codes keep their Intl stamp. */
 function formatConverted(value: number, code: string): string {
-  if (code === "KWD") return `KD ${formatKdDigits(value, 2)}`;
+  if (code === "KWD") return `KD ${formatKWD(value)}`;
   try {
     return new Intl.NumberFormat("en-US", {
       style: "currency",

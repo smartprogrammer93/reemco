@@ -85,7 +85,7 @@ function CountUpPrice({
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [priceLabel, price, currency]);
-  return <>{shown}</>;
+  return <><bdi>{shown}</bdi></>;
 }
 
 function FreshnessChip({
@@ -169,7 +169,7 @@ export default function OfferCard({
           {price != null ? (
             <CountUpPrice priceLabel={priceLabel} price={price} currency={currency ?? "KWD"} />
           ) : (
-            priceLabel
+            <bdi>{priceLabel}</bdi>
           )}
         </span>
         {compareAtLabel && (
@@ -177,14 +177,14 @@ export default function OfferCard({
             className="tabular"
             style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)", textDecoration: "line-through" }}
           >
-            {compareAtLabel}
+            <bdi>{compareAtLabel}</bdi>
           </span>
         )}
-        {isBest && savings && <span className="savings-pill">{`${t.saveLead} ${savings}`}</span>}
+        {isBest && savings && <span className="savings-pill"><bdi>{`${t.saveLead} ${savings}`}</bdi></span>}
       </div>
       {effectivePriceLabel && (
         <p className="tabular mt-1" style={{ font: "var(--rc-text-small)", color: "var(--rc-savings)" }}>
-          {t.effectiveLead} {effectivePriceLabel} {t.effectiveTail}
+          <>{`${t.effectiveLead} ${effectivePriceLabel} ${t.effectiveTail}`}</>
         </p>
       )}
 

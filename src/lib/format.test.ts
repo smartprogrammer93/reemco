@@ -5,10 +5,32 @@
  * stamped label — nothing renders as a bare unexplained number.
  */
 import { describe, expect, it } from "vitest";
-import { formatCountryPrice, formatPrimaryPrice, sortOffers, toKwdNumeric } from "@/lib/format";
+import { formatCountryPrice, formatKWD, formatPrimaryPrice, sortOffers, toKwdNumeric } from "@/lib/format";
+
+describe("formatKWD — the single KD formatter (REEA-574 R2)", () => {
+  it("caps every figure at two decimals with Intl half-expand rounding", () => {
+    // The spec examples, one value per render-shape: fraction rounds to two,
+    // hundredths pads its trailing zero, whole amounts stay bare.
+    expect(formatKWD(559.867)).toBe("559.87");
+    expect(formatKWD(505.838)).toBe("505.84");
+    expect(formatKWD(6.5)).toBe("6.50");
+    expect(formatKWD(3)).toBe("3");
+    // Grouping survives on the big figures.
+    expect(formatKWD(4099)).toBe("4,099");
+  });
+
+  it("one helper prints chip and twin of the same value identically", () => {
+    // The REEA-574 observed case: chip `KD 505.838` vs twin `≈KD 505.84`.
+    // Both render paths now share formatKWD — the KD figure is the same string.
+    const chip = formatPrimaryPrice(505.838, "KWD").label; // `KD 505.84`
+    const twin = formatCountryPrice(505.838, "KWD", null).primary; // `KD 505.84`
+    expect(chip).toBe("KD 505.84");
+    expect(chip).toBe(twin);
+  });
+});
 
 describe("formatPrimaryPrice (REEA-195 AC-4 / REEA-281 AC-2 / REEA-488 item 3)", () => {
-  it("KWD offers render in the Kuwaiti KD convention — whole amounts bare, fils only when nonzero", () => {
+  it("KWD offers render in the Kuwaiti KD convention — whole amounts bare, fractions capped at hundredths", () => {
     const p = formatPrimaryPrice(34.9, "KWD");
     expect(p.value).toBe(34.9);
     expect(p.label.startsWith("KD")).toBe(true);
@@ -18,8 +40,8 @@ describe("formatPrimaryPrice (REEA-195 AC-4 / REEA-281 AC-2 / REEA-488 item 3)",
     expect(formatPrimaryPrice(349, "KWD").label).toBe("KD 349");
     expect(formatPrimaryPrice(14.9, "KWD").label).toBe("KD 14.90");
     expect(formatPrimaryPrice(10, "KWD").label).toBe("KD 10");
-    // REEA-574 rev 1 (R2): the third decimal never renders — every KD output
-    // half-expands to hundredths (40.718 → KD 40.72), single formatter.
+    // REEA-574 R2: the ≤2 cap now covers the KWD-native side too — a third
+    // decimal is rounded, never printed (REEA-281 was the derived side only).
     expect(formatPrimaryPrice(40.718, "KWD").label).toBe("KD 40.72");
   });
 
@@ -78,13 +100,13 @@ describe("formatCountryPrice (REEA-283 country-led rows)", () => {
     expect(plain(p.alt ?? "")).toBe("SAR 499.00");
   });
 
-  it("KWD-native offer under c=KW is ONE figure at ≤2 decimals — no stamp", () => {
+  it("KWD-native offer under c=KW is ONE figure capped at hundredths — no stamp", () => {
     const p = formatCountryPrice(424.238, "KWD", "KW");
     expect(p.alt).toBeNull();
     expect(plain(p.primary)).toBe("KD 424.24");
   });
 
-  it("c=SA over a KWD-native offer: SAR leads as ≈ figure, ≤2dp KWD stamp rides behind", () => {
+  it("c=SA over a KWD-native offer: SAR leads as ≈ figure, capped KWD stamp rides behind", () => {
     const p = formatCountryPrice(424.238, "KWD", "SA");
     expect(p.primary.startsWith("≈SAR")).toBe(true);
     expect(plain(p.alt ?? "")).toBe("KD 424.24");

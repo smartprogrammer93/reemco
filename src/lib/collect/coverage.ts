@@ -72,33 +72,54 @@ function coverageRank(merchant: string): number {
 }
 
 /**
- * REEA-290 + REEA-574 rev 1 (R1) — the per-query coverage sentence the
- * results page states in plain text. The contributor half ('Prices from …' /
- * 'أسعار من …') names ONLY merchants with at least one RENDERED offer row at
- * final paint: callers pass the merchant names read from the rendered rows
- * array at paint time (country/stock toggles included), not adapter hit
- * counts — a retailer that answered successfully but left no row on screen
- * stays unnamed, so the sentence reads as what the shopper sees. An empty
- * rendered set hides the whole sentence: empty pages show heading + hint +
- * empty state only. Errored/timed-out adapters keep the unchanged
- * 'No response from …' half (an errored adapter shows no rows, so its name
- * never needs dedupe against the contributor half). Names keep the fixed
- * COVERAGE_ORDER presentation; the AR join stays byte-stable (half-width
- * commas, ' و' before the last name).
+ * REEA-290 + REEA-574 R1 — the per-query coverage sentence the results page
+ * states in plain text, straight from the run's own notes (no second fetch,
+ * no bundled registry — a note is only ever written by the live fan-out that
+ * produced the offers on screen). Names follow the fixed adapter order above.
+ *
+ * R1 truth rules:
+ *  - contributors ("Prices from …" / "أسعار من …") list ONLY retailers with
+ *    ≥1 rendered offer row at final paint — pass the same filtered product set
+ *    the grid renders (`rendered`), so a country / out-of-stock toggle that
+ *    drops a merchant's last row drops its name from the sentence too;
+ *  - nonResponders ("No response from …" / "لا يوجد رد من …") keep the old
+ *    semantics: notes carrying an error (errored or timed-out adapters);
+ *  - an adapter that answered successfully with zero rendered offers appears
+ *    in NEITHER list;
+ *  - an empty contributor set hides the contributor sentence entirely — an
+ *    empty-result page keeps only the empty state (R3), never a phantom
+ *    merchant list above zero rows. Without a rendered set (notes-only
+ *    diagnostic callers) `hits` is the row count to filter on.
  */
 export function coverageLine(
-  renderedMerchants: readonly string[],
-  errored?: readonly string[],
+  notes: LiveSearchResult["notes"],
   locale?: "en" | "ar",
+  rendered?: readonly NormalizedProduct[],
 ): string {
-  const contributors = [...new Set(renderedMerchants)].sort(
-    (a, b) => coverageRank(a) - coverageRank(b),
+  const ordered = [...notes].sort(
+    (a, b) => coverageRank(a.merchant) - coverageRank(b.merchant),
   );
-  if (contributors.length === 0) return ""; // nothing rendered — no sentence
-  const failed = [...new Set(errored ?? [])]
-    .filter((m) => !contributors.includes(m))
-    .sort((a, b) => coverageRank(a) - coverageRank(b));
-  // REEA-279: the sentence shapes live in the static table so the stamp
+  const failed: string[] = [];
+  const answered: string[] = [];
+  if (rendered) {
+    // Contributor set from the rows actually on screen, in fixed adapter order.
+    const seen = new Set<string>();
+    for (const p of rendered) for (const o of p.offers) seen.add(o.merchant);
+    answered.push(
+      ...[...seen].sort((a, b) => coverageRank(a) - coverageRank(b)),
+    );
+    // A merchant whose offers rendered DID answer — never also a gap.
+    for (const n of ordered) {
+      if (n.error && !seen.has(n.merchant)) failed.push(n.merchant);
+    }
+  } else {
+    // Notes-only fallback (server diagnostics): kept-hits count is the row count.
+    for (const n of ordered) {
+      if (n.error) failed.push(n.merchant);
+      else if (n.hits > 0) answered.push(n.merchant); // success-but-empty: unnamed
+    }
+  }
+  // REEA-279: the two sentence shapes live in the static table so the stamp
   // matches the shell language; EN keeps the exact figures it had before.
   const ar = locale === "ar";
   const parts: string[] = [];
@@ -107,7 +128,8 @@ export function coverageLine(
     // slot — "No response from X" pairs with the coupon badge as its
     // counterpart, instead of the longer sentence.
     parts.push(ar ? `لا يوجد رد من ${joinNames(failed, ar)}.` : `No response from ${joinNames(failed)}.`);
-  parts.push(ar ? `أسعار من ${joinNames(contributors, ar)}.` : `Prices from ${joinNames(contributors)}.`);
+  if (answered.length > 0)
+    parts.push(ar ? `أسعار من ${joinNames(answered, ar)}.` : `Prices from ${joinNames(answered)}.`);
   return parts.join(" ");
 }
 

@@ -2,7 +2,7 @@ import Link from "next/link";
 import Image from "next/image";
 import type { Coupon, NormalizedProduct, PriceOffer } from "@/types/product";
 import { buildResultsHref, type CountryCode } from "@/lib/country";
-import { effectivePrice, formatCountryPrice, formatKdDigits, formatPrimaryPrice, sortOffers, toKwdNumeric } from "@/lib/format";
+import { effectivePrice, formatCountryPrice, formatKWD, formatPrimaryPrice, sortOffers, toKwdNumeric } from "@/lib/format";
 import { gradeBadgeLabel } from "@/lib/collect/canonical-product";
 import { collectedClock, relativeAge } from "@/lib/relative-time";
 import CouponBadge from "@/components/CouponBadge";
@@ -138,9 +138,9 @@ function PriceBlock({
             textDecoration: oos ? "line-through" : undefined,
           }}
         >
-          {hero.primary}
+          <bdi>{hero.primary}</bdi>
         </span>
-        {hero.alt && <span className="price-alt">{`· ${hero.alt}`}</span>}
+        {hero.alt && <span className="price-alt">· <bdi>{hero.alt}</bdi></span>}
         {/* §5.3: strikethrough compare-at BESIDE the price, savings pill right
             after it — savings emphasis without stealing the price's crown.
             REEA-283: single-figure lines follow the LEAD currency too, so one
@@ -150,11 +150,11 @@ function PriceBlock({
             className="tabular"
             style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)", textDecoration: "line-through" }}
           >
-            {formatCountryPrice(offer.wasPrice, offer.currency, country).primary}
+            <bdi>{formatCountryPrice(offer.wasPrice, offer.currency, country).primary}</bdi>
           </span>
         )}
         {saved && offer.wasPrice != null && (
-          <span className="savings-pill">{`${t.saveLead} ${formatCountryPrice(offer.wasPrice - offer.price, offer.currency, country).primary}`}</span>
+          <span className="savings-pill"><bdi>{`${t.saveLead} ${formatCountryPrice(offer.wasPrice - offer.price, offer.currency, country).primary}`}</bdi></span>
         )}
         {isBest && <span className="best-flag">{t.bestPrice}</span>}
       </div>
@@ -163,7 +163,7 @@ function PriceBlock({
         <p className="mt-1" style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)" }}>
           {t.effectiveLead}{" "}
           <span className="tabular" style={{ color: "var(--rc-savings)" }}>
-            {formatCountryPrice(eff, offer.currency, country).primary}
+            <bdi>{formatCountryPrice(eff, offer.currency, country).primary}</bdi>
           </span>{" "}
           {t.effectiveTail} {coupon?.code ?? coupon?.discount}
         </p>
@@ -304,7 +304,7 @@ export default function ProductResultCard({
           <span className="tabular">{offers.length}</span>{" "}
           {offers.length === 1 ? t.retailersOne : t.retailersMany} · {t.fromWord}{" "}
           <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
-            {formatCountryPrice(best.price, best.currency, country).primary}
+            <bdi>{formatCountryPrice(best.price, best.currency, country).primary}</bdi>
           </span>
         </p>
       )}
@@ -320,7 +320,7 @@ export default function ProductResultCard({
       {!detail && product.seenRange != null && (
         <p className="mt-1" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
           {`${t.seenRecentlyLead} `}
-          <span className="tabular">{formatSeenRangeLabel(product.seenRange, country)}</span>
+          <span className="tabular"><bdi>{formatSeenRangeLabel(product.seenRange, country)}</bdi></span>
           {` · ${t.seenRecentlyWindow}`}
         </p>
       )}
@@ -348,7 +348,7 @@ export default function ProductResultCard({
             >
               {v.label}
               <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
-                {formatCountryPrice(cheapestListed + v.priceDelta, "KWD", country).primary}
+                <bdi>{formatCountryPrice(cheapestListed + v.priceDelta, "KWD", country).primary}</bdi>
               </span>
             </span>
           ))}
@@ -470,9 +470,9 @@ export default function ProductResultCard({
                         treatment stays on the PRIMARY span only. */}
                     <span className="flex min-w-0 items-baseline gap-2" style={{ font: "var(--rc-text-body)" }}>
                       <span className="price-cur tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
-                        {row.primary}
+                        <bdi>{row.primary}</bdi>
                       </span>
-                      {row.alt && <span className="price-alt">{`· ${row.alt}`}</span>}
+                      {row.alt && <span className="price-alt">· <bdi>{row.alt}</bdi></span>}
                       {/* REEA-486 AC-2: this row's own collected-at, aged —
                           muted like the converted stamp, so the figure keeps
                           the crown but every offer reads traceable to its
@@ -525,8 +525,8 @@ export default function ProductResultCard({
                 {v.label}
                 {v.priceDelta !== 0 && (
                   <span className="tabular ml-1">
-                    {v.priceDelta > 0 ? "+" : "−"}
-                    {formatKdDigits(Math.abs(v.priceDelta), 2)}
+                    <bdi>{v.priceDelta > 0 ? "+" : "−"}
+                    {formatKWD(Math.abs(v.priceDelta))}</bdi>
                   </span>
                 )}
               </li>
@@ -564,7 +564,7 @@ export default function ProductResultCard({
                   className="tabular ml-auto shrink-0"
                   style={{ font: "var(--rc-text-body)", fontWeight: 600, color: "var(--rc-ink)" }}
                 >
-                  {`${t.fromWord} ${formatPrimaryPrice(a.fromPrice, "KWD").label}`}
+                  <><bdi>{`${t.fromWord} ${formatPrimaryPrice(a.fromPrice, "KWD").label}`}</bdi></>
                 </span>
               </li>
             ))}

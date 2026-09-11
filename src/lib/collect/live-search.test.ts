@@ -7,6 +7,7 @@ import "./test-cache-dir";
 import { describe, expect, it } from "vitest";
 import { PER_RETAILER_TIMEOUT_MS } from "@/lib/collect/types";
 import { COVERAGE_ORDER } from "@/lib/collect/coverage";
+import type { NormalizedProduct } from "@/types/product";
 import {
   asterHits,
   astoreHits,
@@ -2338,22 +2339,68 @@ describe("REA-290 — retry once with backoff + per-query coverage line", () => 
     expect(products.some((p) => p.offers.some((o) => o.merchant === "Xcite"))).toBe(true);
   });
 
-  it("names the rendered retailers and the errored ones, in fixed adapter order", () => {
+  it("states who answered and who did not, in fixed adapter order", () => {
     // Arrival order (Blink first) must not leak into the sentence — the same
     // settled set reads identically on consecutive loads (REEA-254 rule).
-    // REEA-574 rev 1 (R1): the contributor half reads the RENDERED rows.
-    expect(coverageLine(["Blink", "Xcite"], ["Jarir"])).toBe(
-      "No response from Jarir. Prices from Xcite and Blink.",
+    expect(
+      coverageLine([
+        { merchant: "Blink", hits: 3 },
+        { merchant: "Jarir", hits: 0, error: "HTTP 403" },
+        { merchant: "Xcite", hits: 2 },
+      ]),
+    ).toBe("No response from Jarir. Prices from Xcite and Blink.");
+    // REEA-574 R1 — a success-but-empty answer renders no offer row, so the
+    // merchant is named NOWHERE: not a contributor, not a gap. Kept offers
+    // (hits ≥ 1) still ride the sentence in fixed adapter order.
+    expect(coverageLine([{ merchant: "Eureka", hits: 0 }])).toBe("");
+    expect(coverageLine([{ merchant: "Eureka", hits: 1 }])).toBe("Prices from Eureka.");
+    expect(coverageLine([{ merchant: "Xcite", hits: 2 }, { merchant: "Blink", hits: 1 }])).toBe(
+      "Prices from Xcite and Blink.",
     );
-    // An adapter that answered but rendered no rows stays unnamed — rendered
-    // rows, not adapter hit counts, decide the contributor half.
-    expect(coverageLine(["Eureka", "Xcite"])).toBe("Prices from Xcite and Eureka.");
-    expect(coverageLine(["Xcite", "Blink"])).toBe("Prices from Xcite and Blink.");
-    // Nothing rendered on the page hides the whole sentence — an empty page
-    // shows heading + hint + empty state only, never a name list.
-    expect(coverageLine([], ["Xcite", "Blink"])).toBe("");
+    expect(coverageLine([{ merchant: "Blink", hits: 0, error: "timeout" }, { merchant: "Xcite", hits: 0, error: "timeout" }])).toBe(
+      "No response from Xcite and Blink.",
+    );
+    // Empty contributor set hides the contributor sentence — an empty page
+    // shows no phantom merchant list (R1/R3). Errored adapters keep their own
+    // truthful half with unchanged semantics.
+    expect(coverageLine([{ merchant: "Blink", hits: 0, error: "timeout" }, { merchant: "Xcite", hits: 0 }])).toBe(
+      "No response from Blink.",
+    );
     // Nothing collected yet: no line, no flicker.
     expect(coverageLine([])).toBe("");
+  });
+
+  it("lists contributors from the rendered rows themselves, AR join byte-stable (REEA-574 R1)", () => {
+    const product = (id: string, merchants: string[]): NormalizedProduct => ({
+      productId: id,
+      title: `Product ${id}`,
+      brand: "B",
+      offers: merchants.map((m) => ({ merchant: m, price: 1, currency: "KWD", url: `https://${m}.example`, inStock: true })),
+      coupons: [],
+      variations: [],
+      alternatives: [],
+    });
+    const notes = [
+      { merchant: "Xcite", hits: 2 },
+      { merchant: "Eureka", hits: 1 },
+      { merchant: "Sultan Center", hits: 4 },
+    ];
+    // Only Eureka + Sultan Center carry rows on this paint (Xcite's offers
+    // filtered away by the country selection): Eureka ranks first in adapter
+    // order even though Xcite answered more elsewhere.
+    expect(coverageLine(notes, "en", [product("p", ["Sultan Center", "Eureka"])])).toBe(
+      "Prices from Eureka and Sultan Center.",
+    );
+    // AR: same helper, Arabic connective before the last name, half-width commas.
+    expect(coverageLine(notes, "ar", [product("p", ["Sultan Center", "Eureka"])]).trim()).toBe(
+      "أسعار من Eureka وSultan Center.",
+    );
+    // A merchant that answered rows but also logged an error stays a contributor.
+    expect(coverageLine([...notes, { merchant: "Jarir", hits: 0, error: "timeout" }], "en", [product("p", ["Jarir"])])).toBe(
+      "Prices from Jarir.",
+    );
+    // Zero rendered rows → nothing to vouch for: sentence hidden entirely.
+    expect(coverageLine(notes, "en", [])).toBe("");
   });
 });
 

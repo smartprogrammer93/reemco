@@ -3,10 +3,9 @@
  * REEA-281 render-side coverage.
  * AC-1: ≤2 lazy-loaded thumbnails per product row, text-only fallback when
  *       the feed carries no images (never an invented placeholder).
- * AC-2: every rendered KD figure reads ≤2 decimals — converted behind ≈, and
- *       the KWD-native side half-expands to hundredths through the single
- *       formatter (REEA-574 rev 1; format.test.ts covers the formatter itself
- *       — this checks the CARD actually uses it).
+ * AC-2: the converted side of every price reads ≤2 decimals behind ≈; a
+ *       KWD-native keeps its exact fils precision (format.test.ts covers the
+ *       formatter itself — this checks the CARD actually uses it).
  */
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -141,13 +140,15 @@ describe("REEA-283 — country-led price rows (hero + retailer rows)", () => {
     expect(alt[1].getAttribute("style")).toBeNull();
   });
 
-  it("c=KW over KWD-native offers: ONE figure at ≤2 decimals — no stamp", () => {
+  it("c=KW over KWD-native offers: ONE figure capped at hundredths — no stamp", () => {
     const { container } = render(
       <ProductResultCard product={kwdProduct} query="iphone 17 pro" rank={0} country="KW" />,
     );
     const primary = Array.from(container.querySelectorAll(".price-cur"));
     expect(primary.length).toBeGreaterThanOrEqual(2);
-    for (const span of primary) expect(span.textContent).toContain("424.24");
+    // REEA-574 R2: the scraped 424.238 prints as KD 424.24 everywhere on the
+    // card — hero and retailer rows share formatKWD, no third decimal leaks.
+    for (const span of primary) expect(span.textContent).toContain("KD 424.24");
     expect(container.querySelectorAll(".price-alt").length).toBe(0);
   });
 

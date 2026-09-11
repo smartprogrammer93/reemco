@@ -553,30 +553,26 @@ function ResultsHeading(props: {
   return <CountHeading count={visible.length} query={props.query} locale={props.locale} />;
 }
 
-/* REEA-290 + REEA-574 rev 1 — per-query coverage line: which retailers are
-   actually on screen this search, stated in plain text right on the results
-   page. The contributor half reads the RENDERED rows at paint time: the
-   merchant names of the offer rows the grid paints after the same country/
-   stock chain the cards use (stagedView), recomputed on every toggle — not
-   adapter hit counts, so a success-but-empty adapter stays unnamed and the
-   sentence matches what the shopper sees. Errored/timed-out adapters keep
-   the unchanged 'No response from …' half, traceable to their own failed
-   live fetch — never a static registry. Reads as a plain meta stamp like the
-   loading label; spacing/typography polish belongs to the Graphic Designer.
-   The streaming boundary rides the FINAL stage (the only snapshot where every
-   in-scope retailer has settled), so the sentence describes the whole
-   collection while earlier retailers' offers are already painted — a late or
-   failed retailer only deepens the line, it never blanks the grid. */
-function CoverageLine(props: {
-  products: NormalizedProduct[];
+/* REEA-290 — per-query coverage line: which retailers answered this search
+   and which did not, stated in plain text right on the results page. The
+   sentence derives from the SAME live notes that produced the visible offers
+   (coverageLine), so a retailer named as missing is traceable to its own
+   failed live fetch — never a static registry. Reads as a plain meta stamp
+   like the loading label; spacing/typography polish belongs to the Graphic
+   Designer. The streaming boundary rides the FINAL stage (the only snapshot
+   where every in-scope retailer has settled), so the sentence describes the
+   whole collection while earlier retailers' offers are already painted — a
+   late or failed retailer only deepens the line, it never blanks the grid. */
+function CoverageLine({
+  notes,
+  products,
+  locale,
+}: {
   notes: LiveSearchResult["notes"];
+  products: NormalizedProduct[];
   locale?: Locale;
 }) {
-  const text = coverageLine(
-    props.products.flatMap((p) => p.offers.map((o) => o.merchant)),
-    props.notes.filter((n) => !!n.error).map((n) => n.merchant),
-    props.locale,
-  );
+  const text = coverageLine(notes, locale, products);
   if (!text) return null;
   return (
     <p className="meta-stamp" style={{ color: "var(--rc-muted)" }}>
@@ -593,10 +589,13 @@ function StageCoverage(props: {
   locale?: Locale;
 }) {
   const snap = use(props.stage);
+  // REEA-574 R1 — the contributor names are recomputed from the SAME filtered
+  // rows this paint renders (country / out-of-stock selections included), so a
+  // name in the sentence always has ≥1 visible offer row beside it.
   return (
     <CoverageLine
-      products={stagedView(snap, props.page, props.country, props.showOutOfStock)}
       notes={snap.notes}
+      products={stagedView(snap, props.page, props.country, props.showOutOfStock)}
       locale={props.locale}
     />
   );
@@ -708,7 +707,7 @@ function StagedResults(props: {
         <ResultsErrorBoundary locale={locale}>
           <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
           <HeadingGhost />
-          <CoverageLine products={products} notes={finalSnap.notes} locale={locale} />
+          <CoverageLine notes={finalSnap.notes} products={products} locale={locale} />
         </ResultsErrorBoundary>
       );
     }
@@ -719,11 +718,11 @@ function StagedResults(props: {
         {products.length === 0 && query.length > 0 ? (
           <>
             <EmptyState query={query} suggestions={stagedSuggestions(finalSnap, country, showOutOfStock)} country={country} locale={locale} tries={finalSnap.attemptedQueries} />
-            <CoverageLine products={products} notes={finalSnap.notes} locale={locale} />
+            <CoverageLine notes={finalSnap.notes} products={products} locale={locale} />
           </>
         ) : (
           <>
-            <CoverageLine products={products} notes={finalSnap.notes} locale={locale} />
+            <CoverageLine notes={finalSnap.notes} products={products} locale={locale} />
             <ResultsGrid
               products={products}
               query={query}
@@ -768,7 +767,13 @@ function StagedResults(props: {
         />
       </Suspense>
       <Suspense fallback={null}>
-        <StageCoverage stage={finalPromise} page={page} country={country} showOutOfStock={showOutOfStock} locale={locale} />
+        <StageCoverage
+          stage={finalPromise}
+          page={page}
+          country={country}
+          showOutOfStock={showOutOfStock}
+          locale={locale}
+        />
       </Suspense>
       <div className="flex min-w-0 flex-col items-stretch gap-4" style={{ marginTop: "var(--rc-space-8)" }}>
         <Suspense fallback={null}>
