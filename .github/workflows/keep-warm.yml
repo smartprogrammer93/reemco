@@ -19,27 +19,34 @@ name: Keep production alias warm
 # operative mechanism. Blast radius: one GET on a read-only route; worst
 # failure mode is a cold first hit, exactly the pre-existing status quo.
 #
-# Cadence (measured 2026-09-09, probe ladder at ~04:20-04:41Z): the fast answer
-# window after a hit is ~5 min — arrivals 4-6 min after the last tick answered
-# ~2s once and ~30s once, so the pre-warm interval must stay at or under ~5
-# min to guarantee the <=5s bar at arrival. Step cron "2-59/5 * * * *" fires
-# every 5 min, off the :00 spike (REAAs 71/337 anchor hygiene). Scheduled ticks
-# skip occasionally in this environment (REEA-71), so a missed tick self-heals
-# on the next one at most 10 min later; `push` triggers the same ping because
-# push runs proved the reliable trigger here (uptime.yml pairs), and deploy
-# pushes land right when a fresh artifact most wants warming. Each tick is
-# curl-only (no checkout, no node install): ~8s typical runner time.
+# Cadence (re-measured 2026-09-11, REEA-611 idle ladder at ~04:47-04:55Z): the
+# fast-answer window after a hit is shorter than the old note claimed — a probe
+# 65s after a warm hit answered fast (health ~1.4s, results ~4.9s) while one
+# 120s after answered cold (~17.6s boot on health). So the durable guarantee is
+# "arrival within ~60-90s of the last ping", not "~5 min"; the tick lane cannot
+# cover every minute on the Hobby Actions budget, so it is treated as the dense
+# daytime coverage layer (push clusters + drained cron queue) with the Vercel
+# daily anchors (vercel.json crons) as the deterministic floor. Step cron
+# "2-59/5 * * * *" stays every 5 min, off the :00 spike (REAAs 71/337 anchor
+# hygiene). Scheduled ticks skip occasionally in this environment (REEA-71);
+# with cancel-in-progress:false the queued ticks run when the queue drains, so
+# a skipped tick now self-heals in bursts rather than being cancelled away;
+# `push` triggers the same ping because push runs proved the reliable trigger
+# here (uptime.yml pairs), and deploy pushes land right when a fresh artifact
+# most wants warming. Each tick is curl-only (no checkout, no node install):
+# ~8s typical runner time.
 # Cost math (REEA-314 budget): 288 ticks/day x ~8s = ~38 min/day ~= 1,150
 # min/month typical worst-case ceiling; with smoke-scheduled (~600) and the
 # push-triggered uptime/CI pairs this stays inside the ~2,000 min/month Hobby
-# Actions allowance. concurrency cancels queued overlaps so a push burst cannot
-# stack billable runs. Rollback: delete the `schedule:` cron line (or the whole
-# file) and push — the alias keeps serving from smoke-check + push anchors, no
-# other behavior depends on this file.
+# Actions allowance. Queued overlaps wait their turn and run back-to-back when
+# the queue drains (~8s each); nothing is cancelled, and the billable total
+# stays at the tick-count ceiling above. Rollback: delete the `schedule:` cron
+# line (or the whole file) and push — the alias keeps serving from smoke-check
+# + push anchors, no other behavior depends on this file.
 
 on:
   schedule:
-    - cron: "2-59/5 * * * *" # every 5min off-peak; measured ~5min warm window, missed tick self-heals on next step
+    - cron: "2-59/5 * * * *" # every 5min off-peak; densest cadence the Actions budget allows, queued ticks now self-heal in drain bursts (REEA-611)
   push:
     branches: [main] # deploy pushes warm the fresh artifact immediately; reliable trigger in this environment
   workflow_dispatch:
@@ -49,7 +56,15 @@ permissions:
 
 concurrency:
   group: keep-warm
-  cancel-in-progress: true
+  # REEA-611: let queued ticks queue instead of cancelling each other. With the
+  # evening queue lag measured in REEA-578 (>=12 min), cancel-in-progress:true
+  # made every newly queued tick cancel its still-queued predecessor, so behind
+  # a lagging queue almost nothing started and the effective cadence collapsed
+  # to roughly hourly (solo scheduled runs observed ~hourly on 2026-09-10/11).
+  # Queued-but-not-started runs bill nothing, so the tick COUNT billed per month
+  # is unchanged when the queue drains; what changes is that queued ticks
+  # actually run in back-to-back bursts instead of being cancelled away.
+  cancel-in-progress: false
 
 jobs:
   warm:
