@@ -2,21 +2,24 @@ import { currencyForCountry, type CountryCode } from "@/lib/country";
 import type { PriceOffer } from "@/types/product";
 
 /**
- * REEA-488 item 3 — Kuwaiti display convention for KD figures: at most TWO
- * meaningful decimals; fils (the third decimal) ride along ONLY when nonzero;
- * whole amounts render bare ("KD 349", never "KD 349.000"). The digit count
- * also fixes the padded length, so a hundredths figure keeps its second
- * decimal ("KD 14.90", not "KD 14.9"). Applied to price, wasPrice
- * strikethrough and the savings pill, in both locales — the label space is
- * ASCII on every view. `maxDecimals` caps the derived (converted) side at the
- * REEA-281 ≤2 rule; KWD-native figures use the full 3.
+ * REEA-488 item 3 + REEA-574 rev 1 (R2) — the ONE KD display convention for
+ * every rendered figure: at most TWO decimals, half-expand rounding (the
+ * Intl default), in both locales — the label space is ASCII on every view.
+ * Whole amounts render bare ("KD 349", never "KD 349.000"); any fraction pads
+ * to hundredths ("KD 14.90", "KD 6.50"), so a third decimal never leaks
+ * (KD 559.867 → KD 559.87). The derived digit count also fixes the padded
+ * length — this is the per-site minimumFractionDigits the rule keeps; every
+ * KD surface (hero price, ≈ twin, offer rows, colour chips, alternatives
+ * from-KD, savings pill) routes through this helper, so the chip and the
+ * twin of one value print identically. `maxDecimals` stays in the call
+ * signature for existing call sites; the ≤2 cap governs everywhere.
  */
 function kdDigitCount(value: number, maxDecimals: number): number {
   const mille = Math.round(Math.abs(value) * 1000);
   const frac = mille % 1000; // the three decimal places alone
+  void maxDecimals; // REEA-574: the cap is 2 everywhere — the 3rd-decimal tier is gone
   if (frac === 0) return 0; // whole amount — no decimals, no trailing-zero noise
-  if (maxDecimals === 3 && frac % 10 !== 0) return 3; // nonzero fils stays
-  return 2; // any other fraction pads to hundredths: 14.9 → "14.90"
+  return 2; // any fraction pads to hundredths: 14.9 → "14.90"; Intl half-expands 559.867 → 559.87
 }
 
 /** Plain KD-space digits for a figure (grouping kept, no currency prefix) —

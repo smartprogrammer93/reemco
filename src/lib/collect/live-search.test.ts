@@ -2338,24 +2338,20 @@ describe("REA-290 — retry once with backoff + per-query coverage line", () => 
     expect(products.some((p) => p.offers.some((o) => o.merchant === "Xcite"))).toBe(true);
   });
 
-  it("states who answered and who did not, in fixed adapter order", () => {
+  it("names the rendered retailers and the errored ones, in fixed adapter order", () => {
     // Arrival order (Blink first) must not leak into the sentence — the same
     // settled set reads identically on consecutive loads (REEA-254 rule).
-    expect(
-      coverageLine([
-        { merchant: "Blink", hits: 3 },
-        { merchant: "Jarir", hits: 0, error: "HTTP 403" },
-        { merchant: "Xcite", hits: 2 },
-      ]),
-    ).toBe("No response from Jarir. Prices from Xcite and Blink.");
-    // A zero-hit answer is still an answer — only errors mark a gap.
-    expect(coverageLine([{ merchant: "Eureka", hits: 0 }])).toBe("Prices from Eureka.");
-    expect(coverageLine([{ merchant: "Xcite", hits: 2 }, { merchant: "Blink", hits: 1 }])).toBe(
-      "Prices from Xcite and Blink.",
+    // REEA-574 rev 1 (R1): the contributor half reads the RENDERED rows.
+    expect(coverageLine(["Blink", "Xcite"], ["Jarir"])).toBe(
+      "No response from Jarir. Prices from Xcite and Blink.",
     );
-    expect(coverageLine([{ merchant: "Blink", hits: 0, error: "timeout" }, { merchant: "Xcite", hits: 0, error: "timeout" }])).toBe(
-      "No response from Xcite and Blink.",
-    );
+    // An adapter that answered but rendered no rows stays unnamed — rendered
+    // rows, not adapter hit counts, decide the contributor half.
+    expect(coverageLine(["Eureka", "Xcite"])).toBe("Prices from Xcite and Eureka.");
+    expect(coverageLine(["Xcite", "Blink"])).toBe("Prices from Xcite and Blink.");
+    // Nothing rendered on the page hides the whole sentence — an empty page
+    // shows heading + hint + empty state only, never a name list.
+    expect(coverageLine([], ["Xcite", "Blink"])).toBe("");
     // Nothing collected yet: no line, no flicker.
     expect(coverageLine([])).toBe("");
   });

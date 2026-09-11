@@ -72,29 +72,33 @@ function coverageRank(merchant: string): number {
 }
 
 /**
- * REEA-290 — the per-query coverage sentence the results page states in plain
- * text: which retailers answered this search and which did not, straight from
- * the run's own notes (no second fetch, no bundled registry — a note is only
- * ever written by the live fan-out that produced the offers on screen).
- * Names follow the fixed adapter order above. A retailer that answered with
- * zero matching hits DID respond — its empty shelf is an answer, not a gap —
- * so only notes carrying an error land on the "did not respond" side. An
- * empty notes list (nothing collected yet) yields an empty string: no line,
- * no flicker.
+ * REEA-290 + REEA-574 rev 1 (R1) — the per-query coverage sentence the
+ * results page states in plain text. The contributor half ('Prices from …' /
+ * 'أسعار من …') names ONLY merchants with at least one RENDERED offer row at
+ * final paint: callers pass the merchant names read from the rendered rows
+ * array at paint time (country/stock toggles included), not adapter hit
+ * counts — a retailer that answered successfully but left no row on screen
+ * stays unnamed, so the sentence reads as what the shopper sees. An empty
+ * rendered set hides the whole sentence: empty pages show heading + hint +
+ * empty state only. Errored/timed-out adapters keep the unchanged
+ * 'No response from …' half (an errored adapter shows no rows, so its name
+ * never needs dedupe against the contributor half). Names keep the fixed
+ * COVERAGE_ORDER presentation; the AR join stays byte-stable (half-width
+ * commas, ' و' before the last name).
  */
 export function coverageLine(
-  notes: LiveSearchResult["notes"],
+  renderedMerchants: readonly string[],
+  errored?: readonly string[],
   locale?: "en" | "ar",
 ): string {
-  const ordered = [...notes].sort(
-    (a, b) => coverageRank(a.merchant) - coverageRank(b.merchant),
+  const contributors = [...new Set(renderedMerchants)].sort(
+    (a, b) => coverageRank(a) - coverageRank(b),
   );
-  const failed: string[] = [];
-  const answered: string[] = [];
-  for (const n of ordered) {
-    (n.error ? failed : answered).push(n.merchant);
-  }
-  // REEA-279: the two sentence shapes live in the static table so the stamp
+  if (contributors.length === 0) return ""; // nothing rendered — no sentence
+  const failed = [...new Set(errored ?? [])]
+    .filter((m) => !contributors.includes(m))
+    .sort((a, b) => coverageRank(a) - coverageRank(b));
+  // REEA-279: the sentence shapes live in the static table so the stamp
   // matches the shell language; EN keeps the exact figures it had before.
   const ar = locale === "ar";
   const parts: string[] = [];
@@ -103,8 +107,7 @@ export function coverageLine(
     // slot — "No response from X" pairs with the coupon badge as its
     // counterpart, instead of the longer sentence.
     parts.push(ar ? `لا يوجد رد من ${joinNames(failed, ar)}.` : `No response from ${joinNames(failed)}.`);
-  if (answered.length > 0)
-    parts.push(ar ? `أسعار من ${joinNames(answered, ar)}.` : `Prices from ${joinNames(answered)}.`);
+  parts.push(ar ? `أسعار من ${joinNames(contributors, ar)}.` : `Prices from ${joinNames(contributors)}.`);
   return parts.join(" ");
 }
 

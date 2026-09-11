@@ -722,10 +722,12 @@ describe("cold-start zero handling (REEA-437)", () => {
         />,
       );
     });
-    // Provisional zero: skeleton heading instead of a flashing "0 results",
-    // while the coverage line already names the pending retailer honestly.
+    // Provisional zero: skeleton heading instead of a flashing "0 results".
+    // REEA-574 rev 1 (R1): nothing is rendered yet, so the coverage sentence
+    // stays hidden too — the empty page state shows heading + hint + empty
+    // state only, and the line lands with the first rendered rows.
     expect(document.querySelector("h1")).toBeNull();
-    expect(document.body.textContent).toContain("No response from");
+    expect(document.body.textContent).not.toContain("No response from");
     // The follow-up feed lands the converged live answer — heading + cards.
     const late: LiveSearchResult = { products: SAMPLE_PRODUCTS, notes: [], suggestions: SAMPLE_PRODUCTS };
     await act(async () => {

@@ -18,9 +18,9 @@ describe("formatPrimaryPrice (REEA-195 AC-4 / REEA-281 AC-2 / REEA-488 item 3)",
     expect(formatPrimaryPrice(349, "KWD").label).toBe("KD 349");
     expect(formatPrimaryPrice(14.9, "KWD").label).toBe("KD 14.90");
     expect(formatPrimaryPrice(10, "KWD").label).toBe("KD 10");
-    // REEA-281 AC-2's fils rule survives through REEA-488's "keep fils only
-    // when nonzero": a nonzero third decimal is a measured figure.
-    expect(formatPrimaryPrice(40.718, "KWD").label).toBe("KD 40.718");
+    // REEA-574 rev 1 (R2): the third decimal never renders — every KD output
+    // half-expands to hundredths (40.718 → KD 40.72), single formatter.
+    expect(formatPrimaryPrice(40.718, "KWD").label).toBe("KD 40.72");
   });
 
   it("SAR-only retailers convert ≈, and the scraped figure keeps its stamp beside the KD one", () => {
@@ -78,16 +78,16 @@ describe("formatCountryPrice (REEA-283 country-led rows)", () => {
     expect(plain(p.alt ?? "")).toBe("SAR 499.00");
   });
 
-  it("KWD-native offer under c=KW is ONE exact figure — fils kept, no stamp", () => {
+  it("KWD-native offer under c=KW is ONE figure at ≤2 decimals — no stamp", () => {
     const p = formatCountryPrice(424.238, "KWD", "KW");
     expect(p.alt).toBeNull();
-    expect(plain(p.primary)).toBe("KD 424.238");
+    expect(plain(p.primary)).toBe("KD 424.24");
   });
 
-  it("c=SA over a KWD-native offer: SAR leads as ≈ figure, exact KWD stamp rides behind", () => {
+  it("c=SA over a KWD-native offer: SAR leads as ≈ figure, ≤2dp KWD stamp rides behind", () => {
     const p = formatCountryPrice(424.238, "KWD", "SA");
     expect(p.primary.startsWith("≈SAR")).toBe(true);
-    expect(plain(p.alt ?? "")).toBe("KD 424.238");
+    expect(plain(p.alt ?? "")).toBe("KD 424.24");
   });
 
   it("EGP leads under c=EG; no selection keeps the offer-native figure first", () => {
