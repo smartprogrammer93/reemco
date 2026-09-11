@@ -36,9 +36,19 @@ describe("readBodyCapped (REEA-376 shared helper)", () => {
   });
 
   it("aborts an oversized streamed body with the cap note instead of buffering it whole", async () => {
-    // Four 700 KB chunks: every individual flush stays under the cap, only
-    // the accumulated size crosses it — the read must still bail out.
-    const res = streamedResponse(["a".repeat(700_000), "b".repeat(700_000), "c".repeat(700_000), "d".repeat(700_000)]);
+    // Seven 700 KB chunks (~4.9 MB): every individual flush stays under the
+    // REEA-602 4 MiB cap, only the accumulated size crosses it — the read must
+    // still bail out. (The old four-chunk row was sized against the 2 MiB
+    // line; at 4 MiB a 2.8 MB body is legitimately accepted.)
+    const res = streamedResponse([
+      "a".repeat(700_000),
+      "b".repeat(700_000),
+      "c".repeat(700_000),
+      "d".repeat(700_000),
+      "e".repeat(700_000),
+      "f".repeat(700_000),
+      "g".repeat(700_000),
+    ]);
     await expect(readBodyCapped(res)).rejects.toThrow(CAP_NOTE);
   });
 

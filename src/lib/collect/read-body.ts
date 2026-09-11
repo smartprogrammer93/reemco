@@ -16,10 +16,12 @@
  * live-search.fetchChecked, and the api/health funnel hop (get/readHop).
  */
 
-/** ~2 MB — above every measured live document (the home shell lands around
- *  0.5 MB; the health funnel hops stop at their first flush), far below the
- *  multi-megabyte tails of broken edge shells and inlined-asset pages. */
-export const MAX_RESPONSE_BODY_BYTES = 2 * 1024 * 1024;
+/** ~4 MB — above every measured live document (the home shell lands around
+ *  0.5 MB; the health funnel hops stop at their first flush; the batch-five
+ *  Woo archive envelopes on the PC Kuwait lane ride past the old 2 MB line),
+ *  far below the multi-megabyte tails of broken edge shells and inlined-asset
+ *  pages. REEA-602. */
+export const MAX_RESPONSE_BODY_BYTES = 4 * 1024 * 1024;
 
 /**
  * Stream the response body into a string, bounded at `maxBytes`. An optional
