@@ -27,7 +27,11 @@
  *    Shopify suggest.json hop with products.json newest-page top-up
  *    (shopifyKuwaitOffer); www.yousifi.com.kw — WooCommerce archive
  *    (`?s=…&post_type=product`), the pckuwait card scanner.
- * All fifteen are documented retailer contracts (docs/RATE-LIMITS-AND-ROBOTS.md).
+ *  - REEA-557 batch: alghanim-store.com — WooCommerce archive
+ *    (`?s=…&post_type=product`) with the Electro-theme card scanner;
+ *    binsina.ae — Magento Cloud search view
+ *    (`/en/catalogsearch/result/?q=`), JSON-LD first, Luma cards second.
+ * All seventeen are documented retailer contracts (docs/RATE-LIMITS-AND-ROBOTS.md).
  * Search endpoints only — small page sizes, one call per retailer per run.
  */
 
@@ -621,6 +625,118 @@ export function scanWooCards(html: string): WooCard[] {
   return out;
 }
 
+/**
+ * REEA-557 — Alghanim Electronics (alghanim-store.com) card scanner. The
+ * storefront answers scripted GETs with full Arabic SSR WooCommerce cards
+ * (measured live from the coder edge 2026-09-10), but its Electro-theme price
+ * box nests the symbol twice — `<del>/<ins>` wrap
+ * `<span class="sar-currency-symbol"><span class="woocommerce-Price-currency-
+ * Symbol">LABEL</span></span> 5569</bdi>` — so the shared scanWooCards amount
+ * chain (`</span>&nbsp;<digits>`) misses these rows. Same card fields as every
+ * other Woo card; the currency label is read from the symbol text and falls
+ * back to the theme's `sar-currency-symbol` wrapper stamp.
+ */
+export function scanAlghanimStoreCards(html: string): WooCard[] {
+  const out: WooCard[] = [];
+  const needle = 'class="woocommerce-loop-product__title"';
+  let from = 0;
+  for (;;) {
+    const idx = html.indexOf(needle, from);
+    if (idx < 0) break;
+    from = idx + needle.length;
+    const openEnd = html.indexOf(">", idx);
+    const closeAt = html.indexOf("</h2>", idx);
+    if (openEnd < 0 || closeAt < 0 || closeAt < openEnd) continue;
+    const title = decodeEntities(html.slice(openEnd + 1, closeAt).replace(/<[^>]+>/g, " "));
+    if (!title) continue;
+    // Some theme revisions put the anchor around the h2 (`<a href=…><h2 …>`),
+    // others nest it inside (`<h2 …><a href=…>`). Read whichever side carries
+    // the link: first href just after the opening tag, else nearest before.
+    let url = html.slice(openEnd + 1, openEnd + 121).match(/href="([^"]+)"/)?.[1] ?? "";
+    if (!url) {
+      const before = html.slice(Math.max(0, idx - 400), idx);
+      url = [...before.matchAll(/href="([^"]+)"/g)].pop()?.[1] ?? "";
+    }
+    if (!url) continue;
+    const nextTitle = html.indexOf(needle, closeAt);
+    const windowHtml = html.slice(
+      closeAt,
+      nextTitle < 0 ? closeAt + 4000 : Math.min(nextTitle, closeAt + 4000),
+    );
+    // Amount text always lands right before </bdi> inside the price box;
+    // `<del>` carries the list price, `<ins>` the running sale price.
+    const amountOf = (block: string | undefined): number => {
+      const raw = block?.match(/([\d.,]+)<\/bdi>/)?.[1];
+      return priceNumber(raw);
+    };
+    const ins = windowHtml.match(/<ins[\s\S]*?<\/ins>/)?.[0];
+    const del = windowHtml.match(/<del[\s\S]*?<\/del>/)?.[0];
+    const current = amountOf(ins) || amountOf(windowHtml);
+    if (!Number.isFinite(current) || current <= 0) continue;
+    const was = amountOf(del);
+    const symbol = windowHtml.match(/woocommerce-Price-currencySymbol[^>]*>([^<]*)</)?.[1]?.trim() ?? "";
+    // Same label rules as the shared Woo scanner: KD is the local spelling of
+    // KWD; an empty symbol span falls back to the theme's own stamp.
+    const currency =
+      symbol === ""
+        ? windowHtml.includes("sar-currency-symbol")
+          ? "SAR"
+          : "KWD"
+        : symbol.toUpperCase() === "KD"
+          ? "KWD"
+          : symbol.toUpperCase();
+    out.push({
+      title,
+      url,
+      price: current,
+      currency,
+      ...(Number.isFinite(was) && was > current ? { wasPrice: was } : {}),
+      // Listed-with-price implies purchasable (same rule as extractInStock).
+      inStock: !/out of stock/i.test(windowHtml),
+    });
+  }
+  return out;
+}
+
+/**
+ * REEA-557 — BinSina (binsina.ae, Magento Cloud on Fastly) card scanner. The
+ * Luma search-results view renders each product inside
+ * `<strong class="product name product-item-name"><a class="product-item-link"
+ * href="…" title="…">TITLE</a></strong>` followed by `<span class="price">`
+ * with the served currency label; relative hrefs join the storefront origin.
+ * Currency passes through as served (label letters when the price text
+ * carries them, the storefront's own AED stamp otherwise). Shared by the
+ * live collector and the per-product fallback below.
+ */
+export function scanBinsinaCards(html: string): NextStoreCard[] {
+  const out: NextStoreCard[] = [];
+  const segments = html.split('class="product-item-link"').slice(1);
+  for (const seg of segments) {
+    const attrTitle = decodeEntities(seg.match(/title="([^"]+)"/)?.[1] ?? "");
+    const innerTitle = decodeEntities(seg.match(/^[^>]*>([^<]+)</)?.[1] ?? "");
+    const title = attrTitle || innerTitle;
+    let url = seg.match(/href="([^"]+)"/)?.[1] ?? "";
+    if (!title || !url) continue;
+    if (!url.startsWith("http")) url = `https://binsina.ae${url.startsWith("/") ? "" : "/"}${url}`;
+    // First text after the price span carries the served label: either
+    // "AED 49.00" (label + figure) or a bare figure.
+    const priceText = decodeEntities(seg.match(/class="price"[^>]*>([\s\S]{0,120}?)</)?.[1] ?? "");
+    const label = priceText.match(/([A-Z]{3})?\s*([\d.,]+)/);
+    const price = priceNumber(label?.[2]);
+    if (!Number.isFinite(price) || price <= 0) continue;
+    const currency = label?.[1] ?? "AED";
+    out.push({
+      title,
+      url,
+      price,
+      currency,
+      // Listed-with-price implies purchasable unless the card says otherwise.
+      inStock: !/out of stock/i.test(seg),
+    });
+  }
+  return out;
+}
+
 export interface JsonLdProduct {
   title: string;
   url: string;
@@ -743,6 +859,27 @@ export function parseNextStoreSearch(html: string, productTitle: string): FoundO
 /** Parse a pckuwait.com product-archive page into the best offer. */
 export function parsePcKuwaitSearch(html: string, productTitle: string): FoundOffer | null {
   return bestFromCards(scanWooCards(html), productTitle);
+}
+
+/** Parse an alghanim-store.com WooCommerce archive page into the best offer. */
+export function parseAlghanimStoreSearch(html: string, productTitle: string): FoundOffer | null {
+  return bestFromCards(scanAlghanimStoreCards(html), productTitle);
+}
+
+/** Parse a binsina.ae search-results page into the best offer: JSON-LD
+ *  Product records when the served view carries them, Luma card rows
+ *  otherwise. Currency rides the record/label as served either way. */
+export function parseBinsinaSearch(html: string, productTitle: string): FoundOffer | null {
+  const ld = extractJsonLdProducts(html).map((item) => ({
+    title: item.title,
+    url: item.url.startsWith("http") ? item.url : `https://binsina.ae${item.url}`,
+    price: item.price,
+    currency: item.currency ?? "AED",
+    inStock: item.inStock,
+    ...(item.wasPrice != null ? { wasPrice: item.wasPrice } : {}),
+  }));
+  if (ld.length > 0) return bestFromCards(ld, productTitle);
+  return bestFromCards(scanBinsinaCards(html), productTitle);
 }
 
 /** Parse a luluhypermarket.com SSR page JSON-LD into the best offer. */
@@ -1253,6 +1390,38 @@ export async function searchRetailerFallback(
     );
     const found = parsePcKuwaitSearch(await res.text(), productTitle);
     if (!found) throw new Error("No matching product found on Yousifi search");
+    return found;
+  }
+  if (host.endsWith("alghanim-store.com")) {
+    // WooCommerce archive hop mirroring the live collector in live-search.ts
+    // (adapter symmetry): `post_type=product` lands the priced card archive,
+    // and the zone answers scripted GETs directly (measured live 2026-09-10),
+    // so no handshake is needed on this hop. The Electro-theme price box gets
+    // its own scanner (scanAlghanimStoreCards) — see the note there.
+    const res = await fetchResponse(
+      fetchImpl,
+      `https://alghanim-store.com/?s=${encodeURIComponent(productTitle)}&post_type=product`,
+      { headers: { accept: "text/html,application/xhtml+xml", "accept-language": "en" } },
+    );
+    if (!res.ok) throw new Error(`alghanim-store search HTTP ${res.status}`);
+    const found = parseAlghanimStoreSearch(await res.text(), productTitle);
+    if (!found) throw new Error("No matching product found on Alghanim Electronics search");
+    return found;
+  }
+  if (host.endsWith("binsina.ae")) {
+    // Magento Cloud search view on the locale-prefixed store route. The
+    // Fastly edge answers per connection from cloud egress (the zone's own
+    // 405 shell rides some shapes), so this hop rides the same bounded
+    // identity-alternating handshake the other challenged zones get —
+    // mirrored in the live collector (adapter symmetry).
+    const res = await fetchThroughChallenge(
+      fetchImpl,
+      `https://binsina.ae/en/catalogsearch/result/?q=${encodeURIComponent(productTitle)}`,
+      {},
+      AbortSignal.timeout(FALLBACK_TIMEOUT_MS),
+    );
+    const found = parseBinsinaSearch(await res.text(), productTitle);
+    if (!found) throw new Error("No matching product found on BinSina search");
     return found;
   }
   throw new Error(`No search fallback for ${host}`);

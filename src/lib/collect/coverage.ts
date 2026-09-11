@@ -64,6 +64,10 @@ export const COVERAGE_ORDER = [
   "Nahdi",
   "Ounass",
   "Danube Home",
+  // REEA-557 first wave — appended in COLLECTORS declaration order so the
+  // parity pin in live-search.test.ts keeps COVERAGE_ORDER == adapter order.
+  "Alghanim Electronics",
+  "BinSina",
 ] as const;
 
 function coverageRank(merchant: string): number {

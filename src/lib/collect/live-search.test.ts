@@ -1897,8 +1897,8 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     resetDiscoveryCache();
     const staged = collectLiveResultsStaged("samsung", { fetchImpl: mixedSpeedFetch(), country: "KW" });
 
-    // One boundary per KW retailer in the run (seventeen since REEA-378).
-    expect(staged.stages).toHaveLength(17);
+    // One boundary per KW retailer in the run (nineteen since REEA-378).
+    expect(staged.stages).toHaveLength(19);
 
     const first = await staged.stages[0];
     expect(first.products).toHaveLength(1);
@@ -1919,9 +1919,9 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     expect(finalSnap.products[0].offers.map((o) => o.price)).toEqual([379, 385, 390, 399]);
     expect(merchants.has("Eureka")).toBe(true);
     expect(merchants.has("Sultan Center")).toBe(true);
-    // Merchants whose mocks never answer are all reported as notes (seventeen
-    // of the seventeen retailers).
-    expect(finalSnap.notes).toHaveLength(17);
+    // Merchants whose mocks never answer are all reported as notes (nineteen
+    // of the nineteen retailers).
+    expect(finalSnap.notes).toHaveLength(19);
   });
 
   it("the final flush equals the blocking path on the same live answers", async () => {
@@ -2008,8 +2008,8 @@ describe("completion-budget finalize (REEA-398)", () => {
     expect(merchants.has("Eureka")).toBe(false);
     // …plus one honest budget note per still-silent merchant: the coverage
     // line of the FINALIZED page names every gap, with the budget as its
-    // reason — across all seventeen KW retailers in the run.
-    expect(snap.notes).toHaveLength(17);
+    // reason — across all nineteen KW retailers in the run.
+    expect(snap.notes).toHaveLength(19);
     expect(snap.notes.find((n) => n.merchant === "Eureka")?.error).toMatch(/completion budget/);
     expect(snap.notes.find((n) => n.merchant === "Sultan Center")?.error).toMatch(/completion budget/);
     // The page clock sits inside the brief's 4-5 s window.
@@ -2285,8 +2285,8 @@ describe("whole-chain budget signal (REEA-224 F4)", () => {
     expect(elapsed).toBeGreaterThanOrEqual(LIVE_SEARCH_TIMEOUT_MS * 2 - 1_500);
     expect(elapsed).toBeLessThan(LIVE_SEARCH_BUDGET_MS + 2_000);
     // Graceful degradation: every silent retailer is still reported (all
-    // seventeen KW collectors are stalled here, REEA-378 included).
-    expect(notes).toHaveLength(17);
+    // nineteen KW collectors are stalled here, REEA-378 included).
+    expect(notes).toHaveLength(19);
   }, 25_000);
 });
 

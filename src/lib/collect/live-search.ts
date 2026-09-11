@@ -24,6 +24,8 @@ import {
   jarirIndexLang,
   normalizeShopifyProducts,
   queryGatePasses,
+  scanAlghanimStoreCards,
+  scanBinsinaCards,
   scanNextStoreCards,
   scanWooCards,
   titleMatchScore,
@@ -654,6 +656,76 @@ export function luluHits(html: string, query: string): SearchHit[] {
       inStock: item.inStock,
       ...(item.wasPrice != null ? { wasPrice: item.wasPrice } : {}),
       ...(img ? { image: img } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * REEA-557 — BinSina (binsina.ae): Magento Cloud search view. The served
+ * answer is read JSON-LD-first (the same schema.org Product records the Lulu
+ * hop consumes — priceCurrency rides verbatim), falling back to the Luma card
+ * rows when the view ships no ld+json blocks (scanBinsinaCards). Currency
+ * passes through as served; AED is the storefront stamp when a row carries
+ * no label letters. Country tag follows the batch convention the other GCC
+ * storefronts ride (Ounass/Danube Home).
+ */
+export function binsinaHits(html: string, query: string): SearchHit[] {
+  const out: SearchHit[] = [];
+  const ld = extractJsonLdProducts(html);
+  for (const item of ld) {
+    if (!queryGatePasses(item.title, query, MIN_SCORE)) continue;
+    const img = pickImage(item);
+    out.push({
+      title: item.title,
+      merchant: "BinSina",
+      country: "KW",
+      price: item.price,
+      currency: item.currency ?? "AED",
+      url: item.url.startsWith("http") ? item.url : `https://binsina.ae${item.url}`,
+      inStock: item.inStock,
+      ...(item.wasPrice != null ? { wasPrice: item.wasPrice } : {}),
+      ...(img ? { image: img } : {}),
+    });
+  }
+  if (out.length > 0) return out;
+  for (const card of scanBinsinaCards(html)) {
+    if (!queryGatePasses(card.title, query, MIN_SCORE)) continue;
+    out.push({
+      title: card.title,
+      merchant: "BinSina",
+      country: "KW",
+      price: card.price,
+      currency: card.currency,
+      url: card.url,
+      inStock: card.inStock,
+      ...(card.wasPrice != null ? { wasPrice: card.wasPrice } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * REEA-557 — Alghanim Electronics (alghanim-store.com): WooCommerce archive
+ * cards off the SSR search view, read through the theme-specific card
+ * scanner (nested `sar-currency-symbol` price box — see scanAlghanimStoreCards
+ * in search-fallback.ts). Titles ship Arabic-first, prices/promos as served:
+ * `<ins>` is the effective price, `<del>` joins as wasPrice only while it is
+ * above it (the shared promo convention).
+ */
+export function alghanimHits(html: string, query: string): SearchHit[] {
+  const out: SearchHit[] = [];
+  for (const card of scanAlghanimStoreCards(html)) {
+    if (!queryGatePasses(card.title, query, MIN_SCORE)) continue;
+    out.push({
+      title: card.title,
+      merchant: "Alghanim Electronics",
+      country: "KW",
+      price: card.price,
+      currency: card.currency,
+      url: card.url,
+      inStock: card.inStock,
+      ...(card.wasPrice != null ? { wasPrice: card.wasPrice } : {}),
     });
   }
   return out;
@@ -1958,6 +2030,79 @@ export const COLLECTORS: RetailerCollector[] = [
         AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
       );
       return danubeHomeHits(await res.json(), query);
+    },
+  },
+  {
+    merchant: "Alghanim Electronics",
+    country: "KW",
+    collect: async (query, fetchImpl) => {
+      // REEA-557 — WooCommerce archive hop in the PC Kuwait shape (measured
+      // live from the coder edge 2026-09-10): `?s=…&post_type=product` answers
+      // scripted GETs directly — browser-shaped Accept combo, HTTP/~550 KB/
+      // ~0.6–1.2 s with Arabic SSR cards, prices and promo del/ins pairs — so
+      // no handshake is needed on this hop. Whole query first; when the
+      // archive comes back empty, one bounded concurrent per-word round rides
+      // the SAME doubled window (REEA-357/REEA-416 recipe — Arabic phrases are
+      // the empty-answer cells on these Woo archives), merge bodies, and the
+      // shared gate scores every merged row against the ORIGINAL query.
+      const window = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
+      const hop = async (q: string): Promise<string> => {
+        const res = await fetchChecked(
+          fetchImpl,
+          `https://alghanim-store.com/?s=${encodeURIComponent(q)}&post_type=product`,
+          {
+            headers: {
+              accept: "text/html,application/xhtml+xml",
+              "accept-language": "en",
+              "user-agent": "Mozilla/5.0",
+            },
+          },
+          window,
+        );
+        return await res.text();
+      };
+      const bodies = [await hop(query)];
+      if (alghanimHits(bodies[0], query).length === 0 && !window.aborted) {
+        const words = Array.from(
+          new Set([...latinQueryForms(query), ...query.split(/\s+/).filter((w) => w.length > 1)]),
+        ).slice(0, 3);
+        const hops = await Promise.allSettled(words.map((word) => hop(word)));
+        for (const hopRes of hops) if (hopRes.status === "fulfilled") bodies.push(hopRes.value);
+      }
+      const seen = new Set<string>();
+      const out: SearchHit[] = [];
+      for (const body of bodies) {
+        for (const hit of alghanimHits(body, query)) {
+          if (seen.has(hit.url)) continue;
+          seen.add(hit.url);
+          out.push(hit);
+        }
+      }
+      return out;
+    },
+  },
+  {
+    merchant: "BinSina",
+    country: "KW",
+    collect: async (query, fetchImpl) => {
+      // REEA-557 — Magento Cloud storefront on Fastly; the locale-prefixed
+      // search view carries the results. The zone answers per connection
+      // behind the cache-first replay + identity handshake (the REEA-369
+      // combo, same class as the other edge-tuned hops — measured
+      // 2026-09-10: plain shapes ride the edge's own decision page from the
+      // coder container), so the hop leads with challengeHtmlHop and falls
+      // through the bounded JSD clearance tier on a still-shell answer. Only
+      // a body carrying real result content (ld+json blocks or the Luma card
+      // anchors — the REEA-526 presence-gate shape) may answer early.
+      const searchUrl = `https://binsina.ae/en/catalogsearch/result/?q=${encodeURIComponent(query)}`;
+      const qualifies = (html: string): boolean =>
+        html !== "" &&
+        !html.includes("cf-error-details") &&
+        (html.includes("application/ld+json") || html.includes("product-item-link"));
+      const html = await challengeHtmlHop(fetchImpl, searchUrl);
+      if (qualifies(html)) return binsinaHits(html, query);
+      const cleared = await jsdClearedHtml(fetchImpl, searchUrl).catch(() => "");
+      return binsinaHits(qualifies(cleared) ? cleared : html !== "" ? html : cleared, query);
     },
   },
 ];
