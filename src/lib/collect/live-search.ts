@@ -42,6 +42,7 @@ import type { FetchImpl } from "@/lib/collect/scraper";
 import type { CountryCode } from "@/lib/country";
 import { fillSilentFromLastSeen, readSeenObservations, rememberRound } from "@/lib/collect/last-seen";
 import { readCappedResponse } from "@/lib/collect/read-body";
+import { mirrorSharedQuerySnapshot, replaySharedQuerySnapshot } from "@/lib/collect/query-layer";
 import { attachSeenRanges, type SeenRow } from "@/lib/seen-range";
 import { sanitizeExternalUrl } from "@/lib/safe-url";
 import { SC_LANE_TIMEOUT_MS } from "@/lib/collect/types";
@@ -3276,6 +3277,24 @@ export function collectLiveResultsStaged(
     return { stages: [served], final: served, allSettled: Promise.resolve() };
   }
 
+  // REEA-602 shared-layer warm — after a recycle the per-instance memo is
+  // empty, so the first hit on a shared query would re-pay the whole fan-out
+  // even though a sibling instance converged the SAME query seconds ago. On
+  // a plain local miss the run therefore races ONE bounded replay off the
+  // shared KV layer in front of the FIRST stage only: whatever answered
+  // there leads the page as the honestly-aged first flush (its own scrapedAt
+  // rides the JSON, so the freshness chip keeps telling the truth), and this
+  // run's own hops deepen the page behind the response exactly as before.
+  // An empty layer resolves immediately, leaving the hop race untouched;
+  // diagnostic chains with an injected fetchImpl stay isolated (the REEA-510
+  // rule), and the converged FINAL still mirrors itself back into the layer.
+  const sharedWarm: Promise<LiveSearchResult> | null =
+    snapshotsEnabled && !cached
+      ? replaySharedQuerySnapshot<LiveSearchResult>(cacheKey).then(
+          (snap) => snap ?? new Promise<LiveSearchResult>(() => {}),
+        )
+      : null;
+
   // REEA-540 Bet A — load this query's STORED last-seen observations once per
   // run, in parallel with the hop fan-out: same keys REEA-510 already writes,
   // no new collection round. The converged and finalized snapshots await it
@@ -3347,14 +3366,20 @@ export function collectLiveResultsStaged(
     .then(() => (snapshotsEnabled ? rememberRound(q, settled) : undefined))
     .then(async () => finalSnapshot(q, country, settled, fetchImpl, opts.widenedRetry === true, snapshotsEnabled, locale, await seenRowsP));
 
+  // The shared-layer warm leads ONLY the first flush (k === 0): a replayed
+  // snapshot must not mute this round's own deepening stages, so from the
+  // second arrival threshold on the hop race answers alone. With a single
+  // collector the sole stage is the final one and the warm replay still only
+  // shortens its first paint — the converged chain behind it is unchanged.
   const stages: Promise<LiveSearchResult>[] = collectors.map(async (_c, k) => {
     if (k < collectors.length - 1) {
       return await Promise.race([
         untilArrivals(k + 1).then(() => stagedSnapshot(q, country, settled.slice(), locale, seenRows)),
         finalizeAtDeadline,
+        ...(k === 0 && sharedWarm ? [sharedWarm] : []),
       ]);
     }
-    return await Promise.race([converged, finalizeAtDeadline]);
+    return await Promise.race([converged, finalizeAtDeadline, ...(sharedWarm && collectors.length === 1 ? [sharedWarm] : [])]);
   });
   const final: Promise<LiveSearchResult> = stages[stages.length - 1] ?? Promise.resolve(stagedSnapshot(q, country, settled, locale, seenRows));
 
@@ -3371,7 +3396,12 @@ export function collectLiveResultsStaged(
   // settled:false without products defers its write to a later run's FINAL
   // instead of memoizing a blip. Nothing is bundled: writes are live fetches.
   const writeLiveAnswer = (snap: LiveSearchResult): void => {
-    if (snap.products.length > 0 || snap.settled !== false) cache.write(cacheKey, snap);
+    if (snap.products.length === 0 && snap.settled === false) return;
+    cache.write(cacheKey, snap);
+    // REEA-602 — mirror the FINAL write-through into the shared layer so the
+    // next recycled instance replays instead of re-paying the fan-out. Same
+    // single writer per run, behind the response, TTL = memo ceiling.
+    if (snapshotsEnabled) void mirrorSharedQuerySnapshot(cacheKey, snap);
   };
   void final.then(writeLiveAnswer, () => {});
   registerFollowUp(cacheKey, converged);
