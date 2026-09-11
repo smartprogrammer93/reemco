@@ -423,7 +423,11 @@ export default function ProductResultCard({
                       whitespace-nowrap) ride inline; the design-pass 160px
                       floor keeps the column at least chip-wide; chips shrink
                       as whole units, never half-wrap their own text. */}
-                  <span className="flex min-w-[160px] items-center gap-2">
+                  {/* REEA-646: below sm the stacked row leaves this group in a
+                      ~327px column; flex-wrap breaks only BETWEEN whole nowrap
+                      tokens (name/chips keep their text), and sm:flex-nowrap
+                      keeps the inline shape identical from sm up (REA-224). */}
+                  <span className="flex min-w-[160px] flex-wrap items-center gap-2 sm:flex-nowrap">
                     <span style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
                       {/* REEA-451 F6 — bidi isolation around the Latin store name
                           so bidi reordering can't flip it inside Arabic chrome. */}
@@ -475,14 +479,24 @@ export default function ProductResultCard({
                       price block. Overflow at narrow widths is absorbed by
                       the min-w-0 price span, keeping the CTA inside the card
                       (REEA-75 M2 intent). */}
-                  <span className="ml-auto flex min-w-0 items-center justify-end gap-3 sm:shrink-0">
+                  {/* REEA-646: the cluster's min-content is the SUM of its
+                      nowrap tokens (~267-358px measured), so below sm — where
+                      the stacked row leaves the cluster alone in its column —
+                      it now wraps BETWEEN whole tokens (each token stays
+                      intact, REEA-448 G3 copy contract intact). From sm up
+                      sm:flex-nowrap reproduces the one-inline-line shape
+                      above, so the equal-height rhythm (REA-224) and the
+                      >=1280 squeeze are untouched. Containment comes from the
+                      wrap capacity, which is continuous — not tuned to one
+                      viewport. */}
+                  <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-3 sm:flex-nowrap sm:shrink-0">
                     <StockDot state={o.inStock ? "in" : "out"} locale={locale} />
                     {/* REEA-283: the row's figure leads in the selected country's
                         currency (the offer's native figure with no selection);
                         the converted stamp rides beside it on the same baseline
                         with column-gap 8px (gap-2). The font-weight:600 ink
                         treatment stays on the PRIMARY span only. */}
-                    <span className="flex min-w-0 items-baseline gap-2" style={{ font: "var(--rc-text-body)" }}>
+                    <span className="flex min-w-0 flex-wrap items-baseline justify-end gap-2 sm:flex-nowrap" style={{ font: "var(--rc-text-body)" }}>
                       <span className="price-cur tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
                         <bdi>{row.primary}</bdi>
                       </span>
