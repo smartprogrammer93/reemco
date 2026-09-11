@@ -64,9 +64,19 @@ function truncate(query: string): string {
   return `${(atSpace > 20 ? head.slice(0, atSpace) : head).trimEnd()}…`;
 }
 
+/** REEA-631 — display-only tail trim: a feed query typed with trailing
+ *  punctuation ('iPhone 17 Pro...') renders a clean pill label, while the
+ *  Link href and the after() pre-warm keep carrying the RAW query string so
+ *  the click searches exactly what the feed counted. Only '.', ',', '-' and
+ *  spaces tail-trim, at the very end of the label; the ellipsis truncate()
+ *  appends is never eaten. */
+function displayLabel(query: string): string {
+  return truncate(query).replace(/[.,\- ]+$/, "");
+}
+
 function toChip(query: string): TrendingChip {
   const q = query.trim();
-  return { query: q, label: truncate(q) };
+  return { query: q, label: displayLabel(q) };
 }
 
 /**

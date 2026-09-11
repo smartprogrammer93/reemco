@@ -111,6 +111,22 @@ describe("selectTrendingChips — ranking (AC1)", () => {
     expect(long.startsWith(chips[1].label.slice(0, 20))).toBe(true);
   });
 
+  it("trims trailing punctuation/spaces off the pill label but keeps the raw query (REEA-631)", () => {
+    const now = Date.UTC(2026, 8, 10, 12, 0, 0);
+    const t = now - HOUR;
+    const events = [
+      ...searches("iPhone 17 Pro...", 5, t),
+      ...searches("air fryer - ", 3, t),
+      ...searches("desk lamp", 1, t),
+    ];
+    const chips = selectTrendingChips(events, CURATED, { now });
+    // href + pre-warm ride the raw counted query; only the label is cleaned.
+    expect(chips[1].query).toBe("iPhone 17 Pro...");
+    expect(chips[1].label).toBe("iPhone 17 Pro");
+    expect(chips[2].query).toBe("air fryer -");
+    expect(chips[2].label).toBe("air fryer");
+  });
+
   it("falls back to the curated set below three eligible queries (AC3)", () => {
     const now = Date.UTC(2026, 8, 10, 12, 0, 0);
     const t = now - HOUR;
