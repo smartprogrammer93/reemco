@@ -7,6 +7,8 @@
  */
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { act } from "react";
+import { coverageLine } from "@/lib/collect/coverage";
+import { renderToReadableStream } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const searchParams = new URLSearchParams();
@@ -634,6 +636,78 @@ describe("coverage line (REEA-290)", () => {
     });
     // Nothing collected yet is not a coverage story — no empty stamp lands.
     expect(document.body.innerHTML).not.toContain("No response from");
+  });
+
+  it("REEA-601 — the streamed stamp names exactly the merchants whose rows the flushed blocks painted", async () => {
+    // The fork this guards: stage one paints A (Xcite) + B (Blink); the final
+    // stage re-ranks so far that A falls out of the page slice, but its card
+    // STAYS above the fold of the streamed markup (append-only blocks). A
+    // stamp read off the final snapshot alone loses A's merchant (missing
+    // name) while keeping whatever the final slice holds (phantom trailing
+    // names). The served stamp must match the rows actually rendered — the
+    // union the shopper sees before hydration converges.
+    searchParams.set("q", "sony");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    const row = (id: string, merchant: string, price: number): NormalizedProduct => ({
+      productId: id,
+      title: `${id} title`,
+      brand: id,
+      offers: [{ merchant, price, currency: "KWD", url: `https://${merchant}.example/p`, inStock: true }],
+      coupons: [],
+      variations: [],
+      alternatives: [],
+      scrapedAt: "2026-09-11T00:00:00.000Z",
+    });
+    const stageOne: LiveSearchResult = {
+      products: [row("a", "Xcite", 100), row("b", "Blink", 90)],
+      notes: [
+        { merchant: "Xcite", hits: 1 },
+        { merchant: "Blink", hits: 1 },
+      ],
+      suggestions: [],
+    };
+    // Final stage: 20 filler rows from Jarir re-rank B to the top and push A
+    // past the PAGE_SIZE slice — its streamed card remains, though.
+    const fillers = Array.from({ length: 20 }, (_, i) => row(`f${i}`, "Jarir", 80 + i));
+    const finalSnap: LiveSearchResult = {
+      products: [row("b", "Blink", 90), ...fillers],
+      notes: [
+        { merchant: "Xcite", hits: 1 },
+        { merchant: "Blink", hits: 1 },
+        { merchant: "Jarir", hits: 20 },
+      ],
+      suggestions: [],
+    };
+    // The SERVED streamed document (async SSR): boundaries flush as their
+    // snapshots resolve, so the markup is exactly the append-only union of
+    // the stage blocks — what the shopper reads before hydration converges.
+    // (renderToString would serialize only the pending fallbacks; the client
+    // render converges onto the final slice, which is REEA-574 R1 territory.)
+    const stream = await renderToReadableStream(
+      <ResultsClient
+        query="sony"
+        page={1}
+        country={null}
+        locale="en"
+        stages={[Promise.resolve(stageOne), Promise.resolve(finalSnap)]}
+      />,
+    );
+    let html = "";
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      html += decoder.decode(value, { stream: true });
+    }
+    // Union of painted rows, fixed adapter order: Xcite (block one), Blink and
+    // Jarir (later blocks) — every named merchant has ≥1 row in this markup.
+    expect(html).toContain("Prices from Xcite, Blink and Jarir.");
+    // A merchant answered-but-displaced must not survive into the stamp…
+    expect(html).not.toContain("Prices from Jarir, Blink.");
+    // …and A's painted row keeps its name beside it.
+    expect(html).toContain("a title");
   });
 });
 

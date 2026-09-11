@@ -1,6 +1,6 @@
 "use client";
 
-import { Component, Suspense, useEffect, useRef, useState, use, type ReactNode } from "react";
+import { Component, Suspense, useEffect, useMemo, useRef, useState, use, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import CountryFilter from "@/components/CountryFilter";
@@ -581,21 +581,62 @@ function CoverageLine({
   );
 }
 
+/* REEA-601 — the streamed page paints its rows APPEND-ONLY: each flushed
+   boundary keeps its slots, so what is actually on screen is the union of the
+   per-stage views in paint order (a cheaper late arrival re-ranks the FINAL
+   slice and can push an earlier product below PAGE_SIZE, yet its card stays
+   above the fold of the streamed markup). Reading the contributor names off
+   the FINAL snapshot alone forks against those rows: late re-ranked merchants
+   show rows but no name, and slice-displaced merchants keep a name with zero
+   rendered rows (the phantom trailing names REEA-601 reports). So the stamp
+   reads the SAME union the blocks paint, derived from the very snapshots the
+   boundaries consumed — still live-at-query-time data from the run's own
+   fan-out, no second fetch, nothing bundled. */
+export function renderedAcrossStages(
+  stages: readonly Promise<LiveSearchResult>[],
+  page: number,
+  country: CountryCode | null,
+  showOutOfStock: boolean,
+): Promise<NormalizedProduct[]> {
+  return Promise.all(
+    stages.map((stage) => stage.then((snap) => stagedView(snap, page, country, showOutOfStock))),
+  ).then((views) => {
+    const seenIds = new Set<string>();
+    const rows: NormalizedProduct[] = [];
+    for (const view of views) {
+      for (const p of view) {
+        if (seenIds.has(p.productId)) continue;
+        seenIds.add(p.productId);
+        rows.push(p);
+      }
+    }
+    return rows;
+  });
+}
+
 function StageCoverage(props: {
-  stage: Promise<LiveSearchResult>;
+  stages: readonly Promise<LiveSearchResult>[];
   page: number;
   country: CountryCode | null;
   showOutOfStock: boolean;
   locale?: Locale;
 }) {
-  const snap = use(props.stage);
-  // REEA-574 R1 — the contributor names are recomputed from the SAME filtered
-  // rows this paint renders (country / out-of-stock selections included), so a
-  // name in the sentence always has ≥1 visible offer row beside it.
+  const snap = use(props.stages[props.stages.length - 1]);
+  const products = use(
+    useMemo(
+      () => renderedAcrossStages(props.stages, props.page, props.country, props.showOutOfStock),
+      [props.stages, props.page, props.country, props.showOutOfStock],
+    ),
+  );
+  // REEA-574 R1 + REEA-601 — contributor names are recomputed at paint time
+  // from the rows the streamed blocks actually render (country / out-of-stock
+  // selections included), so a name in the sentence always has ≥1 visible
+  // offer row beside it, and every rendered row's merchant is named. Notes
+  // ride the final stage — the only snapshot where every hop has settled.
   return (
     <CoverageLine
       notes={snap.notes}
-      products={stagedView(snap, props.page, props.country, props.showOutOfStock)}
+      products={products}
       locale={props.locale}
     />
   );
@@ -768,7 +809,7 @@ function StagedResults(props: {
       </Suspense>
       <Suspense fallback={null}>
         <StageCoverage
-          stage={finalPromise}
+          stages={stages}
           page={page}
           country={country}
           showOutOfStock={showOutOfStock}
