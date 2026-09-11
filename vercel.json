@@ -3,11 +3,6 @@
   "framework": "nextjs",
   "buildCommand": "echo \"${VERCEL_GIT_COMMIT_SHA:-$(git rev-parse HEAD)}\" > public/__commit.txt && npm run lint && NODE_ENV=test KV_REST_API_URL= KV_REST_API_TOKEN= npm run test && next build",
   "crons": [
-    // REEA-611: two daily anchors as the deterministic warm floor — morning
-    // 08:17Z + evening peak 14:57Z (Kuwait 17:57, the Moment-of-Truth window
-    // for first-time visitors). Vercel-native ticks cost no GitHub Actions
-    // minutes; the hourly tier exceeded the Hobby allowance (REEA-345), two
-    // daily ticks per day fit. The GH keep-warm lane covers daytime bursts.
     {
       "path": "/api/health",
       "schedule": "17 8 * * *"
