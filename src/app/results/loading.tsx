@@ -69,6 +69,10 @@ export default async function ResultsLoading() {
           --rc-text-display × line-height 1.05) so the settled heading lands
           without pushing anything below it. */}
       <div className="skeleton-block" style={{ width: "45%", height: "clamp(36px, 4.8vw, 55px)" }} aria-hidden />
+      {/* REEA-693 item 1 — one-line slot for the late coverage stamp (same
+          .meta-stamp type as ResultsClient.StampGhost), so the settled stamp
+          swaps into its own height instead of shifting the card block down. */}
+      <p className="meta-stamp" aria-hidden style={{ visibility: "hidden" }}>.</p>
       <SkeletonCard />
       <SkeletonCard />
       <SkeletonCard />

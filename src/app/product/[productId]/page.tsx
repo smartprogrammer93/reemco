@@ -55,9 +55,22 @@ export default async function ProductPage({
   // client only continues the same job by polling afterwards — no second POST
   // on first paint. The static preview host keeps its old client-initiated
   // path (no shared job store there; see CollectionPanel AC10 note).
-  const staged = process.env.STATIC_EXPORT
-    ? null
-    : await startProductCollectionStaged(shown);
+  // REEA-693 item 1 — the job handshake no longer holds up the shell: the
+  // stage rides into the panel boundary AS A PROMISE (consumed via use() in
+  // CollectionPanel), so the hero + panel fallback flush with the first chunk
+  // (shell <= 2s) and the first offer lands in its own streamed boundary as
+  // soon as a retailer answers. The manual Collect-now stays exactly as it
+  // is — the no-JS / boundary-not-yet-flushed fallback.
+  const firstStage = process.env.STATIC_EXPORT
+    ? undefined
+    : startProductCollectionStaged(shown)
+        .then((s) => s.firstStage)
+        // a handshake that never started is not an error state: the panel
+        // falls back to its old client-initiated path (see CollectionPanel).
+        .then(
+          (snap) => snap,
+          () => null,
+        );
 
   return (
     <div
@@ -74,7 +87,7 @@ export default async function ProductPage({
         currency={shown.offers[0]?.currency ?? "KWD"}
         country={country}
         locale={locale}
-        firstStage={staged?.firstStage}
+        firstStage={firstStage}
       />
       <p style={{ marginTop: "var(--rc-space-4)" }}>
         <Link

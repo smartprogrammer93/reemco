@@ -116,6 +116,22 @@ function HeadingGhost() {
   );
 }
 
+/* REEA-693 item 1 — the coverage stamp (StageCoverage / CoverageLine) rides a
+   LATE boundary: it lands with the final stage, after the staged cards already
+   painted. Unreserved, that late line pushes the whole visible grid down — the
+   layout shift the acceptance line forbids. A one-line invisible stamp of the
+   same .meta-stamp type reserves exactly its height, so the real sentence
+   swaps into its own slot without moving the rows above or below it. Shared
+   by the streamed fallback and the initial skeleton geometry (results/loading
+   .tsx keeps the same slot). */
+function StampGhost() {
+  return (
+    <p className="meta-stamp" aria-hidden style={{ visibility: "hidden" }}>
+      .
+    </p>
+  );
+}
+
 export function LoadingFallback({ locale }: { locale?: Locale }) {
   const t = getStrings(locale ?? clientLocale());
   return (
@@ -127,6 +143,7 @@ export function LoadingFallback({ locale }: { locale?: Locale }) {
         {t.checkingStores}
       </p>
       <HeadingGhost />
+      <StampGhost />
       <SkeletonCard />
       <SkeletonCard />
       <SkeletonCard />
@@ -807,7 +824,7 @@ function StagedResults(props: {
           showOutOfStock={showOutOfStock} locale={locale}
         />
       </Suspense>
-      <Suspense fallback={null}>
+      <Suspense fallback={<StampGhost />}>
         <StageCoverage
           stages={stages}
           page={page}

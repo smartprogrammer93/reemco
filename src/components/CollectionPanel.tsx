@@ -88,8 +88,11 @@ export default function CollectionPanel(props: {
   country?: CountryCode | null;
   /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
   locale?: Locale;
-  /** REEA-248 first-offer stage of the collection the server render started. */
-  firstStage?: Promise<CollectJob>;
+  /** REEA-248 first-offer stage of the collection the server render started.
+   *  REEA-693 item 1 — the page hands this over unawaited; a stage that could
+   *  not start resolves to null, and the panel then takes the old
+   *  client-initiated path (mount starts the run) instead of erroring. */
+  firstStage?: Promise<CollectJob | null>;
 }) {
   return (
     <Suspense fallback={<PanelFallback locale={props.locale} />}>
@@ -133,7 +136,7 @@ function CollectionPanelBody({
   currency: string;
   country?: CountryCode | null;
   locale?: Locale;
-  firstStage?: Promise<CollectJob>;
+  firstStage?: Promise<CollectJob | null>;
 }) {
   const t = getStrings(locale ?? clientLocale());
   // Server-started staged snapshot (REEA-248): the boundary flushes with the
