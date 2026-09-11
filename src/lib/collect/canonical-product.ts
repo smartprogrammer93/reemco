@@ -605,8 +605,64 @@ export function listingLabel(listingTitle: string, cardTitle: string): string {
   const numericOnly = (w: string): boolean => /^\p{N}+(?:[.,]\p{N}+)?$/u.test(bare(w));
   while (kept.length > 0 && numericOnly(kept[0])) kept.shift();
   while (kept.length > 0 && numericOnly(kept[kept.length - 1])) kept.pop();
-  // A bounded single-line chip — the qualifier, not the whole scraped title.
-  return kept.join(" ").slice(0, 48);
+  return axisLabel(kept.join(" "));
+}
+
+/** Decode the handful of entities retailer listing titles actually ship so
+ *  chips print `6.9"` and not the raw `&quot;` tail (REA-674 fix 2). */
+function decodeListingEntities(s: string): string {
+  return s
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#(\d+);/g, (_m, d: string) => String.fromCharCode(Number(d)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/&amp;/gi, "&");
+}
+
+/**
+ * REA-674 Rule 1 — the label cap for the rebuilt qualifier chip. Retailer
+ * listings pack the variation axes comma-separated ("Chip,48 Space",
+ * "Galaxy S25 FE, 6.7-inch, Navy,"); the rebuilt chip never re-embeds a raw
+ * comma: fragments join on single spaces. Each fragment is trimmed of
+ * whitespace and dangling punctuation at BOTH ends ("Lavender," becomes
+ * "Lavender"), whole fragments past the 40-character budget drop from the
+ * tail — never a mid-word cut, so what survives ends on a word boundary —
+ * and one oversized fragment snaps to its last word boundary inside the
+ * budget. Parenthesis groups ("(GTG)", an unclosed "(ENGLISH/ARABIC") read
+ * as ordinary axis fragments. Deterministic arithmetic on one string: same
+ * input, byte-identical output, the identical path for EN and AR titles —
+ * whitespace collapse only, RTL-safe.
+ */
+function axisLabel(text: string): string {
+  const decoded = decodeListingEntities(text).replace(/\s+/g, " ").trim();
+  if (decoded === "") return "";
+  const trimTail = (s: string): string =>
+    s.trim().replace(/^[-–—/:;.,\s]+/, "").replace(/[-–—/:;.,\s]+$/, "");
+  const fragments = decoded
+    .replace(/[)）]/g, " ")
+    .split(/[,(]+/)
+    .map((f) => trimTail(f.replace(/\s+/g, " ")))
+    .filter((f) => f !== "");
+  let label = "";
+  for (const frag of fragments) {
+    const next = label === "" ? frag : `${label} ${frag}`;
+    if (next.length <= 40) {
+      label = next;
+      continue;
+    }
+    if (label === "") {
+      // Single fragment past the cap: snap to the last word boundary inside
+      // it; a lone longer word keeps its whole shape rather than cut mid-way.
+      const head = frag.slice(0, 40);
+      const cut = head.lastIndexOf(" ");
+      label = cut > 0 ? head.slice(0, cut) : head;
+    }
+    break;
+  }
+  return label;
 }
 
 /** Badge copy for the grade chip: renewed-grade-b → "Renewed Grade B". */

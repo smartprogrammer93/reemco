@@ -296,13 +296,23 @@ const CURATED_MATCHES = CURATED_BRANDS.map((entry) => ({
   re: curatedWordRe(entry),
 })).sort((a, b) => b.entry.length - a.entry.length);
 
-/** Case-insensitive whole-word title lookup against the curated list, longest
- *  entry first; returns the canonical casing or null. */
+/** Case-insensitive whole-word lookup against the curated list, longest entry
+ *  first; returns the canonical casing or null.
+ *
+ *  REA-674 Rule 3 — the scan reads the title's LEADING segment: the
+ *  compatibility tail after "for …" (and the Arabic لـ / لل for-prefix) names
+ *  the DEVICE an accessory fits, not the brand of what is sold — a Belkin /
+ *  Zagg / Araree case "for Apple iPhone" must read its OWN leading brand, and
+ *  a produce/candy row under an `apple` query must not inherit Apple from the
+ *  tail. With no compatibility phrase the whole title is the segment, so
+ *  titles carrying the brand after the model code still resolve. */
 export function curatedBrandInTitle(title: string): string | null {
   const lower = normalizedTitle(title).toLowerCase();
   if (!lower) return null;
+  const lead = lower.split(/\s+[fF]or\s+|لـ|لل/u)[0] ?? lower;
+  const scan = lead.trim() === "" ? lower : lead;
   for (const { entry, re } of CURATED_MATCHES) {
-    if (re.test(lower)) return entry;
+    if (re.test(scan)) return entry;
   }
   return null;
 }

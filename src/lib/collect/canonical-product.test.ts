@@ -236,4 +236,28 @@ describe("REEA-486 merge gate — one card per model identity", () => {
       ),
     ).toBe("");
   });
+
+  it("REA-674: rebuilt labels are comma-clean, capped at 40 on a word boundary, entity-decoded", () => {
+    // Axis fragments join on spaces — the raw comma never re-embeds.
+    expect(listingLabel("Samsung Galaxy A16, Chip,48 Space, 5000mAh", "Samsung Galaxy A16")).toBe(
+      "Chip 48 Space 5000mAh",
+    );
+    // Dangling punctuation trims off BOTH ends of a fragment.
+    expect(listingLabel("Sony WH-1000XM6 Lavender,", "Sony WH-1000XM6")).toBe("Lavender");
+    // Whole fragments past the budget drop from the tail; what survives ends
+    // on a word boundary, never a mid-word cut.
+    expect(
+      listingLabel("Galaxy S25 FE, 6.7-inch, SM-S731BZKVMEA Navy,", "Samsung A57 5G"),
+    ).toBe("Galaxy S25 FE 6.7-inch");
+    // One oversized fragment snaps to its last word boundary inside the cap.
+    // The card title shares no token, so the kept join is the whole
+    // non-noise title — past the budget, exercising the snap.
+    expect(
+      listingLabel("Samsung Galaxy A07 MediaTek Helio G99 Dimensity Nitro Max", "Sony X"),
+    ).toBe("Samsung Galaxy A07 MediaTek Helio G99");
+    // Entities decode so the chip prints the figure, not the raw stamp.
+    expect(listingLabel('Bundle Offer 6.9&quot; Compact', "Sony X")).toBe('Bundle Offer 6.9" Compact');
+    // The Arabic path runs the identical pipeline.
+    expect(listingLabel("كهربائي, خلاط", "خلاط")).toBe("كهربائي");
+  });
 });
