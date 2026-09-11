@@ -100,10 +100,15 @@ export const LIVE_SEARCH_BUDGET_MS = 16_000;
  * 17-21s on the deployed edge before this budget). Late hops keep running
  * behind the finalized response and fold into the page in place via the
  * follow-up feed (/api/results-followup) — no reload, no bundled snapshot.
- * ~4.5s sits inside the 4-5s brief window and leaves flush headroom below
- * the p90 <= 5s acceptance target.
+ * ~4.5s sits inside the old REEA-398 brief window. REEA-693 item 1 tightens
+ * the first-paint guarantee to first offer card <= 3s P95: the finalize clock
+ * is what caps the worst case (every stage also resolves on this timer), so
+ * the window moves to ~2.8s — inside the 3s bar with room for the streamed
+ * swap to land. Late hops are NOT cut short: the landing window behind the
+ * closed document rides STAGE_TAIL_HEADROOM_MS below and stays unchanged —
+ * only the document-close clock moved earlier.
  */
-export const RESULTS_COMPLETION_BUDGET_MS = 4_500;
+export const RESULTS_COMPLETION_BUDGET_MS = 2_800;
 /**
  * REEA-466 — headroom the staged hop chain gets BEHIND the completion budget:
  * the finalize clock closes the document, the same run's late hops plus one
@@ -113,8 +118,26 @@ export const RESULTS_COMPLETION_BUDGET_MS = 4_500;
  * 16 s blocking ceiling instead, so `after()` kept the stream open ~19-25 s
  * after the visible content flushed (QA REEA-467 finding 1). The blocking
  * callers still thread their own LIVE_SEARCH_BUDGET_MS signal.
+ * REEA-645 item 1 — raised 400 -> 3500. With the old value the behind-the-
+ * response tail ceiling (deadline + headroom ≈ 4.9 s) sat almost exactly on
+ * the finalize clock, so the lanes the REEA-607 cycle-1 table caught as
+ * standing budget notes (PC Kuwait, BinSina on every query; Nahdi / Next
+ * Store / Sultan Center intermittently) died in the tail too and the follow-
+ * up feed had nothing left to fold in. The handshake-chain lanes measure
+ * ~5–6 s end-to-end behind the deploy edge (REA-416 tier note; REEA-526 /
+ * REEA-550 cold-handshake notes), so the tail now rides ~8 s from the run
+ * start — still a hard ceiling far under the blocking path, aligned with the
+ * follow-up feed's own bounded wait (FOLLOW_UP_WAIT_MS = 8000). First paint
+ * is untouched: the finalize clock and the after() race keep their values;
+ * the headroom only widens how long late hops may LAND behind the closed
+ * document.
+ * REEA-693 item 1 — raised 3500 -> 5200 as the finalize clock moved 4500 ->
+ * 2800: the landing window measured from the RUN START (deadline + headroom)
+ * stays ~8 s either way, so the handshake-chain lanes keep the same room to
+ * land behind the closed document and the follow-up feed (FOLLOW_UP_WAIT_MS
+ * = 8000) still covers the tail — only the document closes earlier.
  */
-export const STAGE_TAIL_HEADROOM_MS = 400;
+export const STAGE_TAIL_HEADROOM_MS = 5_200;
 /** Cap of distinct product groups served per query. */
 export const LIVE_SEARCH_MAX_PRODUCTS = 20;
 /**

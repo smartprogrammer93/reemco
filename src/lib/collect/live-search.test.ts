@@ -20,6 +20,7 @@ import {
   danubeHomeHits,
   followUpSnapshot,
   RESULTS_COMPLETION_BUDGET_MS,
+  STAGE_TAIL_HEADROOM_MS,
   eurekaHits,
   groupHits,
   jarirHits,
@@ -2032,8 +2033,15 @@ describe("completion-budget finalize (REEA-398)", () => {
     expect(snap.notes).toHaveLength(19);
     expect(snap.notes.find((n) => n.merchant === "Eureka")?.error).toMatch(/completion budget/);
     expect(snap.notes.find((n) => n.merchant === "Sultan Center")?.error).toMatch(/completion budget/);
-    // The page clock sits inside the brief's 4-5 s window.
-    expect(RESULTS_COMPLETION_BUDGET_MS).toBeLessThanOrEqual(5_000);
+    // The page clock sits inside the REEA-693 item-1 first-paint bar: the
+    // finalize timer is what caps the worst-case first-offer visibility, so
+    // it stays under the 3 s acceptance line (the landing window behind the
+    // closed document is widened in lockstep — see STAGE_TAIL_HEADROOM_MS).
+    expect(RESULTS_COMPLETION_BUDGET_MS).toBeLessThanOrEqual(3_000);
+    // …and the behind-the-response landing window keeps its ~8 s from the run
+    // start (REA-645 tier alignment with FOLLOW_UP_WAIT_MS): moving the close
+    // clock earlier must not shrink the window late hops may still LAND in.
+    expect(RESULTS_COMPLETION_BUDGET_MS + STAGE_TAIL_HEADROOM_MS).toBeGreaterThanOrEqual(7_500);
   });
 
   it("late offers land through the follow-up feed from the SAME run, no second fan-out", async () => {
