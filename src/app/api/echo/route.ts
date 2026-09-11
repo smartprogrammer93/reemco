@@ -22,6 +22,12 @@
  *    silent-zero cell on this merchant completes WITHOUT an error note, so
  *    only the deployed runtime can say whether the hop itself answers empty
  *    from this egress or the rows lose the shared coverage gate.
+ *  - `pinned`: REEA-602 support — the pinned Static-IPs tier observed from
+ *    this runtime: each challenging zone probed through its OWN curated
+ *    anycast pair with the Host pinned (the exact plain-http hop shape the
+ *    collectors fall through to), reporting every bounded attempt and
+ *    whether the pair answered. Proof both zone pairs answer on the deployed
+ *    egress, per zone — the pair split the flattened cross-zone shape lost.
  *
  * Same read-only shape as /api/health (REEA-314): deterministic JSON, no
  * cookies, no persisted state, every upstream call best-effort with its own
@@ -41,6 +47,10 @@ const ECHO_WINDOW_MS = 6_000;
 const ZONE_WINDOW_MS = 8_000;
 const LULU_URL = "https://www.luluhypermarket.com/en/search?query=basmati+rice";
 const PCK_URL = "https://pckuwait.com/wp-json/wc/store/v1/products?search=dell&per_page=24";
+// Mirrors the collector's per-zone curated pairs (live-search.ts): each zone
+// rides its own edge, so the observation table walks each pair separately.
+const LULU_KUWAIT_IPS: readonly string[] = ["104.18.40.47", "172.64.147.209"];
+const PCK_KUWAIT_IPS: readonly string[] = ["172.67.189.78", "104.21.81.113"];
 
 interface ZoneProbe {
   status: number | 0;
@@ -81,6 +91,53 @@ async function withClearanceTier(fetchImpl: typeof fetch, probe: ZoneProbe, url:
     .then((text) => text.length)
     .catch(() => 0);
   return { ...probe, clearedBytes };
+}
+
+interface PinnedAttempt {
+  ip: string;
+  status: number | 0;
+  ms: number;
+  error?: string;
+}
+
+interface PinnedReport {
+  answered: boolean;
+  attempts: PinnedAttempt[];
+}
+
+/**
+ * REEA-602 support — observe the pinned Static-IPs tier exactly the way the
+ * collectors run it: plain http to the zone's OWN anycast pair, Host pinned,
+ * the caller's hop extras riding on top. One bounded pass per IP (a fresh
+ * challenge decision per connection), stop at the first body that satisfies
+ * the zone's own answered rule. Reports every attempt so a thin anchor on
+ * the deployed egress classifies as pair-choice vs per-zone judgment from
+ * this table alone. Never throws — an error is just an attempt row.
+ */
+async function probePinned(
+  fetchImpl: typeof fetch,
+  url: string,
+  ips: readonly string[],
+  extraHeaders: Record<string, string>,
+  answered: (body: string) => boolean,
+): Promise<PinnedReport> {
+  const target = new URL(url);
+  const path = `${target.pathname}${target.search}`;
+  const window = AbortSignal.timeout(ZONE_WINDOW_MS);
+  const attempts: PinnedAttempt[] = [];
+  for (const ip of ips) {
+    if (window.aborted) break;
+    const started = Date.now();
+    try {
+      const res = await fetchImpl(`http://${ip}${path}`, { headers: { host: target.host, ...extraHeaders }, cache: "no-store", signal: window } as RequestInit);
+      const body = await res.text();
+      attempts.push({ ip, status: res.status, ms: Date.now() - started });
+      if (res.ok && answered(body)) return { answered: true, attempts };
+    } catch (err) {
+      attempts.push({ ip, status: 0, ms: Date.now() - started, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return { answered: false, attempts };
 }
 
 async function probeSultan(fetchImpl: typeof fetch): Promise<ZoneProbe> {
@@ -142,12 +199,20 @@ export async function GET(): Promise<Response> {
     .then(async (res) => ((await res.json()) as { ip?: string }).ip ?? "")
     .catch(() => "");
 
-  const [echo, fallbackIp, luluRaw, pckRaw, sultan] = await Promise.all([
+  const [echo, fallbackIp, luluRaw, pckRaw, sultan, luluPinned, pckPinned] = await Promise.all([
     hopEcho,
     ipOnly,
     probeZone(fetch, LULU_URL, {}),
     probeZone(fetch, PCK_URL, { accept: "application/json" }),
     probeSultan(fetch),
+    probePinned(fetch, LULU_URL, LULU_KUWAIT_IPS, {}, (body) => body.includes("application/ld+json")),
+    probePinned(fetch, PCK_URL, PCK_KUWAIT_IPS, { accept: "application/json" }, (body) => {
+      try {
+        return Array.isArray(JSON.parse(body));
+      } catch {
+        return false;
+      }
+    }),
   ]);
   const [lulu, pckuwait] = await Promise.all([
     withClearanceTier(fetch, luluRaw, LULU_URL),
@@ -162,6 +227,10 @@ export async function GET(): Promise<Response> {
       "www.luluhypermarket.com": lulu,
       "pckuwait.com": pckuwait,
       "www.sultan-center.com": sultan,
+    },
+    pinned: {
+      "www.luluhypermarket.com": luluPinned,
+      "pckuwait.com": pckPinned,
     },
     identity: VERIFIED_BOT_HEADERS["user-agent"],
     checkedAt: new Date().toISOString(),
