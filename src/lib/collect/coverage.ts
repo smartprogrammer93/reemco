@@ -106,6 +106,10 @@ export function coverageLine(
   const failed: string[] = [];
   const answered: string[] = [];
   if (rendered) {
+    // REEA-574 rev 1 (R1): zero rendered rows → nothing to vouch for, and the
+    // error half would still phantom a merchant above an empty page — hide
+    // the whole sentence, not just the contributor half.
+    if (rendered.length === 0) return "";
     // Contributor set from the rows actually on screen, in fixed adapter order.
     const seen = new Set<string>();
     for (const p of rendered) for (const o of p.offers) seen.add(o.merchant);
