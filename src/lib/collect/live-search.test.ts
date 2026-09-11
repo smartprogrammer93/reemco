@@ -55,6 +55,26 @@ import { bestBadgeIndex } from "@/lib/stock";
 import { toKwdNumeric } from "@/lib/format";
 import { createQueryCache } from "@/lib/query-cache";
 
+/**
+ * REEA-626 — boundary slots open on their OWN arrival threshold, so an early
+ * zero-hit hop legitimately paints an EMPTY slot on slower builder schedules
+ * while the answered card rides on the boundary right behind. Mirror what
+ * ResultsClient's StageAppend paints for the shopper: scan boundaries in
+ * order and capture the first snapshot that actually paints rows. Later
+ * snapshots stay cumulative supersets of earlier ones, so stream-order and
+ * late-merchant coverage asserts keep their teeth on both machine classes.
+ */
+async function firstPaintedFlush<S extends { products: unknown[] }>(staged: {
+  stages: Promise<S>[];
+  final: Promise<S>;
+}): Promise<S> {
+  for (const boundary of staged.stages) {
+    const snap = await boundary;
+    if (snap.products.length > 0) return snap;
+  }
+  return staged.final;
+}
+
 describe("hit parsers", () => {
   it("xciteHits keeps scored hits with /p product URLs", () => {
     const payload = {
@@ -1281,7 +1301,7 @@ describe("groupHits", () => {
       return new Response("{}");
     };
     const staged = collectLiveResultsStaged("airpods", { fetchImpl, country: "KW" });
-    const first = await staged.stages[0];
+    const first = await firstPaintedFlush(staged);
     // Intermediate flush: row identity + offers survive, and the card now
     // reads `alternatives` off every flush too — the payload trim is ENTRY
     // SHARING (one object per referenced group), not emptied arrays.
@@ -1900,7 +1920,7 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     // One boundary per KW retailer in the run (nineteen since REEA-378).
     expect(staged.stages).toHaveLength(19);
 
-    const first = await staged.stages[0];
+    const first = await firstPaintedFlush(staged);
     expect(first.products).toHaveLength(1);
     // REEA-277: stage 0 opens when the FIRST round-one answer lands — the fast
     // Xcite hop is on screen while the delayed Eureka/Sultan hops are still in
