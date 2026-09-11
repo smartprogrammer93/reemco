@@ -142,6 +142,35 @@ const fetchImpl = async (url: string): Promise<Response> => {
       ],
     });
   }
+  if (url.includes("alghanim-store.com")) {
+    // Electro-theme card shape captured live from alghanim-store.com
+    // 2026-09-10: h2 title wrapping the loop link, del/ins price pair with
+    // the nested sar-currency-symbol wrapper and the figure before </bdi>.
+    return htmlResponse(
+      '<h2 class="woocommerce-loop-product__title"><a class="woocommerce-loop-product__link" href="https://alghanim-store.com/product/nescafe-classic/">Nescafe Classic Coffee 50g</a></h2>' +
+        '<span class="price"><span class="sale-price"><del aria-hidden="true"><span class="woocommerce-Price-amount amount"><bdi>' +
+        '<span class="sar-currency-symbol"><span class="woocommerce-Price-currencySymbol"></span></span> 2.80</bdi></span></del>' +
+        '<ins aria-hidden="true"><span class="woocommerce-Price-amount amount"><bdi>' +
+        '<span class="sar-currency-symbol"><span class="woocommerce-Price-currencySymbol"></span></span> 2.40</bdi></span></ins></span></span>',
+    );
+  }
+  if (url.includes("binsina.ae")) {
+    const ld = JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "ItemList",
+      itemListElement: [
+        {
+          "@type": "Item",
+          item: {
+            "@type": "Product",
+            name: "Nescafe Classic Coffee 50g",
+            offers: { "@type": "Offer", price: "1.95", priceCurrency: "AED", availability: "https://schema.org/InStock", url: "/en/nescafe-classic" },
+          },
+        },
+      ],
+    });
+    return htmlResponse(`<script type="application/ld+json">${ld}</script>`);
+  }
   return jsonResponse({});
 };
 
@@ -151,8 +180,9 @@ describe("REEA-262 staged adapter dispatch", () => {
     const staged = collectLiveResultsStaged("nescafe coffee", { fetchImpl });
     const snap = await staged.final;
 
-    // Every adapter of the seventeen-store set (REA-270 batch and the
-    // REEA-378 batch three included) must appear in the converged notes.
+    // Every adapter of the nineteen-store set (REA-270 batch, the
+    // REEA-378 batch three and the REEA-557 batch five first wave included)
+    // must appear in the converged notes.
     expect(new Set(snap.notes.map((n) => n.merchant))).toEqual(
       new Set([
         "Xcite",
@@ -175,6 +205,8 @@ describe("REEA-262 staged adapter dispatch", () => {
         "Nahdi",
         "Ounass",
         "Danube Home",
+        "Alghanim Electronics",
+        "BinSina",
       ]),
     );
 
@@ -189,6 +221,8 @@ describe("REEA-262 staged adapter dispatch", () => {
       "Nahdi",
       "Ounass",
       "Danube Home",
+      "Alghanim Electronics",
+      "BinSina",
     ]) {
       const note = snap.notes.find((n) => n.merchant === merchant);
       expect(note?.hits, `${merchant} must contribute hits`).toBeGreaterThan(0);
