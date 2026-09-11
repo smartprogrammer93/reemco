@@ -652,8 +652,15 @@ export function scanAlghanimStoreCards(html: string): WooCard[] {
     if (!title) continue;
     // Some theme revisions put the anchor around the h2 (`<a href=…><h2 …>`),
     // others nest it inside (`<h2 …><a href=…>`). Read whichever side carries
-    // the link: first href just after the opening tag, else nearest before.
-    let url = html.slice(openEnd + 1, openEnd + 121).match(/href="([^"]+)"/)?.[1] ?? "";
+    // the link: first href inside the header block, else nearest before.
+    // REA-666 — the forward read runs to the header-block end (closeAt), not
+    // a fixed character window: Arabic-first titles percent-encode to ~300
+    // chars, and a window that cuts INSIDE the quoted href never sees the
+    // closing quote the matcher needs — every card row would die on the URL
+    // step while the fetch itself answered fine. The href value is always
+    // closed before `</h2>` in the nested-anchor shape, so the block end is
+    // the natural bound; the reversed-anchor shape keeps the backward read.
+    let url = html.slice(openEnd + 1, closeAt).match(/href="([^"]+)"/)?.[1] ?? "";
     if (!url) {
       const before = html.slice(Math.max(0, idx - 400), idx);
       url = [...before.matchAll(/href="([^"]+)"/g)].pop()?.[1] ?? "";

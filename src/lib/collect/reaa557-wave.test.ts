@@ -93,6 +93,26 @@ describe("REEA-557 Alghanim Electronics lane", () => {
     expect(note?.hits).toBeGreaterThanOrEqual(1);
     expect(note?.error).toBeUndefined();
   });
+
+  it("reads a long Arabic-slugged href in full — the header block bounds the forward read (REA-666)", () => {
+    // Arabic-first WooCommerce titles percent-encode to ~300 ASCII chars, so
+    // the href value runs well past a fixed short window. The scanner reads
+    // href through the header-block end: the quoted value is closed before
+    // `</h2>` in the nested-anchor shape, so the closing quote the matcher
+    // needs is always in range. A window that cuts INSIDE the quoted value
+    // drops every card row on the URL step — hits:0 with no error, from an
+    // archive that fetched fine.
+    const slug = encodeURIComponent("نسكافيه كلاسيك قهوة تركية مطحونة عبوة كبيرة الحجم 200 جرام");
+    expect(slug.length).toBeGreaterThan(121);
+    const html =
+      `<h2 class="woocommerce-loop-product__title"><a href="https://alghanim-store.com/product/${slug}/">نسكافيه كلاسيك 200 جم</a></h2>` +
+      '<span class="price"><span class="woocommerce-Price-amount amount"><bdi>' +
+      '<span class="sar-currency-symbol"><span class="woocommerce-Price-currencySymbol"></span></span> 2.20</bdi></span></span>';
+    const hits = alghanimHits(html, "نسكافيه");
+    expect(hits).toHaveLength(1);
+    expect(hits[0].url).toBe(`https://alghanim-store.com/product/${slug}/`);
+    expect(hits[0].price).toBe(2.2);
+  });
 });
 
 describe("REEA-557 BinSina lane", () => {
