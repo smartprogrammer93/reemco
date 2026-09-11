@@ -16,6 +16,7 @@
 import zlib from "node:zlib";
 import {
   APP_ID_ALLOW,
+  CHALLENGE_HEADERS,
   SEARCH_KEY_ALLOW,
   VERIFIED_BOT_HEADERS,
   extractJarirIndexKey,
@@ -2119,9 +2120,16 @@ export const COLLECTORS: RetailerCollector[] = [
           `https://alghanim-store.com/?s=${encodeURIComponent(q)}&post_type=product`,
           {
             headers: {
-              accept: "text/html,application/xhtml+xml",
-              "accept-language": "en",
-              "user-agent": "Mozilla/5.0",
+              // REA-666 — pin the browser-shaped identity on this hop. The
+              // thin combo (bare accept + `Mozilla/5.0`) answers fine from
+              // the coder edge but the deployed egress gets HTTP 403s on it
+              // (observed on the served head: every sampled query carried
+              // hits:0,error:"HTTP 403" while every other lane answered).
+              // The scripted-browser set is the verified-passing shape for
+              // these edges (REEA-539 precedent: the CF/challenge hops ride
+              // it), and the store serves the same Arabic SSR archive under
+              // it (live-measured HTTP 200, ~550 KB, ~1 s, cards intact).
+              ...CHALLENGE_HEADERS,
             },
           },
           window,
