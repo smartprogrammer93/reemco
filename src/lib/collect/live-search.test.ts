@@ -2060,12 +2060,14 @@ describe("completion-budget finalize (REEA-398)", () => {
     expect(lateMerchants.has("Sultan Center")).toBe(true);
     expect(late!.products[0].offers.map((o) => o.price)).toEqual([379, 385, 390, 399]);
 
-    // The converged write-through leaves the COMPLETE live answer in the
-    // cache, so the next identical query inside the memo window gets the
-    // full coverage immediately.
+    // REEA-674 fix 4 — the memo stores WHAT THE COMPLETED DOCUMENT SERVED:
+    // the finalized-stage snapshot, so a repeated identical GET inside the
+    // memo window renders byte-identically to the first one. The late
+    // coverage above still lands on the open page through this run's own
+    // follow-up feed (asserted just above), not through the memo.
     const memo = cache.read<{ products: { offers: unknown[] }[] }>("samsung");
     expect(memo).not.toBeNull();
-    expect(memo!.value.products[0].offers).toHaveLength(4);
+    expect(memo!.value.products[0].offers).toHaveLength(2);
   });
 });
 

@@ -3343,21 +3343,21 @@ export function collectLiveResultsStaged(
   const final: Promise<LiveSearchResult> = stages[stages.length - 1] ?? Promise.resolve(stagedSnapshot(q, country, settled, locale, seenRows));
 
   // Write-through carries the LIVE answer only (products with their scrapedAt
-  // stamps included). REEA-466 (QA REEA-467 findings 2/3): the warm repeat
-  // must render the COMPLETE answer, so the converged chain ALWAYS writes —
-  // every hop plus the bounded widen round have answered by then, which makes
-  // even its empty result an honest final state rather than a blip, and the
-  // no-result page is cached like any other answer. The finalized snapshot
-  // still writes as soon as it lands so an immediate repeat never re-pays the
-  // fan-out — it defers only when it is a PROVISIONAL empty: hops may still
-  // answer, and that run's converged snapshot overwrites it moments later
-  // anyway (the hop tail now rides the completion clock). No snapshots are
-  // bundled: both writes are this run's own live fetches.
+  // stamps included). REA-674 fix 4 — the memo stores WHAT THE COMPLETED
+  // DOCUMENT SERVED: the FINAL-stage snapshot of this run — converged when the
+  // chain finished inside the completion window, otherwise the settled-only
+  // finalize with its honest coverage notes. The late-converged superset keeps
+  // riding the follow-up feed and this round's last-seen writes, but it no
+  // longer overwrites the memo: a repeated identical GET renders the same
+  // completed-stage snapshot as the first — same card counts, same labels,
+  // byte-identical repeats (REEA-674 AC4; the REEA-675 verdict's cold-vs-warm
+  // fix list, item 4). The REEA-466 guard stands for a PROVISIONAL empty —
+  // settled:false without products defers its write to a later run's FINAL
+  // instead of memoizing a blip. Nothing is bundled: writes are live fetches.
   const writeLiveAnswer = (snap: LiveSearchResult): void => {
     if (snap.products.length > 0 || snap.settled !== false) cache.write(cacheKey, snap);
   };
-  void final.then(writeLiveAnswer);
-  void converged.then(writeLiveAnswer, () => {});
+  void final.then(writeLiveAnswer, () => {});
   registerFollowUp(cacheKey, converged);
   // Resolves once every hop of this run has landed (the late ones too) — the
   // results page schedules it with Next's `after()` so hop round-trips stay
