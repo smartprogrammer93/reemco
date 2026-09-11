@@ -50,6 +50,7 @@ import { canonicalFields, compatibleFields, listingLabel, type CanonicalFields }
 import {
   arabicBrandIntent,
   brandIsNamed,
+  classifyAlternativeMatch,
   isAccessoryTitle,
   isModelExtended,
   latinQueryForms,
@@ -2138,7 +2139,7 @@ export function groupHits(
   locale?: "en" | "ar",
 ): NormalizedProduct[] {
   const groups = buildGroups(query, hits);
-  return finalizeGroups(rankByRelevance(query, groups), includeAlternatives, locale);
+  return finalizeGroups(rankByRelevance(query, groups), includeAlternatives, query, locale);
 }
 
 /**
@@ -2431,7 +2432,7 @@ function colorSwatches(group: HitGroup, offers: PriceOffer[]): ProductVariation[
     }));
 }
 
-function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, locale?: "en" | "ar"): NormalizedProduct[] {
+function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, query: string, locale?: "en" | "ar"): NormalizedProduct[] {
   const scrapedAt = new Date().toISOString(); // real collection completion time
 
   // REEA-254 payload trim, REEA-488 shape — cheaper same-family alternatives.
@@ -2465,7 +2466,10 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, loca
   // token (category words like "washing machine" bridge unbranded lines).
   // Order is cheapest-first; a group with nothing cheaper in-family gets an
   // empty list and the card hides the section entirely — never an empty
-  // shell. Family-token work happens once per group, not per pair.
+  // shell. Family-token work happens once per group, not per pair. Filler
+  // words are no bridge: "for" alone must not tie a clothes rack to a
+  // headphones card — only a shared content token counts.
+  const STOP_TOKENS = new Set(["for", "with", "and", "the", "to", "of", "an", "on", "في", "ون", "به"]);
   const titleTokens = new Map<HitGroup, Set<string>>();
   const tokensOf = (g: HitGroup): Set<string> => {
     let t = titleTokens.get(g);
@@ -2474,7 +2478,7 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, loca
         canonicalGroupTitle(g, locale)
           .toLowerCase()
           .split(/[\s/\-,]+/)
-          .filter((w) => w.length >= 2),
+          .filter((w) => w.length >= 2 && !STOP_TOKENS.has(w)),
       );
       titleTokens.set(g, t);
     }
@@ -2504,9 +2508,19 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, loca
   // the family gate — they are dropped from BOTH rows, not demoted into one.
   const alternativesFor = (group: HitGroup): ProductAlternative[] => {
     const mine = metaOf(group).fromPrice;
+    const matchedTitle = canonicalGroupTitle(group, locale);
     return selected
       .filter((other) => other !== group && other.accessory === group.accessory)
-      .filter((other) => metaOf(other).fromPrice < mine && inSameFamily(group, other))
+      .filter((other) => {
+        if (metaOf(other).fromPrice >= mine) return false;
+        // R1/R3 gate first: a different product class (an Avent soother
+        // under an air-fryer query) or book/mix noise leaves the row even
+        // when the brands agree — the queried job defines the class. Only
+        // same-class candidates then face the family bridge.
+        const cls = classifyAlternativeMatch(query, matchedTitle, canonicalGroupTitle(other, locale));
+        if (cls !== "comparable") return false;
+        return inSameFamily(group, other);
+      })
       .sort((a, b) => metaOf(a).fromPrice - metaOf(b).fromPrice)
       .slice(0, 5)
       .map(metaOf);

@@ -2925,3 +2925,36 @@ describe("REEA-592 — category-aware Alternatives ranking (REEA-575 spec R1-R4)
     expect(caseCard.pairsWith).toEqual([]);
   });
 });
+
+describe("REEA-592 — QA handback classes on real queries (REEA-610 handback)", () => {
+  it("Philips air fryer: cookbooks and Avent soothers never lead Alternatives", () => {
+    const products = groupHits("philips airfryer", [
+      hit({ title: "Philips Airfryer Essential Line HD9200", merchant: "Xcite", price: 39.9, url: "https://xcite.example/af1" }),
+      hit({ title: "Philips Airfryer HD9257 Compact", merchant: "Xcite", price: 32.5, url: "https://xcite.example/af2" }),
+      hit({ title: "Philips Avent Natural Soother", merchant: "Jarir", price: 6.9, url: "https://jarir.example/av1" }),
+      hit({ title: "Paleo Cooking with Your Air Fryer: 75 Recipes", merchant: "Blink", price: 4.5, url: "https://blink.example/bk1" }),
+    ]);
+    const fryer = products.find((p) => p.title === "Philips Airfryer Essential Line HD9200")!;
+    // R1 — the air-fryer comparables lead; the soother (different named job,
+    // shared brand notwithstanding) and the recipe book stay out entirely.
+    expect(fryer.alternatives.map((a) => a.title)).toEqual(["Philips Airfryer HD9257 Compact"]);
+    expect(fryer.alternatives.every((a) => !/Soother|Recipes/.test(a.title))).toBe(true);
+    const soother = products.find((p) => p.title === "Philips Avent Natural Soother")!;
+    expect(soother.alternatives.every((a) => !/Airfryer Essential/.test(a.title))).toBe(true);
+  });
+
+  it("Sony headphones: hanger racks leave the rows; real comparables lead", () => {
+    const products = groupHits("sony wh-1000xm6", [
+      hit({ title: "Sony WH-1000XM6 Wireless Headphones", merchant: "Xcite", price: 75, url: "https://xcite.example/hp1" }),
+      hit({ title: "Sony WH-CH720N Wireless Headphones", merchant: "Jarir", price: 45, url: "https://jarir.example/hp2" }),
+      hit({ title: "Clothes Hanger Rack Foldable", merchant: "Blink", price: 9.9, url: "https://blink.example/rk1" }),
+      hit({ title: "USB-C Adapter for Laptops", merchant: "Blink", price: 3.9, url: "https://blink.example/ad1" }),
+    ]);
+    const hp = products.find((p) => p.title === "Sony WH-1000XM6 Wireless Headphones")!;
+    // Only the cheaper same-family headphone answers the job; the rack and
+    // the laptop adapter share no content token with the card and get
+    // dropped from BOTH rows rather than padded into one.
+    expect(hp.alternatives.map((a) => a.title)).toEqual(["Sony WH-CH720N Wireless Headphones"]);
+    expect(hp.pairsWith).toEqual([]);
+  });
+});

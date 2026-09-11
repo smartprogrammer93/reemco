@@ -20,6 +20,7 @@ import {
   resolveBrand,
   titleHasDeviceIntent,
   titleMatchesBrand,
+  classifyAlternativeMatch,
 } from "@/lib/relevance";
 
 describe("brand resolution (Rule 1)", () => {
@@ -272,5 +273,39 @@ describe("brand-field conflict rule (REEA-487)", () => {
     expect(resolveBrand("Zowie", "S25 XL2566K Gaming Monitor")).toBe("Zowie");
     // Curated field, curated title brand, no conflict: casing only changes.
     expect(resolveBrand("SONY", "Sony WH-CH720N Wireless Headphones")).toBe("Sony");
+  });
+});
+
+describe("REEA-592 — classifyAlternativeMatch + accessory markers (REEA-575 R1-R3)", () => {
+  it("same job under a named-category query stays comparable", () => {
+    expect(
+      classifyAlternativeMatch("philips airfryer", "Philips Airfryer Essential Line HD9200", "Philips Airfryer HD9257 Compact"),
+    ).toBe("comparable");
+  });
+
+  it("cookbook and mix formats are noise even when they name the job", () => {
+    expect(
+      classifyAlternativeMatch("philips airfryer", "Philips Airfryer Essential Line HD9200", "Paleo Cooking with Your Air Fryer: 75 Recipes"),
+    ).toBe("noise");
+    expect(classifyAlternativeMatch("coffee", "Nescafe Original Coffee 200g", "Arb Coffee Mixes Sampler")).toBe("noise");
+  });
+
+  it("a different named class is off-job even on shared brand", () => {
+    expect(classifyAlternativeMatch("philips airfryer", "Philips Airfryer Essential Line HD9200", "Philips Avent Natural Soother")).toBe("offjob");
+  });
+
+  it("Arabic job nouns carry the same gate", () => {
+    expect(classifyAlternativeMatch("قلاية هوائية", "قلاية هوائية فيليبس", "قلاية هوائية مزدوجة السلة")).toBe("comparable");
+    expect(classifyAlternativeMatch("قلاية هوائية", "قلاية هوائية فيليبس", "لهاية فيليبس أفنت")).toBe("offjob");
+  });
+
+  it("brand-only queries keep the loose bridge; the racks get classified by markers", () => {
+    expect(classifyAlternativeMatch("sony wh-1000xm6", "Sony WH-1000XM6 Wireless Headphones", "Sony WH-CH720N Wireless Headphones")).toBe("comparable");
+    expect(classifyAlternativeMatch("samsung", "Samsung Monitor Odyssey", "Samsung Galaxy S26 Ultra")).toBe("comparable");
+    // Racks/adapters/holders are the accessory class — the capped second row,
+    // never the Alternatives lead.
+    expect(isAccessoryTitle("Clothes Hanger Rack Foldable")).toBe(true);
+    expect(isAccessoryTitle("Sony USB-C Adapter")).toBe(true);
+    expect(isAccessoryTitle("Philips Airfryer Essential Line HD9200")).toBe(false);
   });
 });

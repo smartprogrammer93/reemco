@@ -47,7 +47,9 @@ const BRAND_STOP_VALUES: readonly string[] = [
    normalized lowercase title. */
 const ACCESSORY_MARKERS: readonly string[] = [
   "case", "cover", "protector", "tempered glass", "film", "skin",
-  "كفر", "جراب", "واقي", "غطاء",
+  "adapter", "adaptor", "charger", "dock", "holder", "hanger", "rack",
+  "eartips", "ear tips", "sleeve",
+  "كفر", "جراب", "واقي", "غطاء", "شاحن", "كابل", "وصلة", "حامل",
 ];
 
 /** Model-number shape (spec Rule 2): letters immediately followed by digits
@@ -313,6 +315,55 @@ export function resolveBrand(brandField: string | undefined, title: string): str
 export function isAccessoryTitle(title: string): boolean {
   const lower = normalizedTitle(title).toLowerCase();
   return ACCESSORY_MARKERS.some((m) => lower.includes(m));
+}
+
+/* ---- REEA-592 (REEA-575 spec R1/R3): category gate for the Alternatives
+ * row. Nouns are grouped by JOB: titles inside one group replace each other
+ * (phones for phones), a title whose only link to the card is brand equality
+ * or one shared filler word is off-job noise. Query-side nouns tighten the
+ * gate — an Avent soother must not ride a Philips AIRFRYER query on brand
+ * equality alone. ---- */
+const NOISE_NOUN_RE = /\bcook ?books?\b|\brecipes?\b|\bcookery\b|\bmix(?:es)?\b|\bbook\b/;
+
+const CATEGORY_NOUN_GROUPS: readonly { en: RegExp; ar: readonly string[] }[] = [
+  { en: /\biphone\b|\bipad\b|\bsmartphones?\b|\bphones?\b|\btablets?\b/, ar: ["آيفون", "ايفون", "ايباد", "هاتف", "تابلت"] },
+  { en: /\bheadphones?\b|\bearphones?\b|\bear ?buds?\b|\bheadsets?\b/, ar: ["سماع"] },
+  { en: /\bair ?fryers?\b/, ar: ["قلاية"] },
+  { en: /\bcoffee\b/, ar: ["قهوة"] },
+  { en: /\bsoothers?\b|\bpacifiers?\b|\bbottles?\b|\bcups?\b|\bmugs?\b/, ar: ["لهاية", "رضاعة", "زجاجة", "كوب"] },
+  { en: /\bhangers?\b|\bracks?\b|\bstands?\b|\bholders?\b|\borganizers?\b/, ar: ["حامل", "خزانة", "رف"] },
+];
+
+function nounGroupsOf(text: string): Set<number> {
+  const found = new Set<number>();
+  CATEGORY_NOUN_GROUPS.forEach((group, idx) => {
+    if (group.en.test(text) || group.ar.some((word) => text.includes(word))) found.add(idx);
+  });
+  return found;
+}
+
+/** Verdict for one candidate title against the matched card, under the
+ *  queried job (spec R1/R3):
+ *  "noise" — book/mix-format listing; dropped from BOTH rows;
+ *  "offjob" — names a different product class than the queried job; the
+ *             mismatch beats brand equality and shared filler tokens;
+ *  "comparable" — same job, or no conflicting category noun is named. */
+export type AlternativeMatch = "comparable" | "noise" | "offjob";
+
+export function classifyAlternativeMatch(query: string, matchedTitle: string, candidateTitle: string): AlternativeMatch {
+  const matched = normalizedTitle(matchedTitle).toLowerCase();
+  const candidate = normalizedTitle(candidateTitle).toLowerCase();
+  if (NOISE_NOUN_RE.test(candidate)) return "noise";
+  const qGroups = nounGroupsOf(normalizedTitle(query).toLowerCase());
+  if (qGroups.size === 0) return "comparable";
+  const candidateGroups = nounGroupsOf(candidate);
+  if (candidateGroups.size === 0) return "comparable";
+  const allowed = new Set<number>(qGroups);
+  for (const idx of nounGroupsOf(matched)) allowed.add(idx);
+  for (const idx of candidateGroups) {
+    if (allowed.has(idx)) return "comparable";
+  }
+  return "offjob";
 }
 
 /** Rule 2 gate: device intent when ANY matched title carries a curated brand
