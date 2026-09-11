@@ -64,6 +64,18 @@ export const CACHE_TTL_MS = 10 * 60 * 1000; // labeled-repeat freshness window
  * chips; 10 s hard ceiling stops waiting entirely.
  */
 export const PER_RETAILER_TIMEOUT_MS = 4 * 1000; // per-adapter, independent
+/**
+ * REEA-264 — Sultan Center lane ceiling, the documented per-lane exception
+ * to the shared 4 s budget. Tail attribution on the deployed edge (REEA-257):
+ * SC content lands avg ~3.5-3.6 s — inside the shared budget, so nothing cut
+ * it — yet as last arranger it kept gating the full-set render (p90 stuck at
+ * ~4.9 s against the 4 s bar). The lane rides its own ~2 s effective cap:
+ * whatever the storefront answers by then flushes with the progressive
+ * stages; a cut hop keeps settling behind the finalized response into the
+ * converged tail / follow-up feed (REEA-398), never a bundled snapshot.
+ * Every other adapter keeps PER_RETAILER_TIMEOUT_MS unchanged.
+ */
+export const SC_LANE_TIMEOUT_MS = 2 * 1000; // Sultan Center lane only
 export const SOFT_CEILING_MS = 6 * 1000; // render arrived offers, keep chips
 export const OVERALL_BUDGET_MS = 10 * 1000; // hard ceiling
 

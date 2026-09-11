@@ -11,7 +11,7 @@
  * injectable for deterministic tests.
  */
 import type { LiveOffer, RetailerSubtask } from "@/lib/collect/types";
-import { PER_RETAILER_TIMEOUT_MS } from "@/lib/collect/types";
+import { PER_RETAILER_TIMEOUT_MS, SC_LANE_TIMEOUT_MS } from "@/lib/collect/types";
 import { searchRetailerFallback } from "@/lib/collect/search-fallback";
 import { readBodyCapped } from "@/lib/collect/read-body";
 
@@ -21,6 +21,18 @@ export function domainOf(url: string): string {
   } catch {
     return "unknown";
   }
+}
+
+/**
+ * REEA-264 — effective per-lane ceiling for the direct fetch. Sultan Center
+ * is the measured straggler of the fan-out (avg ~3.5-3.6 s arrival on the
+ * deployed edge, REEA-257): it fit under the shared 4 s budget yet its tail
+ * kept gating the full-set render, so the lane rides its own ~2 s cap. Same
+ * host test the fallback dispatcher uses; every other lane keeps the shared
+ * PER_RETAILER_TIMEOUT_MS. An explicitly injected opts.timeoutMs still wins.
+ */
+export function laneCeilingFor(domain: string): number {
+  return domain.endsWith("sultan-center.com") ? SC_LANE_TIMEOUT_MS : PER_RETAILER_TIMEOUT_MS;
 }
 
 /** Injectable fetch for tests — string URLs only (we never pass a Request). */
@@ -104,9 +116,11 @@ export async function scrapeOffer(
   offer: { merchant: string; url: string; currency: string; wasPrice?: number; titleQuery?: string },
   opts: { timeoutMs?: number; fetchImpl?: FetchImpl; now?: number } = {},
 ): Promise<ScrapeOutcome> {
-  const timeoutMs = opts.timeoutMs ?? PER_RETAILER_TIMEOUT_MS;
   const fetchImpl: FetchImpl = opts.fetchImpl ?? ((url, init) => fetch(url, init));
   const domain = domainOf(offer.url);
+  // REEA-264 — lane-aware default: the SC lane answers inside ~2 s or gets
+  // cut toward the retry chip; every other lane keeps the shared budget.
+  const timeoutMs = opts.timeoutMs ?? laneCeilingFor(domain);
   const direct = await tryDirectFetch(offer, { timeoutMs, fetchImpl, now: opts.now, domain });
   if (direct) return direct;
   // Fallback: re-discover the product via the retailer's own search API —

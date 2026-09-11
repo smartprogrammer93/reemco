@@ -77,6 +77,13 @@ export interface NormalizedProduct {
   variations: ProductVariation[];
   alternatives: ProductAlternative[];
   /**
+   * REEA-592 (REEA-575 spec R2) — the capped secondary "Pairs with" row:
+   * complementary accessory items of this card's product, cheapest-first,
+   * max 3 entries. Optional: an empty or absent list renders NOTHING (R4),
+   * so feed seeds and older snapshot records stay valid without it.
+   */
+  pairsWith?: ProductAlternative[];
+  /**
    * ISO 8601 timestamp of the scrape that produced this record (REEA-65 §4.1).
    * Mapped 1:1 from the feed's existing `scraped_at` metadata — no new data is
    * collected. Missing/undefined renders "Verification date unknown".

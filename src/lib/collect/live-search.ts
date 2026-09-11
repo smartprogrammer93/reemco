@@ -44,6 +44,7 @@ import { fillSilentFromLastSeen, readSeenObservations, rememberRound } from "@/l
 import { readCappedResponse } from "@/lib/collect/read-body";
 import { attachSeenRanges, type SeenRow } from "@/lib/seen-range";
 import { sanitizeExternalUrl } from "@/lib/safe-url";
+import { SC_LANE_TIMEOUT_MS } from "@/lib/collect/types";
 import { toKwdNumeric } from "@/lib/format";
 import { canonicalFields, compatibleFields, listingLabel, type CanonicalFields } from "@/lib/collect/canonical-product";
 import {
@@ -1405,7 +1406,12 @@ export const COLLECTORS: RetailerCollector[] = [
       // when empty, one bounded per-word re-search inside the SAME window
       // (max 3 words, dedup by sku) and merge. The shared coverage gate in
       // sultanCenterHits still keeps only titles answering the full query.
-      const window = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
+      // REEA-264 — the lane rides its own ~2 s effective cap instead of the
+      // doubled shared window: the measured ~3.5-3.6 s average arrival fit
+      // under the shared budget yet gated the full-set render (REEA-257).
+      // A hop cut at ~2 s still retries once behind the finalized response,
+      // so late rows ride the converged tail into the follow-up feed.
+      const window = AbortSignal.timeout(SC_LANE_TIMEOUT_MS);
       const sultanSearch = async (q: string): Promise<unknown> => {
       const res = await fetchChecked(
         fetchImpl,
@@ -1436,9 +1442,10 @@ export const COLLECTORS: RetailerCollector[] = [
             isDesktop: "Desktop",
           }),
         },
-        // The storefront answers slower than the Algolia-style endpoints
-        // (observed ~4s under parallel load) — same doubled window as the
-        // other two-step collectors above, shared by the word re-search.
+        // REEA-264 — the lane's own ~2 s cap (not the doubled window the
+        // other two-step collectors ride); phrase round + word re-search
+        // share it, and the aborted-window guard above skips a re-search
+        // that could not answer inside the remainder anyway.
         window,
       );
       return await res.json();
@@ -2466,11 +2473,33 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, loca
     for (const w of tokensOf(b)) if (ta.has(w)) return true;
     return false;
   };
+  // REEA-592 (REEA-575 spec R1-R3) — category-aware split of the module.
+  // R1: the Alternatives row keeps ONLY same-category comparables — groups
+  // of the SAME product class as this card. The queried job defines the
+  // class, so the comparables test is class equality: an accessory-only
+  // query ("جراب آيفون") compares accessories in the top row exactly like
+  // phones compare phones. Still cheapest-first in KWD-space, cap 3 -> 5.
+  // R2: protective/complementary hits (case / cover / protector / film — the
+  // isAccessoryTitle class REEA-192 already gates merging with) move to the
+  // capped secondary `Pairs with` list instead of leading the comparison: a
+  // KD 14.90 silicone case must not out-rank real phone comparisons under a
+  // KD 419 handset. An accessory-only card already shows accessories up top,
+  // so its secondary row stays empty and renders nothing (R4).
+  // R3: items that neither do the job nor complement the device never pass
+  // the family gate — they are dropped from BOTH rows, not demoted into one.
   const alternativesFor = (group: HitGroup): ProductAlternative[] => {
     const mine = metaOf(group).fromPrice;
     return selected
-      .filter((other) => other !== group)
+      .filter((other) => other !== group && other.accessory === group.accessory)
       .filter((other) => metaOf(other).fromPrice < mine && inSameFamily(group, other))
+      .sort((a, b) => metaOf(a).fromPrice - metaOf(b).fromPrice)
+      .slice(0, 5)
+      .map(metaOf);
+  };
+  const pairsWithFor = (group: HitGroup): ProductAlternative[] => {
+    if (group.accessory) return [];
+    return selected
+      .filter((other) => other.accessory && inSameFamily(group, other))
       .sort((a, b) => metaOf(a).fromPrice - metaOf(b).fromPrice)
       .slice(0, 3)
       .map(metaOf);
@@ -2555,6 +2584,7 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, loca
       coupons: [...couponSeen.values()],
       variations: colorSwatches(group, offers),
       alternatives: includeAlternatives ? alternativesFor(group) : [],
+      pairsWith: includeAlternatives ? pairsWithFor(group) : [],
       scrapedAt,
     } satisfies NormalizedProduct;
   });

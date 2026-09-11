@@ -535,41 +535,52 @@ export default function ProductResultCard({
         </section>
       )}
 
-      {/* §3.4 alternatives: 48px rows, right-aligned tabular price, hairline
-          separators. REEA-488 item 1: the module rides BOTH variants now —
-          the results card is where the homepage promise is cashed, and the
-          server fills the list from cheaper same-family collected groups. An
-          empty list still renders NOTHING — never an empty shell. */}
-      {product.alternatives.length > 0 && (
-        <section aria-label={t.alternativesLabel} className="mt-4">
-          <h3 className="label-token mb-2" style={{ color: "var(--rc-body-text)" }}>
-            {t.alternativesLabel}
-          </h3>
-          <ul>
-            {/* REEA-75: wrap + min-h so long alt titles never push the
-                price past the card edge; price never shrinks. */}
-            {product.alternatives.map((a) => (
-              <li
-                key={a.productId}
-                className="flex min-h-12 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded px-1 py-1 hover:bg-[var(--rc-canvas)]"
-              >
-                <a
-                  href={buildResultsHref(a.title, 1, country, showOutOfStock)}
-                  className="min-w-0 hover:underline"
-                  style={{ font: "var(--rc-text-body)", fontWeight: 500, color: "var(--rc-ink)" }}
-                >
-                  {a.title}
-                </a>
-                <span
-                  className="tabular ml-auto shrink-0"
-                  style={{ font: "var(--rc-text-body)", fontWeight: 600, color: "var(--rc-ink)" }}
-                >
-                  <><bdi>{`${t.fromWord} ${formatPrimaryPrice(a.fromPrice, "KWD").label}`}</bdi></>
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
+      {/* §3.4 alternatives + REEA-592 pairs-with: 48px rows, right-aligned
+          tabular price, hairline separators. REEA-488 item 1: the module
+          rides BOTH variants now — the results card is where the homepage
+          promise is cashed, and the server fills the rows from cheaper live
+          groups. REEA-575 spec R1/R2: comparables ride the top row, capped
+          complements the secondary one — identical row craft, so BOTH rows
+          render from one loop. R4: an empty row renders NOTHING — never an
+          empty shell, never a dangling heading. */}
+      {(
+        [
+          [t.alternativesLabel, product.alternatives],
+          [t.pairsWithLabel, product.pairsWith ?? []],
+        ] as const
+      ).map(
+        ([label, rows]) =>
+          rows.length === 0 ? null : (
+                <section key={label} aria-label={label} className="mt-4">
+                  <h3 className="label-token mb-2" style={{ color: "var(--rc-body-text)" }}>
+                    {label}
+                  </h3>
+                  <ul>
+                    {/* REEA-75: wrap + min-h so long alt titles never push the
+                        price past the card edge; price never shrinks. */}
+                    {rows.map((a) => (
+                      <li
+                        key={a.productId}
+                        className="flex min-h-12 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded px-1 py-1 hover:bg-[var(--rc-canvas)]"
+                      >
+                        <a
+                          href={buildResultsHref(a.title, 1, country, showOutOfStock)}
+                          className="min-w-0 hover:underline"
+                          style={{ font: "var(--rc-text-body)", fontWeight: 500, color: "var(--rc-ink)" }}
+                        >
+                          {a.title}
+                        </a>
+                        <span
+                          className="tabular ml-auto shrink-0"
+                          style={{ font: "var(--rc-text-body)", fontWeight: 600, color: "var(--rc-ink)" }}
+                        >
+                          <><bdi>{`${t.fromWord} ${formatPrimaryPrice(a.fromPrice, "KWD").label}`}</bdi></>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ),
       )}
     </article>
   );

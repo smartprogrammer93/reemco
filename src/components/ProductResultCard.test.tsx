@@ -290,3 +290,54 @@ describe("REEA-540 Bet A — seen-recently confidence line", () => {
     expect(container.textContent).not.toContain("Seen recently");
   });
 });
+
+describe("REEA-592 — Alternatives / Pairs-with rows (REEA-575 spec R2/R4)", () => {
+  const base: NormalizedProduct = {
+    productId: "apple-iphone-17-pro",
+    title: "Apple iPhone 17 Pro",
+    brand: "Apple",
+    offers: [
+      { merchant: "Xcite", price: 419, currency: "KWD", url: "https://xcite.example/p", inStock: true },
+    ],
+    coupons: [],
+    variations: [],
+    alternatives: [
+      { productId: "apple-iphone-air", title: "Apple iPhone Air", fromPrice: 389 },
+    ],
+    pairsWith: [
+      { productId: "apple-silicone-case", title: "Apple Silicone Case", fromPrice: 14.9 },
+      { productId: "grabist-clear-case", title: "Grabist Clear Case", fromPrice: 75 },
+    ],
+    scrapedAt: "2026-09-10T00:00:00.000Z",
+  };
+
+  it("EN: comparables lead under Alternatives, capped complements under Pairs with", () => {
+    const { container } = render(<ProductResultCard product={base} query="iphone 17 pro" rank={0} />);
+    const selector = 'section[aria-label="Alternatives"], section[aria-label="Pairs with"]';
+    const sections = Array.from(container.querySelectorAll(selector));
+    expect(sections.map((s) => s.getAttribute("aria-label"))).toEqual(["Alternatives", "Pairs with"]);
+    // Comparable row leads; the KD 14.90 case sits in its own capped row.
+    const rows = sections.flatMap((s) => Array.from(s.querySelectorAll("a"))).map((a) => a.textContent);
+    expect(rows).toEqual(["Apple iPhone Air", "Apple Silicone Case", "Grabist Clear Case"]);
+  });
+
+  it("AR: both labels are localized Arabic — raw English never leaks", () => {
+    const { container } = render(
+      <ProductResultCard product={base} query="آيفون 17" rank={0} locale="ar" />,
+    );
+    const text = container.textContent ?? "";
+    expect(text).toContain("بدائل");
+    expect(text).toContain("إكسسوارات مقترحة");
+    expect(text).not.toContain("Pairs with");
+    expect(text).not.toContain("Alternatives");
+  });
+
+  it("R4: zero-row cards contribute zero nodes — no dangling headings", () => {
+    const empty: NormalizedProduct = { ...base, alternatives: [], pairsWith: [] };
+    const { container } = render(<ProductResultCard product={empty} query="orstom" rank={0} />);
+    const text = container.textContent ?? "";
+    expect(text).not.toContain("Alternatives");
+    expect(text).not.toContain("Pairs with");
+    expect(text).not.toContain("بدائل");
+  });
+});

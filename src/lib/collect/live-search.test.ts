@@ -2858,3 +2858,70 @@ describe("REEA-486 grouped offer cards — one card per product identity", () =>
     expect(xciteRow.label).toBe("Japanese Version");
   });
 });
+
+describe("REEA-592 — category-aware Alternatives ranking (REEA-575 spec R1-R4)", () => {
+  const PHONE = "Apple iPhone 17 Pro 256GB";
+
+  it("R1/R2: comparables lead, accessories pair below, off-job noise is dropped", () => {
+    const products = groupHits("iphone 17 pro", [
+      hit({ title: PHONE, merchant: "Xcite", price: 419, url: "https://xcite.example/p1" }),
+      hit({ title: "Apple iPhone Air 256GB", merchant: "Jarir", price: 389, url: "https://jarir.example/p2" }),
+      hit({ title: "Apple iPhone 16 Plus 128GB", merchant: "Jarir", price: 349, url: "https://jarir.example/p3" }),
+      hit({ title: "Apple Silicone Case for iPhone 17 Pro", merchant: "Jarir", price: 14.9, url: "https://jarir.example/c1" }),
+      hit({ title: "Grabist Clear Case for iPhone 17 Pro", merchant: "Blink", price: 75, url: "https://blink.example/c2" }),
+      hit({ title: "Nescafe Original Coffee 200g", merchant: "Sultan Center", price: 2.5, url: "https://sultan.example/n1" }),
+    ]);
+    const phone = products.find((p) => p.title === PHONE)!;
+    // R1 — phones for phones: cheaper same-family devices, cheapest-first.
+    expect(phone.alternatives.map((a) => a.title)).toEqual([
+      "Apple iPhone 16 Plus 128GB",
+      "Apple iPhone Air 256GB",
+    ]);
+    // R2 — the KD 14.90 case never out-ranks a real phone comparison; it
+    // rides the secondary capped row, cheapest-first.
+    expect(phone.pairsWith?.map((a) => a.title)).toEqual([
+      "Apple Silicone Case for iPhone 17 Pro",
+      "Grabist Clear Case for iPhone 17 Pro",
+    ]);
+    // R3 — the coffee is neither comparable nor complementary: absent from
+    // BOTH rows rather than demoted into one.
+    expect(phone.alternatives.some((a) => a.title.includes("Coffee"))).toBe(false);
+    expect(phone.pairsWith?.some((a) => a.title.includes("Coffee"))).toBe(false);
+  });
+
+  it("R1: an accessory-only query compares accessories in the top row", () => {
+    const products = groupHits("iphone case", [
+      hit({ title: "Apple Silicone Case for iPhone 17 Pro", merchant: "Jarir", price: 14.9, url: "https://jarir.example/c1" }),
+      hit({ title: "Apple Clear Case for iPhone Air", merchant: "Xcite", price: 12, url: "https://xcite.example/c2" }),
+      hit({ title: PHONE, merchant: "Xcite", price: 419, url: "https://xcite.example/p1" }),
+    ]);
+    const cardCase = products.find((p) => p.title === "Apple Silicone Case for iPhone 17 Pro")!;
+    // The queried job is a case, so cheaper cases are the comparables —
+    // the phone is NOT an alternative to the case it is paired with.
+    expect(cardCase.alternatives.map((a) => a.title)).toEqual(["Apple Clear Case for iPhone Air"]);
+    // Accessories up top already cover the complement role: the secondary
+    // row is empty, and R4 hides it entirely.
+    expect(cardCase.pairsWith).toEqual([]);
+  });
+
+  it("R1 cap 5 / R2 cap 3 hold; R4 empty rows stay empty arrays", () => {
+    const cheap: SearchHit[] = [8, 9, 10, 11, 12, 13].map((n) =>
+      hit({ title: `Apple iPhone ${n} 128GB`, merchant: "Jarir", price: 90 + n, url: `https://jarir.example/n${n}` }),
+    );
+    const products = groupHits("iphone 17 pro", [
+      hit({ title: PHONE, merchant: "Xcite", price: 419, url: "https://xcite.example/p1" }),
+      ...cheap,
+      hit({ title: "Apple Clear Case for iPhone Air", merchant: "Xcite", price: 12, url: "https://xcite.example/c2" }),
+    ]);
+    const phone = products.find((p) => p.title === PHONE)!;
+    // Six cheaper devices in-family; the row caps at five, cheapest-first.
+    expect(phone.alternatives).toHaveLength(5);
+    expect(phone.alternatives.map((a) => a.fromPrice)).toEqual([98, 99, 100, 101, 102]);
+    expect(phone.pairsWith).toHaveLength(1);
+    // R4 — a pair of accessories is a full secondary row for the case card:
+    // the phone card's pairs row caps at three while the third absent slot
+    // adds no nodes, checked on the card itself in ProductResultCard tests.
+    const caseCard = products.find((p) => p.title === "Apple Clear Case for iPhone Air")!;
+    expect(caseCard.pairsWith).toEqual([]);
+  });
+});
