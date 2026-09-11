@@ -45,7 +45,7 @@ import { readCappedResponse } from "@/lib/collect/read-body";
 import { attachSeenRanges, type SeenRow } from "@/lib/seen-range";
 import { sanitizeExternalUrl } from "@/lib/safe-url";
 import { SC_LANE_TIMEOUT_MS } from "@/lib/collect/types";
-import { toKwdNumeric } from "@/lib/format";
+import { formatPrice, toKwdNumeric } from "@/lib/format";
 import { canonicalFields, compatibleFields, listingLabel, type CanonicalFields } from "@/lib/collect/canonical-product";
 import {
   arabicBrandIntent,
@@ -2566,14 +2566,17 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, loca
     // REEA-488 item 2 — coupons that actually landed ride on the card too:
     // distinct discount(+code) pairs of this group's hits, in row order. An
     // adapter whose contract carries none still renders no coupon pill — the
-    // gap its note's coverage count states.
+    // gap its note's coverage count states. REEA-603: one signal per side —
+    // couponSignalOf also counts the listing's delivered running discount,
+    // exactly what paints the savings chip, so the embedded coupons list and
+    // the visible chips agree (explicit coupon text still wins the slot).
     const couponSeen = new Map<string, Coupon>();
     for (const o of group.offers) {
-      const d = o.coupon?.discount.trim();
-      if (!d) continue;
-      const key = `${o.coupon?.code ?? ""}|${d}`;
+      const signal = couponSignalOf(o);
+      if (!signal) continue;
+      const key = `${signal.code ?? ""}|${signal.discount}`;
       if (!couponSeen.has(key))
-        couponSeen.set(key, { code: o.coupon?.code ?? null, description: d, discount: d, expiresAt: null });
+        couponSeen.set(key, { code: signal.code ?? null, description: signal.discount, discount: signal.discount, expiresAt: null });
     }
     return {
       productId: slugify(title) || `live-${idx}`,
@@ -2740,8 +2743,29 @@ async function collectSettled(
   }
 }
 
+/**
+ * REEA-603 — THE delivered-discount signal both sides of the coupon slot read.
+ * The listing's own coupon text when the hop carries it; otherwise the
+ * retailer's running discount — compare-at above selling price, the very
+ * fields that paint the visible Save KD / وفّر KD chips (REA-488 wasPrice).
+ * A card renders a savings chip exactly when this returns a signal, so the
+ * embedded summary's coupon counts and the rendered chips agree by
+ * construction instead of sampling two different fields. Both sides stay
+ * traceable to the live hop — nothing bundled, nothing invented. The derived
+ * figure rides the shared KD formatter (formatPrice → formatKWD), so every
+ * rendered amount keeps the ≤2-decimal rule (REEA-574 R2) in EN and AR alike.
+ */
+export function couponSignalOf(hit: SearchHit): { discount: string; code?: string | null } | null {
+  const text = hit.coupon?.discount.trim();
+  if (text) return { discount: text, ...(hit.coupon?.code ? { code: hit.coupon.code } : {}) };
+  if (hit.wasPrice != null && hit.wasPrice > hit.price) {
+    return { discount: formatPrice(hit.wasPrice - hit.price, hit.currency) };
+  }
+  return null;
+}
+
 /** Shared filter+notes pass — adapter country tag wins before grouping. */
-function filterNotes(
+export function filterNotes(
   country: CountryCode | null,
   settledSoFar: SettledAdapter[],
 ): { hits: SearchHit[]; notes: LiveSearchResult["notes"] } {
@@ -2755,8 +2779,11 @@ function filterNotes(
     // REEA-488 item 2 — coupon coverage per merchant stage: offers that
     // carried coupon info vs the merchant's total kept hits. The counts ride
     // every note a stage emits (staged and converged alike), so a gap is
-    // measurable straight from the run's own diagnostics.
-    const couponed = kept.reduce((n, h) => n + (h.coupon?.discount.trim() ? 1 : 0), 0);
+    // measurable straight from the run's own diagnostics. REEA-603: the count
+    // is one signal with the chips — couponSignalOf, the same check that puts
+    // a visible Save KD / وفّر KD pill on the card — so a page showing chips
+    // never samples coupons:0 in this embedded summary.
+    const couponed = kept.reduce((n, h) => n + (couponSignalOf(h) ? 1 : 0), 0);
     notes.push({
       merchant: s.merchant,
       hits: kept.length,
