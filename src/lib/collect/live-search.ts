@@ -16,7 +16,6 @@
 import zlib from "node:zlib";
 import {
   APP_ID_ALLOW,
-  CHALLENGE_HEADERS,
   SEARCH_KEY_ALLOW,
   VERIFIED_BOT_HEADERS,
   extractJarirIndexKey,
@@ -2104,34 +2103,28 @@ export const COLLECTORS: RetailerCollector[] = [
     merchant: "Alghanim Electronics",
     country: "KW",
     collect: async (query, fetchImpl) => {
-      // REEA-557 — WooCommerce archive hop in the PC Kuwait shape (measured
-      // live from the coder edge 2026-09-10): `?s=…&post_type=product` answers
-      // scripted GETs directly — browser-shaped Accept combo, HTTP/~550 KB/
-      // ~0.6–1.2 s with Arabic SSR cards, prices and promo del/ins pairs — so
-      // no handshake is needed on this hop. Whole query first; when the
+      // REEA-557 — WooCommerce archive hop: `?s=…&post_type=product` answers
+      // scripted GETs with Arabic SSR cards, prices and promo del/ins pairs
+      // (~550 KB, ~0.6–1.2 s measured). Whole query first; when the
       // archive comes back empty, one bounded concurrent per-word round rides
       // the SAME doubled window (REEA-357/REEA-416 recipe — Arabic phrases are
       // the empty-answer cells on these Woo archives), merge bodies, and the
       // shared gate scores every merged row against the ORIGINAL query.
       const window = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
       const hop = async (q: string): Promise<string> => {
-        const res = await fetchChecked(
+        // REA-666 — shared identity hop: ride the SAME identity-alternating
+        // handshake the sibling CF-fronted lanes use (verified-crawler leads,
+        // scripted-browser follows, plain rides third, clearance jar replayed
+        // from the shared store — REEA-272/369/276 machinery). The pinned
+        // single set still landed HTTP 403 coverage notes on sampled served
+        // queries from the deployed egress while the rotating-handshake lanes
+        // answered; sharing the handshake gives this hop the same verified
+        // pass shape plus the mirrored clearance replay. Yousifi rides the
+        // identical handshake on the same Woo `post_type=product` shape.
+        const res = await fetchThroughChallenge(
           fetchImpl,
           `https://alghanim-store.com/?s=${encodeURIComponent(q)}&post_type=product`,
-          {
-            headers: {
-              // REA-666 — pin the browser-shaped identity on this hop. The
-              // thin combo (bare accept + `Mozilla/5.0`) answers fine from
-              // the coder edge but the deployed egress gets HTTP 403s on it
-              // (observed on the served head: every sampled query carried
-              // hits:0,error:"HTTP 403" while every other lane answered).
-              // The scripted-browser set is the verified-passing shape for
-              // these edges (REEA-539 precedent: the CF/challenge hops ride
-              // it), and the store serves the same Arabic SSR archive under
-              // it (live-measured HTTP 200, ~550 KB, ~1 s, cards intact).
-              ...CHALLENGE_HEADERS,
-            },
-          },
+          {},
           window,
         );
         return await res.text();
