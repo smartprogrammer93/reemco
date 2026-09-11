@@ -67,6 +67,10 @@ const en = {
   saveLead: "Save",
   effectiveLead: "Effective",
   effectiveTail: "with coupon",
+  // REEA-657 Bet 2 (§5.4 chip, accepted spec criterion b): the amber chip
+  // text LEADS with the word Coupon — an amount-only badge reads as a second
+  // price next to the real one. "Coupon KD 5" / كوبون KD 5.
+  couponLead: "Coupon",
   // REEA-540 Bet A — confidence-line pair on results cards:
   // "Seen recently: KD 4,099–KD 4,350 · last 14 days".
   seenRecentlyLead: "Seen recently:",
@@ -225,6 +229,7 @@ const ar: typeof en = {
   saveLead: "وفّر",
   effectiveLead: "السعر بعد الخصم",
   effectiveTail: "بالكوبون",
+  couponLead: "كوبون",
   // REEA-540 Bet A — AR counterpart of the results-card confidence pair.
   seenRecentlyLead: "شوهد مؤخرًا:",
   seenRecentlyWindow: "آخر 14 يومًا",

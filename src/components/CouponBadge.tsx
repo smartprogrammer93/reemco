@@ -36,8 +36,8 @@ export default function CouponBadge({
   }
 
   return (
-    <span className="coupon-badge inline-flex items-center gap-2">
-      <span>{coupon.discount}</span>
+    <span className="coupon-badge inline-flex items-center gap-2 whitespace-nowrap">
+      <span>{`${t.couponLead} ${coupon.discount}`}</span>
       {coupon.code && (
         <>
           <code

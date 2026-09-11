@@ -102,6 +102,7 @@ function PriceBlock({
   offer,
   isBest,
   coupon,
+  extraCoupons = 0,
   oos = false,
   country,
   locale,
@@ -109,6 +110,9 @@ function PriceBlock({
   offer: PriceOffer;
   isBest: boolean;
   coupon?: Coupon;
+  /** REEA-657 Bet 2 — secondary coupons collapse to a (+n) count beside
+   *  the single chip (accepted spec tradeoff on REEA-605). */
+  extraCoupons?: number;
   oos?: boolean;
   country: CountryCode | null;
   /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
@@ -153,10 +157,31 @@ function PriceBlock({
             <bdi>{formatCountryPrice(offer.wasPrice, offer.currency, country).primary}</bdi>
           </span>
         )}
-        {saved && offer.wasPrice != null && (
+        {/* REEA-657 Bet 2 criterion (a): ONE discount signal on the price row —
+            when coupon evidence carries the chip, the computed savings figure
+            would print the SAME number twice beside the struck list price, so
+            the pill rides off and the chip keeps the crown; with only wasPrice
+            evidence the pill stays exactly as before (§5.3). Struck list price
+            is kept either way. */}
+        {saved && coupon == null && offer.wasPrice != null && (
           <span className="savings-pill"><bdi>{`${t.saveLead} ${formatCountryPrice(offer.wasPrice - offer.price, offer.currency, country).primary}`}</bdi></span>
         )}
         {isBest && <span className="best-flag">{t.bestPrice}</span>}
+        {/* REEA-657 Bet 2 criteria (b)/(d)/(e): the single amber chip rides the
+            SAME baseline row as the price it qualifies — text leads with the
+            word Coupon (كوبون in AR), nowrap inside its pill; secondary coupons
+            collapse to the (+n) count beside it; an empty coupon slot renders
+            nothing at all, no blank row. */}
+        {coupon && (
+          <>
+            <CouponBadge coupon={coupon} locale={locale} />
+            {extraCoupons > 0 && (
+              <span style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)" }}>
+                {`+${extraCoupons} ${t.couponMoreSuffix}`}
+              </span>
+            )}
+          </>
+        )}
       </div>
       {/* Effective-price line: computed value, always explained (§3.3) */}
       {eff != null && (
@@ -165,7 +190,7 @@ function PriceBlock({
           <span className="tabular" style={{ color: "var(--rc-savings)" }}>
             <bdi>{formatCountryPrice(eff, offer.currency, country).primary}</bdi>
           </span>{" "}
-          {t.effectiveTail} {coupon?.code ?? coupon?.discount}
+          {coupon?.code ? `${t.effectiveTail} ${coupon.code}` : t.effectiveTail}
         </p>
       )}
     </div>
@@ -273,6 +298,7 @@ export default function ProductResultCard({
             offer={best}
             isBest={isBest && !oos}
             coupon={primaryCoupon}
+            extraCoupons={extraCoupons}
             oos={oos}
             country={country}
             locale={locale}
@@ -280,24 +306,10 @@ export default function ProductResultCard({
         )}
       </div>
 
-      {/* Coupon pill (§5.4): amber, value only; extras count beside it */}
-      {primaryCoupon && (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <CouponBadge coupon={primaryCoupon} locale={locale} />
-          {extraCoupons > 0 && (
-            <span
-              title={product.coupons
-                .slice(1)
-                .map((c) => c.code)
-                .filter(Boolean)
-                .join(", ")}
-              style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)" }}
-            >
-              {`+${extraCoupons} ${t.couponMoreSuffix}`}
-            </span>
-          )}
-        </div>
-      )}
+      {/* REEA-657 Bet 2 — the single coupon chip rides the price cluster
+          inside PriceBlock (criteria a/e: <=1 chip per card, same baseline
+          row as the price it qualifies). The secondary (+n) count moved with
+          it; the empty-slot caption below (REA-468 G3) is unchanged. */}
 
       {/* REEA-468 G3 — the coupon slot stays explicit when it is empty: a
           card whose live offers answer but carry no promo says "No coupon
