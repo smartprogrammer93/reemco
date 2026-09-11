@@ -1768,28 +1768,27 @@ export const COLLECTORS: RetailerCollector[] = [
         });
         const first = await Promise.race([bareP.then((v) => v ?? ("blip" as const)), hedged]);
         clearTimeout(hedgeTimer);
-        let result: Record<string, unknown>[] | null;
-        if (first === "hedged") {
-          const replayP = replayAttempt().catch(() => null);
-          result = await Promise.race([bareP, replayP]);
-        } else if (first !== "blip") {
-          result = first;
-        } else {
-          result = await replayAttempt().catch(() => null);
-        }
-        if (result) return result;
-        // REEA-602 support — pinned Static-IPs tier AHEAD of the identity
-        // handshake rotation: both plain shapes only blipped, and on the
-        // deployed egress the rotation spends its ~1.4 s block-page attempts
-        // inside this doubled window without ever asking the API. The pinned
-        // per-connection hop reaches the same Store API answer the warm line
-        // gets, and the handshake stays the bounded fallback behind it.
-        if (!jsonWindow.aborted) {
-          const pinned = await pckStaticIpJson(fetchImpl, apiUrl(q), jsonWindow);
-          if (pinned) {
-            answered = true;
-            return pinned;
-          }
+        if (first !== "hedged" && first !== "blip") return first; // fast path: bare led alone
+        // REEA-602 recovery burst — the bare shape hedged (silent past the
+        // slice) or only blipped. Issue the pinned Static-IPs tier on the SAME
+        // tick as the warm KV replay, awaited by precedence: the plain shapes
+        // keep first call (hedged keeps the REEA-550 bare/replay race, a blip
+        // keeps the replay-alone await), the pinned tier rides behind them
+        // inside the SAME window, and the identity handshake stays the bounded
+        // fallback behind everything. The tier-after-blips placement spent the
+        // whole doubled window on the plain shapes before the pinned hop even
+        // started (graded 0/20 on 688004f); concurrent issue means whichever
+        // source can answer has paid roughly one round-trip of wait.
+        const replayP = replayAttempt().catch(() => null);
+        const pinnedP = jsonWindow.aborted
+          ? Promise.resolve(null as Record<string, unknown>[] | null)
+          : pckStaticIpJson(fetchImpl, apiUrl(q), jsonWindow).catch(() => null);
+        const result = first === "hedged"
+          ? ((await Promise.race([bareP, replayP])) ?? (await pinnedP))
+          : ((await replayP) ?? (await pinnedP));
+        if (result) {
+          answered = true;
+          return result;
         }
         try {
           // REEA-369: the identity-alternating handshake as the bounded
