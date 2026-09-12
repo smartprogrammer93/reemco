@@ -530,6 +530,41 @@ html[lang="ar"] .coupon-via {
   animation: rc-sheen 1.2s ease-in-out infinite;
 }
 
+/* REEA-778 — the first-flush reserve boxes ride lh tiers (staged unit
+   cc1b0a4; paired markup classes shipped on the merged head, these css
+   sides complete them). lh is measured against the element's own line box,
+   so an em fallback precedes every lh tier. !important keeps the tier the
+   single owner of the box on both sides of the boundary swap — ghost and
+   settled sentence read the SAME box, so nothing below moves when the real
+   line lands (overflow clip stops a longer wrap from growing the slot).
+   Heading slot: one lh step over the settled heading's line-height (1.05)
+   desktop; on narrow screens the heading wraps to two lines — lh 2.1.
+   Coverage line: desktop 2lh; mobile EN wraps deeper (7lh), the Arabic
+   sentence lands shorter (html[lang=ar] override 5lh). */
+.heading-slot {
+  height: calc(clamp(36px, 4.8vw, 55px) * 1.05) !important; /* lh 1.05 */
+}
+
+.coverage-line {
+  overflow: clip;
+  min-height: 2.8em;
+  min-height: 2lh !important;
+}
+
+@media (max-width: 640px) {
+  .heading-slot {
+    height: calc(clamp(36px, 4.8vw, 55px) * 2.1) !important; /* lh 2.1 */
+  }
+  .coverage-line {
+    min-height: 9.8em;
+    min-height: 7lh !important;
+  }
+  html[lang="ar"] .coverage-line {
+    min-height: 7.5em;
+    min-height: 5lh !important;
+  }
+}
+
 /* ============================================================================
  * The Arrival — the signature moment (Brief v4). On results load a slim amber
  * pulse bar sweeps left→right while retailer chips ignite one-by-one
