@@ -1,5 +1,6 @@
 import ResultsClient from "@/components/ResultsClient";
 import { collectLiveResultsStaged } from "@/lib/collect/live-search";
+import { recordSearchOutcome, searchOutcomeFromSnapshot } from "@/lib/metrics";
 import { MARKET_COOKIE, resolveCountrySelection } from "@/lib/country";
 import { LOCALE_COOKIE, resolveUiLocale } from "@/lib/i18n";
 import { isRefreshSignal, REFRESH_COOKIE } from "@/lib/query-cache";
@@ -145,6 +146,25 @@ export default async function ResultsPage({
   // live fan-out; no second round of requests.
   after(async () => {
     await staged.allSettled;
+    // REEA-807 — aggregate outcome counters, folded in the same after() tail
+    // that keeps the run's hops alive: one live fan-out page serve = one
+    // search; zero-offer and per-retailer offer counts read the CONVERGED
+    // answer (not the budget-finalized slice). Aggregate counters only —
+    // no query content, no identifiers; storage is best-effort and must
+    // never surface as a failed render.
+    if (query) {
+      const snap = await staged.converged.then(
+        (s) => s,
+        () => null,
+      );
+      // A rejected converged chain still counts the search itself — only the
+      // zero-offer flag and per-retailer counts need the snapshot.
+      await recordSearchOutcome(
+        snap
+          ? searchOutcomeFromSnapshot(snap)
+          : { zeroOffers: false, offersByRetailer: {} },
+      );
+    }
   });
 
   return (

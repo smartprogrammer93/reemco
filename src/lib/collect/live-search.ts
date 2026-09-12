@@ -3125,8 +3125,15 @@ export interface LiveSearchStages {
    * so the follow-up feed and the next identical query get the full set.
    * Callers schedule it with Next's `after()` to keep the hop round-trips
    * alive behind the finalized response.
+   * REEA-807 — the converged full-ranked chain itself (NOT capped to the
+   * completion budget the way `final` is): serve-time outcome counters read
+   * the converged answer off this promise in the page's after() tail so the
+   * weekly snapshot counts what the run actually delivered. Resolves before
+   * allSettled's tail cap in the normal case; may reject — readers catch.
    */
   allSettled: Promise<void>;
+  /** Converged full-ranked snapshot of this run (see allSettled note). */
+  converged: Promise<LiveSearchResult>;
 }
 
 type SettledAdapter = { merchant: string; hits: SearchHit[]; error?: string };
@@ -3635,7 +3642,7 @@ export function collectLiveResultsStaged(
     // REEA-743 — the memo hit bypasses the fresh ranking chain entirely:
     // re-head the stored snapshot with the exact-SKU guard at serve time.
     const served = Promise.resolve(skuLeadSnap(q, cached.value));
-    return { stages: [served], final: served, allSettled: Promise.resolve() };
+    return { stages: [served], final: served, allSettled: Promise.resolve(), converged: served };
   }
 
   // REEA-602 shared-layer warm — after a recycle the per-instance memo is
@@ -3808,9 +3815,9 @@ export function collectLiveResultsStaged(
   if (cached) {
     // Stale window only reaches here (fresh returns above): cache-first flush,
     // live stages behind it, converged full-ranked final.
-    return { stages: [Promise.resolve(skuLeadSnap(q, cached.value)), ...stages], final, allSettled };
+    return { stages: [Promise.resolve(skuLeadSnap(q, cached.value)), ...stages], final, allSettled, converged };
   }
-  return { stages, final, allSettled };
+  return { stages, final, allSettled, converged };
 }
 
 /**
