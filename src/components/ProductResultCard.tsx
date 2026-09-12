@@ -207,6 +207,7 @@ export default function ProductResultCard({
   showOutOfStock = false,
   renderStartMs,
   locale,
+  cascadeIndex,
 }: {
   product: NormalizedProduct;
   /** True when this offer carries the best effective price on the page (§3.3 Von Restorff). */
@@ -223,6 +224,12 @@ export default function ProductResultCard({
   renderStartMs?: number;
   /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
   locale?: Locale;
+  /**
+   * REEA-447 R4 — arrival cascade slot: the card rises in (rc-rise, opacity +
+   * translateY only — no layout shift) on the same stagger ladder the retailer
+   * chips use. Absent on surfaces without a staged arrival (the detail hero).
+   */
+  cascadeIndex?: number;
 }) {
   const detail = variant === "detail";
   const t = getStrings(locale ?? clientLocale());
@@ -252,7 +259,10 @@ export default function ProductResultCard({
   const extraCoupons = product.coupons.length - 1;
 
   return (
-    <article className={`result-card${oos ? " is-oos" : ""}`}>
+    <article
+      className={`result-card${oos ? " is-oos" : ""}${cascadeIndex != null ? " pulse-cascade" : ""}`}
+      style={cascadeIndex != null ? ({ "--cascade-index": cascadeIndex } as React.CSSProperties) : undefined}
+    >
       {/* REEA-65 §4.1: honest last-verified freshness, always visible on the
           feed-served results list (the detail view's freshness comes from the
           live job instead — realtime AC-1). */}

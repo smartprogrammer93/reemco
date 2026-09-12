@@ -280,8 +280,15 @@ a:focus-visible {
 }
 
 /* REEA-451 F8 — Arabic-session meta-stamp override: the converted-price stamp
-   reads as body text — body-size line (13px/1.5), plain case and tracking. */
-html[lang="ar"] .price-alt {
+   reads as body text — body-size line (13px/1.5), plain case and tracking.
+   REEA-447 R3: the same override now covers .meta-stamp too — uppercase +
+   .04em tracking on mono breaks Arabic glyph joining, so under lang=ar the
+   live-collection / coverage stamps ride the body font at 13px/1.5 with
+   normal spacing. The html-scoped selector outranks the base
+   `font: var(--rc-text-meta)` shorthand regardless of cascade order. */
+html[lang="ar"] .price-alt,
+html[lang="ar"] .meta-stamp {
+  font-family: var(--rc-font-body);
   font-size: 13px;
   line-height: 1.5;
   text-transform: none;

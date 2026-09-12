@@ -44,10 +44,14 @@ export function Wordmark({ size = 20 }: { size?: number }) {
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {
   // REEA-279: locale comes from the request itself — rc_locale cookie first,
-  // then the coarse Accept-Language hint, then "en" — so the served HTML
-  // carries the right lang/dir and chrome strings on first paint, with no
-  // client-side flip and no hydration mismatch. The request-time reads fall
-  // back silently on the static-export host (same guard as /results).
+  // then the coarse Accept-Language hint, then the Arabic-script query text
+  // forwarded through the request (REEA-447 R2: resolveRequestLocale reads
+  // Next's `next-url` / the proxy-forwarded query so /results?q=كيفيات ships
+  // lang="ar" dir="rtl" even with no cookie and no header), then "en". The
+  // served HTML carries the right lang/dir and chrome strings on first paint,
+  // with no client-side flip and no hydration mismatch. The request-time
+  // reads fall back silently on the static-export host (same guard as
+  // /results).
   const locale = await resolveRequestLocale();
   const dir = localeDir(locale);
   const t = getStrings(locale);

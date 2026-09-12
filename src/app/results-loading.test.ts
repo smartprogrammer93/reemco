@@ -1,11 +1,14 @@
 /**
- * REEA-437 / REEA-448 G2 — results loading boundary locale resolution.
+ * REEA-437 / REEA-448 G2 / REEA-447 R1+R2 — results loading boundary locale
+ * resolution + busy state.
  *
  * Next renders loading.tsx WITHOUT the page's `searchParams` prop, so the
  * boundary must resolve its flash locale from request-time reads alone and
  * never throw on the missing prop (the deployed 500 class this covers). The
- * query-text link of the chain rides the `next-url` header when present and
- * drops silently when it is not.
+ * query-text link of the chain rides the `next-url` header when present,
+ * then the proxy-forwarded `x-query-text` on the initial GET (REEA-447 R2),
+ * and drops silently when neither is there. The collecting rail carries the
+ * busy state in the served markup (REEA-447 R1).
  */
 import { renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,13 +18,19 @@ interface HeadersLike {
 }
 
 let nextUrlValue: string | null = null;
+let queryTextValue: string | null = null;
 let headersThrows = false;
 
 vi.mock("next/headers", () => ({
   headers: async (): Promise<HeadersLike> => {
     if (headersThrows) throw new Error("prerender/static host");
     return {
-      get: (key: string) => (key.toLowerCase() === "next-url" ? nextUrlValue : null),
+      get: (key: string) => {
+        const k = key.toLowerCase();
+        if (k === "next-url") return nextUrlValue;
+        if (k === "x-query-text") return queryTextValue;
+        return null;
+      },
     };
   },
   cookies: async () => ({ get: () => undefined }),
@@ -40,6 +49,7 @@ async function renderFlash(): Promise<string> {
 
 beforeEach(() => {
   nextUrlValue = null;
+  queryTextValue = null;
   headersThrows = false;
 });
 
@@ -56,9 +66,25 @@ describe("ResultsLoading flash locale (REA-437 / REEA-448 G2)", () => {
     expect(await stamp(html)).toBe("جارٍ التحقق من المتاجر…");
   });
 
+  it("takes the Arabic flash stamp from the proxy-forwarded query text on a cold GET", async () => {
+    // REEA-447 R2 — initial document GET: no next-url, just the query the
+    // proxy forwarded percent-encoded from the request URL.
+    queryTextValue = encodeURIComponent("كيفيات");
+    const html = await renderFlash();
+    expect(await stamp(html)).toBe("جارٍ التحقق من المتاجر…");
+  });
+
   it("falls back silently when request-time header reads are unavailable", async () => {
     headersThrows = true;
     const html = await renderFlash();
     expect(await stamp(html)).toBe("Checking live stores…");
+  });
+});
+
+describe("ResultsLoading busy state (REEA-447 R1)", () => {
+  it("ships aria-busy on the collecting pulse-bar rail", async () => {
+    const html = await renderFlash();
+    expect(html).toContain('class="pulse-bar"');
+    expect(html).toContain('aria-busy="true"');
   });
 });

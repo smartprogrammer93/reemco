@@ -8,7 +8,7 @@
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { act } from "react";
 import { coverageLine } from "@/lib/collect/coverage";
-import { renderToReadableStream } from "react-dom/server";
+import { renderToReadableStream, renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const searchParams = new URLSearchParams();
@@ -30,7 +30,7 @@ vi.mock("next/link", () => ({
   ),
 }));
 
-import ResultsClient from "@/components/ResultsClient";
+import ResultsClient, { LoadingFallback } from "@/components/ResultsClient";
 import HeaderSearch from "@/components/HeaderSearch";
 import { resetStockPrefs } from "@/lib/stock";
 import type { LiveSearchResult } from "@/lib/collect/live-search";
@@ -841,3 +841,27 @@ describe("cold-start zero handling (REEA-437)", () => {
     expect(document.body.textContent).toContain("We searched “lg gram mini”, “lg gram”.");
   });
 });
+
+describe("collecting busy state on the pulse-bar rail (REEA-447 R1)", () => {
+  it("ships aria-busy in the served markup while collecting", () => {
+    // Served (pre-hydration) markup: the rail exists precisely while the
+    // staged boundary is still collecting, and carries the busy state.
+    const html = renderToStaticMarkup(<LoadingFallback locale="en" />);
+    expect(html).toContain('class="pulse-bar"');
+    expect(html).toContain('aria-busy="true"');
+  });
+
+  it("drops aria-busy once the shell has settled", async () => {
+    // Hydrated pass: the settling flip removes the attribute (undefined
+    // omits it), so the busy signal never outlives the collection — and the
+    // settled view itself never re-mounts the rail. Async act drains the
+    // one-tick settle before the assertions run.
+    await act(async () => {
+      render(<LoadingFallback locale="en" />);
+    });
+    const bar = document.querySelector(".pulse-bar");
+    expect(bar).not.toBeNull();
+    expect(bar?.getAttribute("aria-busy")).toBeNull();
+  });
+});
+

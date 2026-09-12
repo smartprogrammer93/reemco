@@ -282,5 +282,35 @@ await step(7, "deployed results notes carry every registered adapter (REEA-238/2
   return `${merchants.length} merchant(s) dispatched — ${hitLines.slice(0, 160)}…`;
 });
 
+// REEA-447 R5: the bounded shared-cache window (src/proxy.ts
+// sharedWindowHeaders, declared for the served response via next.config
+// headers()) must actually REACH the served /results response — repeat-search
+// .test.ts pins the builder output and stays green while the renderer silently
+// overwrites the served pair, so assert on the wire here: repeated identical
+// GETs carry Cache-Control with the s-maxage window and a Vary that includes
+// Accept-Language (locale variants never share an entry), never the
+// `private, no-store` dynamic-page rewrite that made every unique search pay a
+// full origin render (x-vercel-cache MISS, age 0).
+await step(8, "served cache-window headers on repeated /results (REEA-447 R5)", async () => {
+  const url = `${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`;
+  const get = async () =>
+    fetch(url, { headers: { accept: "text/html", "cache-control": "max-age=0" }, redirect: "follow", signal: AbortSignal.timeout(15000) });
+  const first = await get();
+  const second = await get(); // the repeat the window exists for
+  if (!first.ok || !second.ok) throw new Error(`results GETs returned ${first.status}/${second.status}`);
+  const problems = [];
+  for (const [label, resp] of [["first", first], ["repeat", second]]) {
+    const cc = resp.headers.get("cache-control") ?? "";
+    const vary = resp.headers.get("vary") ?? "";
+    if (!/s-maxage=\d+/.test(cc)) problems.push(`${label}: Cache-Control "${cc || "(missing)"}" has no s-maxage window`);
+    if (/no-store/i.test(cc)) problems.push(`${label}: Cache-Control "${cc}" is a no-store rewrite (renderer overwrote the window)`);
+    if (!/\baccept-language\b/i.test(vary)) problems.push(`${label}: Vary "${vary || "(missing)"}" drops Accept-Language`);
+  }
+  if (problems.length) throw new Error(problems.join(" | "));
+  const age = Number(second.headers.get("age") ?? 0);
+  const cacheState = second.headers.get("x-vercel-cache") ?? "?";
+  return `window served (s-maxage + Accept-Language vary, no-store absent) — repeat x-vercel-cache=${cacheState} age=${age}s`;
+});
+
 console.log(results.join("\n"));
-console.log(`SMOKE PASSED — ${BASE} funnel (home → search → click-out → freshness → link-health → adapter parity) is healthy.`);
+console.log(`SMOKE PASSED — ${BASE} funnel (home → search → click-out → freshness → link-health → adapter parity → served cache window) is healthy.`);

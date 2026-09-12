@@ -5,7 +5,8 @@
  * (c) malformed / oversized / GET → 4xx
  */
 import { describe, expect, it, beforeEach } from "vitest";
-import { buildCsp } from "./proxy";
+import { NextRequest } from "next/server";
+import { buildCsp, proxy } from "./proxy";
 import {
   MAX_REPORT_BODY_BYTES,
   parseCspReport,
@@ -151,3 +152,36 @@ describe("REEA-74 /api/csp-report sink", () => {
     expect(JSON.stringify(view)).not.toContain("?q=shoes");
   });
 });
+
+describe("REEA-447 shared cache window + query forwarding on results addresses", () => {
+  it("sets the bounded window pair together on the served /results response", () => {
+    const res = proxy(new NextRequest("https://reemco.vercel.app/results?q=sony"));
+    const cc = res.headers.get("Cache-Control") ?? "";
+    expect(cc).toContain("s-maxage=");
+    expect(cc).not.toContain("no-store");
+    // Locale variants must never share a cache entry.
+    expect(res.headers.get("Vary")).toContain("Accept-Language");
+  });
+
+  it("forwards the query text percent-encoded for the shell locale chain", () => {
+    // NextResponse.next({request}) ships rewritten request headers to the
+    // render as x-middleware-request-* — that is the lane the layout reads
+    // `x-query-text` from on a cold GET (decoded in src/lib/i18n-server.ts).
+    const req = new NextRequest(
+      "https://reemco.vercel.app/results?q=" + encodeURIComponent("كيفيات"),
+    );
+    const res = proxy(req);
+    const forwarded = res.headers.get("x-middleware-request-x-query-text");
+    expect(forwarded).toBe(encodeURIComponent("كيفيات"));
+    expect(decodeURIComponent(forwarded ?? "")).toBe("كيفيات");
+    expect(res.headers.get("x-middleware-override-headers")).toContain("x-query-text");
+  });
+
+  it("keeps the hardening CSP on non-results paths without the window pair", () => {
+    const res = proxy(new NextRequest("https://reemco.vercel.app/about"));
+    expect(res.headers.get("Content-Security-Policy")).toContain("default-src 'self'");
+    // The window belongs to the results addresses only (RESULTS_PATHS).
+    expect(res.headers.get("Cache-Control") ?? "").toBe("");
+  });
+});
+

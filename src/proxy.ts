@@ -69,6 +69,16 @@ export function proxy(request: NextRequest) {
 
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);
+  // REEA-447 R2 — forward the segment query text to the render so the shell
+  // locale chain (cookie → Accept-Language hint → Arabic-script query) can
+  // run in the layout on the INITIAL document GET, where Next's own
+  // `next-url` header is absent. Percent-encoded so the header value stays
+  // ASCII-clean across the edge hop; src/lib/i18n-server.ts decodes it back
+  // and feeds resolveUiLocale — cookie/header preferences still win the chain.
+  const queryHint = request.nextUrl.searchParams.get("q");
+  if (queryHint) {
+    requestHeaders.set("x-query-text", encodeURIComponent(queryHint));
+  }
 
   const response = NextResponse.next({ request: { headers: requestHeaders } });
   response.headers.set(enforce ? "Content-Security-Policy" : "Content-Security-Policy-Report-Only", csp);

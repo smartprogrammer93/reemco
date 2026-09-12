@@ -134,9 +134,21 @@ function StampGhost() {
 
 export function LoadingFallback({ locale }: { locale?: Locale }) {
   const t = getStrings(locale ?? clientLocale());
+  // REEA-447 R1 — busy state on the collecting rail: aria-busy rides while
+  // the partial is still collecting and comes off once the shell has settled
+  // (same grammar as CollectionPulse's aria-busy={!settled} on the product
+  // panel). When the staged content lands, the boundary swap removes the
+  // container — and with it the attribute — so the busy signal never outlives
+  // the collection it describes.
+  const [isDone, setIsDone] = useState(false);
+  useEffect(() => {
+    // Deferred one tick so the settling flip never re-renders synchronously
+    // inside the mount commit (cascading-render guard).
+    queueMicrotask(() => setIsDone(true));
+  }, []);
   return (
     <div className="space-y-4">
-      <div className="pulse-bar" aria-hidden>
+      <div className="pulse-bar" aria-hidden aria-busy={isDone ? undefined : true}>
         <div className="pulse-bar-fill" style={{ width: "100%" }} />
       </div>
       <p className="meta-stamp" style={{ color: "var(--rc-muted)" }}>
@@ -263,6 +275,7 @@ function ResultsGrid({
             country={country}
             showOutOfStock={showOutOfStock} locale={locale}
             renderStartMs={renderStartMs}
+            cascadeIndex={i}
           />
         ))}
       </div>
@@ -286,6 +299,7 @@ function ResultsGrid({
               country={country}
               showOutOfStock={showOutOfStock} locale={locale}
               renderStartMs={renderStartMs}
+              cascadeIndex={i}
             />
           ))}
         </div>
@@ -306,6 +320,7 @@ function ResultsGrid({
                 country={country}
                 showOutOfStock={showOutOfStock} locale={locale}
                 renderStartMs={renderStartMs}
+                cascadeIndex={i}
               />
             ))}
           </div>
@@ -436,6 +451,7 @@ function FlushBlock(props: {
             country={country}
             showOutOfStock={showOutOfStock} locale={locale}
             renderStartMs={renderStartMs}
+            cascadeIndex={i}
           />
         ))}
       </div>

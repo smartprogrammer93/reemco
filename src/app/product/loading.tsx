@@ -34,7 +34,9 @@ export default async function ProductLoading() {
       className="mx-auto w-full space-y-4 px-6 py-6"
       style={{ maxWidth: "var(--rc-layout-max-w)" }}
     >
-      <div className="pulse-bar" aria-hidden>
+      {/* REEA-447 R1 — busy state mirrors the results flash: aria-busy rides
+          while collecting, removed with the container on the settled swap. */}
+      <div className="pulse-bar" aria-hidden aria-busy>
         <div className="pulse-bar-fill" style={{ width: "100%" }} />
       </div>
       <p className="meta-stamp" style={{ color: "var(--rc-muted)" }}>

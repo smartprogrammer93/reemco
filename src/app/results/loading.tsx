@@ -23,43 +23,28 @@ function SkeletonCard() {
 }
 
 import { getStrings } from "@/lib/i18n";
-import { sanitizeSearchQuery } from "@/lib/search-params";
 import { resolveRequestLocale } from "@/lib/i18n-server";
-import { headers } from "next/headers";
-
-/**
- * Query hint for the flash locale, read from request headers instead of a
- * props bag: loading.tsx renders WITHOUT the page's `searchParams` prop, so
- * the settled page's prop route reads as undefined here and the whole
- * boundary throws. `next-url` carries the full path+query on Next's own
- * navigation renders; when it is absent the query link simply drops out and
- * the chain keeps cookie → Accept-Language → "en" (same silent-fallback
- * guard as the home shell), never a crash.
- */
-async function readQueryHint(): Promise<string | undefined> {
-  try {
-    const nextUrl = (await headers()).get("next-url");
-    if (!nextUrl) return undefined;
-    const raw = new URL(nextUrl, "http://localhost").searchParams.get("q");
-    return sanitizeSearchQuery(raw) ?? undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 export default async function ResultsLoading() {
   // REEA-279 — the loading stamp is chrome: it comes from the table too.
-  // REEA-448 G2 — same chain as the settled page: with no cookie and no
-  // Accept-Language header the Arabic-script query decides the flash locale,
-  // so the loading chrome never flashes English under an Arabic title.
-  const locale = await resolveRequestLocale(await readQueryHint());
+  // REEA-448 G2 / REEA-447 R2 — same chain as the settled page and layout:
+  // resolveRequestLocale folds in the segment query text itself (Next's own
+  // `next-url` header on navigation renders, else the query forwarded by
+  // src/proxy.ts on the initial GET), so an Arabic-script query decides the
+  // flash locale and the loading chrome never flashes English under an
+  // Arabic title — and when request-time reads are unavailable the chain
+  // falls back silently, exactly like the shell.
+  const locale = await resolveRequestLocale();
   const t = getStrings(locale);
   return (
     <div
       className="mx-auto w-full space-y-4 px-6 py-6"
       style={{ maxWidth: "var(--rc-layout-max-w)" }}
     >
-      <div className="pulse-bar" aria-hidden>
+      {/* REEA-447 R1 — busy state mirrors LoadingFallback exactly (REEA-224
+          identical-markup rule): aria-busy rides the collecting rail and is
+          gone with the container when the settled content swaps in. */}
+      <div className="pulse-bar" aria-hidden aria-busy>
         <div className="pulse-bar-fill" style={{ width: "100%" }} />
       </div>
       <p className="meta-stamp" style={{ color: "var(--rc-muted)" }}>
