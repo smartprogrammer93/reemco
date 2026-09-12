@@ -3084,3 +3084,64 @@ describe("REEA-592 — QA handback classes on real queries (REEA-610 handback)",
     expect(hp.pairsWith).toEqual([]);
   });
 });
+
+describe("REEA-721 — family-led first card, merged twins, bounded head lists", () => {
+  it("a cheaper accessory answering the exact phrase does not lead the family card", () => {
+    // The served-shape check behind the >=9/10 bar: "Apple iPhone 17 Pro
+    // Silicone Case" is a tier-1 head match for `iPhone 17 Pro` (the phrase
+    // sits right behind the leading brand word), and its KD 2.90 figure used
+    // to win the inside-tier price tiebreak — the shopper's first card read
+    // as a case. The family row leads its tier; the case follows it.
+    const products = groupHits("iPhone 17 Pro", [
+      hit({ title: "Apple iPhone 17 Pro Silicone Case", merchant: "Blink", price: 2.9, url: "https://blink.example/case" }),
+      hit({ title: "Apple iPhone 17 Pro 256GB", merchant: "Xcite", price: 419.9, url: "https://xcite.example/17p" }),
+    ]);
+    expect(products.map((p) => p.title)).toEqual([
+      "Apple iPhone 17 Pro 256GB",
+      "Apple iPhone 17 Pro Silicone Case",
+    ]);
+  });
+
+  it("a query naming the accessory itself still leads with the accessory", () => {
+    // EF PS931CBEGWW (Samsung's clear-case SKU): the accessory carries the
+    // stated code at the head (tier 1); the phone row only answers through
+    // weaker tiers and must not jump the accessory it ships with.
+    const products = groupHits("EF PS931CBEGWW", [
+      hit({ title: "Samsung Galaxy S25 Smartphone 128GB Black", merchant: "Jarir", country: "SA", currency: "SAR", price: 399, url: "https://jarir.example/s25", brand: "Samsung" }),
+      hit({ title: "Samsung EF PS931CBEGWW Clear Hard Case for Galaxy S25", merchant: "Xcite", price: 3.9, url: "https://xcite.example/case" }),
+    ]);
+    expect(products.length).toBeGreaterThan(0);
+    expect(isAccessoryTitle(products[0].title)).toBe(true);
+    expect(products[0].title).toContain("PS931CBEGWW");
+  });
+
+  it("two groups sharing one normalized card title fold into one card, stamps kept", () => {
+    // Both capacity groups collected the short spelling, so BOTH cards
+    // display "Apple iPhone 17 Pro Max" — visually one product page
+    // duplicated. The twin folds into the lead slot with its full offer set;
+    // every row keeps the collected-at its hop stamped.
+    const products = groupHits("iPhone 17 Pro Max", [
+      hit({ title: "Apple iPhone 17 Pro Max 256GB Black", merchant: "Xcite", price: 499, url: "https://xcite.example/max-256", collectedAt: "2026-09-11T08:00:01.000Z" }),
+      hit({ title: "Apple iPhone 17 Pro Max", merchant: "Blink", price: 505, url: "https://blink.example/max-a", collectedAt: "2026-09-11T08:00:02.000Z" }),
+      hit({ title: "Apple iPhone 17 Pro Max 512GB Black", merchant: "Eureka", price: 460, url: "https://eureka.example/max-512", collectedAt: "2026-09-11T08:00:03.000Z" }),
+      hit({ title: "Apple iPhone 17 Pro Max", merchant: "Jarir", country: "SA", currency: "SAR", price: 480, url: "https://jarir.example/max-b", collectedAt: "2026-09-11T08:00:04.000Z" }),
+    ]);
+    expect(products).toHaveLength(1);
+    const card = products[0];
+    expect(card.title).toBe("Apple iPhone 17 Pro Max");
+    expect(card.offers).toHaveLength(4);
+    // Per-offer freshness survives the fold: each row carries its hop's clock.
+    expect(card.offers.every((o) => typeof o.collectedAt === "string")).toBe(true);
+    expect(card.offers.find((o) => o.merchant === "Xcite")?.collectedAt).toBe("2026-09-11T08:00:01.000Z");
+    expect(card.offers.find((o) => o.merchant === "Jarir")?.collectedAt).toBe("2026-09-11T08:00:04.000Z");
+  });
+
+  it("head queries serve a bounded shortlist of distinct cards", () => {
+    const hits = Array.from({ length: 14 }, (_, i) =>
+      hit({ title: `LG Monitor M${i + 1}Q`, merchant: "Xcite", price: 90 + i, url: `https://xcite.example/m${i + 1}` }),
+    );
+    const products = groupHits("lg monitor", hits);
+    expect(products.length).toBeLessThanOrEqual(10);
+    expect(products.length).toBeGreaterThan(0);
+  });
+});

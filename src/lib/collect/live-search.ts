@@ -57,6 +57,7 @@ import {
   latinBridgeDispatch,
   latinQueryForms,
   matchesQueryToken,
+  normalizedTitle,
   queryMatchTokens,
   relevanceTier,
   resolveBrand,
@@ -139,8 +140,11 @@ export const RESULTS_COMPLETION_BUDGET_MS = 2_800;
  * = 8000) still covers the tail — only the document closes earlier.
  */
 export const STAGE_TAIL_HEADROOM_MS = 5_200;
-/** Cap of distinct product groups served per query. */
-export const LIVE_SEARCH_MAX_PRODUCTS = 20;
+/** Cap of distinct product groups served per query. REEA-721: the head-query
+ *  bar is "~10 cards" — every head query's served set must stay a scannable
+ *  shortlist (the near-duplicate merge below keeps the tail honest), while
+ *  thin queries were never near this ceiling anyway. */
+export const LIVE_SEARCH_MAX_PRODUCTS = 10;
 /**
  * REEA-156 — per-source page size for the query-time fan-out. Tail
  * model-number queries ("lg gram", "dyson airwrap") are the thin lists: each
@@ -2281,6 +2285,16 @@ function rankByRelevance(query: string, groups: HitGroup[]): HitGroup[] {
     };
   });
   const insideTier = (a: Ranked, b: Ranked): number =>
+    // REEA-721 — family-match first inside every tier block: a queried family
+    // (phones under `iPhone 17 Pro`, tablets under `iPad Air`) leads its tier
+    // even when a cheaper accessory answers the SAME phrase at the head
+    // ("Apple iPhone 17 Pro Silicone Case" is a tier-1 head match — the price
+    // tiebreak alone used to let its KD 2 figure lead the whole page). An
+    // accessory-only answer set (the query names the accessory itself, e.g.
+    // the SKU `EF-PS931CBEGWW`) compares identically on both sides, so the
+    // accessory still leads there; and a family row that only answers through
+    // weaker tiers stays in its own higher bucket — buckets never blend.
+    Number(a.group.accessory) - Number(b.group.accessory) ||
     Number(a.extended) - Number(b.extended) ||
     Number(!a.named) - Number(!b.named) ||
     Number(!a.stocked) - Number(!b.stocked) ||
@@ -2513,7 +2527,56 @@ function colorSwatches(group: HitGroup, offers: PriceOffer[]): ProductVariation[
     }));
 }
 
+/**
+ * REEA-721 — near-duplicate card merge. Two groups can rank side by side
+ * while the shopper sees ONE title: each group's displayed title is its
+ * shortest member spelling (canonicalGroupTitle), so a 256 GB spelling and a
+ * 512 GB spelling whose shared short spelling was collected into both render
+ * as two identical cards — same visible title, two slots, one real product
+ * choice. The storage tuple keeps discriminating whenever the DISPLAYED
+ * titles differ; once normalized titles are equal the cards are visually one
+ * product page duplicated, so the twin folds into the lead card's slot: the
+ * exact same-merchant+price+url listing dedupe as buildGroups, a title union
+ * (the canonical pick stays deterministic for later reads), and the first
+ * non-empty brand field — every offer keeps its own collectedAt / snapshot
+ * marker, so the per-offer freshness stamps ride the merged card unchanged.
+ * The accessory class rides in the key: an accessory twin never folds into
+ * the device card (the REEA-192 class gate, same rule as the merge pass).
+ */
+function mergeSameTitleGroups(groups: HitGroup[]): HitGroup[] {
+  const byTitle = new Map<string, HitGroup>();
+  const out: HitGroup[] = [];
+  for (const g of groups) {
+    const key = `${Number(g.accessory)}|${normalizedTitle(canonicalGroupTitle(g)).toLowerCase()}`;
+    const lead = byTitle.get(key);
+    if (!lead) {
+      byTitle.set(key, g);
+      out.push(g);
+      continue;
+    }
+    if (lead === g) continue;
+    for (const o of g.offers) {
+      if (
+        !lead.offers.some(
+          (x) => x.merchant === o.merchant && x.price === o.price && x.url === o.url,
+        )
+      ) {
+        lead.offers.push(o);
+      }
+    }
+    for (const t of g.titles) lead.titles.add(t);
+    if (lead.brandRaw === "" && g.brandRaw !== "") lead.brandRaw = g.brandRaw;
+  }
+  return out;
+}
+
 function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, query: string, locale?: "en" | "ar"): NormalizedProduct[] {
+  // REEA-721: collapse title-identical twins BEFORE any derived figure is
+  // read, so the alternatives pool, the cheapest-of-card comparisons and the
+  // rendered rows all describe the merged card set. The dedupe key reads the
+  // locale-independent canonical title, so EN and AR runs of one query land
+  // on the same merged count (the parity bar stays arithmetic, not sampled).
+  const groups = mergeSameTitleGroups(selected);
   const scrapedAt = new Date().toISOString(); // real collection completion time
 
   // REEA-254 payload trim, REEA-488 shape — cheaper same-family alternatives.
@@ -2590,7 +2653,7 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, quer
   const alternativesFor = (group: HitGroup): ProductAlternative[] => {
     const mine = metaOf(group).fromPrice;
     const matchedTitle = canonicalGroupTitle(group, locale);
-    return selected
+    return groups
       .filter((other) => other !== group && other.accessory === group.accessory)
       .filter((other) => {
         if (metaOf(other).fromPrice >= mine) return false;
@@ -2608,14 +2671,14 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, quer
   };
   const pairsWithFor = (group: HitGroup): ProductAlternative[] => {
     if (group.accessory) return [];
-    return selected
+    return groups
       .filter((other) => other.accessory && inSameFamily(group, other))
       .sort((a, b) => metaOf(a).fromPrice - metaOf(b).fromPrice)
       .slice(0, 3)
       .map(metaOf);
   };
 
-  return selected.map((group, idx) => {
+  return groups.map((group, idx) => {
     const title = canonicalGroupTitle(group, locale);
     const rows: PriceOffer[] = [...group.offers]
       // Cheapest offer first in KWD-space (REEA-167 §2 + REEA-254 item B);

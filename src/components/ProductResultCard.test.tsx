@@ -341,3 +341,80 @@ describe("REEA-592 — Alternatives / Pairs-with rows (REEA-575 spec R2/R4)", ()
     expect(text).not.toContain("بدائل");
   });
 });
+
+describe("REEA-721 — heading `from` figure: matching offers only, KD-space, <=2 decimals", () => {
+  const stamp = "2026-09-11T08:00:00.000Z";
+
+  it("the from-line rounds half-expand at hundredths (0.48861 -> KD 0.49)", () => {
+    const { container } = render(
+      <ProductResultCard
+        product={{
+          productId: "tiny-fee",
+          title: "Anker USB-C Cable 1m",
+          brand: "Anker",
+          offers: [{ merchant: "Blink", price: 0.48861, currency: "KWD", url: "https://blink.example/c", inStock: true }],
+          coupons: [],
+          variations: [],
+          alternatives: [],
+          scrapedAt: stamp,
+        }}
+        query="anker cable"
+        rank={0}
+      />,
+    );
+    const text = container.textContent ?? "";
+    expect(text).toContain("KD 0.49");
+    expect(text).not.toContain("KD 0.488");
+  });
+
+  it("the figure is the cheapest EFFECTIVE value over the card's matching offers, in KD-space", () => {
+    // Two live rows of ONE product: the SAR listing converts to KD-space and
+    // wins the comparison (0.816 against KD 1.25) — the heading states the
+    // comparable figure whatever order the rows arrive in. The hero row
+    // still prints its scraped figure beside the ≈ twin (REEA-283).
+    const { container } = render(
+      <ProductResultCard
+        product={{
+          productId: "anker-charger",
+          title: "Anker 310 Compact Charger",
+          brand: "Anker",
+          offers: [
+            { merchant: "Jarir", price: 10, currency: "SAR", url: "https://jarir.example/ch", inStock: true },
+            { merchant: "Xcite", price: 1.25, currency: "KWD", url: "https://xcite.example/ch", inStock: true },
+          ],
+          coupons: [],
+          variations: [],
+          alternatives: [],
+          scrapedAt: stamp,
+        }}
+        query="anker charger"
+        rank={0}
+      />,
+    );
+    const text = container.textContent ?? "";
+    expect(text).toContain("KD 0.82");
+    // EN and AR run the identical arithmetic (parity bar).
+    cleanup();
+    const ar = render(
+      <ProductResultCard
+        product={{
+          productId: "anker-charger",
+          title: "شاحن انكر 310",
+          brand: "Anker",
+          offers: [
+            { merchant: "Jarir", price: 10, currency: "SAR", url: "https://jarir.example/ch", inStock: true },
+            { merchant: "Xcite", price: 1.25, currency: "KWD", url: "https://xcite.example/ch", inStock: true },
+          ],
+          coupons: [],
+          variations: [],
+          alternatives: [],
+          scrapedAt: stamp,
+        }}
+        query="شاحن انكر"
+        rank={0}
+        locale="ar"
+      />,
+    );
+    expect(ar.container.textContent ?? "").toContain("KD 0.82");
+  });
+});

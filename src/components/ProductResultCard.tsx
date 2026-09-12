@@ -334,13 +334,23 @@ export default function ProductResultCard({
       )}
 
       {/* REEA-65 §4.2: the card stays cheap — retailer count + lowest price
-          only; the full per-retailer comparison lives on the detail view. */}
+          only; the full per-retailer comparison lives on the detail view.
+          REEA-721: the heading `from` figure is computed ONLY from this card's
+          matching offers — the cheapest EFFECTIVE figure in KWD-space over the
+          merged rows (cheapestListed, the same one key the rows sort on and
+          the colour chips sit against) — so a mixed-currency card leads with
+          a comparable KD figure instead of whichever raw numeric happened to
+          answer first. Display runs through the shared KD formatter: at most
+          TWO decimals, half-expand rounding (0.48861 → KD 0.49), whole figures
+          bare, identical arithmetic in EN and AR. With a country selection
+          formatCountryPrice still leads that market's currency (REEA-283) —
+          the conversion is the same pair the offer rows print. */}
       {!detail && best && (
         <p className="mt-3" style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
           <span className="tabular">{offers.length}</span>{" "}
           {offers.length === 1 ? t.retailersOne : t.retailersMany} · {t.fromWord}{" "}
           <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
-            <bdi>{formatCountryPrice(best.price, best.currency, country).primary}</bdi>
+            <bdi>{formatCountryPrice(cheapestListed, "KWD", country).primary}</bdi>
           </span>
         </p>
       )}
