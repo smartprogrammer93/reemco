@@ -2,7 +2,7 @@
  * REEA-398 — follow-up feed for the completion-budget results page.
  *
  * The streamed page finalizes on the completion budget (~2.8 s since REEA-693
- * item 1, ~2.0 s since REEA-756): whatever
+ * item 1, ~1.8 s since REEA-756): whatever
  * answered by then is on screen with its honest coverage line, and the stream
  * closes. Hops still in flight keep running behind the finalized response (the
  * page schedules the run's `allSettled` through Next's `after()`); this route

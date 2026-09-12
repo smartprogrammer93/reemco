@@ -57,7 +57,7 @@ export async function generateMetadata({
  */
 export const dynamic = "force-dynamic";
 // Ceiling for the whole query-time walk. REEA-398: the RESPONSE closes on the
-// per-query completion budget (~2.8 s since REEA-693 item 1, ~2.0 s since
+// per-query completion budget (~2.8 s since REEA-693 item 1, ~1.8 s since
 // REEA-756), but the hops still in flight
 // at finalize keep running behind it via after()/allSettled — hop ceiling
 // LIVE_SEARCH_BUDGET_MS plus converge and cache write-through — and the
