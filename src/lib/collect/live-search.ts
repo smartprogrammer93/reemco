@@ -57,6 +57,7 @@ import {
   latinBridgeDispatch,
   latinQueryForms,
   matchesQueryToken,
+  narrowSkuLead,
   normalizedTitle,
   queryMatchTokens,
   relevanceTier,
@@ -3515,6 +3516,23 @@ const NO_CACHE: QueryCache = {
   reset: () => {},
 };
 
+/** REEA-743 — serve-time head guard for STORED snapshots: fresh memo hits,
+ *  stale cache-first flushes and shared-layer KV replays all bypass the fresh
+ *  fan-out's rankByRelevance narrowing, so an aged snapshot could still lead
+ *  an exact-SKU query with the filler rows it happened to flush first. The
+ *  helper re-heads such a snapshot through narrowSkuLead — code-bearing rows
+ *  lead, stored order holds inside, honest zeros and plain queries pass
+ *  through untouched. Pure and idempotent, so re-serving a narrowed snapshot
+ *  cannot drift; suggestions ride the same partition to stay consistent. */
+function skuLeadSnap(q: string, snap: LiveSearchResult): LiveSearchResult {
+  if (snap.products.length === 0) return snap;
+  return {
+    ...snap,
+    products: narrowSkuLead(q, snap.products),
+    ...(snap.suggestions ? { suggestions: narrowSkuLead(q, snap.suggestions) } : {}),
+  };
+}
+
 export function collectLiveResultsStaged(
   query: string,
   opts: StagedCollectOptions = {},
@@ -3580,7 +3598,9 @@ export function collectLiveResultsStaged(
   const cached: QueryCacheHit<LiveSearchResult> | null =
     hit && opts.refresh && !hit.stale ? { ...hit, stale: true } : hit;
   if (cached && !cached.stale) {
-    const served = Promise.resolve(cached.value);
+    // REEA-743 — the memo hit bypasses the fresh ranking chain entirely:
+    // re-head the stored snapshot with the exact-SKU guard at serve time.
+    const served = Promise.resolve(skuLeadSnap(q, cached.value));
     return { stages: [served], final: served, allSettled: Promise.resolve() };
   }
 
@@ -3598,7 +3618,8 @@ export function collectLiveResultsStaged(
   const sharedWarm: Promise<LiveSearchResult> | null =
     snapshotsEnabled && !cached
       ? replaySharedQuerySnapshot<LiveSearchResult>(cacheKey).then(
-          (snap) => snap ?? new Promise<LiveSearchResult>(() => {}),
+          // REEA-743 — same serve-time head guard on the replayed snapshot.
+          (snap) => (snap ? skuLeadSnap(q, snap) : new Promise<LiveSearchResult>(() => {})),
         )
       : null;
 
@@ -3753,7 +3774,7 @@ export function collectLiveResultsStaged(
   if (cached) {
     // Stale window only reaches here (fresh returns above): cache-first flush,
     // live stages behind it, converged full-ranked final.
-    return { stages: [Promise.resolve(cached.value), ...stages], final, allSettled };
+    return { stages: [Promise.resolve(skuLeadSnap(q, cached.value)), ...stages], final, allSettled };
   }
   return { stages, final, allSettled };
 }

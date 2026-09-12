@@ -659,3 +659,33 @@ export function partitionForQuery<T extends { title: string }>(
   }
   return { tiered: true, devices, accessories };
 }
+
+/** REEA-743 — the exact-SKU head guard re-applied at SERVE time. The fresh
+ *  fan-out narrows inside rankByRelevance, but stored snapshots (memo hits,
+ *  stale cache-first flushes, shared-layer KV replays) were ranked by the
+ *  chain that wrote them — some predating the narrowing, some flushed mid-
+ *  round while filler still answered first. This helper closes that gap at
+ *  read time: under an exact-SKU query (skuCodeTokens), rows carrying the
+ *  code lead and everything else keeps its stored order behind them; when no
+ *  row carries the code the stored order stands untouched — an honest zero
+ *  reads honestly, it is not re-ranked into a fake one. Queries without the
+ *  code shape pass through unchanged. Pure and idempotent (a stable two-pass
+ *  partition): the same list narrowed twice reads identical, so a memo hit
+ *  of an already-narrowed snapshot cannot drift. Locale-independent — the
+ *  guard reads only the query and the titles, so EN and AR serve the same
+ *  order for the same snapshot. The family-first gate inside rankByRelevance
+ *  stays untouched: this only re-heads a stored list, never re-tiers it. */
+export function narrowSkuLead<T extends { title: string }>(
+  query: string,
+  products: readonly T[],
+): T[] {
+  const codes = skuCodeTokens(query);
+  if (codes.length === 0) return [...products];
+  const lead: T[] = [];
+  const rest: T[] = [];
+  for (const p of products) (titleCarriesCode(p.title, codes) ? lead : rest).push(p);
+  // No row answers the code: the stored order is already the honest answer
+  // (an empty/honest-zero page) — pass it through as-is.
+  if (lead.length === 0) return [...products];
+  return [...lead, ...rest];
+}
