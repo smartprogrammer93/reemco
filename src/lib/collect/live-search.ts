@@ -109,11 +109,16 @@ export const LIVE_SEARCH_BUDGET_MS = 16_000;
  * the first-paint guarantee to first offer card <= 3s P95: the finalize clock
  * is what caps the worst case (every stage also resolves on this timer), so
  * the window moves to ~2.8s — inside the 3s bar with room for the streamed
- * swap to land. Late hops are NOT cut short: the landing window behind the
- * closed document rides STAGE_TAIL_HEADROOM_MS below and stays unchanged —
- * only the document-close clock moved earlier.
+ * swap to land. REEA-756 tightens the full-list bar to < 2.5 s p75 on a
+ * throttled Fast-3G client: the document closes earlier (~2.0 s + flush) so
+ * the LAST staged boundary — the one that completes the offer list — is still
+ * on the wire, not still being produced, inside the 2.5 s line. Late hops are
+ * NOT cut short: the landing window behind the closed document rides
+ * STAGE_TAIL_HEADROOM_MS below and stays unchanged (~8 s from the run start)
+ * — only the document-close clock moved earlier, exactly as in the REEA-693
+ * item-1 step.
  */
-export const RESULTS_COMPLETION_BUDGET_MS = 2_800;
+export const RESULTS_COMPLETION_BUDGET_MS = 2_000;
 /**
  * REEA-466 — headroom the staged hop chain gets BEHIND the completion budget:
  * the finalize clock closes the document, the same run's late hops plus one
@@ -141,8 +146,12 @@ export const RESULTS_COMPLETION_BUDGET_MS = 2_800;
  * stays ~8 s either way, so the handshake-chain lanes keep the same room to
  * land behind the closed document and the follow-up feed (FOLLOW_UP_WAIT_MS
  * = 8000) still covers the tail — only the document closes earlier.
+ * REEA-756 — raised 5200 -> 6000 as the finalize clock moved 2800 -> 2000:
+ * the same lockstep holds — deadline + headroom stays ~8 s from the run
+ * start, the handshake-chain lanes keep their landing room behind the closed
+ * document, and only the document-close clock moves earlier with it.
  */
-export const STAGE_TAIL_HEADROOM_MS = 5_200;
+export const STAGE_TAIL_HEADROOM_MS = 6_000;
 /** Cap of distinct product groups served per query. REEA-721: the head-query
  *  bar is "~10 cards" — every head query's served set must stay a scannable
  *  shortlist (the near-duplicate merge below keeps the tail honest), while
