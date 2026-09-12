@@ -5,6 +5,7 @@ import { isTenMinutesOld, relativeAge } from "@/lib/relative-time";
 import { formatPrice } from "@/lib/format";
 import type { Coupon } from "@/types/product";
 import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
+import CouponLine from "@/components/CouponLine";
 
 /**
  * Design v3 offer card (design-v3 §5.2–§5.5), paired with realtime-policy §6.
@@ -151,16 +152,12 @@ export default function OfferCard({
         </bdi>
       </p>
 
-      {/* Chips row: availability + coupon value (§5.4) */}
+      {/* Chips row: availability only (§5.4) — REEA-760 moved the coupon
+          evidence onto its own honest line below the price cluster. */}
       <p className="mt-1 flex flex-wrap items-center gap-2">
         <span className="savings-pill" style={!inStock ? { background: "var(--rc-error-bg)", color: "var(--rc-error)" } : undefined}>
           {inStock ? t.inStock : t.outOfStock}
         </span>
-        {coupon && (
-          <span className="coupon-badge">
-            {coupon.discount}
-          </span>
-        )}
       </p>
 
       {/* Price block: effective price is the loudest element (P1 / AC-6) */}
@@ -182,11 +179,13 @@ export default function OfferCard({
         )}
         {isBest && savings && <span className="savings-pill"><bdi>{`${t.saveLead} ${savings}`}</bdi></span>}
       </div>
-      {effectivePriceLabel && (
+      {coupon ? (
+        <CouponLine row={{ coupon, merchant, effectiveLabel: effectivePriceLabel ?? null }} locale={locale} />
+      ) : effectivePriceLabel ? (
         <p className="tabular mt-1" style={{ font: "var(--rc-text-small)", color: "var(--rc-savings)" }}>
           <>{`${t.effectiveLead} ${effectivePriceLabel} ${t.effectiveTail}`}</>
         </p>
-      )}
+      ) : null}
 
       {isBest && (
         <p className="mt-2">

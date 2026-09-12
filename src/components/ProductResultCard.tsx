@@ -1,11 +1,11 @@
 import Link from "next/link";
 import Image from "next/image";
-import type { Coupon, NormalizedProduct, PriceOffer } from "@/types/product";
+import type { NormalizedProduct, PriceOffer } from "@/types/product";
 import { buildResultsHref, type CountryCode } from "@/lib/country";
-import { effectivePrice, effectivePriceKwd, formatCountryPrice, formatKWD, formatPrimaryPrice, sortOffers } from "@/lib/format";
+import { effectivePriceKwd, formatCountryPrice, formatKWD, formatPrimaryPrice, sortOffers } from "@/lib/format";
 import { gradeBadgeLabel } from "@/lib/collect/canonical-product";
 import { collectedClock, relativeAge } from "@/lib/relative-time";
-import CouponBadge from "@/components/CouponBadge";
+import CouponLine, { buildCouponRows } from "@/components/CouponLine";
 import ShareSummaryButton from "@/components/ShareSummaryButton";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import { resolveOfferUrl } from "@/lib/links";
@@ -101,25 +101,24 @@ function ThumbRow({ product }: { product: NormalizedProduct }) {
 function PriceBlock({
   offer,
   isBest,
-  coupon,
-  extraCoupons = 0,
+  hasCoupon,
   oos = false,
   country,
   locale,
 }: {
   offer: PriceOffer;
   isBest: boolean;
-  coupon?: Coupon;
-  /** REEA-657 Bet 2 — secondary coupons collapse to a (+n) count beside
-   *  the single chip (accepted spec tradeoff on REEA-605). */
-  extraCoupons?: number;
+  /** REEA-657 Bet 2 criterion (a), kept honest by REEA-760: ONE discount
+   *  signal per card — when coupon evidence exists the computed savings
+   *  figure would print the SAME number twice beside the struck list price,
+   *  so the pill rides off and the coupon honesty line keeps the crown. */
+  hasCoupon: boolean;
   oos?: boolean;
   country: CountryCode | null;
   /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
   locale?: Locale;
 }) {
   const t = getStrings(locale ?? clientLocale());
-  const eff = effectivePrice(offer, coupon);
   // REEA-75: ml-auto keeps the price right-aligned when the row wraps;
   // flex-wrap on the baseline row stops the Best badge clipping (M3).
   const saved = offer.wasPrice != null && offer.wasPrice > offer.price;
@@ -163,36 +162,15 @@ function PriceBlock({
             the pill rides off and the chip keeps the crown; with only wasPrice
             evidence the pill stays exactly as before (§5.3). Struck list price
             is kept either way. */}
-        {saved && coupon == null && offer.wasPrice != null && (
+        {saved && !hasCoupon && offer.wasPrice != null && (
           <span className="savings-pill"><bdi>{`${t.saveLead} ${formatCountryPrice(offer.wasPrice - offer.price, offer.currency, country).primary}`}</bdi></span>
         )}
         {isBest && <span className="best-flag">{t.bestPrice}</span>}
-        {/* REEA-657 Bet 2 criteria (b)/(d)/(e): the single amber chip rides the
-            SAME baseline row as the price it qualifies — text leads with the
-            word Coupon (كوبون in AR), nowrap inside its pill; secondary coupons
-            collapse to the (+n) count beside it; an empty coupon slot renders
-            nothing at all, no blank row. */}
-        {coupon && (
-          <>
-            <CouponBadge coupon={coupon} locale={locale} />
-            {extraCoupons > 0 && (
-              <span style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)" }}>
-                {`+${extraCoupons} ${t.couponMoreSuffix}`}
-              </span>
-            )}
-          </>
-        )}
+        {/* REEA-760: the coupon evidence rides its own honest line below the
+            price cluster — one row per issuing retailer (chip → attribution →
+            single effective number), never stacked amounts, never "+N more".
+            The pill suppression above keeps REEA-657 criterion (a). */}
       </div>
-      {/* Effective-price line: computed value, always explained (§3.3) */}
-      {eff != null && (
-        <p className="mt-1" style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)" }}>
-          {t.effectiveLead}{" "}
-          <span className="tabular" style={{ color: "var(--rc-savings)" }}>
-            <bdi>{formatCountryPrice(eff, offer.currency, country).primary}</bdi>
-          </span>{" "}
-          {coupon?.code ? `${t.effectiveTail} ${coupon.code}` : t.effectiveTail}
-        </p>
-      )}
     </div>
   );
 }
@@ -256,7 +234,10 @@ export default function ProductResultCard({
         )
       : 0;
   const oos = best != null && !best.inStock;
-  const extraCoupons = product.coupons.length - 1;
+  // REEA-760 — coupon rows ride the CARD's own offer order (one key: the
+  // sorted array the rows below render in), so the effective figure names the
+  // retailer that actually leads this card.
+  const couponRows = buildCouponRows(product.coupons, offers, country);
 
   return (
     <article
@@ -307,8 +288,7 @@ export default function ProductResultCard({
           <PriceBlock
             offer={best}
             isBest={isBest && !oos}
-            coupon={primaryCoupon}
-            extraCoupons={extraCoupons}
+            hasCoupon={product.coupons.length > 0}
             oos={oos}
             country={country}
             locale={locale}
@@ -316,10 +296,18 @@ export default function ProductResultCard({
         )}
       </div>
 
-      {/* REEA-657 Bet 2 — the single coupon chip rides the price cluster
-          inside PriceBlock (criteria a/e: <=1 chip per card, same baseline
-          row as the price it qualifies). The secondary (+n) count moved with
-          it; the empty-slot caption below (REA-468 G3) is unchanged. */}
+      {/* REEA-760 coupon honesty line (spec eb16258c, ACCEPT REEA-748): one
+          line per ISSUING retailer under the price cluster — chip carries the
+          code verbatim or the exact one-step auto-note, attribution names the
+          issuing retailer, ONE honest effective number prints per card on the
+          leading retailer's row (existing effectivePrice arithmetic + headline
+          formatter, bdi-isolated). No stacked amounts, no "+N more" — the
+          secondary-count collapsed into the best-single-coupon pick inside
+          buildCouponRows. State B: no coupons, no line, nothing reserved; the
+          empty-slot caption below (REA-468 G3) is unchanged. */}
+      {!detail && couponRows.map((row) => (
+        <CouponLine key={`${row.merchant}-${row.coupon.code ?? ""}-${row.coupon.discount}`} row={row} locale={locale} />
+      ))}
 
       {/* REEA-468 G3 — the coupon slot stays explicit when it is empty: a
           card whose live offers answer but carry no promo says "No coupon

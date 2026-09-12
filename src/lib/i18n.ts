@@ -71,6 +71,13 @@ const en = {
   // text LEADS with the word Coupon — an amount-only badge reads as a second
   // price next to the real one. "Coupon KD 5" / كوبون KD 5.
   couponLead: "Coupon",
+  // REEA-760 coupon honesty line (spec eb16258c, ACCEPT REEA-748): chip = code
+  // verbatim, else the exact one-step auto-note; attribution + effective lead
+  // ride the same locale path as every other chrome string. Latin codes render
+  // as-is in both locales.
+  couponAutoNote: "auto-applied at checkout",
+  couponViaLead: "via",
+  couponEffectiveLead: "Effective",
   // REEA-540 Bet A — confidence-line pair on results cards:
   // "Seen recently: KD 4,099–KD 4,350 · last 14 days".
   seenRecentlyLead: "Seen recently:",
@@ -230,6 +237,10 @@ const ar: typeof en = {
   effectiveLead: "السعر بعد الخصم",
   effectiveTail: "بالكوبون",
   couponLead: "كوبون",
+  // REEA-760 — AR side of the coupon honesty line, verbatim per spec §5.
+  couponAutoNote: "تُطبَّق تلقائيًا عند الدفع",
+  couponViaLead: "من",
+  couponEffectiveLead: "بعد الخصم",
   // REEA-540 Bet A — AR counterpart of the results-card confidence pair.
   seenRecentlyLead: "شوهد مؤخرًا:",
   seenRecentlyWindow: "آخر 14 يومًا",

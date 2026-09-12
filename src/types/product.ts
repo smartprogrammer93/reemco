@@ -52,6 +52,13 @@ export interface Coupon {
   description: string;
   discount: string; // human-readable, e.g. "10% off" or "$5 off"
   expiresAt: string | null; // ISO 8601
+  /**
+   * REEA-760 — the issuing retailer, stamped onto the record by the hop that
+   * delivered it (live-at-query-time attribution). Records without one fall
+   * back to the card's cheapest ANSWERING merchant at render time — never a
+   * guess beyond what the served rows carry.
+   */
+  merchant?: string;
 }
 
 export interface ProductVariation {

@@ -10,6 +10,7 @@
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ProductResultCard from "@/components/ProductResultCard";
+import { buildCouponRows } from "@/components/CouponLine";
 import type { NormalizedProduct } from "@/types/product";
 
 vi.mock("next/link", () => ({
@@ -219,9 +220,19 @@ describe("REEA-468 G3 coupon-slot copy", () => {
     expect(container.querySelector(".coupon-badge")).toBeNull();
   });
 
-  it("a promo listing shows the coupon pill instead of the empty-slot line", () => {
+  it("a promo listing shows the coupon honesty line instead of the empty-slot line", () => {
     const { container } = render(<ProductResultCard product={withCoupon} query="xm6" rank={0} />);
-    expect(container.querySelector(".coupon-badge")?.textContent).toContain("10% off");
+    // REEA-760: chip carries the CODE verbatim (paste-and-go), attribution
+    // names the issuing retailer (unstamped record falls back to the card's
+    // cheapest answering merchant — Jarir leads this fixture in KWD space),
+    // ONE honest effective figure prints on that leading row. No (+n) counter,
+    // no stacked amount beside the struck price.
+    expect(container.querySelector(".coupon-badge")?.textContent).toContain("SAVE10");
+    expect(container.querySelector(".coupon-via")?.textContent).toContain("via");
+    expect(container.querySelector(".coupon-via")?.textContent).toContain("Jarir");
+    expect(container.querySelector(".coupon-effective")?.textContent).toContain("SAR 449.10");
+    expect(container.querySelectorAll(".coupon-line")).toHaveLength(1);
+    expect(container.textContent).not.toContain("+1");
     expect(container.textContent).not.toContain("No coupon available");
   });
 
@@ -230,6 +241,87 @@ describe("REEA-468 G3 coupon-slot copy", () => {
       <ProductResultCard product={noCoupon} query="كيبورد" rank={0} locale="ar" />,
     );
     expect(container.textContent).toContain("لا توجد قسيمة متاحة");
+  });
+});
+
+describe("REEA-760 coupon honesty line", () => {
+  const hopStamped: NormalizedProduct = {
+    ...product(false),
+    coupons: [
+      { code: "SAVEKD45", description: "10% off", discount: "10% off", expiresAt: null, merchant: "Xcite" },
+      { code: null, description: "5% off", discount: "5% off", expiresAt: null, merchant: "Jarir" },
+    ],
+  };
+
+  it("one line per issuing retailer; the effective figure prints exactly once", () => {
+    const { container } = render(<ProductResultCard product={hopStamped} query="xm6" rank={0} />);
+    const lines = Array.from(container.querySelectorAll(".coupon-line"));
+    expect(lines).toHaveLength(2);
+    // Xcite row: code verbatim (paste-and-go) + hop attribution, no number —
+    // Jarir holds the cheapest matching offer, so ONLY its row carries it.
+    expect(lines[0].querySelector(".coupon-badge")?.textContent).toBe("SAVEKD45");
+    expect(lines[0].querySelector(".coupon-via")?.textContent).toContain("Xcite");
+    expect(lines[0].querySelector(".coupon-effective")).toBeNull();
+    // Jarir row: no code → the exact EN auto-note (one-step redeemable).
+    expect(lines[1].querySelector(".coupon-badge")?.textContent).toBe("auto-applied at checkout");
+    expect(container.querySelectorAll(".coupon-effective")).toHaveLength(1);
+    expect(container.textContent).not.toContain("+1");
+  });
+
+  it("AR mirrors the copy verbatim with bidi-isolated merchant and number", () => {
+    const { container } = render(
+      <ProductResultCard product={hopStamped} query="كيبورد" rank={0} locale="ar" />,
+    );
+    const badges = container.querySelectorAll(".coupon-badge");
+    expect(badges[0]?.textContent).toBe("SAVEKD45");
+    expect(badges[1]?.textContent).toBe("تُطبَّق تلقائيًا عند الدفع");
+    const via = container.querySelector(".coupon-via");
+    expect(via?.textContent).toContain("من");
+    // The Latin merchant name rides a bidi isolate under RTL flow.
+    expect(via?.querySelector("bdi")?.textContent).toBe("Xcite");
+    const eff = container.querySelector(".coupon-effective");
+    expect(eff?.querySelector("bdi")?.textContent).toBe("SAR 474.05");
+  });
+
+  it("paired EN/AR renders of one query print the identical formatted figure", () => {
+    const en = render(<ProductResultCard product={hopStamped} query="xm6" rank={0} />);
+    const enNum = en.container.querySelector(".coupon-effective bdi")?.textContent;
+    cleanup();
+    const ar = render(<ProductResultCard product={hopStamped} query="xm6" rank={0} locale="ar" />);
+    const arNum = ar.container.querySelector(".coupon-effective bdi")?.textContent;
+    // ≤2 decimals, identical arithmetic EN⇄AR (spec §5).
+    expect(enNum).toBe("SAR 474.05");
+    expect(arNum).toBe(enNum);
+  });
+
+  it("buildCouponRows keys dedup per hop, picks the best SINGLE coupon, falls back honestly", () => {
+    const offers = hopStamped.offers;
+    const rows = buildCouponRows(
+      [
+        { code: "SAVEKD45", description: "10% off", discount: "10% off", expiresAt: null, merchant: "Jarir" },
+        { code: "SAVEKD45", description: "KD 45 off", discount: "KD 45 off", expiresAt: null, merchant: "Jarir" },
+        { code: "SAVEKD45", description: "10% off", discount: "10% off", expiresAt: null, merchant: "Xcite" },
+      ],
+      offers,
+      null,
+    );
+    // Same code from two merchants stays TWO rows (per-hop dedup); inside one
+    // retailer the BEST SINGLE coupon wins (largest delivered value), never a
+    // stack — "KD 45 off" is not machine-readable, so "10% off" carries more.
+    expect(rows.map((r) => `${r.merchant}:${r.coupon.discount}`)).toEqual([
+      "Jarir:10% off",
+      "Xcite:10% off",
+    ]);
+    // An unstamped record rides the card's cheapest ANSWERING merchant as its
+    // attribution — an honest fallback, and that leading row owns the number.
+    const stamped = buildCouponRows(
+      [{ code: "X", description: "10% off", discount: "10% off", expiresAt: null }],
+      offers,
+      null,
+    );
+    expect(stamped).toHaveLength(1);
+    expect(stamped[0].merchant).toBe("Jarir");
+    expect(stamped[0].effectiveLabel).toBe("SAR 449.10");
   });
 });
 

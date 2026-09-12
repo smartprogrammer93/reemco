@@ -3001,13 +3001,17 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, quer
     // couponSignalOf also counts the listing's delivered running discount,
     // exactly what paints the savings chip, so the embedded coupons list and
     // the visible chips agree (explicit coupon text still wins the slot).
+    // REEA-760: each record carries the SHOP of the hop that delivered it
+    // (live-at-query-time attribution for the coupon honesty line), and the
+    // dedup key rides that stamp too — the same code from two merchants is
+    // two honest attributions, never one merged row.
     const couponSeen = new Map<string, Coupon>();
     for (const o of group.offers) {
       const signal = couponSignalOf(o);
       if (!signal) continue;
-      const key = `${signal.code ?? ""}|${signal.discount}`;
+      const key = `${o.merchant}|${signal.code ?? ""}|${signal.discount}`;
       if (!couponSeen.has(key))
-        couponSeen.set(key, { code: signal.code ?? null, description: signal.discount, discount: signal.discount, expiresAt: null });
+        couponSeen.set(key, { code: signal.code ?? null, description: signal.discount, discount: signal.discount, expiresAt: null, merchant: o.merchant });
     }
     return {
       productId: slugify(title) || `live-${idx}`,

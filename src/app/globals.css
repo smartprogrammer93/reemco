@@ -114,6 +114,14 @@
     --rc-fresh: var(--rc-dark-fresh);
     --rc-error: var(--rc-dark-error);
   }
+
+  /* REEA-760 coupon chip fix (spec §6): the dark swap moves the chip fg to
+     #FBBF24 but keeps the cream background (~1.5:1). The chip background
+     follows the dark line token → #FBBF24 on #3A3128 ≈ 7.6:1; the light
+     pairing stays untouched above. Existing tokens only. */
+  .coupon-badge {
+    background: var(--rc-dark-line);
+  }
 }
 
 /* Layout gutter tightens below 400px (brief Layout line: "20px ≤400px"). */
@@ -209,6 +217,55 @@ a:focus-visible {
   font: var(--rc-text-small);
 }
 
+/* REEA-760 coupon honesty line — one row per issuing retailer: chip →
+   attribution → effective number. Layout rides the existing utilities
+   (flex-wrap + gap-x-2/gap-y-1 + mt-2, i.e. the --rc-space-2/--rc-space-1
+   steps); this table carries ONLY the typography and the truncation rule.
+   Zero new custom properties. The two `ch` caps are per-component bounds,
+   not scale entries: 28ch fits the longest honest chip (EN auto-note =
+   24 chars) without ellipsis on desktop; the 20ch mobile cap sits on the
+   sheet's existing 640px boundary and returns horizontal room to the
+   attribution + number so a 375px card never clips the row. Priority when
+   space is tight — number > chip > attribution — comes from nowrap-number +
+   capped-chip + wrapping-attribution alone. */
+.coupon-line {
+  min-width: 0;
+}
+
+.coupon-line .coupon-badge {
+  min-width: 0;
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .coupon-line .coupon-badge {
+    max-width: 20ch;
+  }
+}
+
+/* Attribution: the meta-stamp grammar (§2 table), muted. */
+.coupon-via {
+  font: var(--rc-text-meta);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--rc-muted);
+}
+
+/* Effective number: the terminal eye-stop — label weight, primary hue,
+   never wraps internally. */
+.coupon-effective {
+  font: var(--rc-text-label);
+  color: var(--rc-muted);
+  white-space: nowrap;
+}
+
+.coupon-effective bdi {
+  color: var(--rc-primary);
+}
+
 /* Meta stamps ("live · 3s ago · Jarir", section labels) — receipt-printer
    cue: system mono, uppercase, wide tracking. */
 .label-token,
@@ -287,7 +344,8 @@ a:focus-visible {
    normal spacing. The html-scoped selector outranks the base
    `font: var(--rc-text-meta)` shorthand regardless of cascade order. */
 html[lang="ar"] .price-alt,
-html[lang="ar"] .meta-stamp {
+html[lang="ar"] .meta-stamp,
+html[lang="ar"] .coupon-via {
   font-family: var(--rc-font-body);
   font-size: 13px;
   line-height: 1.5;
