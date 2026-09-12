@@ -565,6 +565,68 @@ html[lang="ar"] .coupon-via {
   }
 }
 
+/* REEA-793 — pending row: the fixed box DIRECTLY UNDER the count line, both
+   views. Carries the shipped skeleton pulse-bar motif (skeleton-block) plus
+   the honest label; no competing price. Renders ONLY in pending mode —
+   normal passes add no box. */
+.pending-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.pending-row .pending-row-bar {
+  width: 220px;
+}
+
+/* REEA-793 B2 — the amber coverage-status pill rides the SAME coverage-line
+   box; the trailing token is the sole interactive element in the line. */
+.coverage-status-chip {
+  margin-inline-start: 6px;
+  gap: 4px;
+}
+
+.coverage-refresh {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* Sole interactive token keeps a real hit area on narrow screens (>=44px). */
+@media (max-width: 640px) {
+  .coverage-refresh {
+    min-height: 44px;
+    min-width: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+/* REEA-793 B2 — lh tiers grow ONE STEP only in has-status mode (desktop 2lh
+   -> 3lh; mobile EN 7lh -> 8lh; AR 5lh -> 6lh). Same !important single-owner
+   pattern as the base tiers; the normal (no-status) pass is untouched. */
+.coverage-line.has-status {
+  min-height: 4.2em;
+  min-height: 3lh !important;
+}
+
+@media (max-width: 640px) {
+  .coverage-line.has-status {
+    min-height: 11.2em;
+    min-height: 8lh !important;
+  }
+  html[lang="ar"] .coverage-line.has-status {
+    min-height: 9em;
+    min-height: 6lh !important;
+  }
+}
+
 /* ============================================================================
  * The Arrival — the signature moment (Brief v4). On results load a slim amber
  * pulse bar sweeps left→right while retailer chips ignite one-by-one

@@ -575,21 +575,84 @@ function CoverageLine({
   notes,
   products,
   locale,
+  pendingStatus,
+  onRefresh,
 }: {
   notes: LiveSearchResult["notes"];
   products: NormalizedProduct[];
   locale?: Locale;
+  pendingStatus?: boolean;
+  onRefresh?: () => void;
 }) {
   const text = coverageLine(notes, locale, products);
-  if (!text) return null;
+  if (!text && !pendingStatus) return null;
   // REEA-778 — the settled sentence rides the SAME lh-tier box as its
   // StampGhost reserve (one shared deterministic box per locale tier): the
   // swap changes no height, so nothing below moves when the line lands.
+  // REEA-793 B2 — has-status mode: the amber cached-chip pill rides the SAME
+  // box, and the lh tier grows one step ONLY in this mode (CSS single-owner
+  // tiers), so the normal pass stays byte-for-byte. The trailing token is
+  // ONE real button — the sole interactive token in the line — and the
+  // combined textContent reads byte-equal "…still loading — Refresh".
+  const l = locale ?? clientLocale();
   return (
-    <p className="meta-stamp coverage-line" style={{ color: "var(--rc-muted)", minHeight: `${coverageLhTier(locale)}lh` }}>
+    <p
+      className={`meta-stamp coverage-line${pendingStatus ? " has-status" : ""}`}
+      style={{ color: "var(--rc-muted)", minHeight: `${coverageLhTier(locale)}lh` }}
+    >
       {text}
+      {pendingStatus ? (
+        <span className="cached-chip coverage-status-chip">
+          {KUWAIT_PENDING_TEXT[l]}
+          {" — "}
+          <button type="button" className="coverage-refresh focusable" onClick={onRefresh}>
+            {REFRESH_TOKEN[l]}
+          </button>
+        </span>
+      ) : null}
     </p>
   );
+}
+
+/* REEA-793 B1 — the pending row: a fixed box DIRECTLY UNDER the count line,
+   carrying the shipped skeleton pulse-bar motif and the exact honest label.
+   No competing price — the Best-price slot stays empty until a real device
+   offer renders. Present ONLY when the served snapshot flags it (device-intent
+   query, zero device rows, ≥1 accessory rendered); every other pass renders
+   nothing and the markup stays byte-for-byte. */
+const PENDING_LABEL: Record<Locale, string> = {
+  en: "Best device price still loading…",
+  ar: "أفضل سعر للجهاز قيد التحميل…",
+};
+const KUWAIT_PENDING_TEXT: Record<Locale, string> = {
+  en: "Kuwait offers still loading",
+  ar: "عروض الكويت لا تزال قيد التحميل",
+};
+const REFRESH_TOKEN: Record<Locale, string> = { en: "Refresh", ar: "تحديث" };
+
+function DeviceLeadPendingRow({ locale }: { locale?: Locale }) {
+  const l = locale ?? clientLocale();
+  return (
+    <div className="pending-row" role="status">
+      <span className="skeleton-block pending-row-bar" aria-hidden="true" />
+      <span className="pending-row-label" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
+        {PENDING_LABEL[l]}
+      </span>
+    </div>
+  );
+}
+
+/* Streamed-boundary form of the pending row: resolves with the FINAL stage
+   (the same snapshot the flags were derived on at serve time) and renders
+   ahead of the stamp boundary, so the pending box sits directly under the
+   count line in BOTH views. Null fallback: normal passes add no box. */
+function StagePendingRow(props: {
+  stages: readonly Promise<LiveSearchResult>[];
+  locale?: Locale;
+}) {
+  const snap = use(props.stages[props.stages.length - 1]);
+  if (!snap.deviceLeadPending) return null;
+  return <DeviceLeadPendingRow locale={props.locale} />;
 }
 
 /* REEA-601 — the streamed page paints its rows APPEND-ONLY: each flushed
@@ -631,6 +694,7 @@ function StageCoverage(props: {
   country: CountryCode | null;
   showOutOfStock: boolean;
   locale?: Locale;
+  onRefresh?: () => void;
 }) {
   const snap = use(props.stages[props.stages.length - 1]);
   const products = use(
@@ -649,6 +713,8 @@ function StageCoverage(props: {
       notes={snap.notes}
       products={products}
       locale={props.locale}
+      pendingStatus={snap.kuwaitPendingStatus}
+      onRefresh={props.onRefresh}
     />
   );
 }
@@ -759,6 +825,10 @@ function StagedResults(props: {
         <ResultsErrorBoundary locale={locale}>
           <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
           <HeadingGhost />
+          {/* REEA-793 — pending row ahead of the stamp boundary in this view too. */}
+          <Suspense fallback={null}>
+            <StagePendingRow stages={stages} locale={locale} />
+          </Suspense>
           <CoverageLine notes={finalSnap.notes} products={products} locale={locale} />
         </ResultsErrorBoundary>
       );
@@ -767,6 +837,9 @@ function StagedResults(props: {
       <ResultsErrorBoundary locale={locale}>
         <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
         <CountHeading count={products.length} query={query} locale={locale} />
+        {/* REEA-793 B1 — the pending row sits DIRECTLY UNDER the count line
+            in the converged view, before the coverage stamp. */}
+        {finalSnap.deviceLeadPending ? <DeviceLeadPendingRow locale={locale} /> : null}
         {products.length === 0 && query.length > 0 ? (
           <>
             <EmptyState query={query} suggestions={stagedSuggestions(finalSnap, country, showOutOfStock)} country={country} locale={locale} tries={finalSnap.attemptedQueries} />
@@ -774,7 +847,7 @@ function StagedResults(props: {
           </>
         ) : (
           <>
-            <CoverageLine notes={finalSnap.notes} products={products} locale={locale} />
+            <CoverageLine notes={finalSnap.notes} products={products} locale={locale} pendingStatus={finalSnap.kuwaitPendingStatus} onRefresh={onRefresh} />
             <ResultsGrid
               products={products}
               query={query}
@@ -824,6 +897,12 @@ function StagedResults(props: {
           showOutOfStock={showOutOfStock} locale={locale}
         />
       </Suspense>
+      {/* REEA-793 — the pending-row boundary is REORDERED AHEAD of the stamp
+          boundary so the pending box lands directly under the count line in
+          the streamed view as well; normal passes render null and add nothing. */}
+      <Suspense fallback={null}>
+        <StagePendingRow stages={stages} locale={locale} />
+      </Suspense>
       <Suspense fallback={<StampGhost locale={locale} />}>
         <StageCoverage
           stages={stages}
@@ -831,6 +910,7 @@ function StagedResults(props: {
           country={country}
           showOutOfStock={showOutOfStock}
           locale={locale}
+          onRefresh={onRefresh}
         />
       </Suspense>
       <div className="flex min-w-0 flex-col items-stretch gap-4" style={{ marginTop: "var(--rc-space-8)" }}>
