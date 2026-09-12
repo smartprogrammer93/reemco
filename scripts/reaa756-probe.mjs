@@ -250,9 +250,15 @@ async function browserLane(rounds) {
             try {
               await page.close();
             } catch {}
-            page = await browser.newPage();
-            page.setDefaultTimeout(30_000);
-            await page.setViewportSize({ width: 1280, height: 900 });
+            try {
+              page = await browser.newPage();
+              page.setDefaultTimeout(30_000);
+              await page.setViewportSize({ width: 1280, height: 900 });
+            } catch {
+              /* browser itself died — keep what the completed rows measured */
+              rows.push({ locale, query });
+              break;
+            }
           }
           rows.push({ locale, query, ...(m || {}) });
         }
