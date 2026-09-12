@@ -1346,6 +1346,170 @@ async function pckStaticIpJson(
   return null;
 }
 
+/**
+ * REEA-723 batch tail — Nest (neststores.com) card scanner. The Shopify Hyper
+ * theme renders its search views server-side: every result card is a locale-
+ * prefixed `/products/<handle>` anchor whose aria-label carries the listing
+ * title, followed by repeated `<span class=money>NN.NNN KD</span>` responsive
+ * copies of the price (measured live 2026-09-12: five cards, 17 money spans).
+ * Distinct money values inside one card segment read as the promo pair: the
+ * lower figure is the current price, the higher one joins as wasPrice only
+ * while it sits above it — the shared promo convention. suggest.json is NOT
+ * part of this zone's contract: the edge answers scripted GETs with a 417
+ * "Unsupported buyer locale" shell even with locale parameters, so the SSR
+ * search views are the documented hop for this storefront.
+ */
+export function nestHits(html: string, query: string): SearchHit[] {
+  const out: SearchHit[] = [];
+  const seen = new Set<string>();
+  const anchors = [...html.matchAll(/href="(\/(?:en|ar)\/products\/[^"?]+)[^"]*"\s+aria-label="([^"]+)"/g)];
+  anchors.forEach((anchor, i) => {
+    const path = anchor[1];
+    const title = anchor[2].replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"').trim();
+    if (!title || !queryGatePasses(title, query, MIN_SCORE)) return;
+    const url = `https://www.neststores.com${path}`;
+    if (seen.has(url)) return;
+    seen.add(url);
+    // One card segment runs to the next card anchor; the theme repeats the
+    // money span per responsive breakpoint, distinct values only matter.
+    const from = anchor.index;
+    const to = anchors[i + 1]?.index ?? from + 2200;
+    const segment = html.slice(from, Math.max(to, from + 40));
+    const values = new Set<number>();
+    for (const money of segment.matchAll(/class=money>([\d.,]+)\s*KD</g)) {
+      const value = Number(money[1].replace(/,/g, ""));
+      if (Number.isFinite(value) && value > 0) values.add(value);
+    }
+    const prices = [...values].sort((a, b) => a - b);
+    if (prices.length === 0) return;
+    const price = prices[0];
+    const wasPrice = prices.length > 1 && prices[prices.length - 1] > price ? prices[prices.length - 1] : undefined;
+    out.push({
+      title,
+      merchant: "Nest",
+      country: "KW",
+      price,
+      currency: "KWD",
+      url,
+      // Listed-with-price rule: the SSR card carries the price while the
+      // listing is purchasable (same reading as the ld+json availability gate).
+      inStock: true,
+      ...(wasPrice != null ? { wasPrice } : {}),
+    });
+  });
+  return out;
+}
+
+/**
+ * REEA-723 ladder tiers — search-first parser: JSON-LD Product records when
+ * the SSR search view carries them (the REEA-526 presence-gate shape), the
+ * generic anchored-card scan second. Both tiers score through the shared gate
+ * against the ORIGINAL query.
+ */
+function ladderHtmlHits(html: string, query: string, merchant: string, origin: string): SearchHit[] {
+  const out: SearchHit[] = [];
+  const seen = new Set<string>();
+  const joinUrl = (pathOrUrl: string): string =>
+    pathOrUrl.startsWith("http") ? pathOrUrl : `${origin}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
+  for (const product of extractJsonLdProducts(html)) {
+    if (!queryGatePasses(product.title, query, MIN_SCORE)) continue;
+    const url = joinUrl(product.url);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    out.push({
+      title: product.title,
+      merchant,
+      country: "KW",
+      price: product.price,
+      currency: product.currency ?? "KWD",
+      url,
+      inStock: product.inStock,
+      ...(product.wasPrice != null && product.wasPrice > product.price ? { wasPrice: product.wasPrice } : {}),
+      ...(product.image ? { image: product.image } : {}),
+    });
+  }
+  if (out.length > 0) return out;
+  for (const card of scanBinsinaCards(html)) {
+    if (!queryGatePasses(card.title, query, MIN_SCORE)) continue;
+    const url = joinUrl(card.url);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    out.push({
+      title: card.title,
+      merchant,
+      country: "KW",
+      price: card.price,
+      currency: card.currency ?? "KWD",
+      url,
+      inStock: card.inStock,
+      ...(card.wasPrice != null && card.wasPrice > card.price ? { wasPrice: card.wasPrice } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * REEA-723 ladder tiers — sitemap-second parser: archive rows read from the
+ * sitemap.xml `<url>` blocks. Titles ride `<image:title>` when the feed
+ * carries one (otherwise the slug tail of the loc); a row needs a price in
+ * its own block to be listed at all — an unpriced archive entry is not an
+ * offer, so rows without one stay out. Prices ride the fetched-live text,
+ * never synthesized.
+ */
+function ladderSitemapHits(xml: string, query: string, merchant: string): SearchHit[] {
+  const out: SearchHit[] = [];
+  const seen = new Set<string>();
+  const xmlText = (s: string): string => s.replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"').trim();
+  for (const block of xml.matchAll(/<url>([\s\S]*?)<\/url>/g)) {
+    const body = block[1];
+    const loc = body.match(/<loc>([^<]+)<\/loc>/)?.[1]?.trim();
+    if (!loc) continue;
+    const titleRaw = body.match(/<image:title>([^<]+)<\/image:title>/)?.[1];
+    const title = titleRaw
+      ? xmlText(titleRaw)
+      : xmlText(loc.split("/").filter(Boolean).pop() ?? "").replace(/[-_]+/g, " ");
+    if (!title || !queryGatePasses(title, query, MIN_SCORE)) continue;
+    const priceRaw = body.match(/<image:caption>[^<]*?(\d+(?:\.\d+)?)\s*(?:KD|KWD)/i)?.[1]
+      ?? body.match(/<image:(?:caption|title)>[^<]*?(\d+(?:\.\d+))/)?.[1];
+    const price = Number(priceRaw);
+    if (!Number.isFinite(price) || price <= 0) continue;
+    if (seen.has(loc)) continue;
+    seen.add(loc);
+    out.push({ title, merchant, country: "KW", price, currency: "KWD", url: loc, inStock: true });
+  }
+  return out;
+}
+
+/**
+ * REEA-723 ladder contract shared by Bomai, Hobby Center and YasO: one
+ * bounded search hop, then — only when the search view stayed silent — one
+ * bounded sitemap hop whose rows ride the second tier. Both hops ride the
+ * shared identity-alternating handshake with the mirrored clearance replay
+ * (REEA-272/369/276 machinery). Measured 2026-09-12: bomai.com answers both
+ * shapes with a bare nginx 404 shell over HTTPS, yaso.com with a 406 shell
+ * (403 over plain HTTP), Hobby Center lands its edge ERROR shell per header
+ * shape — so these lanes are silent TODAY, honestly, inside the completion
+ * window (REA-666 form); once a zone serves real archives the SAME ladder
+ * starts answering with no code change. Nothing bundled.
+ */
+async function ladderCollect(
+  fetchImpl: FetchImpl,
+  origin: string,
+  query: string,
+  merchant: string,
+): Promise<SearchHit[]> {
+  const window = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
+  const searchHtml = await fetchThroughChallenge(fetchImpl, `${origin}/search?q=${encodeURIComponent(query)}`, {}, window)
+    .then((res) => res.text())
+    .catch(() => "");
+  const hits = ladderHtmlHits(searchHtml, query, merchant, origin);
+  if (hits.length > 0 || window.aborted) return hits;
+  const xml = await fetchThroughChallenge(fetchImpl, `${origin}/sitemap.xml`, {}, window)
+    .then((res) => res.text())
+    .catch(() => "");
+  return ladderSitemapHits(xml, query, merchant);
+}
+
 export const COLLECTORS: RetailerCollector[] = [
   {
     merchant: "Xcite",
@@ -2201,6 +2365,68 @@ export const COLLECTORS: RetailerCollector[] = [
       if (qualifies(html)) return binsinaHits(html, query);
       const cleared = await jsdClearedHtml(fetchImpl, searchUrl).catch(() => "");
       return binsinaHits(qualifies(cleared) ? cleared : html !== "" ? html : cleared, query);
+    },
+  },
+  {
+    merchant: "Nest",
+    country: "KW",
+    collect: async (query, fetchImpl) => {
+      // REEA-723 — Shopify storefront whose search views render server-side
+      // per locale: the English shape rides /en/search, Arabic-script
+      // queries the RTL root locale (measured live 2026-09-12 — /en/search
+      // answers lang="en", the root /search the Arabic-first view, both with
+      // the same priced SSR cards). Arabic rides root, Latin rides /en —
+      // crawled per locale, never a guessed shared slug. Both shapes ride
+      // ONE bounded window so a mixed shelf merges from the same run; a
+      // silent hop just contributes nothing.
+      const window = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
+      const hop = async (localePath: string, q: string): Promise<string> => {
+        try {
+          const res = await fetchChecked(
+            fetchImpl,
+            `https://www.neststores.com${localePath}/search?q=${encodeURIComponent(q)}`,
+            { headers: { accept: "text/html" } },
+            window,
+          );
+          return await res.text();
+        } catch {
+          return "";
+        }
+      };
+      const lead = /[\u0600-\u06FF]/.test(query) ? "" : "/en";
+      const follow = lead === "" ? "/en" : "";
+      const bodies = await Promise.all([hop(lead, query), hop(follow, query)]);
+      const seen = new Set<string>();
+      const out: SearchHit[] = [];
+      for (const body of bodies) {
+        for (const hit of nestHits(body, query)) {
+          if (seen.has(hit.url)) continue;
+          seen.add(hit.url);
+          out.push(hit);
+        }
+      }
+      return out;
+    },
+  },
+  {
+    merchant: "Bomai",
+    country: "KW",
+    collect: (query, fetchImpl) => ladderCollect(fetchImpl, "https://bomai.com", query, "Bomai"),
+  },
+  {
+    merchant: "Hobby Center",
+    country: "KW",
+    collect: (query, fetchImpl) => ladderCollect(fetchImpl, "https://hobbycenter.com.kw", query, "Hobby Center"),
+  },
+  {
+    merchant: "YasO",
+    country: "KW",
+    collect: (query, fetchImpl) => {
+      // REEA-723 — Arabic-first RTL zone: Arabic-script queries ride the
+      // root locale, Latin queries the /en English shape — crawled per
+      // locale, never a guessed shared slug (measured 2026-09-12).
+      const shape = /[\u0600-\u06FF]/.test(query) ? "" : "/en";
+      return ladderCollect(fetchImpl, `https://yaso.com${shape}`, query, "YasO");
     },
   },
 ];

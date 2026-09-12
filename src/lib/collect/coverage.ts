@@ -68,6 +68,13 @@ export const COVERAGE_ORDER = [
   // parity pin in live-search.test.ts keeps COVERAGE_ORDER == adapter order.
   "Alghanim Electronics",
   "BinSina",
+  // REEA-723 batch tail — Nest first (per-locale Shopify SSR search), then
+  // the ladder lanes in ranking order, appended in COLLECTORS declaration
+  // order so the parity pin keeps COVERAGE_ORDER == adapter order.
+  "Nest",
+  "Bomai",
+  "Hobby Center",
+  "YasO",
 ] as const;
 
 function coverageRank(merchant: string): number {

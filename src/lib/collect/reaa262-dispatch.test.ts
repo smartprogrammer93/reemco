@@ -214,6 +214,10 @@ describe("REEA-262 staged adapter dispatch", () => {
         "Danube Home",
         "Alghanim Electronics",
         "BinSina",
+        "Nest",
+        "Bomai",
+        "Hobby Center",
+        "YasO",
       ]),
     );
 
