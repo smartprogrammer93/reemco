@@ -865,3 +865,46 @@ describe("collecting busy state on the pulse-bar rail (REEA-447 R1)", () => {
   });
 });
 
+
+describe("REEA-721 QA item5 — honest empty in the SERVED streamed document", () => {
+  const drain = async (stream: ReadableStream<Uint8Array>): Promise<string> => {
+    let html = "";
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      html += decoder.decode(value, { stream: true });
+    }
+    return html;
+  };
+
+  it("streams the zero heading + hint once the final snapshot settles at zero", async () => {
+    searchParams.set("q", "zzxwq");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    const zeroSnap: LiveSearchResult = { products: [], notes: [], suggestions: [], settled: true };
+    const stream = await renderToReadableStream(
+      <ResultsClient query="zzxwq" page={1} country={null} locale="en" stages={[Promise.resolve(zeroSnap), Promise.resolve(zeroSnap)]} />,
+    );
+    const html = await drain(stream);
+    // QA grade item 5: the delivered document itself states the honest zero —
+    // count heading plus its hint line — not only the filter row over space.
+    expect(html).toContain("zzxwq");
+    expect(html).toContain("No matches — try a shorter phrase.");
+  });
+
+  it("keeps the skeleton while a finalized-at-budget zero is still provisional", async () => {
+    searchParams.set("q", "zzxwq");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    const provisional: LiveSearchResult = { products: [], notes: [], suggestions: [], settled: false };
+    const stream = await renderToReadableStream(
+      <ResultsClient query="zzxwq" page={1} country={null} locale="en" stages={[Promise.resolve(provisional), Promise.resolve(provisional)]} />,
+    );
+    const html = await drain(stream);
+    // REEA-437 semantics hold: a zero that may still deepen behind the
+    // response keeps the skeleton until the follow-up feed answers.
+    expect(html).not.toContain("No matches — try a shorter phrase.");
+  });
+});

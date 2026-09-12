@@ -564,11 +564,16 @@ function CountHeading({ count, query, locale }: { count: number; query: string; 
    streamed chunk and only its count deepens as slower retailers land.
 
    REEA-437 AC-3 — while the count-so-far is still ZERO and more answers may
-   land (later stages pending, or this snapshot is a finalized-at-budget
-   provisional one with hops converging behind the response), the heading
-   slot keeps its skeleton instead of flashing "0 results — No matches"
-   before the cards arrive. A single settled stage answering zero is the
-   honest final answer and renders straight away. */
+   land (this snapshot is a finalized-at-budget provisional one with hops
+   converging behind the response), the heading slot keeps its skeleton
+   instead of flashing "0 results — No matches" before the cards arrive.
+
+   REEA-721 follow-up (QA grade item 5) — once the FINAL snapshot SETTLES at
+   zero the answer is honest and final: the served document itself carries
+   `0 results for …` plus CountHeading's hint line, so a no-match state
+   reads as an explicit empty result even before hydration — not just the
+   filter row over empty space. The provisional guard still speaks through
+   `settled === false`, which is exactly the finalized-at-budget shape. */
 function ResultsHeading(props: {
   stage: Promise<LiveSearchResult>;
   stagesCount: number;
@@ -580,7 +585,7 @@ function ResultsHeading(props: {
 }) {
   const snap = use(props.stage);
   const visible = stagedView(snap, props.page, props.country, props.showOutOfStock);
-  if (visible.length === 0 && (props.stagesCount > 1 || snap.settled === false)) {
+  if (visible.length === 0 && snap.settled === false) {
     return <HeadingGhost />;
   }
   return <CountHeading count={visible.length} query={props.query} locale={props.locale} />;

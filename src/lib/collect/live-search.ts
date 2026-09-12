@@ -61,6 +61,8 @@ import {
   queryMatchTokens,
   relevanceTier,
   resolveBrand,
+  skuCodeTokens,
+  titleCarriesCode,
   titleMatchesBrand,
 } from "@/lib/relevance";
 import type { Coupon, NormalizedProduct, PriceOffer, ProductAlternative, ProductVariation } from "@/types/product";
@@ -2255,6 +2257,22 @@ function effectiveKeyOf(o: { price: number; currency: string; wasPrice?: number 
  * through the selection and the tier ladder holds.
  */
 function rankByRelevance(query: string, groups: HitGroup[]): HitGroup[] {
+  // REEA-721 follow-up (QA grade item 2) — exact-SKU intent: when the query
+  // carries a part-number-shaped token (skuCodeTokens), the page is about
+  // THAT item. Rows carrying the code lead; unrelated filler never outranks
+  // them, and when no retailer answered with the code the page reads as an
+  // honest zero (heading + hint, item 5) instead of dressing up
+  // cross-category rows as results. Queries without such a token — plain
+  // phrases and short model qualifiers — keep today's ladder untouched.
+  const codes = skuCodeTokens(query);
+  const kept =
+    codes.length === 0
+      ? groups
+      : groups.filter(
+          (g) =>
+            [...g.titles].some((t) => titleCarriesCode(t, codes)) ||
+            titleCarriesCode(canonicalGroupTitle(g), codes),
+        );
   type Ranked = {
     group: HitGroup;
     arrival: number;
@@ -2264,7 +2282,7 @@ function rankByRelevance(query: string, groups: HitGroup[]): HitGroup[] {
     stocked: boolean;
     cheapest: number;
   };
-  const ranked: Ranked[] = groups.map((group, arrival) => {
+  const ranked: Ranked[] = kept.map((group, arrival) => {
     // A merged card qualifies through ANY of its member titles; the visible
     // extended-match flag reads the canonical title the card actually shows.
     const canonical = canonicalGroupTitle(group);

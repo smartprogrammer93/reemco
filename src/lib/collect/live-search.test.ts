@@ -3145,3 +3145,31 @@ describe("REEA-721 — family-led first card, merged twins, bounded head lists",
     expect(products.length).toBeGreaterThan(0);
   });
 });
+
+describe("REEA-721 QA follow-up — exact-SKU lead (grade item 2)", () => {
+  it("a hyphenated SKU query leads with the code-bearing card over unrelated filler", () => {
+    // The shape QA measured: the accessory-exact query rendered a Smeg mini
+    // fridge first because every answer sat in the same weak bucket and the
+    // price tiebreak dressed the fridge up as the result. The code token
+    // carries the intent — rows carrying it lead, the rest never outranks.
+    const products = groupHits("EF PS931CBEGWW", [
+      hit({ title: "Smeg Mini Refrigerator ,34 L,Blue", merchant: "Sultan Center", price: 59, url: "https://sc.example/smeg" }),
+      hit({ title: "Samsung EF-PS931CBEGWW Clear Hard Case for Galaxy S25", merchant: "Xcite", price: 3.9, url: "https://xcite.example/case" }),
+    ]);
+    expect(products.map((p) => p.title)).toEqual([
+      "Samsung EF-PS931CBEGWW Clear Hard Case for Galaxy S25",
+    ]);
+  });
+
+  it("descriptive queries without a distinctive code token keep the plain ladder", () => {
+    // `anker charger` has no SKU-shaped token — both matching Anker rows keep
+    // their slots exactly like before; only the relevance ladder orders them.
+    const products = groupHits("anker charger", [
+      hit({ title: "Anker 310 Compact Charger", merchant: "Xcite", price: 12, url: "https://xcite.example/c1" }),
+      hit({ title: "Anker Nano II 65W Charger", merchant: "Jarir", price: 18, url: "https://jarir.example/c2" }),
+      hit({ title: "Smeg Mini Refrigerator ,34 L,Blue", merchant: "Sultan Center", price: 59, url: "https://sc.example/smeg" }),
+    ]);
+    expect(products.length).toBeGreaterThanOrEqual(2);
+    expect(products[0]?.title).toContain("Anker");
+  });
+});

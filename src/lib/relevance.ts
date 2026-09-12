@@ -161,6 +161,43 @@ export function queryMatchTokens(query: string): string[] {
   );
 }
 
+/** REEA-721 follow-up — SKU-shaped query intent. Tokens that mix letters and
+ *  digits at real length (`ps931cbegww`, `1000xm6`) are the exact part-number
+ *  shape a shopper pastes when they want one precise item: every retailer
+ *  answer that is NOT that item is filler under such a query. Short model
+ *  qualifiers (`s25`, `xm4`) and bare numbers (`17`) carry too little signal
+ *  to narrow on — they keep today's relevance path untouched. */
+function isCodeShape(token: string): boolean {
+  // Letter-led, >=5 chars, carrying a digit: `ps931cbegww`, `mr1qk2` …
+  // Digit-led spec words (`128gb`, `1000xm6`) and short qualifiers (`s25`)
+  // carry too little identity to be the exact-SKU signal on their own.
+  return /^[a-z][a-z0-9]{4,}$/i.test(token) && /\d/.test(token);
+}
+
+export function skuCodeTokens(query: string): string[] {
+  const tokens = queryMatchTokens(query);
+  const codes = tokens.filter(isCodeShape);
+  if (codes.length === 0) return [];
+  // Exact-SKU intent only when EVERYTHING in the query is the code itself:
+  // the code tokens, a short attached prefix (`ef`, `a20`), or an Arabic
+  // category word riding along. One descriptive word (`sony`, `ipad`) turns
+  // this back into a normal model/category query — the plain ladder answers.
+  const skuShaped = tokens.every(
+    (t) => isCodeShape(t) || t.length <= 3 || /[\u0600-\u06FF]/.test(t),
+  );
+  return skuShaped ? codes : [];
+}
+
+/** True when the title carries the code once separators are folded out on
+ *  both sides — the hyphenated storefront spelling "EF-PS931CBEGWW" and the
+ *  spaced "EF PS931CBEGWW" meet here. Only >=5-char mixed letter+digit
+ *  tokens reach this helper (skuCodeTokens), which keeps a plain substring
+ *  safe: rows from another category do not share a code tail that long. */
+export function titleCarriesCode(title: string, codes: string[]): boolean {
+  const folded = title.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, "");
+  return codes.some((c) => folded.includes(c));
+}
+
 /** Curated Latin spellings of the Arabic-script tokens in a query, in token
  *  order (brand alias value first, then curated category forms). JSON
  *  storefronts whose catalogs are Latin-only answer these spellings while
