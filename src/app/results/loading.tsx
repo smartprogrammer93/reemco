@@ -10,20 +10,9 @@
  * whole block is removed on first paint by the Suspense boundary; the real
  * h1 itself ships in the first streamed flush (ResultsClient.StageAppend).
  */
-function SkeletonCard() {
-  return (
-    <div className="skeleton-card" aria-hidden>
-      <div className="skeleton-block w-2/3" />
-      <div className="skeleton-block mt-2 w-1/3" />
-      <div className="skeleton-block mt-4 w-32" />
-      <div className="skeleton-block mt-4 w-full" />
-      <div className="skeleton-block mt-2 w-full" />
-    </div>
-  );
-}
-
 import { getStrings } from "@/lib/i18n";
 import { resolveRequestLocale } from "@/lib/i18n-server";
+import { HeadingGhost, SkeletonCard, StampGhost } from "@/components/SkeletonSlots";
 
 export default async function ResultsLoading() {
   // REEA-279 — the loading stamp is chrome: it comes from the table too.
@@ -50,14 +39,11 @@ export default async function ResultsLoading() {
       <p className="meta-stamp" style={{ color: "var(--rc-muted)" }}>
         {t.checkingStores}
       </p>
-      {/* Heading slot at the h1's own display height (same clamp math as
-          --rc-text-display × line-height 1.05) so the settled heading lands
-          without pushing anything below it. */}
-      <div className="skeleton-block" style={{ width: "45%", height: "clamp(36px, 4.8vw, 55px)" }} aria-hidden />
-      {/* REEA-693 item 1 — one-line slot for the late coverage stamp (same
-          .meta-stamp type as ResultsClient.StampGhost), so the settled stamp
-          swaps into its own height instead of shifting the card block down. */}
-      <p className="meta-stamp" aria-hidden style={{ visibility: "hidden" }}>.</p>
+      {/* REEA-224 identical-markup rule: the heading/stamp reserves and the
+          named-slot card ghosts come from the shared SkeletonSlots geometry,
+          byte-identical to ResultsClient's LoadingFallback. */}
+      <HeadingGhost />
+      <StampGhost />
       <SkeletonCard />
       <SkeletonCard />
       <SkeletonCard />

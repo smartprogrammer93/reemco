@@ -23,6 +23,7 @@ import {
   type CountryCode,
 } from "@/lib/country";
 import { trackEvents } from "@/lib/telemetry";
+import { HeadingGhost, SkeletonCard, StampGhost } from "@/components/SkeletonSlots";
 import { PRODUCTS } from "@/lib/feed";
 import { isAccessoryTitle, partitionForQuery } from "@/lib/relevance";
 import { coverageLine, type LiveSearchResult } from "@/lib/collect/coverage";
@@ -92,45 +93,11 @@ class ResultsErrorBoundary extends Component<
 
 /* Brief v4 loading state: card-shaped ghosts with sheen + the slim amber
    pulse bar carrying the "checking stores" label — never a blank area.
-   REEA-224 item 2: ghosts + heading slot mirror the real geometry (see
-   .skeleton-card in globals.css and results/loading.tsx — kept identical). */
-function SkeletonCard() {
-  return (
-    <div className="skeleton-card" aria-hidden>
-      <div className="skeleton-block w-2/3" />
-      <div className="skeleton-block mt-2 w-1/3" />
-      <div className="skeleton-block mt-4 w-32" />
-      <div className="skeleton-block mt-4 w-full" />
-      <div className="skeleton-block mt-2 w-full" />
-    </div>
-  );
-}
-
-/* Heading slot at the h1's own display height (same clamp math as
-   --rc-text-display × line-height 1.05) so the settled heading lands
-   without pushing anything below it. Shared by the initial fallback and
-   the REEA-437 provisional-zero state. */
-function HeadingGhost() {
-  return (
-    <div className="skeleton-block" style={{ width: "45%", height: "clamp(36px, 4.8vw, 55px)" }} aria-hidden />
-  );
-}
-
-/* REEA-693 item 1 — the coverage stamp (StageCoverage / CoverageLine) rides a
-   LATE boundary: it lands with the final stage, after the staged cards already
-   painted. Unreserved, that late line pushes the whole visible grid down — the
-   layout shift the acceptance line forbids. A one-line invisible stamp of the
-   same .meta-stamp type reserves exactly its height, so the real sentence
-   swaps into its own slot without moving the rows above or below it. Shared
-   by the streamed fallback and the initial skeleton geometry (results/loading
-   .tsx keeps the same slot). */
-function StampGhost() {
-  return (
-    <p className="meta-stamp" aria-hidden style={{ visibility: "hidden" }}>
-      .
-    </p>
-  );
-}
+   REEA-224 item 2: ghosts + heading slot mirror the real geometry; REEA-756
+   adds the named per-retailer row slots. The geometry lives in the shared
+   SkeletonSlots module so this streamed fallback, the route flash in
+   results/loading.tsx, and the append blocks' reserves stay byte-identical
+   across all three sites. */
 
 export function LoadingFallback({ locale }: { locale?: Locale }) {
   const t = getStrings(locale ?? clientLocale());
