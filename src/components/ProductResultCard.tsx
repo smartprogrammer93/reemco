@@ -1,9 +1,9 @@
 import Link from "next/link";
 import Image from "next/image";
-import type { NormalizedProduct, PriceOffer } from "@/types/product";
+import type { NormalizedProduct, PriceOffer, ProductAlternative } from "@/types/product";
 import { buildResultsHref, type CountryCode } from "@/lib/country";
 import { effectivePriceKwd, formatCountryPrice, formatKWD, formatPrimaryPrice, sortOffers } from "@/lib/format";
-import { gradeBadgeLabel } from "@/lib/collect/canonical-product";
+import { canonicalKey, dedupVariantKey, gradeBadgeLabel } from "@/lib/collect/canonical-product";
 import { collectedClock, relativeAge } from "@/lib/relative-time";
 import CouponLine, { buildCouponRows } from "@/components/CouponLine";
 import ShareSummaryButton from "@/components/ShareSummaryButton";
@@ -175,6 +175,73 @@ function PriceBlock({
   );
 }
 
+/**
+ * REEA-787 — variant-aware retailer-row fold, applied right AFTER sortOffers
+ * so it inherits the single REEA-604 ordering key and the stable live-first
+ * order. One row survives per (merchant(lower) | folded variant tier | grade
+ * badge | effective figure):
+ *  - merchant reads case-folded — the same retailer listing one listing twice
+ *    with different spelling is one row; keep-first on the sorted order keeps
+ *    the cheapest live answer surviving;
+ *  - the tier rides dedupVariantKey (listingLabel's vocabulary): colour /
+ *    shelf-code / RAM / marketing restatements fold out, storage tiers,
+ *    LABEL_QUALIFIERS and bundle words keep rows apart;
+ *  - grade keeps its own slot (the REEA-167 badge rule): renewed/refurbished
+ *    never blends into the new-condition rows;
+ *  - the figure is the EFFECTIVE number the headline slot prints — the same
+ *    single sortOffers/effectivePrice arithmetic (card best coupon + lower
+ *    was-price evidence folded, KWD-space, ≤2 decimals) — so rows sharing a
+ *    LISTED price but landing on different effective numbers stay separate
+ *    (the post-REEA-757 rule), and equal-effective twins collapse.
+ * Pure, order-preserving, idempotent: same input array, same survivors, and
+ * a second pass over the survivors changes nothing. The OOS toggle filters
+ * BEFORE this pass (stock.ts, order-preserving), so the keep-first survivor
+ * set is identical in both toggle states — ON reveals rows in place.
+ */
+export function foldRetailerRows(
+  offers: PriceOffer[],
+  coupon: { discount: string } | null,
+): PriceOffer[] {
+  const seen = new Set<string>();
+  const rows: PriceOffer[] = [];
+  for (const o of offers) {
+    const effective = effectivePriceKwd(o.price, o.currency, {
+      wasPrice: o.wasPrice,
+      couponDiscount: coupon?.discount ?? null,
+    });
+    const key = [
+      o.merchant.toLowerCase(),
+      dedupVariantKey(o.label ?? ""),
+      gradeBadgeLabel(o.grade ?? "") ?? "",
+      formatKWD(effective),
+    ].join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push(o);
+  }
+  return rows;
+}
+
+/**
+ * REEA-787 — alternatives/pairs fold: duplicate cards for ONE matched product
+ * (the REEA-167 canonicalKey title identity — retailer spellings of the same
+ * device read as one) with an IDENTICAL formatted fromPrice collapse to the
+ * first entry. Different prices or variants never merge: the distinct-price
+ * set per section is provably unchanged — only byte-equal twins fold. Same
+ * keep-first, idempotent rule as the retailer rows.
+ */
+export function foldAlternativeRows(rows: ProductAlternative[]): ProductAlternative[] {
+  const seen = new Set<string>();
+  const out: ProductAlternative[] = [];
+  for (const a of rows) {
+    const key = `${canonicalKey(a.title)}|${formatPrimaryPrice(a.fromPrice, "KWD").label}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(a);
+  }
+  return out;
+}
+
 export default function ProductResultCard({
   product,
   isBest = false,
@@ -215,7 +282,15 @@ export default function ProductResultCard({
   // sort on the normalized effective price (coupon/was-price evidence folded,
   // KWD-based), the same scale the effective-price line prints under the hero.
   const primaryCoupon = product.coupons[0];
-  const offers = sortOffers(product.offers, primaryCoupon ?? null);
+  // REEA-787: the fold rides AFTER sortOffers — keep-first on the ranked,
+  // stable order (live-first, in-stock-first, cheapest-effective) so the
+  // surviving row of each twin group is the cheapest live answer, and the
+  // retailer count + `from` figure below read the SAME folded set the rows
+  // render (one honest count for what the shopper sees).
+  const offers = foldRetailerRows(
+    sortOffers(product.offers, primaryCoupon ?? null),
+    primaryCoupon ?? null,
+  );
   const best = offers[0];
   // Base figure for the swatch chips (REEA-254 + REEA-604): the cheapest
   // EFFECTIVE figure in KWD-space on this card — the same key the rows sort
@@ -593,8 +668,8 @@ export default function ProductResultCard({
           empty shell, never a dangling heading. */}
       {(
         [
-          [t.alternativesLabel, product.alternatives],
-          [t.pairsWithLabel, product.pairsWith ?? []],
+          [t.alternativesLabel, foldAlternativeRows(product.alternatives)],
+          [t.pairsWithLabel, foldAlternativeRows(product.pairsWith ?? [])],
         ] as const
       ).map(
         ([label, rows]) =>

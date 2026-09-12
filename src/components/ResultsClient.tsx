@@ -23,7 +23,7 @@ import {
   type CountryCode,
 } from "@/lib/country";
 import { trackEvents } from "@/lib/telemetry";
-import { HeadingGhost, SkeletonCard, StampGhost } from "@/components/SkeletonSlots";
+import { HeadingGhost, SkeletonCard, StampGhost, coverageLhTier } from "@/components/SkeletonSlots";
 import { PRODUCTS } from "@/lib/feed";
 import { isAccessoryTitle, partitionForQuery } from "@/lib/relevance";
 import { coverageLine, type LiveSearchResult } from "@/lib/collect/coverage";
@@ -121,8 +121,11 @@ export function LoadingFallback({ locale }: { locale?: Locale }) {
       <p className="meta-stamp" style={{ color: "var(--rc-muted)" }}>
         {t.checkingStores}
       </p>
+      {/* REEA-224 identical-markup rule: heading/stamp reserves + named-slot
+          card ghosts come from the shared SkeletonSlots geometry; REEA-778
+          passes the locale so the coverage-line reserve rides its lh tier. */}
       <HeadingGhost />
-      <StampGhost />
+      <StampGhost locale={locale} />
       <SkeletonCard />
       <SkeletonCard />
       <SkeletonCard />
@@ -579,8 +582,11 @@ function CoverageLine({
 }) {
   const text = coverageLine(notes, locale, products);
   if (!text) return null;
+  // REEA-778 — the settled sentence rides the SAME lh-tier box as its
+  // StampGhost reserve (one shared deterministic box per locale tier): the
+  // swap changes no height, so nothing below moves when the line lands.
   return (
-    <p className="meta-stamp" style={{ color: "var(--rc-muted)" }}>
+    <p className="meta-stamp coverage-line" style={{ color: "var(--rc-muted)", minHeight: `${coverageLhTier(locale)}lh` }}>
       {text}
     </p>
   );
@@ -794,7 +800,13 @@ function StagedResults(props: {
   return (
     <ResultsErrorBoundary locale={locale}>
       <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
-      <Suspense fallback={null}>
+      {/* REEA-778 check 2 — the heading/stamp reserves ride the FIRST
+          streamed flush: the boundaries carry the shared SkeletonSlots
+          ghosts as their fallback markup, so the served document paints
+          heading-slot + coverage-line boxes before either boundary swaps,
+          and the settled heading/stamp land in-slot instead of pushing the
+          already-painted card grid down (~79px on the old null fallback). */}
+      <Suspense fallback={<HeadingGhost />}>
         <ResultsHeading
           // REEA-382 AC-1 — the count reads from the FINAL stage, the same
           // snapshot the appended flushes converge onto, so the delivered
@@ -812,7 +824,7 @@ function StagedResults(props: {
           showOutOfStock={showOutOfStock} locale={locale}
         />
       </Suspense>
-      <Suspense fallback={<StampGhost />}>
+      <Suspense fallback={<StampGhost locale={locale} />}>
         <StageCoverage
           stages={stages}
           page={page}

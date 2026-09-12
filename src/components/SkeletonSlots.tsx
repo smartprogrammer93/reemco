@@ -21,22 +21,43 @@ import { COVERAGE_ORDER } from "@/lib/collect/coverage";
 /* Heading slot at the h1's own display height (same clamp math as
    --rc-text-display × line-height 1.05) so the settled heading lands
    without pushing anything below it. Shared by the initial fallback and
-   the REEA-437 provisional-zero state. */
+   the REEA-437 provisional-zero state. REEA-778 check 2: the class pair
+   `heading-slot skeleton-block` is what the first streamed flush must
+   carry, so the heading paints in-slot from the very first paint. */
 export function HeadingGhost() {
   return (
-    <div className="skeleton-block" style={{ width: "45%", height: "clamp(36px, 4.8vw, 55px)" }} aria-hidden />
+    <div className="heading-slot skeleton-block" style={{ width: "45%", height: "clamp(36px, 4.8vw, 55px)" }} aria-hidden />
   );
+}
+
+/* REEA-778 lh-tier — the ONE deterministic coverage-line box for both
+   streaming states. The settled coverage sentence wraps by locale: one
+   line in EN, ~two in AR (the Arabic sentence is longer than the Latin
+   one at the same width). A single shared reserve per locale tier — sized
+   in lh (the .meta-stamp line-height unit already set by the font token)
+   — keeps the reserve and the settled sentence in the SAME box, so the
+   swap never changes height and the grid below never moves. Same helper
+   on both sides of the boundary swap is the identical-markup rule (REEA-
+   224) for this slot. */
+export function coverageLhTier(locale?: string): number {
+  return locale === "ar" ? 2 : 1;
 }
 
 /* REEA-693 item 1 — the coverage stamp (StageCoverage / CoverageLine) rides a
    LATE boundary: it lands after the staged card blocks have already painted.
    Unreserved, that late line pushes the whole visible grid down between
-   flushes — the layout shift the acceptance line forbids. A one-line
-   invisible stamp of the same .meta-stamp type reserves exactly its height,
-   so the real sentence swaps into its own slot without moving anything. */
-export function StampGhost() {
+   flushes — the layout shift the acceptance line forbids. REEA-778: the
+   reserve rides the SAME `meta-stamp coverage-line` grammar as the settled
+   sentence, sized to the locale's lh tier (EN one line, AR two), so the
+   real coverage line swaps into its own box and paints in-slot from the
+   first streamed flush. */
+export function StampGhost({ locale }: { locale?: string } = {}) {
   return (
-    <p className="meta-stamp" aria-hidden style={{ visibility: "hidden" }}>
+    <p
+      className="meta-stamp coverage-line"
+      aria-hidden
+      style={{ visibility: "hidden", minHeight: `${coverageLhTier(locale)}lh` }}
+    >
       .
     </p>
   );

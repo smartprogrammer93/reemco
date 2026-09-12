@@ -41,9 +41,10 @@ export default async function ResultsLoading() {
       </p>
       {/* REEA-224 identical-markup rule: the heading/stamp reserves and the
           named-slot card ghosts come from the shared SkeletonSlots geometry,
-          byte-identical to ResultsClient's LoadingFallback. */}
+          byte-identical to ResultsClient's LoadingFallback. REEA-778: the
+          stamp reserve rides the locale lh tier (AR ~two lines). */}
       <HeadingGhost />
-      <StampGhost />
+      <StampGhost locale={locale} />
       <SkeletonCard />
       <SkeletonCard />
       <SkeletonCard />

@@ -608,9 +608,56 @@ export function listingLabel(listingTitle: string, cardTitle: string): string {
   return axisLabel(kept.join(" "));
 }
 
+/** REEA-787 — bundle words: a listing that ships more than the bare device
+ *  ("Bundle", "Kit", "Duo") is a different offer, never a restatement —
+ *  these keep rows apart inside the tier fold, same role as the qualifier
+ *  class below them. */
+const BUNDLE_WORDS = new Set(["bundle", "bundles", "combo", "kit", "duo", "trio"]);
+
+/**
+ * REEA-787 — the variant-tier fold for retailer-row dedup. Rides listingLabel's
+ * existing vocabulary (the same word classes, not a second registry): colour
+ * words close into the swatch chips, shelf-code shapes restate the retailer's
+ * own prefix, RAM restatements and marketing tails restate what the tier
+ * already carries — all of it folds OUT of the key so three spellings of one
+ * listing ("256 GB", "256GB", "256 GB - Black") collapse to one row. What
+ * survives keeps rows apart: storage tiers (256gb vs 512gb), LABEL_QUALIFIERS
+ * ("Japanese Version", "eSIM" — the REEA-486 AC-6 visible-label rule), and
+ * bundle words. Deterministic tokenizer pass (canonicalTokens): casing,
+ * punctuation and joined-unit spellings ("256 GB" ≡ "256GB") land on the same
+ * key in both scripts; same inputs, same fold, every render.
+ */
+export function dedupVariantKey(label: string): string {
+  const tokens = canonicalTokens(label);
+  const kept: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (LABEL_QUALIFIERS.has(t) || LABEL_QUALIFIERS.has(normalizeArabicText(t))) {
+      kept.push(t);
+      continue;
+    }
+    if (BUNDLE_WORDS.has(t)) {
+      kept.push(t);
+      continue;
+    }
+    if (COLORS.has(t) || COLOR_PREFIXES.has(t)) continue; // swatch chips own colours
+    if (GRADE_WORDS.has(t) || GRADE_LETTERS.has(t) || t === "grade" || t === "open-box") continue; // the grade badge rides its own key slot
+    if (RAM_QUANTITY_RE.test(t) || RAM_WORDS.has(t)) continue; // RAM restatement
+    if (/^\d+(?:\.\d+)?(?:gb|tb)$/i.test(t) && RAM_WORDS.has(tokens[i + 1] ?? "")) continue; // "12GB RAM" glued form: the quantity is the RAM restatement
+    if (STORAGE_RE.test(t)) {
+      kept.push(t);
+      continue;
+    }
+    if (noised(t)) continue; // marketing/connectivity restatements ride off
+    if (SHELF_CODE_RE.test(t) || isCodeShape(t)) continue; // retailer's own shelf prefix
+    if (/^\p{N}+(?:[.,]\p{N}+)?$/u.test(t)) continue; // bare counts restate the tier
+    kept.push(t); // plain words carry tier information ("Max")
+  }
+  return kept.join(" ");
+}
+
 /** Decode the handful of entities retailer listing titles actually ship so
- *  chips print `6.9"` and not the raw `&quot;` tail (REA-674 fix 2). */
-function decodeListingEntities(s: string): string {
+ *  chips print `6.9"` and not the raw `&quot;` tail (REA-674 fix 2). */function decodeListingEntities(s: string): string {
   return s
     .replace(/&nbsp;/gi, " ")
     .replace(/&quot;/gi, '"')

@@ -908,3 +908,27 @@ describe("REEA-721 QA item5 — honest empty in the SERVED streamed document", (
     expect(html).not.toContain("No matches — try a shorter phrase.");
   });
 });
+
+/* REEA-778 check 2 — the heading/stamp reserves paint from the FIRST streamed
+   flush: the served document itself carries the heading-slot block and the
+   coverage-line lh-tier box, so heading/stamp swap IN-TO their slots instead
+   of pushing the already-painted card grid down (~79px on the old head). */
+describe("first-flush reserves (REEA-778)", () => {
+  const PENDING: Promise<LiveSearchResult> = new Promise(() => {});
+
+  it("inlines heading-slot + coverage-line reserves into the streamed shell", () => {
+    const html = renderToStaticMarkup(
+      <ResultsClient query="iPhone 17 Pro" page={1} country={null} stages={[PENDING]} locale="en" />,
+    );
+    expect(html).toContain("heading-slot skeleton-block");
+    expect(html).toContain('class="meta-stamp coverage-line"');
+  });
+
+  it("sizes the coverage-line reserve on the locale lh tier (EN 1lh, AR 2lh)", () => {
+    const en = renderToStaticMarkup(<LoadingFallback locale="en" />);
+    const ar = renderToStaticMarkup(<LoadingFallback locale="ar" />);
+    expect(en).toContain('class="meta-stamp coverage-line"');
+    expect(en).toContain("min-height:1lh");
+    expect(ar).toContain("min-height:2lh");
+  });
+});

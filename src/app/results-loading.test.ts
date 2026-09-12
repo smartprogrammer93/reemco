@@ -58,12 +58,22 @@ describe("ResultsLoading flash locale (REA-437 / REEA-448 G2)", () => {
     const html = await renderFlash();
     expect(await stamp(html)).toBe("Checking live stores…");
     expect(html).toContain("skeleton-card");
+    // REEA-778 check 2 — the reserves ride the flash markup itself: heading
+    // slot + locale-tiered coverage-line box, painted before any boundary
+    // swaps so heading/stamp land in-slot with zero pushdown. EN tier: 1lh.
+    expect(html).toContain("heading-slot skeleton-block");
+    expect(html).toContain('class="meta-stamp coverage-line"');
+    expect(html).toContain("min-height:1lh");
   });
 
   it("takes the Arabic flash stamp from the next-url query hint", async () => {
     nextUrlValue = "/results?q=%D8%A2%D9%8A%D9%81%D9%88%D9%86";
     const html = await renderFlash();
     expect(await stamp(html)).toBe("جارٍ التحقق من المتاجر…");
+    // REEA-778 — the AR coverage sentence wraps to ~two lines: the shared
+    // lh-tier box reserves BOTH lines, so the settled line never stretches
+    // the box it lands in.
+    expect(html).toContain("min-height:2lh");
   });
 
   it("takes the Arabic flash stamp from the proxy-forwarded query text on a cold GET", async () => {
