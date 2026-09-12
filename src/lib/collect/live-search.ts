@@ -57,6 +57,7 @@ import {
   latinBridgeDispatch,
   latinQueryForms,
   matchesQueryToken,
+  narrowDeviceLead,
   narrowSkuLead,
   normalizedTitle,
   queryMatchTokens,
@@ -74,6 +75,7 @@ import type { Coupon, NormalizedProduct, PriceOffer, ProductAlternative, Product
 import type { LiveSearchResult } from "@/lib/collect/coverage";
 export type { LiveSearchResult } from "@/lib/collect/coverage";
 export { coverageLine } from "@/lib/collect/coverage";
+import { deviceLeadFlags } from "@/lib/collect/coverage";
 
 /**
  * Per-attempt fetch ceiling for the search fan-out (parallel per retailer).
@@ -3543,10 +3545,25 @@ const NO_CACHE: QueryCache = {
  *  cannot drift; suggestions ride the same partition to stay consistent. */
 function skuLeadSnap(q: string, snap: LiveSearchResult): LiveSearchResult {
   if (snap.products.length === 0) return snap;
+  // REEA-793 B1 — device-intent queries get the same serve-time treatment:
+  // device rows (non-accessory titles) re-head the stored list, stored order
+  // holds inside, honest accessory-only sets pass through untouched (the
+  // pending flag below carries that state instead of a fake device lead).
+  // Pure and idempotent, so re-serving a narrowed snapshot cannot drift.
+  const isDeviceRow = (p: { title: string }) => !isAccessoryTitle(p.title);
+  const products = narrowDeviceLead(q, narrowSkuLead(q, snap.products), isDeviceRow);
+  const suggestions = snap.suggestions
+    ? narrowDeviceLead(q, narrowSkuLead(q, snap.suggestions), isDeviceRow)
+    : undefined;
+  // REEA-793 B1/B2 — the honesty flags derive from the SAME narrowed set the
+  // page renders, so the pending markup can never disagree with the rows.
+  const flags = deviceLeadFlags(q, products);
   return {
     ...snap,
-    products: narrowSkuLead(q, snap.products),
-    ...(snap.suggestions ? { suggestions: narrowSkuLead(q, snap.suggestions) } : {}),
+    products,
+    ...(suggestions ? { suggestions } : {}),
+    ...(flags.deviceLeadPending ? { deviceLeadPending: true } : {}),
+    ...(flags.kuwaitPendingStatus ? { kuwaitPendingStatus: true } : {}),
   };
 }
 

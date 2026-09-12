@@ -1,4 +1,10 @@
 import type { NormalizedProduct } from "@/types/product";
+import {
+  curatedBrandInTitle,
+  isAccessoryTitle,
+  narrowDeviceLead,
+  titleHasDeviceIntent,
+} from "@/lib/relevance";
 
 /**
  * REEA-437 — pure helpers shared by the LIVE collect chain (live-search.ts)
@@ -36,6 +42,24 @@ export interface LiveSearchResult {
    * Absent/undefined means the snapshot is the honest settled answer.
    */
   settled?: boolean;
+  /**
+   * REEA-793 B1 — true ONLY on snapshots whose query carries device intent
+   * (brand+model shape) while ZERO device-family rows rendered and at least
+   * one accessory row did: the completion budget closed before the device
+   * offer landed, so the page shows the labeled pending row under the count
+   * line instead of letting an accessory impersonate the Best-price slot.
+   * Absent/undefined = not pending (normal pass, byte-for-byte markup).
+   */
+  deviceLeadPending?: boolean;
+  /**
+   * REEA-793 B2 — true ONLY when the rendered set carries ZERO offers from
+   * the Kuwait-primary retailers (Xcite, Jarir, Eureka, Sultan Center) while
+   * fallback (non-Kuwait) offers did render: the Kuwait-primary hops missed
+   * the completion budget, so the page states it honestly instead of
+   * silently degrading to an Egypt-only listing. Derived purely from the
+   * already-rendered offer state — no extra fetch, no bundled registry.
+   */
+  kuwaitPendingStatus?: boolean;
 }
 
 /* Fixed presentation order for the coverage sentence — mirrors the COLLECTORS
@@ -208,4 +232,89 @@ export function aggregateAlternativesFill(
     }
   }
   return { productsSeen: seen, productsWithAlternatives: filled, nonEmptyRate: seen > 0 ? filled / seen : null };
+}
+
+/* REEA-793 — B1 device-first lead + B2 Kuwait coverage honesty. Pure helpers
+   shared by the serve-time guard (live-search.ts) and the results shell
+   (ResultsClient.tsx); same dependency-light contract as the rest of this
+   module (relevance.ts is pure string logic, browser-safe). */
+
+/** The four Kuwait-primary retailers the coverage status speaks for
+ *  (REEA-793 B2). Fixed list, mirrors the COVERAGE_ORDER head — a plain name
+ *  list, no registry, so a merchant is counted only when its OWN live offers
+ *  actually rendered. */
+export const KUWAIT_PRIMARY_MERCHANTS: readonly string[] = [
+  "Xcite",
+  "Jarir",
+  "Eureka",
+  "Sultan Center",
+];
+
+/** REEA-793 B1 — does the QUERY itself carry device intent (brand+model
+ *  shape)? Same predicates the client tier gate and the ranker use, applied
+ *  to the query string: a curated brand word or a model-code token. Accessory
+ *  queries (case, charger) never carry device intent and pass untouched. */
+export function queryHasDeviceIntent(query: string): boolean {
+  return titleHasDeviceIntent(query) || curatedBrandInTitle(query) !== null;
+}
+
+export interface DeviceLeadFlags {
+  /** Device-intent query, zero device rows rendered, ≥1 accessory rendered. */
+  deviceLeadPending: boolean;
+  /** Zero Kuwait-primary hits among rendered rows, fallback rows rendered. */
+  kuwaitPendingStatus: boolean;
+}
+
+/** REEA-793 — derive BOTH honesty flags from the same offer state the page
+ *  renders. Pure: no fetches, no clocks, no env — the flags are a function of
+ *  (query, rendered products) so a cached snapshot re-derives identically and
+ *  the flags can never disagree with what is actually on screen. An empty
+ *  rendered set flags neither (the provisional-zero skeleton owns that state,
+ *  REEA-437 grammar). */
+export function deviceLeadFlags(
+  query: string,
+  products: readonly NormalizedProduct[],
+): DeviceLeadFlags {
+  if (products.length === 0 || !queryHasDeviceIntent(query)) {
+    return { deviceLeadPending: false, kuwaitPendingStatus: false };
+  }
+  let devices = 0;
+  let accessories = 0;
+  let kuwait = false;
+  for (const p of products) {
+    if (isAccessoryTitle(p.title)) accessories += 1;
+    else devices += 1;
+    if (!kuwait) {
+      for (const o of p.offers) {
+        if (KUWAIT_PRIMARY_MERCHANTS.includes(o.merchant)) {
+          kuwait = true;
+          break;
+        }
+      }
+    }
+  }
+  return {
+    // Device offer missed the budget: accessories rendered, devices did not.
+    deviceLeadPending: devices === 0 && accessories > 0,
+    // Kuwait-primary missed the budget: fallback offers rendered, none of the
+    // four Kuwait-primary merchants has a single rendered offer.
+    kuwaitPendingStatus: kuwait === false,
+  };
+}
+
+/** REEA-793 B1 — re-head a snapshot so the matching device-family offer
+ *  leads: device rows (non-accessory titles) first, everything else keeping
+ *  its stored order behind them. Only meaningful under a device-intent
+ *  query; plain and accessory queries pass through unchanged. Pure and
+ *  idempotent (stable two-pass partition, same contract as narrowSkuLead):
+ *  a snapshot narrowed twice reads identical, so a memo hit of an
+ *  already-narrowed snapshot cannot drift. When NO device row rendered the
+ *  stored order stands — the pending-row flag above carries the honesty
+ *  state, the list is never re-ranked into a fake device lead. */
+export function deviceLeadSnap<T extends { title: string }>(
+  query: string,
+  products: readonly T[],
+): T[] {
+  if (!queryHasDeviceIntent(query)) return [...products];
+  return narrowDeviceLead(query, products, (p) => !isAccessoryTitle(p.title));
 }

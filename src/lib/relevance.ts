@@ -660,6 +660,34 @@ export function partitionForQuery<T extends { title: string }>(
   return { tiered: true, devices, accessories };
 }
 
+/** REEA-793 B1 — device-first serve-time head guard, the narrowSkuLead
+ *  pattern applied to the DEVICE/ACCESSORY split of a device-intent query.
+ *  Stored snapshots (memo hits, cache-first flushes, KV replays) were ranked
+ *  by the chain that wrote them; some predate the device-first ranking, so
+ *  an accessory row could lead a device-intent query at read time. This
+ *  helper re-heads such a snapshot at SERVE time: rows the caller's
+ *  device-row predicate accepts lead, everything else keeps its stored
+ *  order behind them. The predicate is injected (not imported) so the guard
+ *  stays dependency-light and reusable across call sites. When NO device row
+ *  rendered the stored order stands — the pending flag on the served
+ *  snapshot carries the honesty state, the list is never re-ranked into a
+ *  fake device lead. Pure and idempotent (a stable two-pass partition, same
+ *  contract as narrowSkuLead): a snapshot narrowed twice reads identical, so
+ *  a memo hit of an already-narrowed snapshot cannot drift. Locale-
+ *  independent — the guard reads only the predicate's verdict per row. */
+export function narrowDeviceLead<T>(
+  query: string,
+  products: readonly T[],
+  isDeviceRow: (row: T) => boolean,
+): T[] {
+  if (!titleHasDeviceIntent(query)) return [...products];
+  const lead: T[] = [];
+  const rest: T[] = [];
+  for (const p of products) (isDeviceRow(p) ? lead : rest).push(p);
+  if (lead.length === 0) return [...products];
+  return [...lead, ...rest];
+}
+
 /** REEA-743 — the exact-SKU head guard re-applied at SERVE time. The fresh
  *  fan-out narrows inside rankByRelevance, but stored snapshots (memo hits,
  *  stale cache-first flushes, shared-layer KV replays) were ranked by the
