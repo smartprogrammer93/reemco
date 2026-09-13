@@ -7,14 +7,15 @@ name: Deploy site
 # gating now lives in the Vercel buildCommand (vercel.json); this workflow is
 # the verified manual path: rollback via rollback_sha, KV re-attach, redeploy.
 #
-# REEA-314 budget: automatic deploys ride Vercel's own git-connected project
-# build (Project settings → Git → "Connected" + Production Branch: main),
-# which runs on Vercel compute and consumes zero GitHub Actions minutes.
-# This workflow stays as the VERIFIED manual path: rollback via rollback_sha,
-# KV re-attach, or re-deploying a known-good commit — run it from Actions >
-# Deploy site > Run workflow. It no longer triggers on every push, so the
-# repo's hosted-minutes footprint stays inside the ~2,000 min/month free
-# allowance (per-push CI+deploy pairs measured ~15,000 min/month).
+# REEA-314 budget, revised by REEA-813: automatic deploys ride pickup.yml
+# (`vercel deploy --prod` per push to main, ~18m ceiling). The Vercel-side
+# git-connected build was DISCONNECTED (REEA-813) — running it alongside
+# pickup.yml issued two production deployments per commit and the loser died
+# on the Hobby single-build slot. This workflow stays as the VERIFIED manual
+# path: rollback via rollback_sha, KV re-attach, or re-deploying a known-good
+# commit — run it from Actions > Deploy site > Run workflow. It no longer
+# triggers on every push, so the repo's hosted-minutes footprint stays inside
+# the ~2,000 min/month free allowance.
 #
 # Required repo secret (Settings > Secrets > Actions, env injection only):
 #   VERCEL_TOKEN (+ optional VERCEL_TEAM_ID for --scope)
@@ -244,28 +245,15 @@ jobs:
           CODE=$(curl -s -o "$LIST_JSON" -w '%{http_code}' -m 30 -H "$AUTH" "$BASE/v9/projects/reemco/env$Q" || echo 000)
           echo "verify GET env list after attach -> HTTP $CODE"
           echo "KV binding listed on reemco: $(has_both && echo yes || echo no)"
-      # REEA-314 finisher: make Vercel rebuild on every push itself, so
-      # automatic deploys stop needing this workflow (and any Actions minutes)
-      # at all. Idempotent: when already connected the CLI reports the existing
-      # link; either way a bounded, non-fatal step - the deploy below works
-      # with or without it. Token comes from repo secrets via env injection
-      # only; never echoed (CLI prints masked output).
-      - name: Enable push-triggered Vercel builds (REEA-314)
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
-        run: |
-          set -u
-          export VERCEL_TELEMETRY_DISABLED=1
-          [ -z "${VERCEL_TOKEN:-}" ] && { echo "VERCEL_TOKEN unset - skipping git connect"; exit 0; }
-          SCOPE_ARGS=""
-          if [ -n "${VERCEL_TEAM_ID:-}" ]; then SCOPE_ARGS="--scope $VERCEL_TEAM_ID"; fi
-          timeout --signal=INT 3m npx -y vercel@59.11.7 git connect \
-            --cwd "$GITHUB_WORKSPACE" $SCOPE_ARGS \
-            2>&1 | tail -5 || echo "git connect returned non-zero (already-connected is fine)"
-          timeout --signal=INT 2m npx -y vercel@59.11.7 git inspect \
-            --cwd "$GITHUB_WORKSPACE" $SCOPE_ARGS \
-            2>&1 | tail -6 || echo "git inspect unavailable"
+      # REEA-813: the repo-level GitHub deploy hook (vercel git connect) is
+      # permanently disconnected. Keeping both it and pickup.yml's CLI deploy
+      # produced TWO production deployments per push to main — the
+      # git-integration build lost the Hobby-plan single-build slot to the
+      # arriving CLI build and died with ERROR/CANCELED (~40s+ of wasted
+      # compute and a red check on every commit). pickup.yml is now the ONLY
+      # push-deploy path; deploy.yml stays the verified manual/rollback path.
+      # Do NOT re-run `vercel git connect` against this project while
+      # pickup.yml triggers on push.
 
       - name: Deploy to Vercel production (reemco.vercel.app)
         env:
