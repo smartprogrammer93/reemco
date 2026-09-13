@@ -20,6 +20,7 @@ import {
   toViolation,
 } from "@/lib/csp-report";
 import { checkRateLimitShared } from "@/lib/rate-limit-kv";
+import { rateLimitHeaders } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,7 +43,7 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   const gate = await checkRateLimitShared(`csp-report:${clientKey(req)}`, Date.now());
   if (!gate.allowed) {
-    return Response.json({ error: "rate limit exceeded" }, { status: 429 });
+    return Response.json({ error: "rate limit exceeded" }, { status: 429, headers: rateLimitHeaders(gate) });
   }
 
   const text = await req.text();

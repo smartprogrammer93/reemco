@@ -19,6 +19,7 @@
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { checkRateLimitShared } from "@/lib/rate-limit-kv";
+import { rateLimitHeaders } from "@/lib/rate-limit";
 import { recordLinkSmoke } from "@/lib/metrics";
 
 export const runtime = "nodejs";
@@ -52,7 +53,7 @@ export async function POST(req: Request): Promise<Response> {
 
   const gate = await checkRateLimitShared(clientKey(req), Date.now(), SMOKE_RATE_LIMIT);
   if (!gate.allowed) {
-    return Response.json({ error: "rate limit exceeded" }, { status: 429 });
+    return Response.json({ error: "rate limit exceeded" }, { status: 429, headers: rateLimitHeaders(gate) });
   }
 
   const text = await req.text();

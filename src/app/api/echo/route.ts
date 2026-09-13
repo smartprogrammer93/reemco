@@ -41,6 +41,7 @@ import { jsdClearedHtml } from "@/lib/collect/live-search";
 // window otherwise). Gate sits ahead of the probe fan-out: past the limit
 // the route answers 429 with ZERO upstream fetches.
 import { checkRateLimitShared } from "@/lib/rate-limit-kv";
+import { rateLimitHeaders } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -203,7 +204,7 @@ export async function GET(req: Request): Promise<Response> {
   // binding is present (per-instance fallback otherwise).
   const gate = await checkRateLimitShared(`echo:${clientKey(req)}`, Date.now());
   if (!gate.allowed) {
-    return Response.json({ error: "rate limit exceeded" }, { status: 429 });
+    return Response.json({ error: "rate limit exceeded" }, { status: 429, headers: rateLimitHeaders(gate) });
   }
   // The hop identity rides verbatim to the echo services, so what they report
   // IS what the retailer zones see from this runtime (headers + source IP).
@@ -242,20 +243,25 @@ export async function GET(req: Request): Promise<Response> {
     withClearanceTier(fetch, pckRaw, PCK_URL),
   ]);
 
-  return Response.json({
-    hop: echo.headers,
-    originIp: echo.originIp || fallbackIp,
-    echoError: echo.error,
-    zones: {
-      "www.luluhypermarket.com": lulu,
-      "pckuwait.com": pckuwait,
-      "www.sultan-center.com": sultan,
+  // REEA-837 — the budget is observable on success responses too, so a burst
+  // is diagnosable before it trips.
+  return Response.json(
+    {
+      hop: echo.headers,
+      originIp: echo.originIp || fallbackIp,
+      echoError: echo.error,
+      zones: {
+        "www.luluhypermarket.com": lulu,
+        "pckuwait.com": pckuwait,
+        "www.sultan-center.com": sultan,
+      },
+      pinned: {
+        "www.luluhypermarket.com": luluPinned,
+        "pckuwait.com": pckPinned,
+      },
+      identity: VERIFIED_BOT_HEADERS["user-agent"],
+      checkedAt: new Date().toISOString(),
     },
-    pinned: {
-      "www.luluhypermarket.com": luluPinned,
-      "pckuwait.com": pckPinned,
-    },
-    identity: VERIFIED_BOT_HEADERS["user-agent"],
-    checkedAt: new Date().toISOString(),
-  });
+    { headers: rateLimitHeaders(gate) },
+  );
 }

@@ -78,7 +78,14 @@ export async function checkRateLimitShared(
       const id = windowIdAt(now, opts.windowMs);
       const count = await kv.incr(sharedWindowKey(key, id), Math.ceil(opts.windowMs / 1000) + TTL_SLACK_S);
       if (typeof count === "number" && Number.isFinite(count)) {
-        return { allowed: count <= opts.limit, remaining: Math.max(0, opts.limit - count) };
+        // Fixed window: the reset is exactly the end of the current window.
+        const retryAfterMs = (id + 1) * opts.windowMs - now;
+        return {
+          allowed: count <= opts.limit,
+          remaining: Math.max(0, opts.limit - count),
+          limit: opts.limit,
+          ...(count > opts.limit ? { retryAfterMs: Math.max(1, retryAfterMs) } : {}),
+        };
       }
     } catch {
       // KV hiccup — degrade to the local layer below.

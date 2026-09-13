@@ -64,7 +64,9 @@ describe("REEA-827 shared fixed-window counter", () => {
     // re-arm the budget (that is the per-instance blindness being fixed).
     resetRateLimiter();
     const drained = await checkRateLimitShared("echo:203.0.113.9", now, opts);
-    expect(drained).toEqual({ allowed: false, remaining: 0 });
+    // REEA-837 — denials carry the budget shape + exact fixed-window reset
+    // (window id floor(t/60s)=28333333 ends at t+40000).
+    expect(drained).toEqual({ allowed: false, remaining: 0, limit: 3, retryAfterMs: 40_000 });
     expect(kv.counts.size).toBe(1);
   });
 
@@ -192,6 +194,13 @@ describe("REEA-827 GET /api/echo rides the shared counter (Upstash-shaped REST s
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("rate limit exceeded");
     expect(probeCalls).toBe(0);
+    // REEA-837 — the denial is self-describing on the wire: the caller sees
+    // the budget and how long to back off, without tripping it again.
+    expect(res.headers.get("x-ratelimit-limit")).toBe(String(RATE_LIMIT.limit));
+    expect(res.headers.get("x-ratelimit-remaining")).toBe("0");
+    const retryAfter = Number(res.headers.get("retry-after"));
+    expect(retryAfter).toBeGreaterThanOrEqual(1);
+    expect(retryAfter).toBeLessThanOrEqual(60);
   });
 
   it("under-budget caller passes the gate; KV keys carry no raw IP", async () => {
@@ -201,6 +210,10 @@ describe("REEA-827 GET /api/echo rides the shared counter (Upstash-shaped REST s
     const body = (await res.json()) as { checkedAt: string };
     expect(body.checkedAt).toBeTruthy();
     expect(probeCalls).toBeGreaterThan(0);
+    // REEA-837 — success responses expose the remaining budget (no Retry-After).
+    expect(res.headers.get("x-ratelimit-limit")).toBe(String(RATE_LIMIT.limit));
+    expect(Number(res.headers.get("x-ratelimit-remaining"))).toBeGreaterThan(0);
+    expect(res.headers.get("retry-after")).toBeNull();
     for (const key of store.keys()) {
       expect(key.startsWith(RATE_LIMIT_KV_PREFIX)).toBe(true);
       expect(key).not.toContain("198.51.100.4");
