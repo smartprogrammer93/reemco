@@ -10,6 +10,7 @@ import ShareSummaryButton from "@/components/ShareSummaryButton";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import { resolveOfferUrl } from "@/lib/links";
 import { formatSeenRangeLabel } from "@/lib/seen-range";
+import { cleanDisplayTitle, displayTitleChanged } from "@/lib/display-title";
 import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
 import FreshnessBadge from "@/components/FreshnessBadge";
 
@@ -278,6 +279,13 @@ export default function ProductResultCard({
 }) {
   const detail = variant === "detail";
   const t = getStrings(locale ?? clientLocale());
+  // REEA-836 — display-side title hygiene: the card renders the cleaned
+  // title; the retailer's raw string stays one interaction away (hover title
+  // attribute + the disclosure below) and every other consumer of
+  // product.title (matching, ranking, share summary, links) is untouched —
+  // presentation only, no adapter or stored-data change.
+  const displayTitle = cleanDisplayTitle(product.title);
+  const titleChanged = displayTitleChanged(product.title, displayTitle);
   // REEA-604 — the card's best coupon folds into the ONE ordering key: rows
   // sort on the normalized effective price (coupon/was-price evidence folded,
   // KWD-based), the same scale the effective-price line prints under the hero.
@@ -342,16 +350,23 @@ export default function ProductResultCard({
             existing wrap rules for long titles and narrow viewports hold. */}
         <div className="flex min-w-0 items-start gap-2">
           <ThumbRow product={product} />
-          {/* Title links to the product page; underline on hover only (§3.3) */}
-          <h2 className="min-w-0" style={{ font: "var(--rc-text-title)", color: "var(--rc-ink)" }}>
+          {/* Title links to the product page; underline on hover only (§3.3).
+              REEA-836 AC3: the h2's native title attribute carries the FULL
+              original retailer string on hover (≤1 interaction); the tap path
+              is the disclosure below. */}
+          <h2
+            className="min-w-0"
+            style={{ font: "var(--rc-text-title)", color: "var(--rc-ink)" }}
+            title={titleChanged ? product.title : undefined}
+          >
             {detail ? (
-              product.title
+              displayTitle
             ) : (
               <Link
                 href={`/product/${encodeURIComponent(product.productId)}`}
                 className="hover:underline"
               >
-                {product.title}
+                {displayTitle}
               </Link>
             )}
           </h2>
@@ -370,6 +385,25 @@ export default function ProductResultCard({
           />
         )}
       </div>
+
+      {/* REEA-836 AC3 — transparency, not data loss: when the rendered title
+          was cleaned, the retailer's FULL original string stays one tap away
+          (native <details>: one click/tap, keyboard-accessible, no JS). One
+          interaction on both pointer and touch; renders nothing on cards
+          whose title needed no cleanup (AC6). */}
+      {titleChanged && (
+        <details className="mt-1">
+          <summary
+            className="label-token cursor-pointer list-none inline-flex items-center rounded px-2 py-0.5"
+            style={{ color: "var(--rc-muted)", border: "1px solid var(--rc-line)" }}
+          >
+            {t.originalTitleLabel}
+          </summary>
+          <p className="mt-1" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
+            {product.title}
+          </p>
+        </details>
+      )}
 
       {/* REEA-760 coupon honesty line (spec eb16258c, ACCEPT REEA-748): one
           line per ISSUING retailer under the price cluster — chip carries the
@@ -690,8 +724,13 @@ export default function ProductResultCard({
                           href={buildResultsHref(a.title, 1, country, showOutOfStock)}
                           className="min-w-0 hover:underline"
                           style={{ font: "var(--rc-text-body)", fontWeight: 500, color: "var(--rc-ink)" }}
+                          /* REEA-836 AC1: alternative rows are displayed listing
+                              titles too — the same render-time cleanup applies;
+                              the href still carries the RAW title so the next
+                              query matches what the retailer indexed. */
+                          title={displayTitleChanged(a.title, cleanDisplayTitle(a.title)) ? a.title : undefined}
                         >
-                          {a.title}
+                          {cleanDisplayTitle(a.title)}
                         </a>
                         <span
                           className="tabular ml-auto shrink-0"

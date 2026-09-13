@@ -510,3 +510,52 @@ describe("REEA-721 — heading `from` figure: matching offers only, KD-space, <=
     expect(ar.container.textContent ?? "").toContain("KD 0.82");
   });
 });
+
+/**
+ * REEA-836 — display-side title hygiene on the card:
+ * AC1/AC2  boilerplate never reaches the rendered h2; a storage tier stranded
+ *          in a dropped clause is re-attached (brand+model+storage kept).
+ * AC3      the FULL original retailer string stays ≤1 interaction away
+ *          (hover title attribute + <details> disclosure).
+ * AC6      a clean title renders byte-identical with NO disclosure.
+ */
+describe("REEA-836 — displayed title hygiene", () => {
+  const boilerplateProduct = (title: string): NormalizedProduct => ({
+    ...product(false),
+    title,
+  });
+
+  it("renders the cleaned title and keeps the original one tap away (AC1/AC3)", () => {
+    const { container } = render(
+      <ProductResultCard
+        product={boilerplateProduct(
+          'Apple iPhone 17 Pro 6.3-inch A3256 | Tax Paid But "eSIM Only" eSIM + eSIM (8 or more, max 2 at a time) Unlocked, 512GB',
+        )}
+        query="iphone 17 pro"
+        rank={0}
+      />,
+    );
+    const h2 = container.querySelector("h2");
+    expect(h2?.textContent).toBe("Apple iPhone 17 Pro 6.3-inch A3256 512GB");
+    expect(h2?.getAttribute("title")).toBe(
+      'Apple iPhone 17 Pro 6.3-inch A3256 | Tax Paid But "eSIM Only" eSIM + eSIM (8 or more, max 2 at a time) Unlocked, 512GB',
+    );
+    const disclosure = container.querySelector("details");
+    expect(disclosure).not.toBeNull();
+    expect(disclosure?.textContent).toContain("Apple iPhone 17 Pro 6.3-inch A3256");
+  });
+
+  it("renders a clean title unchanged with no disclosure (AC6)", () => {
+    const { container } = render(
+      <ProductResultCard
+        product={boilerplateProduct("Sony WH-1000XM6")}
+        query="wh-1000xm6"
+        rank={0}
+      />,
+    );
+    const h2 = container.querySelector("h2");
+    expect(h2?.textContent).toBe("Sony WH-1000XM6");
+    expect(h2?.getAttribute("title")).toBeNull();
+    expect(container.querySelector("details")).toBeNull();
+  });
+});

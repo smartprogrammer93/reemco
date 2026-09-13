@@ -88,6 +88,8 @@ const en = {
   pricesHeading: "Prices at retailers · excl. delivery",
   colourOptionsAria: "Colour options",
   variationsLabel: "Variations",
+  // REEA-836 AC3 — disclosure label above the untouched retailer title string.
+  originalTitleLabel: "Original retailer title",
   alternativesLabel: "Alternatives",
   pairsWithLabel: "Pairs with",
   devicesLabel: "Devices",
@@ -250,6 +252,8 @@ const ar: typeof en = {
   pricesHeading: "أسعار المتاجر · دون التوصيل",
   colourOptionsAria: "خيارات اللون",
   variationsLabel: "الخيارات",
+  // REEA-836 AC3 — disclosure label above the untouched retailer title string.
+  originalTitleLabel: "العنوان الأصلي من المتجر",
   alternativesLabel: "بدائل",
   pairsWithLabel: "إكسسوارات مقترحة",
   devicesLabel: "أجهزة",
