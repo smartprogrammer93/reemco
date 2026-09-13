@@ -1,6 +1,11 @@
 "use client";
 
-import type { CollectJob, LiveOffer, RetailerSubtask } from "@/lib/collect/types";
+import {
+  normalizedListingUrlOf,
+  type CollectJob,
+  type LiveOffer,
+  type RetailerSubtask,
+} from "@/lib/collect/types";
 import { jobProgress } from "@/lib/collect-progress";
 import { effectivePrice, effectivePriceKwd, formatPrimaryPrice } from "@/lib/format";
 import type { Coupon } from "@/types/product";
@@ -86,12 +91,44 @@ export function PulseOfferCascade({
       couponDiscount: offer.coupon?.discount ?? null,
     }),
   }));
-  const effs = keyed.map((k) => k.effKey);
-  const best = Math.min(...effs);
+  // REEA-908 spec §1/§6 — render-layer listing fold: the served invariant is
+  // AT MOST ONE card per (merchant, normalized URL). The grouping fold
+  // (live-search finalizeGroups) and the runner (uniqueListings /
+  // appendUniqueOffers) already enforce it upstream; folding here too makes
+  // the rendered page structurally immune to an upstream regression stacking
+  // the same listing twice. Survivor rule per spec: the CHEAPEST occurrence
+  // wins when the same listing lands twice with disagreeing prices, else the
+  // first occurrence — rendered verbatim (no field merging), at the first
+  // occurrence's position so the rendered order stays stable. Map iteration
+  // is insertion-ordered and re-setting an existing key keeps its position,
+  // which is exactly that survivor contract.
+  const folded = new Map<string, (typeof keyed)[number]>();
+  for (const k of keyed) {
+    const id = `${k.offer.merchant}|${normalizedListingUrlOf(k.offer.url)}`;
+    const at = folded.get(id);
+    if (at === undefined || k.effKey < at.effKey) folded.set(id, k);
+  }
+  const unique = [...folded.values()];
+  // The savings gap reads the RENDERED set only — a dropped duplicate must
+  // never inflate `worst` (the cheapest/worst ends both come from cards that
+  // actually render).
+  const effs = unique.map((k) => k.effKey);
+  // REEA-908 spec §2 — exactly ONE "Best price" badge per product page,
+  // computed over IN-STOCK offers (fall back to the whole set only when every
+  // card is out of stock), on the normalized comparable figure. A tie on the
+  // lowest figure goes to the card that sorts first in the rendered list —
+  // the badge index is picked once here, never per-card, so tied duplicates
+  // of the same figure can never paint two badges.
+  const stocked = unique.filter((k) => k.offer.inStock);
+  const badgePool = stocked.length > 0 ? stocked : unique;
+  const best = Math.min(...badgePool.map((k) => k.effKey));
+  const bestIndex = unique.findIndex(
+    (k) => k.effKey === best && (k.offer.inStock || stocked.length === 0),
+  );
   const worst = Math.max(...effs);
   return (
     <ul className="mt-4 grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 xl:grid-cols-[repeat(2,minmax(0,1fr))]">
-      {keyed.map(({ offer, effKey }, i) => {
+      {unique.map(({ offer }, i) => {
         const eff = effectivePrice(offer, offer.coupon);
         // REEA-195 AC-4: KWD-primary labels on the cascade cards too; the
         // count-up animates in the same KWD space it lands on.
@@ -119,11 +156,11 @@ export function PulseOfferCascade({
               url={offer.url}
               collectedAt={offer.collectedAt}
               method={offer.method}
-              isBest={effKey === best}
+              isBest={i === bestIndex}
               savings={
                 // Both ends of the gap are KWD-space numbers — the pill prints
                 // in the same KWD space the ranking uses.
-                effKey === best && worst > best
+                i === bestIndex && worst > best
                   ? formatPrimaryPrice(worst - best, "KWD").label
                   : null
               }

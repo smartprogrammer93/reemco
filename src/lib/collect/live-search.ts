@@ -45,7 +45,7 @@ import { readCappedResponse } from "@/lib/collect/read-body";
 import { mirrorSharedQuerySnapshot, replaySharedQuerySnapshot } from "@/lib/collect/query-layer";
 import { attachSeenRanges, type SeenRow } from "@/lib/seen-range";
 import { sanitizeExternalUrl } from "@/lib/safe-url";
-import { PER_RETAILER_TIMEOUT_MS } from "@/lib/collect/types";
+import { PER_RETAILER_TIMEOUT_MS, normalizedListingUrlOf } from "@/lib/collect/types";
 import { effectivePriceKwd, formatPrice } from "@/lib/format";
 import { canonicalFields, compatibleFields, listingLabel, type CanonicalFields } from "@/lib/collect/canonical-product";
 import {
@@ -2649,16 +2649,20 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, quer
           ...(o.image ? { image: o.image } : {}),
         };
       });
-    // REEA-897 — one row per unique retailer+SKU FIRST: the label below is
-    // title-derived, so the same listing URL reaching the group twice under
-    // two title spellings survived as two rows with one purchasable unit —
-    // the duplicate that rode into the product page's collect fan-out as two
-    // identical scraped cards, both badged Best price. The sorted-first row
-    // wins (cheapest effective, live before snapshot), so the fold is
-    // deterministic on the same fetched set.
+    // REEA-897 / REEA-908 spec §1 — one row per unique retailer+SKU FIRST,
+    // keyed on the NORMALIZED listing URL (lowercase host, query string and
+    // trailing slash stripped). The label below is title-derived, so the same
+    // listing URL reaching the group twice under two title spellings survived
+    // as two rows with one purchasable unit — the duplicate that rode into
+    // the product page's collect fan-out as two identical scraped cards, both
+    // badged Best price. The sorted-first row wins (cheapest effective, live
+    // before snapshot — the spec's cheapest-occurrence survivor), so the fold
+    // is deterministic on the same fetched set.
     const perListing = rows.filter(
       (o, i, arr) =>
-        arr.findIndex((x) => x.merchant === o.merchant && x.url === o.url) === i,
+        arr.findIndex(
+          (x) => x.merchant === o.merchant && normalizedListingUrlOf(x.url) === normalizedListingUrlOf(o.url),
+        ) === i,
     );
     // REEA-192 — one row per retailer in the card: the sorted-first offer
     // is that retailer's best matched-product price; further listings from

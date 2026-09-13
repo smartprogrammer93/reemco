@@ -15,17 +15,30 @@
  *  3. RETRY sibling: a single-listing retry must not wipe the merchant's
  *     OTHER distinct-SKU rows (the old replace-by-merchant filter did).
  *
+ * REEA-908 spec additions pinned here too: the dedupe key normalizes the
+ * listing URL (lowercase host, query string and trailing slash stripped); the
+ * append survivor is the CHEAPEST occurrence when prices disagree; the badge
+ * rule renders exactly ONE "Best price" per page over in-stock offers with
+ * the tie broken by render order (AC4); and the discriminating end-to-end
+ * regression (AC5) drives the REAL runner on a duplicated offer list and
+ * renders the cascade, asserting one card for the duplicate, exactly one
+ * badge, and preserved distinct-SKU rows.
+ *
  * Live-data fidelity note: every row comes from the group's own fetched hits
  * — the dedupe folds only listings that are literally the same URL, so
  * distinct retailer SKUs (plain vs "Japanese Version") keep their rows.
  */
+// @vitest-environment jsdom
 import "./test-cache-dir";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SearchHit } from "@/lib/collect/live-search";
 import { groupHits } from "@/lib/collect/live-search";
+import { normalizedListingUrlOf } from "@/lib/collect/types";
+import { PulseOfferCascade } from "@/components/CollectionPulse";
 import type { NormalizedProduct } from "@/types/product";
 
 // Store isolation for the runner pins (same convention as collect.test.ts).
@@ -70,6 +83,7 @@ const fetchOk = (): Promise<Response> =>
 beforeEach(() => {
   resetStoreForTests();
 });
+afterEach(cleanup);
 
 describe("REEA-897 source: one row per unique retailer+SKU in the grouped card", () => {
   it("folds the same merchant+URL arriving under two title spellings into ONE row", () => {
@@ -235,5 +249,173 @@ describe("REEA-897 runner chokepoint", () => {
     // Both distinct listings render exactly once after the retry.
     expect(retried.offers.filter((o) => o.url.includes("old-seed-a"))).toHaveLength(1);
     expect(retried.offers.filter((o) => o.url.includes("old-seed-b"))).toHaveLength(1);
+  });
+});
+
+describe("REEA-908 spec §1 — normalized dedupe key and cheapest survivor", () => {
+  it("normalizedListingUrlOf lowercases the host and strips query/hash/trailing slash", () => {
+    expect(normalizedListingUrlOf("HTTPS://Wibi.com.kw/p/x/")).toBe("https://wibi.com.kw/p/x");
+    expect(normalizedListingUrlOf("https://wibi.com.kw/p?variant=12")).toBe(
+      "https://wibi.com.kw/p",
+    );
+    expect(normalizedListingUrlOf("https://wibi.com.kw/p/#top")).toBe("https://wibi.com.kw/p");
+    // The path itself compares as-is.
+    expect(normalizedListingUrlOf("https://wibi.com.kw/p")).not.toBe(
+      normalizedListingUrlOf("https://wibi.com.kw/p/512gb"),
+    );
+  });
+
+  it("grouping folds query-string / trailing-slash / case variants of one listing into ONE row", () => {
+    const products = groupHits("iphone 17 pro max", [
+      hit({ title: "Apple iPhone 17 Pro Max 512GB Silver", price: 409.9, url: "https://wibi.com.kw/products/listing" }),
+      hit({ title: "Apple iPhone 17 Pro Max 512GB Silver 5G", price: 412, url: "https://wibi.com.kw/products/listing?variant=12" }),
+      hit({ title: "Apple iPhone 17 Pro Max 512GB Silver eSIM", price: 415, url: "https://WIBI.com.kw/products/listing/" }),
+    ]);
+    const card = products.find((p) => p.offers.some((o) => o.merchant === "Wibi"));
+    expect(card?.offers.filter((o) => o.merchant === "Wibi")).toHaveLength(1);
+    // Cheapest occurrence survives, rendered verbatim.
+    expect(card?.offers.find((o) => o.merchant === "Wibi")?.price).toBe(409.9);
+  });
+
+  it("uniqueListings folds URL-noise duplicates for the fan-out", () => {
+    const uniq = uniqueListings([
+      { merchant: "Wibi", price: 409.9, url: "https://wibi.com.kw/p" },
+      { merchant: "Wibi", price: 410, url: "https://wibi.com.kw/p?variant=1" },
+      { merchant: "Wibi", price: 411, url: "https://WIBI.com.kw/p/" },
+    ]);
+    expect(uniq).toHaveLength(1);
+  });
+});
+
+
+// REEA-908 AC5 — DISCRIMINATING end-to-end regression (aggregation → render):
+// the REAL runner consumes a product-offer list carrying an exact duplicate
+// (same merchant + URL) plus distinct-URL same-retailer offers, and the
+// cascade renders the collected offers. Assertions: exactly one card for the
+// duplicated listing (AC1), distinct-URL same-retailer cards preserved (AC2),
+// and exactly ONE "Best price" badge on the page (AC4). Recorded both
+// directions per AC5: failing output captured on the pre-fix build (ff288a4),
+// passing output on the fix — both pasted in the issue thread.
+describe("REEA-908 AC5 — discriminating dedupe + single-badge regression", () => {
+  const wibiListing = "https://wibi.com.kw/products/apple-iphone-17-pro-max-512gb-deep-blue-dual-e-sim";
+  const duplicatedShelf = product([
+    { merchant: "Wibi", price: 414.9, currency: "KWD", url: wibiListing, inStock: true },
+    // The exact duplicate: same merchant, same listing (query-string noise on
+    // the second stamp) — one purchasable unit, never two cards.
+    { merchant: "Wibi", price: 414.9, currency: "KWD", url: `${wibiListing}?utm=feed`, inStock: true },
+    // Legit same-retailer multiples that MUST survive (AC2).
+    { merchant: "Blink", price: 364.9, currency: "KWD", url: "https://blink.com.kw/products/apple-iphone-17-pro-max-japanese-version", inStock: true },
+    { merchant: "Blink", price: 369, currency: "KWD", url: "https://blink.com.kw/products/apple-iphone-17-pro-max", inStock: true },
+    { merchant: "Zayoom", price: 379.9, currency: "KWD", url: "https://zayoom.com/products/apple-iphone-17-pro-max-256gb-silver", inStock: true },
+    { merchant: "Zayoom", price: 399.9, currency: "KWD", url: "https://zayoom.com/products/apple-iphone-17-pro-max-256gb-silver-japanese", inStock: true },
+  ]);
+
+  // Price-faithful scrape stub: each listing's PDP answers with ITS OWN price
+  // (meta tag, the Shopify convention REEA-896 pinned), so the collected
+  // offers carry the shelf's real figures and the AC2/AC4 price assertions
+  // exercise the actual render values.
+  const shelfPrices: Record<string, number> = {
+    [wibiListing]: 414.9,
+    "https://blink.com.kw/products/apple-iphone-17-pro-max-japanese-version": 364.9,
+    "https://blink.com.kw/products/apple-iphone-17-pro-max": 369,
+    "https://zayoom.com/products/apple-iphone-17-pro-max-256gb-silver": 379.9,
+    "https://zayoom.com/products/apple-iphone-17-pro-max-256gb-silver-japanese": 399.9,
+  };
+  const shelfFetch = (url: string): Promise<Response> => {
+    const price = shelfPrices[normalizedListingUrlOf(url)] ?? 999;
+    return Promise.resolve(
+      new Response(
+        `<meta property="product:price:amount" content="${price}"><meta property="product:price:currency" content="KWD">`,
+        { status: 200 },
+      ),
+    );
+  };
+
+  it("collects one offer per unique listing and renders exactly one card per (merchant, URL)", async () => {
+    const { job } = await startCollection(duplicatedShelf, { force: true });
+    const done = await runCollection(job, duplicatedShelf, { fetchImpl: shelfFetch, now: 1_000_000 });
+    expect(done.status).toBe("complete");
+    // AC1: at most one card per (merchant, normalized URL) — the duplicated
+    // Wibi listing renders ONCE even though the product-offer list carried it
+    // twice, and its scraped offers cannot stack.
+    expect(done.offers.filter((o) => o.merchant === "Wibi")).toHaveLength(1);
+    const keys = done.offers.map((o) => `${o.merchant}|${normalizedListingUrlOf(o.url)}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    // AC2: distinct-URL same-retailer offers preserved with their prices.
+    expect(done.offers.filter((o) => o.merchant === "Blink").map((o) => o.price)).toEqual([364.9, 369]);
+    expect(done.offers.filter((o) => o.merchant === "Zayoom").map((o) => o.price)).toEqual([379.9, 399.9]);
+
+    // Render layer: the cascade over the collected offers shows the same
+    // card set and AC4's single badge.
+    const { container } = render(<PulseOfferCascade offers={done.offers} />);
+    const cards = Array.from(container.querySelectorAll("article"));
+    expect(cards.filter((c) => c.textContent?.includes("Wibi"))).toHaveLength(1);
+    expect(cards.filter((c) => c.textContent?.includes("Blink"))).toHaveLength(2);
+    expect(cards.filter((c) => c.textContent?.includes("Zayoom"))).toHaveLength(2);
+    // AC4: exactly ONE badge, on the cheapest in-stock card (Blink 364.9).
+    expect(screen.getAllByText("Best price")).toHaveLength(1);
+    const badged = cards.find((c) => c.querySelector(".best-flag"));
+    expect(badged?.textContent).toContain("Blink");
+  });
+});
+
+describe("REEA-908 AC4 — badge rule edge cases", () => {
+  function cascadeOffer(over: { merchant: string; url: string; price?: number; inStock?: boolean }) {
+    return {
+      merchant: over.merchant,
+      domain: new URL(over.url).hostname,
+      price: over.price ?? 100,
+      currency: "KWD",
+      url: over.url,
+      inStock: over.inStock ?? true,
+      collectedAt: "2026-09-13T12:00:00.000Z",
+      method: "live" as const,
+    };
+  }
+
+  it("a price tie badges only the FIRST rendered card, never both", () => {
+    const { container } = render(
+      <PulseOfferCascade
+        offers={[
+          cascadeOffer({ merchant: "Alpha", url: "https://alpha.example/p" }),
+          cascadeOffer({ merchant: "Beta", url: "https://beta.example/p" }),
+          cascadeOffer({ merchant: "Gamma", price: 120, url: "https://gamma.example/p" }),
+        ]}
+      />,
+    );
+    expect(screen.getAllByText("Best price")).toHaveLength(1);
+    const badged = Array.from(container.querySelectorAll("article")).find((c) =>
+      c.querySelector(".best-flag"),
+    );
+    expect(badged?.textContent).toContain("Alpha");
+  });
+
+  it("the badge lands on the cheapest IN-STOCK card when a cheaper out-of-stock card exists", () => {
+    const { container } = render(
+      <PulseOfferCascade
+        offers={[
+          cascadeOffer({ merchant: "CheapOOS", price: 50, url: "https://cheapoos.example/p", inStock: false }),
+          cascadeOffer({ merchant: "Stocked", price: 80, url: "https://stocked.example/p" }),
+          cascadeOffer({ merchant: "Pricier", price: 120, url: "https://pricier.example/p" }),
+        ]}
+      />,
+    );
+    expect(screen.getAllByText("Best price")).toHaveLength(1);
+    const badged = Array.from(container.querySelectorAll("article")).find((c) =>
+      c.querySelector(".best-flag"),
+    );
+    expect(badged?.textContent).toContain("Stocked");
+  });
+
+  it("an all-out-of-stock page still badges exactly one card", () => {
+    render(
+      <PulseOfferCascade
+        offers={[
+          cascadeOffer({ merchant: "Alpha", price: 50, url: "https://alpha.example/p", inStock: false }),
+          cascadeOffer({ merchant: "Beta", price: 80, url: "https://beta.example/p", inStock: false }),
+        ]}
+      />,
+    );
+    expect(screen.getAllByText("Best price")).toHaveLength(1);
   });
 });

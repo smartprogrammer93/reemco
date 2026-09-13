@@ -36,6 +36,25 @@ export interface LiveOffer {
   method: "live" | "cache";
 }
 
+/**
+ * REEA-908 spec §1 — normalized comparison form of a listing URL: lowercase
+ * host, query string and hash stripped, trailing slash stripped; the path
+ * itself compares as-is. The dedupe key of an offer card is (merchant, this
+ * form of the offer URL) — two offers that agree here are the same SKU card
+ * even when one stamp carries a stray `?variant=` or a trailing slash.
+ * Comparison-only: the survivor always renders verbatim.
+ */
+export function normalizedListingUrlOf(url: string): string {
+  const raw = url.trim();
+  try {
+    const parsed = new URL(raw);
+    const path = parsed.pathname.replace(/\/+$/, "");
+    return `${parsed.protocol}//${parsed.host.toLowerCase()}${path}`;
+  } catch {
+    return raw;
+  }
+}
+
 export interface CollectJob {
   jobId: string;
   productId: string;

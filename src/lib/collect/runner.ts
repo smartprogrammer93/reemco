@@ -15,7 +15,8 @@
  * the budgets above are enforced here regardless.
  */
 import type { CollectJob, LiveOffer, RetailerSubtask } from "@/lib/collect/types";
-import { OVERALL_BUDGET_MS, isStaleCollectingJob } from "@/lib/collect/types";
+import { OVERALL_BUDGET_MS, isStaleCollectingJob, normalizedListingUrlOf } from "@/lib/collect/types";
+import { effectivePriceKwd } from "@/lib/format";
 import type { NormalizedProduct } from "@/types/product";
 import { scrapeOffer, subtaskFor, type FetchImpl } from "@/lib/collect/scraper";
 import {
@@ -41,13 +42,14 @@ function stageSnapshot(job: CollectJob): CollectJob {
   return { ...job, subtasks: [...job.subtasks], offers: [...job.offers] };
 }
 
-/** REEA-897 — listing identity: one purchasable unit per retailer+URL. Two
- *  product-offer rows that agree on merchant and URL are the SAME SKU (title
- *  spellings and hit-time price jitter are noise), so they get one subtask,
- *  one scrape and one rendered card — never two identical "Best price" rows
- *  and never a duplicated hit on the retailer's endpoint. */
+/** REEA-897 / REEA-908 spec §1 — listing identity: one purchasable unit per
+ *  (merchant, normalized URL). Two product-offer rows that agree here are the
+ *  SAME SKU (title spellings, hit-time price jitter, a stray query string or
+ *  trailing slash are noise), so they get one subtask, one scrape and one
+ *  rendered card — never two identical "Best price" rows and never a
+ *  duplicated hit on the retailer's endpoint. */
 function listingKey(o: { merchant: string; url: string }): string {
-  return `${o.merchant}|${o.url}`;
+  return `${o.merchant}|${normalizedListingUrlOf(o.url)}`;
 }
 
 /** First occurrence wins, in the product's own offer order — deterministic
@@ -64,20 +66,37 @@ export function uniqueListings<T extends { merchant: string; url: string }>(
   });
 }
 
+/** Effective-price key of a collected offer — the ONE normalized comparison
+ *  figure (REEA-604), folded with was-price evidence in KWD-space. */
+function effKeyOf(o: LiveOffer): number {
+  return effectivePriceKwd(o.price, o.currency, { wasPrice: o.wasPrice });
+}
+
 /** Append scraped offers without stacking an identical retailer+URL listing
  *  twice (defense in depth behind the fan-out dedupe: the retailer-search
  *  fallback can re-discover the SAME canonical listing from two distinct
  *  seed URLs, and a future upstream regression must not render as a
- *  duplicate card). Returns the offers actually appended. */
+ *  duplicate card). REEA-908 spec §1 survivor rule: when the same listing
+ *  lands twice with disagreeing prices, the CHEAPEST occurrence survives —
+ *  the earlier position is kept so the rendered order stays stable, the
+ *  payload is swapped verbatim (no field merging). Returns the offers
+ *  actually appended. */
 function appendUniqueOffers(job: CollectJob, offers: readonly LiveOffer[]): LiveOffer[] {
-  const seen = new Set(job.offers.map(listingKey));
-  const fresh = offers.filter((o) => {
+  const positionOf = new Map<string, number>();
+  job.offers.forEach((o, i) => positionOf.set(listingKey(o), i));
+  const fresh: LiveOffer[] = [];
+  for (const o of offers) {
     const key = listingKey(o);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  job.offers.push(...fresh);
+    const at = positionOf.get(key);
+    if (at === undefined) {
+      positionOf.set(key, job.offers.length);
+      job.offers.push(o);
+      fresh.push(o);
+      continue;
+    }
+    // Same listing already collected — keep the cheaper occurrence verbatim.
+    if (effKeyOf(o) < effKeyOf(job.offers[at])) job.offers[at] = o;
+  }
   return fresh;
 }
 
