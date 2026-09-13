@@ -7,8 +7,8 @@
  *
  * Hardening mirrors /api/events (REEA-37 AC-6): CSP-report content types
  * only (`application/csp-report`, `application/reports+json`), 16 KB body
- * cap, schema validation, sliding-window rate limit per caller (REEA-826:
- * per serverless instance, not deployment-wide), and a
+ * cap, schema validation, rate limit per caller (REEA-826: per serverless
+ * instance unless the REEA-827 shared-KV counter is bound), and a
  * bounded in-memory ring buffer (newest 200) plus a concise console line.
  * No cookies or PII are logged; document-uri is reduced to its origin.
  */
@@ -19,7 +19,7 @@ import {
   recordViolation,
   toViolation,
 } from "@/lib/csp-report";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { checkRateLimitShared } from "@/lib/rate-limit-kv";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     );
   }
 
-  const gate = checkRateLimit(`csp-report:${clientKey(req)}`, Date.now());
+  const gate = await checkRateLimitShared(`csp-report:${clientKey(req)}`, Date.now());
   if (!gate.allowed) {
     return Response.json({ error: "rate limit exceeded" }, { status: 429 });
   }

@@ -13,9 +13,16 @@
  * a deployment-wide budget requires the shared-KV counter (REEA-826
  * follow-up). Never document the number below as a per-caller deployment
  * budget without that qualifier.
+ *
+ * REEA-827 — the gated routes now sit behind `checkRateLimitShared`
+ * (lib/rate-limit-kv.ts), which layers a deployment-wide fixed-window
+ * counter on the shared KV and falls back to THIS limiter when no store is
+ * bound or the store hiccups.
  */
 
-interface RateLimitOptions {
+/** Exported for lib/rate-limit-kv.ts: SharedRateLimitOptions extends this
+ *  (REEA-827 left the interface module-local, failing tsc / next build). */
+export interface RateLimitOptions {
   limit: number; // max requests per window
   windowMs: number;
 }

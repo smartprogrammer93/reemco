@@ -21,9 +21,10 @@
  * REEA-377: the served body is the minimal shape — `{ok, build}` (verdict +
  * build stamp) — while the per-step internals (card/chip counts, fixture
  * name, checkedAt/failedAt) go to the function console instead, so a public
- * GET leaks nothing beyond the verdict. GET shares the REEA-37 sliding-window
- * checkRateLimit (REEA-826: per serverless instance — memory-only buckets, so
- * the budget is per caller per instance, not deployment-wide): while inside
+ * GET leaks nothing beyond the verdict. GET shares the REEA-37 limiter
+ * (REEA-826: per serverless instance — memory-only buckets; REEA-827: the
+ * fixed-window counter rides the shared KV when bound, making the budget
+ * deployment-wide): while inside
  * the limit the funnel runs and its verdict is
  * cached in memory; past the limit the cached verdict is replayed without a
  * re-walk, so hammering one anonymous endpoint cannot re-run the whole site
@@ -39,7 +40,7 @@
  * `{ok, build}` shape either way.
  */
 import type { NextRequest } from "next/server";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { checkRateLimitShared } from "@/lib/rate-limit-kv";
 import { invalidateTrendingChips } from "@/lib/trending-chips";
 import { MAX_RESPONSE_BODY_BYTES, readBodyCapped } from "@/lib/collect/read-body";
 
@@ -159,7 +160,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   // REEA-377: reuse the REEA-37 limiter on the GET path. Inside the window
   // the funnel runs (and caches its verdict); past it the cached verdict is
   // replayed so repeated hits do not each re-walk home → results → product.
-  const gate = checkRateLimit(clientKey(req), Date.now());
+  const gate = await checkRateLimitShared(clientKey(req), Date.now());
   if (!gate.allowed && lastVerdict) return verdictResponse(lastVerdict.ok);
 
   const origin = new URL(req.url).origin;

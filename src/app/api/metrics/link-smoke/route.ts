@@ -10,14 +10,15 @@
  *
  *  - JSON-only, 4 KB payload cap, schema validation with per-field bounds
  *    (same hardening posture as the REEA-37 events route);
- *  - sliding-window rate limit per caller (memory-only, key never persisted;
- *    REEA-826: per serverless instance, not deployment-wide);
+ *  - rate limit per caller (REEA-827 shared fixed window when KV is bound,
+ *    per-instance otherwise — the REEA-826 semantics; the raw key is hashed
+ *    before it leaves the process);
  *  - no cookies, no identifiers, no per-URL or per-query data stored — the
  *    counters keep integer totals and retailer names only.
  */
 import type { NextRequest } from "next/server";
 import { z } from "zod";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { checkRateLimitShared } from "@/lib/rate-limit-kv";
 import { recordLinkSmoke } from "@/lib/metrics";
 
 export const runtime = "nodejs";
@@ -49,7 +50,7 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: "content-type must be application/json" }, { status: 415 });
   }
 
-  const gate = checkRateLimit(clientKey(req), Date.now(), SMOKE_RATE_LIMIT);
+  const gate = await checkRateLimitShared(clientKey(req), Date.now(), SMOKE_RATE_LIMIT);
   if (!gate.allowed) {
     return Response.json({ error: "rate limit exceeded" }, { status: 429 });
   }

@@ -35,11 +35,12 @@
  */
 import { fetchThroughChallenge, VERIFIED_BOT_HEADERS } from "@/lib/collect/search-fallback";
 import { jsdClearedHtml } from "@/lib/collect/live-search";
-// REEA-782 — GET /api/echo rides the shared REEA-37 sliding-window limiter
-// (namespaced `echo:` bucket, so the budget is independent of the sibling
-// health/events/csp-report buckets). Gate sits ahead of the probe fan-out:
-// past the limit the route answers 429 with ZERO upstream fetches.
-import { checkRateLimit } from "@/lib/rate-limit";
+// REEA-782 — GET /api/echo rides the shared rate limiter (REEA-37 bucket,
+// REEA-827 deployment-wide counter: the namespaced `echo:` budget counts
+// across instances on the shared KV when bound, degrading to the per-process
+// window otherwise). Gate sits ahead of the probe fan-out: past the limit
+// the route answers 429 with ZERO upstream fetches.
+import { checkRateLimitShared } from "@/lib/rate-limit-kv";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -197,10 +198,10 @@ export async function GET(req: Request): Promise<Response> {
   // REEA-782 — rate-limit gate BEFORE any probe fan-out. Past the bucket the
   // handler returns 429 and performs zero upstream fetches (fail closed on
   // abuse; every fetch below sits behind this line).
-  // REEA-826 — the bucket is per serverless instance (memory-only store), so
-  // the enforced budget is per caller per instance, not deployment-wide; the
-  // deployment-wide counter is the REEA-826 KV follow-up.
-  const gate = checkRateLimit(`echo:${clientKey(req)}`, Date.now());
+  // REEA-826 — the memory bucket is per serverless instance; the deployment-
+  // wide budget is supplied by the REEA-827 shared-KV counter when the KV
+  // binding is present (per-instance fallback otherwise).
+  const gate = await checkRateLimitShared(`echo:${clientKey(req)}`, Date.now());
   if (!gate.allowed) {
     return Response.json({ error: "rate limit exceeded" }, { status: 429 });
   }

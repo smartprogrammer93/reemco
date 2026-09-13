@@ -29,6 +29,13 @@ export interface SharedKv {
   get(key: string): Promise<string | null>;
   /** Store the value with a TTL (seconds). Resolves true on ack. */
   set(key: string, value: string, ttlSeconds: number): Promise<boolean>;
+  /**
+   * REEA-827 — atomic increment, creating the key with a TTL when absent.
+   * Returns the post-increment count, or null when unsupported/unreachable
+   * (callers then degrade to their local layer). Optional so existing
+   * test fakes that only need get/set keep compiling.
+   */
+  incr?(key: string, ttlSeconds: number): Promise<number | null>;
 }
 
 let cached: SharedKv | null | undefined;
@@ -102,6 +109,20 @@ function makeKv(base: string, token: string): SharedKv {
         body,
       });
       return data !== null && data.ok !== false;
+    },
+    // REEA-827 — INCR is atomic server-side, so concurrent instances sharing
+    // the store each land a distinct count (a GET/SET read-modify-write would
+    // lose increments under concurrent instances — the exact per-instance
+    // blindness this counter exists to fix). The TTL is armed on the first
+    // hit of a window key; the window id is encoded in the key itself, so a
+    // missed EXPIRE only leaks a stale key, never a wrong count.
+    async incr(key, ttlSeconds) {
+      const data = await request(`incr/${encodeURIComponent(key)}`);
+      if (!data || data.ok === false || typeof data.result !== "number") return null;
+      if (data.result === 1) {
+        await request(`expire/${encodeURIComponent(key)}/${Math.max(1, Math.ceil(ttlSeconds))}`);
+      }
+      return data.result;
     },
   };
 }

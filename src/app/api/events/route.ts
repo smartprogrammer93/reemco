@@ -3,15 +3,17 @@
  *
  * POST /api/events  { events: [...] } or a single event object.
  * Hardening (AC-6): JSON-only, 16 KB payload cap, schema validation with
- * per-field bounds, 120 req/min sliding-window rate limit per caller
- * (REEA-826: enforced per serverless instance, not deployment-wide).
- * The rate-limit key (client IP) is used in memory only — never persisted.
+ * per-field bounds, 120 req/min rate limit per caller (REEA-826: enforced
+ * per serverless instance; REEA-827: the window counter rides the shared
+ * KV when bound, making the budget deployment-wide).
+ * The rate-limit key (client IP) is hashed before any shared storage —
+ * never persisted raw.
  * No cookies are set; the 202 response contains no client data (AC-3).
  */
 import type { NextRequest } from "next/server";
 import { validateEventBatch, MAX_EVENTS_PER_REQUEST } from "@/lib/events";
 import { appendEvents } from "@/lib/event-store";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { checkRateLimitShared } from "@/lib/rate-limit-kv";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,7 +31,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     return Response.json({ error: "content-type must be application/json" }, { status: 415 });
   }
 
-  const gate = checkRateLimit(clientKey(req), Date.now());
+  const gate = await checkRateLimitShared(clientKey(req), Date.now());
   if (!gate.allowed) {
     return Response.json({ error: "rate limit exceeded" }, { status: 429 });
   }
