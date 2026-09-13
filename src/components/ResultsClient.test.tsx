@@ -454,6 +454,117 @@ describe("staged progressive results (REEA-178)", () => {
     // The badge rides the first stocked card of the rendered block.
     expect(flags[0].closest("article")?.textContent).toContain("Panzer Care MagSafe Slim");
   });
+
+  it("REEA-835: withholds the unqualified Best-price flag for a checking state while the Kuwait batch is pending, restores it on settle", async () => {
+    // Live repro (REEA-835): a cold `iphone 17 pro` first paint rendered an
+    // Amazon.eg EGP lead with the unqualified "Best price" flag while all 24
+    // Kuwait adapters were still in flight. While the snapshot flags zero
+    // Kuwait-primary offers AND the batch may still land, the lead card's
+    // flag slot carries the honest checking state instead; once the batch
+    // settles (converged snapshot with a Kuwait offer), the flag is back per
+    // the settled rules.
+    searchParams.set("q", "iphone 17 pro");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    let resolveFinal: (v: LiveSearchResult) => void = () => {};
+    const INTERIM: NormalizedProduct = {
+      productId: "iphone-17-pro-eg",
+      title: "iPhone 17 Pro 256GB",
+      brand: "Apple",
+      offers: [
+        { merchant: "Amazon.eg", price: 42000, currency: "EGP", url: "https://amazon.eg/p1", inStock: true },
+      ],
+      coupons: [],
+      variations: [],
+      alternatives: [],
+      scrapedAt: new Date().toISOString(),
+    };
+    const SETTLED: NormalizedProduct = {
+      ...INTERIM,
+      offers: [
+        { merchant: "Xcite", price: 389, currency: "KWD", url: "https://xcite.example/p1", inStock: true },
+        ...INTERIM.offers,
+      ],
+    };
+    const stages: Promise<LiveSearchResult>[] = [
+      // First flush: only a fallback (non-Kuwait) offer rendered, Kuwait
+      // retailers still in flight — the exact evidence shape.
+      Promise.resolve({
+        products: [INTERIM],
+        notes: [{ merchant: "Amazon.eg", hits: 1 }],
+        suggestions: [INTERIM],
+        kuwaitPendingStatus: true,
+      }),
+      new Promise<LiveSearchResult>((res) => {
+        resolveFinal = res;
+      }),
+    ];
+
+    await act(async () => {
+      render(
+        <ResultsClient query="iphone 17 pro" page={1} country={null} stages={stages} />,
+      );
+    });
+
+    // Pending first paint: NO unqualified Best-price flag anywhere; the lead
+    // card carries the checking state in the flag slot instead.
+    expect(document.querySelectorAll(".best-flag:not(.best-flag-pending)")).toHaveLength(0);
+    const pending = document.querySelectorAll(".best-flag-pending");
+    expect(pending).toHaveLength(1);
+    expect(pending[0].textContent).toContain("Checking Kuwait stores");
+    expect(pending[0].closest("article")?.textContent).toContain("iPhone 17 Pro 256GB");
+
+    // Settled: the converged snapshot carries a Kuwait-primary offer, so the
+    // flag slot swaps back to the current settled rules.
+    await act(async () => {
+      resolveFinal({ products: [SETTLED], notes: [], suggestions: [] });
+      await Promise.resolve();
+    });
+    expect(document.querySelectorAll(".best-flag-pending")).toHaveLength(0);
+    const settledFlags = document.querySelectorAll(".best-flag");
+    expect(settledFlags).toHaveLength(1);
+    expect(settledFlags[0].textContent).toContain("Best price");
+    expect(settledFlags[0].closest("article")?.textContent).toContain("iPhone 17 Pro 256GB");
+  });
+
+  it("REEA-835: a settled snapshot with zero Kuwait offers keeps the flag per the settled rules", async () => {
+    // AC4 guard: once the batch has settled (no pending flags on the
+    // snapshot), the Best-price flag appears per current rules even though
+    // the cheapest offer is international.
+    searchParams.set("q", "iphone 17 pro");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    const SOLO: NormalizedProduct = {
+      productId: "iphone-17-pro-eg",
+      title: "iPhone 17 Pro 256GB",
+      brand: "Apple",
+      offers: [
+        { merchant: "Amazon.eg", price: 42000, currency: "EGP", url: "https://amazon.eg/p1", inStock: true },
+      ],
+      coupons: [],
+      variations: [],
+      alternatives: [],
+      scrapedAt: new Date().toISOString(),
+    };
+    const stages: Promise<LiveSearchResult>[] = [
+      Promise.resolve({
+        products: [SOLO],
+        notes: [{ merchant: "Amazon.eg", hits: 1 }],
+        suggestions: [SOLO],
+        kuwaitPendingStatus: true,
+        settled: true,
+      }),
+    ];
+
+    await act(async () => {
+      render(
+        <ResultsClient query="iphone 17 pro" page={1} country={null} stages={stages} />,
+      );
+    });
+
+    expect(document.querySelectorAll(".best-flag-pending")).toHaveLength(0);
+    expect(document.querySelectorAll(".best-flag")).toHaveLength(1);
+  });
 });
 
 describe("relevance tiering + brand hygiene (REEA-189)", () => {

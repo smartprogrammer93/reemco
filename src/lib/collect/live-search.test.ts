@@ -1311,6 +1311,45 @@ describe("groupHits", () => {
     const finalSnap = await staged.final;
     expect(finalSnap.products.some((p) => p.alternatives.length > 0)).toBe(true);
   });
+
+  it("REEA-835: fresh runs stamp the honesty flags on every flush and the converged snapshot", async () => {
+    resetDiscoveryCache();
+    // Only Blink answers (a Kuwait-SECONDARY merchant): the rendered set has
+    // zero offers from the Kuwait-primary four, which is exactly the state
+    // the results shell reads to withhold the unqualified Best-price flag.
+    // REEA-793 stamped the flags only on cached replays (skuLeadSnap) — a
+    // cold run never carried them, so the pending states could not fire on a
+    // first paint at all.
+    const blinkOnly = async (url: string): Promise<Response> => {
+      if (url.includes("blink.com.kw/search/suggest.json")) {
+        return new Response(
+          JSON.stringify({
+            resources: {
+              results: {
+                products: [
+                  {
+                    title: "Apple iPhone 17 Pro 256GB",
+                    handle: "ip17p-256",
+                    price: "389.000",
+                    available: true,
+                    vendor: "Apple",
+                  },
+                ],
+              },
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response("{}");
+    };
+    const staged = collectLiveResultsStaged("iphone 17 pro", { fetchImpl: blinkOnly });
+    const first = await firstPaintedFlush(staged);
+    expect(first.kuwaitPendingStatus).toBe(true);
+    const finalSnap = await staged.final;
+    expect(finalSnap.products.length).toBeGreaterThan(0);
+    expect(finalSnap.kuwaitPendingStatus).toBe(true);
+  });
 });
 
 describe("collectLiveResults", () => {

@@ -64,10 +64,20 @@ describe("REEA-793 honesty flags", () => {
     expect(ok.kuwaitPendingStatus).toBe(false);
   });
 
-  it("empty rendered set and non-device queries flag neither (REEA-437 grammar)", () => {
+  it("empty rendered set flags neither (REEA-437 grammar)", () => {
     expect(deviceLeadFlags("iPhone 17", [])).toEqual({ deviceLeadPending: false, kuwaitPendingStatus: false });
     expect(deviceLeadFlags("case", [row("case")]).deviceLeadPending).toBe(false);
     expect(queryHasDeviceIntent("case")).toBe(false);
+  });
+
+  it("REEA-835: kuwaitPendingStatus keys on the rendered set, not the query shape", () => {
+    // A non-device first paint must be able to say "no Kuwait answer yet"
+    // too — the device-intent gate stays on deviceLeadPending only.
+    const nonDevice = deviceLeadFlags("coffee machine", [row("Delonghi coffee machine", ["Amazon"])]);
+    expect(nonDevice.kuwaitPendingStatus).toBe(true);
+    expect(nonDevice.deviceLeadPending).toBe(false);
+    // A Kuwait-primary offer among the rendered rows clears the flag on any query.
+    expect(deviceLeadFlags("coffee machine", [row("Delonghi coffee machine", ["Sultan Center"])]).kuwaitPendingStatus).toBe(false);
   });
 
   it("Kuwait-primary merchant list is the fixed four", () => {

@@ -63,6 +63,12 @@ const en = {
   inStock: "In stock",
   outOfStock: "Out of stock",
   bestPrice: "Best price",
+  // REEA-835 — honest first paint: while the Kuwait retailer batch is still
+  // pending, the lead card's flag slot carries this checking state instead of
+  // an unqualified "Best price" (an interim international price must never
+  // read as a Kuwait best price). Count-free on purpose: the shopper-visible
+  // claim stays true whether 0 or 24 Kuwait adapters have answered so far.
+  kuwaitChecking: "Checking Kuwait stores…",
   lowestListed: "Lowest listed price",
   saveLead: "Save",
   effectiveLead: "Effective",
@@ -234,6 +240,10 @@ const ar: typeof en = {
   inStock: "متوفر",
   outOfStock: "غير متوفر",
   bestPrice: "أفضل سعر",
+  // REEA-835 — AR side of the lead-card checking state (EN: "Checking Kuwait
+  // stores…"). Pure Arabic renders correctly under the RTL chrome; the
+  // ellipsis trails the sentence in the locale's own script.
+  kuwaitChecking: "نتحقق من متاجر الكويت…",
   lowestListed: "أقل سعر معروض",
   saveLead: "وفّر",
   effectiveLead: "السعر بعد الخصم",

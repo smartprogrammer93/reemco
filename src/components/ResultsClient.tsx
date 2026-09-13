@@ -215,6 +215,7 @@ function ResultsGrid({
   showOutOfStock,
   renderStartMs,
   locale,
+  kuwaitPending,
 }: {
   products: NormalizedProduct[];
   query: string;
@@ -223,6 +224,10 @@ function ResultsGrid({
   showOutOfStock: boolean;
   renderStartMs?: number;
   locale?: Locale;
+  /** REEA-835 — Kuwait batch still pending for this render: the lead card
+   *  withholds the unqualified Best-price flag and shows the checking state
+   *  instead (see ProductResultCard). Absent = settled rules, byte-for-byte. */
+  kuwaitPending?: boolean;
 }) {
   const t = getStrings(locale ?? clientLocale());
   const tier = partitionForQuery(products);
@@ -240,6 +245,7 @@ function ResultsGrid({
             key={p.productId}
             product={p}
             isBest={i === bestAt}
+            kuwaitPending={kuwaitPending}
             query={query}
             rank={(page - 1) * PAGE_SIZE + i}
             country={country}
@@ -264,6 +270,7 @@ function ResultsGrid({
               key={p.productId}
               product={p}
               isBest={i === bestAt}
+              kuwaitPending={kuwaitPending}
               query={query}
               rank={(page - 1) * PAGE_SIZE + i}
               country={country}
@@ -285,6 +292,7 @@ function ResultsGrid({
                 key={p.productId}
                 product={p}
                 isBest={false}
+                kuwaitPending={kuwaitPending}
                 query={query}
                 rank={(page - 1) * PAGE_SIZE + tier.devices.length + i}
                 country={country}
@@ -407,8 +415,9 @@ function FlushBlock(props: {
   showOutOfStock: boolean;
   renderStartMs?: number;
   locale?: Locale;
+  kuwaitPending?: boolean;
 }) {
-  const { label, order, products, bestAt, query, page, country, showOutOfStock, renderStartMs, locale } = props;
+  const { label, order, products, bestAt, query, page, country, showOutOfStock, renderStartMs, locale, kuwaitPending } = props;
   if (products.length === 0) return null;
   // REEA-213: inside a participating block the badge rides the first
   // in-stock card of the final sorted order, never a later cheaper one.
@@ -421,6 +430,7 @@ function FlushBlock(props: {
             key={p.productId}
             product={p}
             isBest={i === badgeAt}
+            kuwaitPending={kuwaitPending}
             query={query}
             rank={(page - 1) * PAGE_SIZE + i}
             country={country}
@@ -473,6 +483,17 @@ function StageAppend(props: {
   // tiered path: the Accessories block owns the badge only when it is the
   // only rendered block up to here.
   const badgeOwner = index === 0 || prevVisible.length === 0;
+  // REEA-835 — the Kuwait batch is still pending for THIS render when the
+  // snapshot flags zero Kuwait-primary offers among the rendered rows AND
+  // more answers may still land: any intermediate flush (later stages are
+  // still streaming), or a finalized-at-budget snapshot (`settled === false`,
+  // whose follow-up feed may still fold Kuwait rows in). A settled converged
+  // snapshot keeps the current flag rules byte-for-byte (AC4) — if the four
+  // Kuwait-primary merchants genuinely answered without offers, the Best-price
+  // flag on the fallback offer is the honest settled state.
+  const kuwaitPending =
+    snap.kuwaitPendingStatus === true &&
+    (index < stages.length - 1 || snap.settled === false);
   // The tier gate reads the FULL matched set (cumulative snapshot), so the
   // decision only ever flips toward tiering as more retailers answer.
   const tiered = partitionForQuery(visible).tiered;
@@ -485,7 +506,7 @@ function StageAppend(props: {
   if (!tiered) {
     return (
       <>
-        <FlushBlock order={1} products={fresh} bestAt={badgeOwner ? 0 : -1} {...props} />
+        <FlushBlock order={1} products={fresh} bestAt={badgeOwner ? 0 : -1} kuwaitPending={kuwaitPending} {...props} />
         {next}
       </>
     );
@@ -500,9 +521,10 @@ function StageAppend(props: {
         
         products={devices}
         bestAt={badgeOwner ? 0 : -1}
+        kuwaitPending={kuwaitPending}
         {...props}
       />
-      <FlushBlock label={t.accessoriesLabel} order={2} products={accessories} bestAt={badgeOwner && devices.length === 0 ? 0 : -1} {...props} />
+      <FlushBlock label={t.accessoriesLabel} order={2} products={accessories} bestAt={badgeOwner && devices.length === 0 ? 0 : -1} kuwaitPending={kuwaitPending} {...props} />
       {next}
     </>
   );
@@ -862,6 +884,11 @@ function StagedResults(props: {
               country={country}
               showOutOfStock={showOutOfStock} locale={locale}
               renderStartMs={props.renderStartMs}
+              /* REEA-835 — pending only while the Kuwait batch may still land:
+                  a finalized-at-budget snapshot clears when the follow-up feed
+                  has answered (the REEA-437 one-shot grammar); a converged
+                  snapshot was never pending. */
+              kuwaitPending={finalSnap.kuwaitPendingStatus === true && finalSnap.settled === false && !feedDone}
             />
           </>
         )}

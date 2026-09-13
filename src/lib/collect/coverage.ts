@@ -52,12 +52,17 @@ export interface LiveSearchResult {
    */
   deviceLeadPending?: boolean;
   /**
-   * REEA-793 B2 — true ONLY when the rendered set carries ZERO offers from
-   * the Kuwait-primary retailers (Xcite, Jarir, Eureka, Sultan Center) while
+   * REEA-793 B2 — true when the rendered set carries ZERO offers from the
+   * Kuwait-primary retailers (Xcite, Jarir, Eureka, Sultan Center) while
    * fallback (non-Kuwait) offers did render: the Kuwait-primary hops missed
    * the completion budget, so the page states it honestly instead of
    * silently degrading to an Egypt-only listing. Derived purely from the
    * already-rendered offer state — no extra fetch, no bundled registry.
+   * REEA-835 — the flag is a property of the RENDERED SET, not of the query
+   * shape: the device-intent gate stays on `deviceLeadPending` only, so a
+   * first paint on ANY query can tell "no Kuwait answer yet" (and the lead
+   * card can withhold the unqualified Best-price flag while the Kuwait batch
+   * is still in flight).
    */
   kuwaitPendingStatus?: boolean;
 }
@@ -270,14 +275,18 @@ export interface DeviceLeadFlags {
  *  (query, rendered products) so a cached snapshot re-derives identically and
  *  the flags can never disagree with what is actually on screen. An empty
  *  rendered set flags neither (the provisional-zero skeleton owns that state,
- *  REEA-437 grammar). */
+ *  REEA-437 grammar). REEA-835 — `kuwaitPendingStatus` keys on the rendered
+ *  set alone (ANY query: a non-device first paint must be able to say "no
+ *  Kuwait answer yet" too); `deviceLeadPending` keeps its device-intent gate
+ *  because its pending row only makes sense under device intent. */
 export function deviceLeadFlags(
   query: string,
   products: readonly NormalizedProduct[],
 ): DeviceLeadFlags {
-  if (products.length === 0 || !queryHasDeviceIntent(query)) {
+  if (products.length === 0) {
     return { deviceLeadPending: false, kuwaitPendingStatus: false };
   }
+  const deviceIntent = queryHasDeviceIntent(query);
   let devices = 0;
   let accessories = 0;
   let kuwait = false;
@@ -295,7 +304,7 @@ export function deviceLeadFlags(
   }
   return {
     // Device offer missed the budget: accessories rendered, devices did not.
-    deviceLeadPending: devices === 0 && accessories > 0,
+    deviceLeadPending: deviceIntent && devices === 0 && accessories > 0,
     // Kuwait-primary missed the budget: fallback offers rendered, none of the
     // four Kuwait-primary merchants has a single rendered offer.
     kuwaitPendingStatus: kuwait === false,

@@ -3334,7 +3334,9 @@ function stagedSnapshot(
   // from the titles this run collected; only when those are empty too does
   // the empty state fall back to its category-pill floor.
   const suggestions = products.length > 0 ? products.slice(0, 3) : nearMatchSuggestions(q, hits);
-  return { products, notes, suggestions };
+  // REEA-835 — fresh flushes carry the honesty flags too, so the streamed
+  // first paint can read the Kuwait-pending state straight off its snapshot.
+  return withHonestyFlags(q, { products, notes, suggestions });
 }
 
 /**
@@ -3484,7 +3486,10 @@ async function finalSnapshot(
     : retrySuggestions && retrySuggestions.length > 0
       ? retrySuggestions
       : nearMatchSuggestions(q, nearPool);
-  return { products, notes: servedNotes, suggestions, attemptedQueries };
+  // REEA-835 — the converged snapshot stamps the flags too, so the settled
+  // view (and the follow-up feed that replaces the finalized one) re-derives
+  // the same honesty state the flushes carried.
+  return withHonestyFlags(q, { products, notes: servedNotes, suggestions, attemptedQueries });
 }
 
 /** Options shared by the staged and blocking collection entries. */
@@ -3550,6 +3555,21 @@ const NO_CACHE: QueryCache = {
  *  lead, stored order holds inside, honest zeros and plain queries pass
  *  through untouched. Pure and idempotent, so re-serving a narrowed snapshot
  *  cannot drift; suggestions ride the same partition to stay consistent. */
+/** REEA-835 — stamp BOTH honesty flags from the product set the snapshot
+ *  actually serves, on EVERY snapshot. REEA-793 stamped the flags only inside
+ *  skuLeadSnap (stored/memo/KV replays), so a cold fresh run never carried
+ *  them and the results shell's pending states could not fire on the first
+ *  paint at all. Pure: flags re-derive identically on a replay (skuLeadSnap
+ *  narrows first, then re-stamps — idempotent by the same contract). */
+function withHonestyFlags(q: string, snap: LiveSearchResult): LiveSearchResult {
+  const flags = deviceLeadFlags(q, snap.products);
+  return {
+    ...snap,
+    ...(flags.deviceLeadPending ? { deviceLeadPending: true } : {}),
+    ...(flags.kuwaitPendingStatus ? { kuwaitPendingStatus: true } : {}),
+  };
+}
+
 function skuLeadSnap(q: string, snap: LiveSearchResult): LiveSearchResult {
   if (snap.products.length === 0) return snap;
   // REEA-793 B1 — device-intent queries get the same serve-time treatment:
@@ -3564,14 +3584,11 @@ function skuLeadSnap(q: string, snap: LiveSearchResult): LiveSearchResult {
     : undefined;
   // REEA-793 B1/B2 — the honesty flags derive from the SAME narrowed set the
   // page renders, so the pending markup can never disagree with the rows.
-  const flags = deviceLeadFlags(q, products);
-  return {
+  return withHonestyFlags(q, {
     ...snap,
     products,
     ...(suggestions ? { suggestions } : {}),
-    ...(flags.deviceLeadPending ? { deviceLeadPending: true } : {}),
-    ...(flags.kuwaitPendingStatus ? { kuwaitPendingStatus: true } : {}),
-  };
+  });
 }
 
 export function collectLiveResultsStaged(

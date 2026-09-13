@@ -299,6 +299,17 @@ a:focus-visible {
   font: var(--rc-text-label);
 }
 
+/* REEA-835 — pending swap in the best-flag slot: while the Kuwait retailer
+   batch is still in flight the lead card carries the checking state instead
+   of an unqualified "Best price". Same box (inline-flex pill, same padding +
+   label font) so the settle swap moves nothing; the muted tint reads as
+   progress, not as a price claim. */
+.best-flag-pending {
+  background: transparent;
+  border: 1px dashed var(--rc-muted);
+  color: var(--rc-muted);
+}
+
 /* Freshness / provenance stamp: mono uppercase, dot + relative time, never
    omitted. REEA-283: nowrap + a min-width sized to the 'UPDATED {n} MINUTES
    AGO' copy — the chip keeps one line and its width no longer jiggle-shifts

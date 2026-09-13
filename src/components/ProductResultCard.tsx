@@ -106,6 +106,7 @@ function PriceBlock({
   oos = false,
   country,
   locale,
+  kuwaitPending = false,
 }: {
   offer: PriceOffer;
   isBest: boolean;
@@ -118,6 +119,12 @@ function PriceBlock({
   country: CountryCode | null;
   /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
   locale?: Locale;
+  /** REEA-835 — while the Kuwait batch is still pending, the lead card
+   *  withholds the unqualified Best-price flag and shows the honest checking
+   *  state in the SAME slot (one box, no layout shift) — an EGP lead must
+   *  never read as a Kuwait best price on first paint. The slot swaps back
+   *  to the flag when the batch settles (kuwaitPending clears). */
+  kuwaitPending?: boolean;
 }) {
   const t = getStrings(locale ?? clientLocale());
   // REEA-75: ml-auto keeps the price right-aligned when the row wraps;
@@ -166,7 +173,20 @@ function PriceBlock({
         {saved && !hasCoupon && offer.wasPrice != null && (
           <span className="savings-pill"><bdi>{`${t.saveLead} ${formatCountryPrice(offer.wasPrice - offer.price, offer.currency, country).primary}`}</bdi></span>
         )}
-        {isBest && <span className="best-flag">{t.bestPrice}</span>}
+        {/* REEA-835 — honest first paint: while any Kuwait retailer is still
+            pending, the lead card's flag slot carries the checking state
+            instead of an unqualified "Best price" (route (a) withhold — an
+            interim international price never reads as a Kuwait best price).
+            Same slot either way, so the settled swap moves nothing. */}
+        {isBest ? (
+          kuwaitPending ? (
+            <span className="best-flag best-flag-pending" role="status">
+              <bdi>{t.kuwaitChecking}</bdi>
+            </span>
+          ) : (
+            <span className="best-flag">{t.bestPrice}</span>
+          )
+        ) : null}
         {/* REEA-760: the coupon evidence rides its own honest line below the
             price cluster — one row per issuing retailer (chip → attribution →
             single effective number), never stacked amounts, never "+N more".
@@ -246,6 +266,7 @@ export function foldAlternativeRows(rows: ProductAlternative[]): ProductAlternat
 export default function ProductResultCard({
   product,
   isBest = false,
+  kuwaitPending = false,
   variant = "card",
   query = "",
   rank = -1,
@@ -258,6 +279,13 @@ export default function ProductResultCard({
   product: NormalizedProduct;
   /** True when this offer carries the best effective price on the page (§3.3 Von Restorff). */
   isBest?: boolean;
+  /**
+   * REEA-835 — true while the Kuwait retailer batch is still pending for the
+   * current staged render: the lead card (isBest) then withholds the
+   * unqualified "Best price" flag and shows the honest checking state
+   * instead. Default false keeps every other surface byte-for-byte.
+   */
+  kuwaitPending?: boolean;
   variant?: "card" | "detail";
   /** REEA-37 funnel context for item_clicked events (-1 = product detail page). */
   query?: string;
@@ -382,6 +410,7 @@ export default function ProductResultCard({
             oos={oos}
             country={country}
             locale={locale}
+            kuwaitPending={kuwaitPending}
           />
         )}
       </div>
