@@ -13,7 +13,9 @@ import { describe, expect, it } from "vitest";
 import {
   applyLinkSmoke,
   applySearchOutcome,
+  emptyWeek,
   isoWeekKey,
+  latencyBandOf,
   MAX_RETAILERS_PER_WEEK,
   METRICS_KV_KEY,
   pruneWeeks,
@@ -75,8 +77,15 @@ describe("REEA-807 applySearchOutcome", () => {
     applySearchOutcome(weeks, "2026-W37", {
       zeroOffers: false,
       offersByRetailer: { Xcite: 3, Jarir: 2 },
+      serveOutcome: "full",
+      serveLatencyMs: 1200,
     });
-    applySearchOutcome(weeks, "2026-W37", { zeroOffers: true, offersByRetailer: {} });
+    applySearchOutcome(weeks, "2026-W37", {
+      zeroOffers: true,
+      offersByRetailer: {},
+      serveOutcome: "pending",
+      serveLatencyMs: 900,
+    });
     const w = weeks["2026-W37"];
     expect(w.searches).toBe(2);
     expect(w.zero_offer_searches).toBe(1);
@@ -88,10 +97,14 @@ describe("REEA-807 applySearchOutcome", () => {
     applySearchOutcome(weeks, "2026-W37", {
       zeroOffers: false,
       offersByRetailer: { Xcite: 2 },
+      serveOutcome: "full",
+      serveLatencyMs: 900,
     });
     applySearchOutcome(weeks, "2026-W37", {
       zeroOffers: false,
       offersByRetailer: { Xcite: 1, "Bad\u0000Name": 4 },
+      serveOutcome: "full",
+      serveLatencyMs: 900,
     });
     const w = weeks["2026-W37"];
     expect(w.offers_by_retailer["Xcite"]).toBe(3);
@@ -104,6 +117,8 @@ describe("REEA-807 applySearchOutcome", () => {
       applySearchOutcome(weeks, "2026-W37", {
         zeroOffers: false,
         offersByRetailer: { [`Retailer ${i}`]: 1 },
+        serveOutcome: "full",
+        serveLatencyMs: 900,
       });
     }
     const w = weeks["2026-W37"];
@@ -171,10 +186,8 @@ describe("REEA-807 pruneWeeks", () => {
     for (let i = 0; i < RETENTION_WEEKS + 4; i++) {
       const d = new Date(Date.UTC(2026, 8, 12) - i * 7 * 24 * 60 * 60 * 1000);
       weeks[isoWeekKey(d.getTime())] = {
+        ...emptyWeek(),
         searches: i,
-        zero_offer_searches: 0,
-        offers_by_retailer: {},
-        link_smoke: { runs: 0, checked: 0, dead: 0, by_retailer: {} },
       };
     }
     const pruned = pruneWeeks(weeks);
@@ -190,11 +203,11 @@ describe("REEA-807 store round-trip", () => {
     const dir = tmpDir();
     try {
       await recordSearchOutcome(
-        { zeroOffers: false, offersByRetailer: { Xcite: 2 } },
+        { zeroOffers: false, offersByRetailer: { Xcite: 2 }, serveOutcome: "full", serveLatencyMs: 900 },
         { dir, now: Date.UTC(2026, 8, 12) },
       );
       await recordSearchOutcome(
-        { zeroOffers: true, offersByRetailer: {} },
+        { zeroOffers: true, offersByRetailer: {}, serveOutcome: "pending", serveLatencyMs: 900 },
         { dir, now: Date.UTC(2026, 8, 12) },
       );
       const weeks = await readWeeklyCounters({ dir });
@@ -217,11 +230,23 @@ describe("REEA-807 store round-trip", () => {
     const blob = JSON.parse(kv.writes[0].value) as { weeks: Record<string, Record<string, unknown>> };
     const week = blob.weeks["2026-W37"];
     expect(Object.keys(week).sort()).toEqual([
+      "cold_serves_full",
+      "cold_serves_pending",
+      "latency_band_1_3s",
+      "latency_band_3_10s",
+      "latency_band_gt_10s",
+      "latency_band_lt_1s",
       "link_smoke",
       "offers_by_retailer",
+      "retailer_adapter_attempts",
+      "retailer_adapter_failures",
       "searches",
       "zero_offer_searches",
     ]);
+    // REEA-871 — the extension maps carry retailer names only, same keys as
+    // the per-retailer offer counts.
+    expect(Object.keys(week.retailer_adapter_attempts as object)).toEqual([]);
+    expect(Object.keys(week.retailer_adapter_failures as object)).toEqual([]);
     expect(Object.keys(week.link_smoke as object).sort()).toEqual([
       "by_retailer",
       "checked",
@@ -244,7 +269,7 @@ describe("REEA-807 store round-trip", () => {
     };
     try {
       await recordSearchOutcome(
-        { zeroOffers: false, offersByRetailer: { Jarir: 1 } },
+        { zeroOffers: false, offersByRetailer: { Jarir: 1 }, serveOutcome: "full", serveLatencyMs: 900 },
         { dir, kv, now: Date.UTC(2026, 8, 12) },
       );
       const weeks = await readWeeklyCounters({ dir });
@@ -260,7 +285,13 @@ describe("REEA-807 store round-trip", () => {
     const dir = tmpDir();
     const apply = (n: number) =>
       updateWeeklyCounters(
-        (weeks, week) => applySearchOutcome(weeks, week, { zeroOffers: false, offersByRetailer: { Xcite: n } }),
+        (weeks, week) =>
+          applySearchOutcome(weeks, week, {
+            zeroOffers: false,
+            offersByRetailer: { Xcite: n },
+            serveOutcome: "full",
+            serveLatencyMs: 900,
+          }),
         { kv, dir, now: Date.UTC(2026, 8, 12) },
       );
     try {
@@ -273,5 +304,175 @@ describe("REEA-807 store round-trip", () => {
     } finally {
       cleanDir(dir);
     }
+  });
+});
+
+describe("REEA-871 cold-serve outcome + latency bands", () => {
+  it("splits exactly one cold-serve bucket per search, so full + pending == searches", () => {
+    const weeks: WeekCountersMap = {};
+    applySearchOutcome(weeks, "2026-W37", {
+      zeroOffers: false,
+      offersByRetailer: { Xcite: 2 },
+      serveOutcome: "full",
+      serveLatencyMs: 900,
+    });
+    applySearchOutcome(weeks, "2026-W37", {
+      zeroOffers: false,
+      offersByRetailer: {},
+      serveOutcome: "pending",
+      serveLatencyMs: 4_000,
+    });
+    applySearchOutcome(weeks, "2026-W37", {
+      zeroOffers: true,
+      offersByRetailer: {},
+      serveOutcome: "pending",
+      serveLatencyMs: 11_000,
+    });
+    const w = weeks["2026-W37"];
+    expect(w.searches).toBe(3);
+    expect(w.cold_serves_full).toBe(1);
+    expect(w.cold_serves_pending).toBe(2);
+    expect(w.cold_serves_full + w.cold_serves_pending).toBe(w.searches);
+  });
+
+  it("bands each serve latency into exactly one bucket (edges inclusive as documented)", () => {
+    expect(latencyBandOf(-5)).toBe("latency_band_lt_1s");
+    expect(latencyBandOf(0)).toBe("latency_band_lt_1s");
+    expect(latencyBandOf(999)).toBe("latency_band_lt_1s");
+    expect(latencyBandOf(1_000)).toBe("latency_band_1_3s");
+    expect(latencyBandOf(2_999)).toBe("latency_band_1_3s");
+    expect(latencyBandOf(3_000)).toBe("latency_band_3_10s");
+    expect(latencyBandOf(10_000)).toBe("latency_band_3_10s");
+    expect(latencyBandOf(10_001)).toBe("latency_band_gt_10s");
+    expect(latencyBandOf(Number.NaN)).toBe("latency_band_lt_1s");
+
+    const weeks: WeekCountersMap = {};
+    const latencies = [500, 1_500, 1_500, 4_000, 12_000];
+    for (const ms of latencies) {
+      applySearchOutcome(weeks, "2026-W37", {
+        zeroOffers: false,
+        offersByRetailer: {},
+        serveOutcome: "full",
+        serveLatencyMs: ms,
+      });
+    }
+    const w = weeks["2026-W37"];
+    expect(w.latency_band_lt_1s).toBe(1);
+    expect(w.latency_band_1_3s).toBe(2);
+    expect(w.latency_band_3_10s).toBe(1);
+    expect(w.latency_band_gt_10s).toBe(1);
+    const bands = w.latency_band_lt_1s + w.latency_band_1_3s + w.latency_band_3_10s + w.latency_band_gt_10s;
+    expect(bands).toBe(w.searches);
+  });
+});
+
+describe("REEA-871 retailer adapter attempts/failures", () => {
+  it("folds attempts and failures under the same retailer keys as the offer counts", () => {
+    const weeks: WeekCountersMap = {};
+    applySearchOutcome(weeks, "2026-W37", {
+      zeroOffers: false,
+      offersByRetailer: { Xcite: 3 },
+      serveOutcome: "full",
+      serveLatencyMs: 900,
+      adapterAttempts: { Xcite: 1, "Sultan Center": 1 },
+      adapterFailures: { "Sultan Center": 1 },
+    });
+    applySearchOutcome(weeks, "2026-W37", {
+      zeroOffers: false,
+      offersByRetailer: { Xcite: 1 },
+      serveOutcome: "full",
+      serveLatencyMs: 900,
+      adapterAttempts: { Xcite: 1 },
+    });
+    const w = weeks["2026-W37"];
+    expect(w.retailer_adapter_attempts).toEqual({ Xcite: 2, "Sultan Center": 1 });
+    expect(w.retailer_adapter_failures).toEqual({ "Sultan Center": 1 });
+    // failures ≤ attempts holds for every retailer present in either map.
+    for (const [merchant, attempts] of Object.entries(w.retailer_adapter_attempts)) {
+      expect(w.retailer_adapter_failures[merchant] ?? 0).toBeLessThanOrEqual(attempts);
+    }
+    // Sanitized like every other retailer name in the store.
+    applySearchOutcome(weeks, "2026-W37", {
+      zeroOffers: false,
+      offersByRetailer: {},
+      serveOutcome: "full",
+      serveLatencyMs: 900,
+      adapterAttempts: { "Bad\u0000Name": 2 },
+      adapterFailures: { "Bad\u0000Name": 1 },
+    });
+    expect(w.retailer_adapter_attempts["BadName"]).toBe(2);
+    expect(w.retailer_adapter_failures["BadName"]).toBe(1);
+  });
+
+  it("clamps failures without attempts and negative/garbage counts instead of recording impossible math", () => {
+    const weeks: WeekCountersMap = {};
+    applySearchOutcome(weeks, "2026-W37", {
+      zeroOffers: false,
+      offersByRetailer: {},
+      serveOutcome: "full",
+      serveLatencyMs: 900,
+      adapterAttempts: { Xcite: 1, Jarir: -3 },
+      adapterFailures: { Xcite: 7, Blink: 2 },
+    });
+    const w = weeks["2026-W37"];
+    expect(w.retailer_adapter_attempts).toEqual({ Xcite: 1 });
+    expect(w.retailer_adapter_failures).toEqual({ Xcite: 1 }); // clamped to attempts
+    expect(w.retailer_adapter_failures["Blink"]).toBeUndefined();
+    // A serve that ran no fan-out (memo hit) records no attempts at all.
+    applySearchOutcome(weeks, "2026-W37", {
+      zeroOffers: false,
+      offersByRetailer: {},
+      serveOutcome: "full",
+      serveLatencyMs: 5,
+    });
+    expect(w.retailer_adapter_attempts).toEqual({ Xcite: 1 });
+  });
+
+  it("persists the extension through the store and backfills old-schema weeks on read", async () => {
+    const kv = fakeKv();
+    // An OLD-schema blob (REEA-807 fields only) as a pre-extension instance
+    // would have written it.
+    await kv.set(
+      METRICS_KV_KEY,
+      JSON.stringify({
+        version: 1,
+        weeks: {
+          "2026-W36": {
+            searches: 4,
+            zero_offer_searches: 1,
+            offers_by_retailer: { Xcite: 9 },
+            link_smoke: { runs: 0, checked: 0, dead: 0, by_retailer: {} },
+          },
+        },
+      }),
+      60,
+    );
+    const old = await readWeeklyCounters({ kv });
+    expect(old["2026-W36"].cold_serves_full).toBe(0);
+    expect(old["2026-W36"].cold_serves_pending).toBe(0);
+    expect(old["2026-W36"].retailer_adapter_attempts).toEqual({});
+    expect(old["2026-W36"].latency_band_lt_1s).toBe(0);
+    expect(old["2026-W36"].searches).toBe(4);
+
+    await recordSearchOutcome(
+      {
+        zeroOffers: false,
+        offersByRetailer: { Xcite: 2 },
+        serveOutcome: "full",
+        serveLatencyMs: 2_500,
+        adapterAttempts: { Xcite: 1, Jarir: 1 },
+        adapterFailures: { Jarir: 1 },
+      },
+      { kv, now: Date.UTC(2026, 8, 12) },
+    );
+    const weeks = await readWeeklyCounters({ kv });
+    const w = weeks["2026-W37"];
+    expect(w.searches).toBe(1);
+    expect(w.cold_serves_full).toBe(1);
+    expect(w.latency_band_1_3s).toBe(1);
+    expect(w.retailer_adapter_attempts).toEqual({ Xcite: 1, Jarir: 1 });
+    expect(w.retailer_adapter_failures).toEqual({ Jarir: 1 });
+    // The old week rides along untouched, still readable.
+    expect(weeks["2026-W36"].searches).toBe(4);
   });
 });

@@ -3134,6 +3134,28 @@ export interface LiveSearchStages {
   allSettled: Promise<void>;
   /** Converged full-ranked snapshot of this run (see allSettled note). */
   converged: Promise<LiveSearchResult>;
+  /**
+   * REEA-871 — per-retailer adapter outcome of this run's round-one fan-out,
+   * resolved once every round-one hop has landed (the same point the
+   * converged chain rides). Observation only — nothing here touches the
+   * hops: `attempts` counts one adapter invocation per retailer that reached
+   * its network round or terminally failed before one, `failures` counts
+   * adapters that returned an error / empty-due-to-error outcome after their
+   * bounded REEA-290 retry. Recovery passes outside the round-one fan-out
+   * (the REEA-149 deepen, the REEA-437 widened retry) are separate bounded
+   * re-collections, not the serve fan-out, and stay out of this counter.
+   * Retailer keys are the same merchant names the coverage notes carry. A
+   * memo hit (fresh cache) reports empty maps — no fan-out ran, so the
+   * weekly fold records no attempts for that serve.
+   */
+  adapterTelemetry: Promise<AdapterTelemetry>;
+}
+
+/** REEA-871 — per-retailer adapter attempts/failures of one round-one
+ *  fan-out (see LiveSearchStages.adapterTelemetry). */
+export interface AdapterTelemetry {
+  attempts: Record<string, number>;
+  failures: Record<string, number>;
 }
 
 type SettledAdapter = { merchant: string; hits: SearchHit[]; error?: string };
@@ -3659,7 +3681,15 @@ export function collectLiveResultsStaged(
     // REEA-743 — the memo hit bypasses the fresh ranking chain entirely:
     // re-head the stored snapshot with the exact-SKU guard at serve time.
     const served = Promise.resolve(skuLeadSnap(q, cached.value));
-    return { stages: [served], final: served, allSettled: Promise.resolve(), converged: served };
+    // REEA-871 — a memo hit ran no fan-out, so the telemetry is empty by
+    // contract: the weekly fold records no adapter attempts for this serve.
+    return {
+      stages: [served],
+      final: served,
+      allSettled: Promise.resolve(),
+      converged: served,
+      adapterTelemetry: Promise.resolve({ attempts: {}, failures: {} }),
+    };
   }
 
   // REEA-602 shared-layer warm — after a recycle the per-instance memo is
@@ -3731,6 +3761,21 @@ export function collectLiveResultsStaged(
       wakeReady();
     });
   }
+
+  // REEA-871 — the push callbacks above are registered first, so once
+  // Promise.all(runs) resolves every run has already landed in `settled`
+  // (collectSettled never rejects): one attempt per retailer that ran, a
+  // failure for each error outcome. Pure read of the accumulator — no hop
+  // is started, retried, or reordered by this.
+  const adapterTelemetry: Promise<AdapterTelemetry> = Promise.all(runs).then(() => {
+    const attempts: Record<string, number> = {};
+    const failures: Record<string, number> = {};
+    for (const s of settled) {
+      attempts[s.merchant] = (attempts[s.merchant] ?? 0) + 1;
+      if (s.error) failures[s.merchant] = (failures[s.merchant] ?? 0) + 1;
+    }
+    return { attempts, failures };
+  });
 
   // REEA-398 finalize clock: every stage ALSO resolves on this timer, so the
   // streamed document closes inside the completion budget even while slow
@@ -3832,9 +3877,9 @@ export function collectLiveResultsStaged(
   if (cached) {
     // Stale window only reaches here (fresh returns above): cache-first flush,
     // live stages behind it, converged full-ranked final.
-    return { stages: [Promise.resolve(skuLeadSnap(q, cached.value)), ...stages], final, allSettled, converged };
+    return { stages: [Promise.resolve(skuLeadSnap(q, cached.value)), ...stages], final, allSettled, converged, adapterTelemetry };
   }
-  return { stages, final, allSettled, converged };
+  return { stages, final, allSettled, converged, adapterTelemetry };
 }
 
 /**

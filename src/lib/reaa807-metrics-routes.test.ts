@@ -45,11 +45,11 @@ afterEach(async () => {
 describe("REEA-807 GET /api/metrics/weekly", () => {
   it("returns the PM snapshot: counters plus funnel-derived link clicks, no PII", async () => {
     await recordSearchOutcome(
-      { zeroOffers: true, offersByRetailer: {} },
+      { zeroOffers: true, offersByRetailer: {}, serveOutcome: "pending", serveLatencyMs: 4_200, adapterAttempts: { Xcite: 1 }, adapterFailures: { Xcite: 1 } },
       { now: WEEK_MS },
     );
     await recordSearchOutcome(
-      { zeroOffers: false, offersByRetailer: { Xcite: 3, Jarir: 2 } },
+      { zeroOffers: false, offersByRetailer: { Xcite: 3, Jarir: 2 }, serveOutcome: "full", serveLatencyMs: 1_800, adapterAttempts: { Xcite: 1, Jarir: 1 } },
       { now: WEEK_MS },
     );
     await appendEvents([
@@ -73,11 +73,31 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
     expect(week.zero_offer_searches).toBe(1);
     expect(week.offers_by_retailer).toEqual({ Xcite: 3, Jarir: 2 });
     expect(week.offer_link_clicks).toBe(2);
+    // REEA-871 — the aggregate extension rides the same payload with the
+    // same invariants the store guarantees by construction.
+    expect(week.cold_serves_full).toBe(1);
+    expect(week.cold_serves_pending).toBe(1);
+    expect((week.cold_serves_full as number) + (week.cold_serves_pending as number)).toBe(week.searches);
+    const bands = ["latency_band_lt_1s", "latency_band_1_3s", "latency_band_3_10s", "latency_band_gt_10s"] as const;
+    expect(bands.reduce((n, b) => n + (week[b] as number), 0)).toBe(week.searches);
+    expect(week.retailer_adapter_attempts).toEqual({ Xcite: 2, Jarir: 1 });
+    expect(week.retailer_adapter_failures).toEqual({ Xcite: 1 });
+    for (const [merchant, attempts] of Object.entries(week.retailer_adapter_attempts as Record<string, number>)) {
+      expect((week.retailer_adapter_failures as Record<string, number>)[merchant] ?? 0).toBeLessThanOrEqual(attempts);
+    }
     // No PII surface: counters and retailer names only.
     expect(Object.keys(week).sort()).toEqual([
+      "cold_serves_full",
+      "cold_serves_pending",
+      "latency_band_1_3s",
+      "latency_band_3_10s",
+      "latency_band_gt_10s",
+      "latency_band_lt_1s",
       "link_smoke",
       "offer_link_clicks",
       "offers_by_retailer",
+      "retailer_adapter_attempts",
+      "retailer_adapter_failures",
       "searches",
       "zero_offer_searches",
     ]);

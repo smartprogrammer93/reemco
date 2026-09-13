@@ -13,7 +13,18 @@
  * Response shape (no-store):
  * { generated_at, retention_weeks, weeks: { "<ISOWeek>": {
  *   searches, zero_offer_searches, offers_by_retailer,
+ *   cold_serves_full, cold_serves_pending,
+ *   retailer_adapter_attempts, retailer_adapter_failures,
+ *   latency_band_lt_1s, latency_band_1_3s, latency_band_3_10s,
+ *   latency_band_gt_10s,
  *   offer_link_clicks, link_smoke: { runs, checked, dead, by_retailer } } } }
+ *
+ * REEA-871 — the cold-serve outcome split, the per-retailer adapter
+ * attempts/failures and the four latency bands ride the same payload with
+ * the same no-store header and the same 1–26 weeks clamping. Invariants by
+ * construction: cold_serves_full + cold_serves_pending == searches, the four
+ * bands sum to searches, and retailer_adapter_failures ≤ attempts per
+ * retailer. Weeks stored before the extension read back with 0 backfill.
  */
 import { RETENTION_WEEKS, isoWeekKey, readWeeklyCounters } from "@/lib/metrics";
 import { readEvents } from "@/lib/event-store";
@@ -56,6 +67,15 @@ export async function GET(req: Request): Promise<Response> {
       searches: w.searches,
       zero_offer_searches: w.zero_offer_searches,
       offers_by_retailer: w.offers_by_retailer,
+      // REEA-871 — aggregate extension (integer counters, retailer names only).
+      cold_serves_full: w.cold_serves_full,
+      cold_serves_pending: w.cold_serves_pending,
+      retailer_adapter_attempts: w.retailer_adapter_attempts,
+      retailer_adapter_failures: w.retailer_adapter_failures,
+      latency_band_lt_1s: w.latency_band_lt_1s,
+      latency_band_1_3s: w.latency_band_1_3s,
+      latency_band_3_10s: w.latency_band_3_10s,
+      latency_band_gt_10s: w.latency_band_gt_10s,
       offer_link_clicks: clicks[week] ?? 0,
       link_smoke: w.link_smoke,
     };

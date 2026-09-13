@@ -1985,6 +1985,52 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     expect(finalSnap.notes).toHaveLength(23);
   });
 
+  // REEA-871 — the adapter attempts/failures counters read off the run's own
+  // round-one telemetry: one attempt per retailer in the fan-out, a failure
+  // only where the adapter returned an error outcome.
+  it("reports one attempt per round-one adapter and failures only for errored hops (REEA-871)", async () => {
+    resetDiscoveryCache();
+    const staged = collectLiveResultsStaged("samsung", { fetchImpl: mixedSpeedFetch(), country: "KW" });
+    await staged.final;
+    const telemetry = await staged.adapterTelemetry;
+    // One attempt per retailer in the fan-out — the same 23 merchants the
+    // coverage notes name.
+    expect(Object.values(telemetry.attempts).reduce((a, b) => a + b, 0)).toBe(23);
+    expect(Object.keys(telemetry.attempts)).toHaveLength(23);
+    expect(Object.keys(telemetry.attempts)).toEqual(
+      expect.arrayContaining(["Xcite", "Blink", "Eureka", "Sultan Center"]),
+    );
+    // Every hop answered in this fixture: no failures.
+    expect(telemetry.failures).toEqual({});
+  });
+
+  it("counts a failing adapter as attempt + failure after its bounded retry (REEA-871)", async () => {
+    resetDiscoveryCache();
+    const staged = collectLiveResultsStaged("samsung", {
+      fetchImpl: async (url) => {
+        if (url.includes("blink.com.kw")) throw new Error("blink down");
+        return mixedSpeedFetch()(url);
+      },
+      country: "KW",
+    });
+    await staged.final;
+    const telemetry = await staged.adapterTelemetry;
+    expect(telemetry.attempts["Blink"]).toBe(1);
+    expect(telemetry.failures["Blink"]).toBe(1);
+    // The healthy lanes keep their clean 1 attempt / 0 failures record.
+    expect(telemetry.attempts["Xcite"]).toBe(1);
+    expect(telemetry.failures["Xcite"]).toBeUndefined();
+  });
+
+  it("a memo hit reports empty adapter telemetry — no fan-out ran (REEA-871)", async () => {
+    resetDiscoveryCache();
+    const cache = createQueryCache();
+    await collectLiveResultsStaged("xm6", { fetchImpl: mixedSpeedFetch(), cache }).final;
+    const warm = collectLiveResultsStaged("xm6", { fetchImpl: mixedSpeedFetch(), cache });
+    const telemetry = await warm.adapterTelemetry;
+    expect(telemetry).toEqual({ attempts: {}, failures: {} });
+  });
+
   it("the final flush equals the blocking path on the same live answers", async () => {
     resetDiscoveryCache();
     const staged = await collectLiveResultsStaged("samsung", { fetchImpl: mixedSpeedFetch(), country: "KW" }).final;

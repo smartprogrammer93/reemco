@@ -137,6 +137,12 @@ export default async function ResultsPage({
   // signals. Coverage notes describe the whole fan-out the page actually ran.
   // The ONE exception is the explicit Refresh action (REFRESH_COOKIE), which
   // always re-runs the live collection so its timestamps move.
+  // REEA-871 — the latency-band clock: wall-clock from fan-out start (this
+  // moment, immediately before the staged collection is kicked off) to the
+  // after() recording below. Read once per render, server-side only; the raw
+  // value never leaves the counter fold (only its band is stored).
+  // eslint-disable-next-line react-hooks/purity -- intentional single clock read per server render (REEA-283 pattern); not a render output.
+  const fanoutStartMs = Date.now();
   const staged = collectLiveResultsStaged(query, { refresh: hint.refresh, locale });
   // REEA-398 — keep the hops still in flight alive BEHIND the finalized
   // response: after() runs the run's allSettled chain once the document is
@@ -145,25 +151,38 @@ export default async function ResultsPage({
   // dying when the stream closes on the completion budget. Same single
   // live fan-out; no second round of requests.
   after(async () => {
-    await staged.allSettled;
-    // REEA-807 — aggregate outcome counters, folded in the same after() tail
+    await staged.allSettled;    // REEA-807 — aggregate outcome counters, folded in the same after() tail
     // that keeps the run's hops alive: one live fan-out page serve = one
     // search; zero-offer and per-retailer offer counts read the CONVERGED
     // answer (not the budget-finalized slice). Aggregate counters only —
     // no query content, no identifiers; storage is best-effort and must
     // never surface as a failed render.
+    // REEA-871 — the same recording carries the approved aggregate
+    // extension: the cold-serve outcome (full when the converged answer has
+    // no pending/staged retailers left at recording time — a
+    // finalized-at-budget answer or a rejected converged chain counts as
+    // pending), the fan-out wall-clock latency banded into exactly one
+    // bucket, and the round-one adapter attempts/failures read off the run's
+    // own telemetry. Still aggregate-only; a rejected converged chain counts
+    // the search with the honest pending outcome rather than no outcome.
     if (query) {
-      const snap = await staged.converged.then(
-        (s) => s,
-        () => null,
-      );
-      // A rejected converged chain still counts the search itself — only the
-      // zero-offer flag and per-retailer counts need the snapshot.
-      await recordSearchOutcome(
-        snap
+      const [snap, adapterTelemetry] = await Promise.all([
+        staged.converged.then(
+          (s) => s,
+          () => null,
+        ),
+        staged.adapterTelemetry.catch(() => ({ attempts: {}, failures: {} })),
+      ]);
+      await recordSearchOutcome({
+        ...(snap
           ? searchOutcomeFromSnapshot(snap)
-          : { zeroOffers: false, offersByRetailer: {} },
-      );
+          : { zeroOffers: false, offersByRetailer: {} }),
+        serveOutcome: snap && snap.settled !== false ? "full" : "pending",
+        // eslint-disable-next-line react-hooks/purity -- the recording clock is read in the deferred after() tail, never during render output.
+        serveLatencyMs: Math.max(0, Date.now() - fanoutStartMs),
+        adapterAttempts: adapterTelemetry.attempts,
+        adapterFailures: adapterTelemetry.failures,
+      });
     }
   });
 
