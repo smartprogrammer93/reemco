@@ -3,7 +3,8 @@
  *
  * POST /api/events  { events: [...] } or a single event object.
  * Hardening (AC-6): JSON-only, 16 KB payload cap, schema validation with
- * per-field bounds, 120 req/min sliding-window rate limit per caller.
+ * per-field bounds, 120 req/min sliding-window rate limit per caller
+ * (REEA-826: enforced per serverless instance, not deployment-wide).
  * The rate-limit key (client IP) is used in memory only — never persisted.
  * No cookies are set; the 202 response contains no client data (AC-3).
  */

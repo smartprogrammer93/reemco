@@ -4,6 +4,15 @@
  * Sliding-window counter keyed by caller (hashed client IP). Memory-only:
  * the key is never persisted and never written to the event store, so no
  * PII leaves the process.
+ *
+ * REEA-826 — deployment semantics: the bucket store is per PROCESS. On
+ * Vercel, requests fan out across serverless instances (each with its own
+ * memory), so the enforced budget is `limit` per caller per INSTANCE, not
+ * per deployment — the effective abuse ceiling scales with instance count.
+ * The in-memory layer is cheap same-instance flood protection (layer 1);
+ * a deployment-wide budget requires the shared-KV counter (REEA-826
+ * follow-up). Never document the number below as a per-caller deployment
+ * budget without that qualifier.
  */
 
 interface RateLimitOptions {

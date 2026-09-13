@@ -197,6 +197,9 @@ export async function GET(req: Request): Promise<Response> {
   // REEA-782 — rate-limit gate BEFORE any probe fan-out. Past the bucket the
   // handler returns 429 and performs zero upstream fetches (fail closed on
   // abuse; every fetch below sits behind this line).
+  // REEA-826 — the bucket is per serverless instance (memory-only store), so
+  // the enforced budget is per caller per instance, not deployment-wide; the
+  // deployment-wide counter is the REEA-826 KV follow-up.
   const gate = checkRateLimit(`echo:${clientKey(req)}`, Date.now());
   if (!gate.allowed) {
     return Response.json({ error: "rate limit exceeded" }, { status: 429 });

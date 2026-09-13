@@ -22,7 +22,9 @@
  * build stamp) — while the per-step internals (card/chip counts, fixture
  * name, checkedAt/failedAt) go to the function console instead, so a public
  * GET leaks nothing beyond the verdict. GET shares the REEA-37 sliding-window
- * checkRateLimit: while inside the limit the funnel runs and its verdict is
+ * checkRateLimit (REEA-826: per serverless instance — memory-only buckets, so
+ * the budget is per caller per instance, not deployment-wide): while inside
+ * the limit the funnel runs and its verdict is
  * cached in memory; past the limit the cached verdict is replayed without a
  * re-walk, so hammering one anonymous endpoint cannot re-run the whole site
  * walk on every hit. Step 3 stays a hard assertion; its hop budget (25 s,

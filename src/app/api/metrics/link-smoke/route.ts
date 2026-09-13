@@ -10,7 +10,8 @@
  *
  *  - JSON-only, 4 KB payload cap, schema validation with per-field bounds
  *    (same hardening posture as the REEA-37 events route);
- *  - sliding-window rate limit per caller (memory-only, key never persisted);
+ *  - sliding-window rate limit per caller (memory-only, key never persisted;
+ *    REEA-826: per serverless instance, not deployment-wide);
  *  - no cookies, no identifiers, no per-URL or per-query data stored — the
  *    counters keep integer totals and retailer names only.
  */

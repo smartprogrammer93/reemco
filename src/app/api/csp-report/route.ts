@@ -7,7 +7,8 @@
  *
  * Hardening mirrors /api/events (REEA-37 AC-6): CSP-report content types
  * only (`application/csp-report`, `application/reports+json`), 16 KB body
- * cap, schema validation, sliding-window rate limit per caller, and a
+ * cap, schema validation, sliding-window rate limit per caller (REEA-826:
+ * per serverless instance, not deployment-wide), and a
  * bounded in-memory ring buffer (newest 200) plus a concise console line.
  * No cookies or PII are logged; document-uri is reduced to its origin.
  */
