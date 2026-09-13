@@ -8,6 +8,8 @@
  * this poll sees the job created by another instance's POST.
  */
 import { getJob } from "@/lib/collect/store";
+import { reapStaleCollectingJob } from "@/lib/collect/runner";
+import { isStaleCollectingJob } from "@/lib/collect/types";
 
 export const dynamic = "force-dynamic";
 
@@ -20,5 +22,11 @@ export async function GET(
   if (!job) {
     return Response.json({ error: "Unknown collect job" }, { status: 404 });
   }
-  return Response.json(job, { headers: { "Cache-Control": "no-store" } });
+  // REEA-870: a "collecting" job older than INFLIGHT_STALE_MS has no living
+  // runner — its invocation died before the tail finalize. Serve a reaped
+  // terminal snapshot instead of answering "collecting" forever, so a client
+  // attached to an orphaned job (e.g. a jobId served from a page render that
+  // deduped onto the dead run) always exits its spinner within a bounded time.
+  const served = isStaleCollectingJob(job) ? await reapStaleCollectingJob(job) : job;
+  return Response.json(served, { headers: { "Cache-Control": "no-store" } });
 }

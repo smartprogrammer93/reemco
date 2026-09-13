@@ -313,3 +313,13 @@ export function resetStoreForTests(dir = COLLECT_CACHE_DIR): void {
     /* nothing to clean */
   }
 }
+
+/**
+ * Test helper (REEA-870): aim the local in-flight pointer at an arbitrary job
+ * id — simulates a dead runner that left the pointer at its orphaned job
+ * without going through createJob. The shared-KV pointer (cross-instance
+ * dedupe) is untouched; tests of the dedupe path run without a KV binding.
+ */
+export function setInflightForTests(productId: string, jobId: string): void {
+  inflight.set(productId, jobId);
+}

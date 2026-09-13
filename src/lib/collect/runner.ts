@@ -15,7 +15,7 @@
  * the budgets above are enforced here regardless.
  */
 import type { CollectJob, LiveOffer, RetailerSubtask } from "@/lib/collect/types";
-import { OVERALL_BUDGET_MS } from "@/lib/collect/types";
+import { OVERALL_BUDGET_MS, isStaleCollectingJob } from "@/lib/collect/types";
 import type { NormalizedProduct } from "@/types/product";
 import { scrapeOffer, subtaskFor, type FetchImpl } from "@/lib/collect/scraper";
 import {
@@ -57,12 +57,20 @@ export async function startCollection(
 ): Promise<StartResult> {
   void opts; // always-live: `force` is accepted but no longer changes anything
   // Dedupe rapid repeat clicks on the same product by in-flight job (shared
-  // across instances through the KV store, REEA-92).
+  // across instances through the KV store, REEA-92). REEA-870: a dedupe hit is
+  // only safe while the run behind the job is alive — a "collecting" job older
+  // than INFLIGHT_STALE_MS has no living runner (its invocation died before the
+  // tail finalize), so attaching to it would serve an unfixable stale spinner
+  // to every later visitor. Reap the orphan and start a fresh run instead.
   const inflightId = await getInflightJobId(product.productId);
   if (inflightId) {
     const existing = await getJob(inflightId);
     if (existing && existing.status === "collecting") {
-      return { job: existing, deduped: true, servedFromCache: false };
+      if (isStaleCollectingJob(existing)) {
+        await reapStaleCollectingJob(existing);
+      } else {
+        return { job: existing, deduped: true, servedFromCache: false };
+      }
     }
   }
 
@@ -72,6 +80,43 @@ export async function startCollection(
   // shared store (REEA-92).
   await touchJob(job);
   return { job, deduped: false, servedFromCache: false };
+}
+
+/**
+ * REEA-870 — finalize a job whose runner died mid-run (serverless recycle,
+ * deploy, aborted render): the shared store still says "collecting" and, with
+ * no living runner, nothing would ever write a terminal state. Marks every
+ * unsettled subtask timeout and the job failed, links the last completed
+ * collection for the client's stale-cache fallback, and publishes the
+ * terminal snapshot so both dedupe and polling surfaces converge on it.
+ *
+ * The job is deliberately left "failed" even when partial offers landed (they
+ * still render — the panel draws job.offers in every state): finishJob only
+ * caches "complete" jobs, so a reaped artifact can never pose as a fresh
+ * completed collection. Reaping is idempotent — a second pass finds only
+ * settled subtasks and rewrites the same terminal snapshot.
+ */
+export async function reapStaleCollectingJob(
+  job: CollectJob,
+  opts: { now?: number } = {},
+): Promise<CollectJob> {
+  const now = opts.now ?? Date.now();
+  for (const sub of job.subtasks) {
+    if (sub.status === "pending" || sub.status === "collecting") {
+      sub.status = "timeout";
+      sub.error = "Retailer check interrupted — the collection run stopped before this store answered";
+      sub.finishedAt = new Date(now).toISOString();
+    }
+  }
+  if (job.status === "collecting") {
+    job.status = "failed";
+    job.error = "Collection run was interrupted before it finished — please retry.";
+  }
+  const previous = await findLastCompleted(job.productId);
+  if (previous && previous.jobId !== job.jobId) job.previousJobId = previous.jobId;
+  await finishJob(job);
+  await touchJob(job);
+  return job;
 }
 
 /** Staged product collection for the /product/... server render (REEA-248). */

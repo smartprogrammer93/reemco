@@ -253,3 +253,120 @@ describe("misc", async () => {
     expect(await getJob(job.jobId)).toBeTruthy();
   });
 });
+
+describe("stale in-flight reaping (REEA-870)", async () => {
+  const { reapStaleCollectingJob } = await import("@/lib/collect/runner");
+  const { INFLIGHT_STALE_MS, isStaleCollectingJob } = await import("@/lib/collect/types");
+
+  function collectingJob(overrides: Partial<CollectJob> = {}): CollectJob {
+    return {
+      jobId: `orphan-${++idCounter}`,
+      productId: product().productId,
+      status: "collecting",
+      mode: "live",
+      startedAt: new Date().toISOString(),
+      subtasks: [
+        { retailer: "Alpha", domain: "alpha.example", status: "done", offersFound: 1 },
+        { retailer: "Beta", domain: "beta.example", status: "collecting", offersFound: 0 },
+      ],
+      offers: [],
+      ...overrides,
+    };
+  }
+
+  it("isStaleCollectingJob flags only collecting jobs past the staleness window", () => {
+    const job = collectingJob();
+    expect(isStaleCollectingJob(job)).toBe(false);
+    expect(
+      isStaleCollectingJob(
+        collectingJob({ startedAt: new Date(Date.now() - INFLIGHT_STALE_MS - 1).toISOString() }),
+      ),
+    ).toBe(true);
+    // A terminal job is never stale, whatever its age.
+    expect(
+      isStaleCollectingJob(
+        collectingJob({
+          status: "complete",
+          startedAt: new Date(Date.now() - INFLIGHT_STALE_MS - 1).toISOString(),
+        }),
+      ),
+    ).toBe(false);
+    // An unparseable startedAt cannot be judged — never reaped.
+    expect(isStaleCollectingJob(collectingJob({ startedAt: "not-a-date" }))).toBe(false);
+  });
+
+  it("reapStaleCollectingJob finalizes unsettled subtasks, keeps settled ones, and never caches as completed", async () => {
+    const p = product();
+    const job = collectingJob({ productId: p.productId });
+    job.offers = [
+      {
+        merchant: "Alpha",
+        domain: "alpha.example",
+        price: 10,
+        currency: "KWD",
+        url: "https://alpha.example/p/1",
+        inStock: true,
+        collectedAt: new Date().toISOString(),
+        method: "live",
+      },
+    ];
+    const reaped = await reapStaleCollectingJob(job);
+    expect(reaped.status).toBe("failed");
+    expect(reaped.error).toBeTruthy();
+    expect(reaped.subtasks.find((s) => s.retailer === "Beta")?.status).toBe("timeout");
+    expect(reaped.subtasks.find((s) => s.retailer === "Alpha")?.status).toBe("done");
+    // Live-data fidelity: partial offers from an interrupted run still render,
+    // but the reaped artifact must never pose as a fresh completed collection.
+    expect(await findFreshCompleted(p.productId)).toBeUndefined();
+    // The reaped snapshot is published for polling surfaces.
+    expect((await getJob(job.jobId))?.status).toBe("failed");
+  });
+
+  it("startCollection reaps an orphaned in-flight job and starts a fresh run instead of deduping onto it", async () => {
+    const p = product();
+    const dead = collectingJob({ productId: p.productId });
+    dead.startedAt = new Date(Date.now() - INFLIGHT_STALE_MS - 1).toISOString();
+    // Plant the orphan as the product's in-flight job, as a dead runner would
+    // have left it: snapshot published, in-flight pointer aimed at it.
+    const store = await import("@/lib/collect/store");
+    await store.touchJob(dead);
+    store.setInflightForTests(p.productId, dead.jobId);
+
+    const again = await startCollection(p);
+    expect(again.deduped).toBe(false); // never dedupe onto a dead run
+    expect(again.job.jobId).not.toBe(dead.jobId);
+    expect((await getJob(dead.jobId))?.status).toBe("failed"); // orphan reaped
+  });
+
+  it("still dedupes a fresh in-flight job (the healthy path, unchanged)", async () => {
+    const p = product();
+    const first = await startCollection(p);
+    const second = await startCollection(p);
+    expect(second.deduped).toBe(true);
+    expect(second.job.jobId).toBe(first.job.jobId);
+  });
+
+  it("poll endpoint reaps a stale collecting job and serves a terminal snapshot (REEA-870 client contract)", async () => {
+    const p = product();
+    const dead = collectingJob({ productId: p.productId });
+    dead.startedAt = new Date(Date.now() - INFLIGHT_STALE_MS - 1).toISOString();
+    const store = await import("@/lib/collect/store");
+    await store.touchJob(dead);
+
+    const { GET } = await import("@/app/api/collect-jobs/[jobId]/route");
+    const res = await GET(new Request("http://localhost/x"), {
+      params: Promise.resolve({ jobId: dead.jobId }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as CollectJob;
+    expect(body.status).toBe("failed"); // spinner exits with a visible error state
+    expect(body.error).toBeTruthy();
+
+    // A fresh (non-stale) job still polls as-is.
+    const live = await startCollection(p);
+    const res2 = await GET(new Request("http://localhost/x"), {
+      params: Promise.resolve({ jobId: live.job.jobId }),
+    });
+    expect(((await res2.json()) as CollectJob).status).toBe("collecting");
+  });
+});

@@ -79,6 +79,29 @@ export const SC_LANE_TIMEOUT_MS = 2 * 1000; // Sultan Center lane only
 export const SOFT_CEILING_MS = 6 * 1000; // render arrived offers, keep chips
 export const OVERALL_BUDGET_MS = 10 * 1000; // hard ceiling
 
+/**
+ * REEA-870 — staleness window for a job whose status still reads "collecting".
+ * A live run cannot outlast OVERALL_BUDGET_MS (the runner races every scrape
+ * against the remaining budget and its tail always finalizes the job), so a
+ * collecting job older than 3 budgets has no living runner: its serverless
+ * invocation died (recycle, deploy, aborted render) before the tail could
+ * write a terminal state. Left alone, the job stays "collecting" forever and
+ * every later visitor dedupes onto it — the infinite "Checking …" spinner.
+ */
+export const INFLIGHT_STALE_MS = 3 * OVERALL_BUDGET_MS;
+
+/** True when a still-"collecting" job is past the point any live runner could exist. */
+export function isStaleCollectingJob(
+  job: CollectJob,
+  now: number = Date.now(),
+  staleMs: number = INFLIGHT_STALE_MS,
+): boolean {
+  if (job.status !== "collecting") return false;
+  const t = new Date(job.startedAt).getTime();
+  if (Number.isNaN(t)) return false; // cannot judge age — do not reap
+  return now - t > staleMs;
+}
+
 /** True when a completed job is fresh enough to serve as cached (AC5). */
 export function isFreshCompleted(
   job: CollectJob,
