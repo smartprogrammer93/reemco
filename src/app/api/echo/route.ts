@@ -35,6 +35,11 @@
  */
 import { fetchThroughChallenge, VERIFIED_BOT_HEADERS } from "@/lib/collect/search-fallback";
 import { jsdClearedHtml } from "@/lib/collect/live-search";
+// REEA-782 — GET /api/echo rides the shared REEA-37 sliding-window limiter
+// (namespaced `echo:` bucket, so the budget is independent of the sibling
+// health/events/csp-report buckets). Gate sits ahead of the probe fan-out:
+// past the limit the route answers 429 with ZERO upstream fetches.
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -181,7 +186,21 @@ async function probeSultan(fetchImpl: typeof fetch): Promise<ZoneProbe> {
   }
 }
 
-export async function GET(): Promise<Response> {
+// Same caller key as the sibling /api/health and /api/events limiters
+// (client IP from the proxy chain).
+function clientKey(req: Request): string {
+  const fwd = req.headers.get("x-forwarded-for");
+  return (fwd ? fwd.split(",")[0].trim() : "") || req.headers.get("x-real-ip") || "unknown";
+}
+
+export async function GET(req: Request): Promise<Response> {
+  // REEA-782 — rate-limit gate BEFORE any probe fan-out. Past the bucket the
+  // handler returns 429 and performs zero upstream fetches (fail closed on
+  // abuse; every fetch below sits behind this line).
+  const gate = checkRateLimit(`echo:${clientKey(req)}`, Date.now());
+  if (!gate.allowed) {
+    return Response.json({ error: "rate limit exceeded" }, { status: 429 });
+  }
   // The hop identity rides verbatim to the echo services, so what they report
   // IS what the retailer zones see from this runtime (headers + source IP).
   const hopEcho: Promise<{ headers: Record<string, string>; originIp: string; error?: string }> = fetch(HEADER_ECHO_URL, {
