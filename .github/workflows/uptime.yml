@@ -1,6 +1,17 @@
 name: Uptime check
 
-
+# Basic availability monitoring for the public site (REEA-27 item 3).
+# Runs every 30 minutes (Hobby minutes budget, REEA-322); any failure opens a
+# GitHub issue labeled `uptime-alert` (deduped) so downtime surfaces in the
+# repo notification stream immediately.
+# REEA-820 follow-up: REEA-322 accidentally deleted the whole `on:` block,
+# leaving an orphaned `workflow_dispatch:` — GitHub rejected the workflow on
+# every push since (red run, zero jobs), so the hosted uptime probe has been
+# dead since 2026-09-08. Restores the trigger; keep-warm remains the
+# push-triggered lane.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 permissions:
