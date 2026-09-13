@@ -2980,6 +2980,17 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, quer
           ...(o.image ? { image: o.image } : {}),
         };
       });
+    // REEA-897 — one row per unique retailer+SKU FIRST: the label below is
+    // title-derived, so the same listing URL reaching the group twice under
+    // two title spellings survived as two rows with one purchasable unit —
+    // the duplicate that rode into the product page's collect fan-out as two
+    // identical scraped cards, both badged Best price. The sorted-first row
+    // wins (cheapest effective, live before snapshot), so the fold is
+    // deterministic on the same fetched set.
+    const perListing = rows.filter(
+      (o, i, arr) =>
+        arr.findIndex((x) => x.merchant === o.merchant && x.url === o.url) === i,
+    );
     // REEA-192 — one row per retailer in the card: the sorted-first offer
     // is that retailer's best matched-product price; further listings from
     // the same merchant are variants of one comparison row, not new rows,
@@ -2987,10 +2998,12 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, quer
     // REEA-486: listings the merchant itself distinguishes with a visible
     // qualifier (plain vs "Japanese Version") ARE distinct purchasable
     // offers of one model — each keeps its row, labeled, so the merge never
-    // hides a price behind the other spelling. Colour/capacity/grade
-    // differences carry no label (their own slots on the card), so those
-    // still fold to the merchant's best row exactly as before.
-    const offers: PriceOffer[] = rows.filter(
+    // hides a price behind the other spelling. Those always carry distinct
+    // listing URLs, so the REEA-897 fold above never touches them.
+    // Colour/capacity/grade differences carry no label (their own slots on
+    // the card), so those still fold to the merchant's best row exactly as
+    // before.
+    const offers: PriceOffer[] = perListing.filter(
       (o, i, arr) =>
         arr.findIndex(
           (x) => x.merchant === o.merchant && (x.label ?? "") === (o.label ?? ""),

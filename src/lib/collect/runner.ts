@@ -41,6 +41,46 @@ function stageSnapshot(job: CollectJob): CollectJob {
   return { ...job, subtasks: [...job.subtasks], offers: [...job.offers] };
 }
 
+/** REEA-897 — listing identity: one purchasable unit per retailer+URL. Two
+ *  product-offer rows that agree on merchant and URL are the SAME SKU (title
+ *  spellings and hit-time price jitter are noise), so they get one subtask,
+ *  one scrape and one rendered card — never two identical "Best price" rows
+ *  and never a duplicated hit on the retailer's endpoint. */
+function listingKey(o: { merchant: string; url: string }): string {
+  return `${o.merchant}|${o.url}`;
+}
+
+/** First occurrence wins, in the product's own offer order — deterministic
+ *  on the same fetched set. Exported for the focused REEA-897 pins. */
+export function uniqueListings<T extends { merchant: string; url: string }>(
+  offers: readonly T[],
+): T[] {
+  const seen = new Set<string>();
+  return offers.filter((o) => {
+    const key = listingKey(o);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** Append scraped offers without stacking an identical retailer+URL listing
+ *  twice (defense in depth behind the fan-out dedupe: the retailer-search
+ *  fallback can re-discover the SAME canonical listing from two distinct
+ *  seed URLs, and a future upstream regression must not render as a
+ *  duplicate card). Returns the offers actually appended. */
+function appendUniqueOffers(job: CollectJob, offers: readonly LiveOffer[]): LiveOffer[] {
+  const seen = new Set(job.offers.map(listingKey));
+  const fresh = offers.filter((o) => {
+    const key = listingKey(o);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  job.offers.push(...fresh);
+  return fresh;
+}
+
 /**
  * Entry point for POST /api/products/:id/collect. Returns in well under 300 ms:
  * it only creates/looks up registry entries; the scrape itself is scheduled by
@@ -75,7 +115,10 @@ export async function startCollection(
   }
 
   const job = await createJob(product.productId);
-  job.subtasks = product.offers.map((o) => subtaskFor(o));
+  // REEA-897 — one subtask per unique retailer+SKU listing; the subtask list
+  // is what the counter chips read, so a duplicated product-offer row must
+  // not surface as "Wibi x2" before the scrapes even start.
+  job.subtasks = uniqueListings(product.offers).map((o) => subtaskFor(o));
   // Snapshot before responding so a poll on another instance finds it in the
   // shared store (REEA-92).
   await touchJob(job);
@@ -181,7 +224,10 @@ export async function runCollection(
   opts: { fetchImpl?: FetchImpl; overallBudgetMs?: number; now?: number; onStage?: (job: CollectJob) => void } = {},
 ): Promise<CollectJob> {
   const budgetMs = opts.overallBudgetMs ?? OVERALL_BUDGET_MS;
-  const retailers = product.offers.map((o) => ({
+  // REEA-897 — scrape each unique retailer+SKU listing exactly once: the
+  // deduped list keeps the subtask indices aligned with the job.subtasks
+  // startCollection built through the same uniqueListings pass.
+  const retailers = uniqueListings(product.offers).map((o) => ({
     merchant: o.merchant,
     url: o.url,
     currency: o.currency,
@@ -253,7 +299,11 @@ export async function runCollection(
           opts.onStage?.(stageSnapshot(job));
           return;
         }
-        job.offers.push(...offers);
+        // REEA-897 — identical retailer+URL listings never stack in job.offers
+        // (one rendered card per unique retailer+SKU), even when the
+        // retailer-search fallback re-discovers the same canonical listing
+        // from two distinct seed URLs.
+        appendUniqueOffers(job, offers);
         opts.onStage?.(stageSnapshot(job));
       }),
     );
@@ -312,7 +362,11 @@ export async function retryRetailer(
   opts: { fetchImpl?: FetchImpl; now?: number } = {},
 ): Promise<CollectJob | undefined> {
   if (job.status === "collecting") return undefined; // only terminal jobs retry
-  const index = product.offers.findIndex((o) => o.merchant === retailer);
+  // REEA-897 — the subtask list was built from the LISTING-unique offer set,
+  // so the retry index must read the same deduped sequence (a duplicated
+  // product-offer row would otherwise shift every later subtask index).
+  const listings = uniqueListings(product.offers);
+  const index = listings.findIndex((o) => o.merchant === retailer);
   if (index === -1) return undefined;
   const sub = job.subtasks[index];
   if (!sub) return undefined;
@@ -321,7 +375,7 @@ export async function retryRetailer(
   sub.status = "collecting";
   sub.error = undefined;
   sub.startedAt = new Date().toISOString();
-  const offer = product.offers[index];
+  const offer = listings[index];
   try {
     const outcome = await scrapeOffer({ ...offer, titleQuery: product.title }, {
       fetchImpl: opts.fetchImpl,
@@ -337,9 +391,12 @@ export async function retryRetailer(
       sub.error = outcome.error;
     } else {
       sub.status = "done";
-      // Replace any prior offers from this retailer, then add the fresh one.
-      job.offers = job.offers.filter((o) => o.merchant !== retailer);
-      job.offers.push(...outcome.offers);
+      // Replace the retried LISTING's prior offers (merchant+URL, REEA-897),
+      // then add the fresh scrape — retrying one of a merchant's distinct-SKU
+      // rows must not wipe the merchant's other listings.
+      const retriedKey = listingKey(offer);
+      job.offers = job.offers.filter((o) => listingKey(o) !== retriedKey);
+      appendUniqueOffers(job, outcome.offers);
     }
   } catch (err) {
     sub.status = "failed";
