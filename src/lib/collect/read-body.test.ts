@@ -123,22 +123,24 @@ describe("live-search hops read through the cap (via collectLiveResults)", () =>
           // Fat Algolia envelope: bigger than the cap, must never be buffered.
           return new Response("x".repeat(MAX_RESPONSE_BODY_BYTES + 1024));
         }
-        if (url.includes("wp-json/wc/store/v1/products")) {
+        // Healthy second lane: Blink rides the Shopify suggest hop (vehicle
+        // retargeted from the retired PC Kuwait lane, REEA-901).
+        if (url.includes("blink.com.kw/search/suggest.json")) {
           return new Response(
-            JSON.stringify([
-              {
-                name: "Dell KM7321W Pro Plus Keyboard Wireless Combo",
-                permalink: "https://pckuwait.com/product/dell-km7321w/",
-                is_in_stock: true,
-                prices: { price: "29900", currency_code: "KWD", currency_minor_unit: 3 },
+            JSON.stringify({
+              resources: {
+                results: {
+                  products: [
+                    {
+                      title: "Dell Inspiron 15 Laptop Core i5",
+                      handle: "dell-inspiron-15",
+                      price: "29.900",
+                      available: true,
+                    },
+                  ],
+                },
               },
-              {
-                name: "Asus Vivobook 15 Laptop Core i5",
-                permalink: "https://pckuwait.com/product/asus-vivobook-15/",
-                is_in_stock: true,
-                prices: { price: "119000", currency_code: "KWD", currency_minor_unit: 3 },
-              },
-            ]),
+            }),
             { headers: { "content-type": "application/json" } },
           );
         }
@@ -148,8 +150,8 @@ describe("live-search hops read through the cap (via collectLiveResults)", () =>
     // Graceful degradation: one oversized hop degrades its own note only.
     const xcite = notes.find((n) => n.merchant === "Xcite");
     expect(xcite?.error).toMatch(CAP_NOTE);
-    const pckuwait = notes.find((n) => n.merchant === "PC Kuwait");
-    expect(pckuwait?.error).toBeUndefined();
-    expect(pckuwait?.hits).toBeGreaterThan(0);
+    const blink = notes.find((n) => n.merchant === "Blink");
+    expect(blink?.error).toBeUndefined();
+    expect(blink?.hits).toBeGreaterThan(0);
   });
 });

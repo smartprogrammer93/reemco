@@ -87,14 +87,6 @@ const fetchImpl = async (url: string): Promise<Response> => {
         '<a class="product-item-brand" href="/nescafe">NESCAFE</a></li>',
     );
   }
-  if (url.includes("pckuwait.com")) {
-    return htmlResponse(
-      '<li class="product-type-simple"><a href="https://pckuwait.com/shop/nescafe-classic-coffee/" class="woocommerce-loop-product__link">' +
-        '<h2 class="woocommerce-loop-product__title">Nescafe Classic Coffee 50g</h2></a>' +
-        '<span class="price"><ins><span class="woocommerce-Price-amount amount">' +
-        '<span class="woocommerce-Price-currencySymbol">KD</span>&nbsp;2.200</span></ins></span></li>',
-    );
-  }
   if (url.includes("luluhypermarket.com")) {
     const ld = JSON.stringify({
       "@type": "Product",
@@ -201,7 +193,6 @@ describe("REEA-262 staged adapter dispatch", () => {
         "Amazon.eg",
         "Quadra Stores",
         "Next Store",
-        "PC Kuwait",
         "Lulu Hypermarket",
         "Switch",
         "Wibi",
@@ -226,7 +217,6 @@ describe("REEA-262 staged adapter dispatch", () => {
     for (const merchant of [
       "Quadra Stores",
       "Next Store",
-      "PC Kuwait",
       "Lulu Hypermarket",
       "Aster Pharmacy",
       "Nahdi",
@@ -243,7 +233,7 @@ describe("REEA-262 staged adapter dispatch", () => {
     // The offers themselves ride the merged cards (price + availability).
     const card = snap.products[0];
     const merchants = card.offers.map((o) => o.merchant);
-    expect(merchants).toEqual(expect.arrayContaining(["Quadra Stores", "Next Store", "PC Kuwait", "Lulu Hypermarket"]));
+    expect(merchants).toEqual(expect.arrayContaining(["Quadra Stores", "Next Store", "Lulu Hypermarket"]));
     expect(card.offers.every((o) => o.price > 0)).toBe(true);
   });
 });

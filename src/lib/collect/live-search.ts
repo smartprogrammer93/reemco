@@ -184,15 +184,6 @@ export const LIVE_SEARCH_HITS_PER_PAGE = 24;
  * while keeping attempt+backoff+attempt inside the TIMEOUT×2 hop window.
  */
 export const AMAZON_RETRY_BACKOFF_MS = 200;
-/**
- * REEA-550 — the slice a still-silent PC Kuwait bare GET tolerates before
- * the warm KV replay joins it concurrently (see apiRound). 500 ms is under
- * the measured warm-line answer time (~0.5–0.9 s from a warm instance the
- * replay is often a cache read), so the hedge only stacks when the cold
- * handshake really is eating the finalize budget. Exported so the guardrail
- * test can pace its mock against the same slice.
- */
-export const PCK_BARE_HEDGE_MS = 500;
 
 export interface SearchHit {
   title: string;
@@ -624,67 +615,6 @@ export function nextStoreHits(html: string, query: string): SearchHit[] {
       url: card.url,
       inStock: card.inStock,
       ...(card.wasPrice != null ? { wasPrice: card.wasPrice } : {}),
-    });
-  }
-  return out;
-}
-
-/** PC Kuwait (WooCommerce archive) cards → hits via the shared scanner. */
-export function pcKuwaitHits(html: string, query: string): SearchHit[] {
-  const out: SearchHit[] = [];
-  for (const card of scanWooCards(html)) {
-    if (!queryGatePasses(card.title, query, MIN_SCORE)) continue;
-    out.push({
-      title: card.title,
-      merchant: "PC Kuwait",
-      country: "KW",
-      price: card.price,
-      currency: card.currency,
-      url: card.url,
-      inStock: card.inStock,
-      ...(card.wasPrice != null ? { wasPrice: card.wasPrice } : {}),
-    });
-  }
-  return out;
-}
-
-/**
- * PC Kuwait WooCommerce Store API v1 (`/wp-json/wc/store/v1/products`) JSON →
- * hits (REEA-272). The Store API is the challenge-tolerant endpoint for this
- * hop: it answers scripted requests on the first attempt without the CF
- * managed challenge, so the handshake is a fallback here rather than the
- * default. Prices arrive as minor-unit strings; `currency_minor_unit` is the
- * exponent that turns them into a decimal KWD amount.
- */
-export function pcKuwaitApiHits(payload: unknown, query: string): SearchHit[] {
-  const items = Array.isArray(payload) ? payload : [];
-  const out: SearchHit[] = [];
-  for (const item of items as Record<string, unknown>[]) {
-    const title = typeof item.name === "string" ? item.name : "";
-    if (!title || !queryGatePasses(title, query, MIN_SCORE)) continue;
-    const prices = (item.prices ?? {}) as Record<string, unknown>;
-    const exponent = Number(prices.currency_minor_unit);
-    const minor = Number.isFinite(exponent) ? exponent : 2;
-    const fromMinor = (raw: unknown): number | null => {
-      const value = Number(raw);
-      return Number.isFinite(value) ? value / 10 ** minor : null;
-    };
-    const price = fromMinor(prices.price);
-    if (price == null) continue;
-    const wasPrice = fromMinor(prices.regular_price);
-    const images = Array.isArray(item.images) ? item.images : [];
-    const firstImage = images[0] as Record<string, unknown> | undefined;
-    const image = typeof firstImage?.src === "string" ? firstImage.src : undefined;
-    out.push({
-      title,
-      merchant: "PC Kuwait",
-      country: "KW",
-      price,
-      currency: typeof prices.currency_code === "string" ? prices.currency_code : "KWD",
-      url: typeof item.permalink === "string" ? item.permalink : "https://pckuwait.com/",
-      inStock: item.is_in_stock !== false,
-      ...(wasPrice != null && wasPrice > price ? { wasPrice } : {}),
-      ...(image ? { image } : {}),
     });
   }
   return out;
@@ -1288,14 +1218,6 @@ export async function jsdClearedHtml(fetchImpl: FetchImpl, url: string): Promise
  *  edge but each connection gets its own challenge decision). */
 const LULU_KUWAIT_IPS: readonly string[] = ["104.18.40.47", "172.64.147.209"];
 
-/** REEA-602 support — the PC Kuwait zone's OWN anycast pair (resolved from
- *  the pckuwait.com host 2026-09-11). The Store API rides its own Cloudflare
- *  edge: the managed-challenge decision made on the Lulu pair's edge says
- *  nothing about this zone's, so one flattened cross-zone pair spends the
- *  bounded passes on the wrong edge's answers. Each zone keeps its own pair;
- *  each connection still gets its own decision there. */
-const PCK_KUWAIT_IPS: readonly string[] = ["172.67.189.78", "104.21.81.113"];
-
 /**
  * REEA-416 — bounded Static-IPs hop: when both identity paths on the Lulu
  * zone miss on this egress, reach the same search view through the host's
@@ -1325,41 +1247,6 @@ async function staticIpHtml(fetchImpl: FetchImpl, url: string): Promise<string> 
     }
   }
   return "";
-}
-
-/** REEA-602 support — pinned Static-IPs tier for the PC Kuwait JSON hop, the
- *  same REEA-416 recipe Lulu already rides, on THIS zone's own anycast pair
- *  (PCK_KUWAIT_IPS — the challenge decision is per edge, so the flattened
- *  cross-zone pair was the regression; per edge the answer is managed
- *  challenge per connection, and the pinned Host reaches the zone's rules
- *  unchanged). Measured from the
- *  deployed egress: the crawler-shaped identities land on the CF block page
- *  in ~1.4 s per attempt (/api/echo), so stacking the identity rotation
- *  burns the doubled JSON window while the Store API itself answers plainly
- *  on a clean connection. Plain-http scheme for the same reason as the Lulu
- *  hop — an IP-addressed https fetch carries the IP as TLS SNI and fails the
- *  handshake on every shape measured. Returns the first IP that answers a
- *  real JSON array; best-effort like every hop here — null lets the caller
- *  fall through to the bounded handshake it already runs. */
-async function pckStaticIpJson(
-  fetchImpl: FetchImpl,
-  url: string,
-  window: AbortSignal,
-): Promise<Record<string, unknown>[] | null> {
-  const target = new URL(url);
-  const path = `${target.pathname}${target.search}`;
-  for (const ip of PCK_KUWAIT_IPS) {
-    if (window.aborted) break;
-    try {
-      const res = await fetchImpl(`http://${ip}${path}`, { headers: { host: target.host, accept: "application/json" }, cache: "no-store", signal: window } as RequestInit);
-      if (!res.ok) continue;
-      const parsed: unknown = JSON.parse(await res.text());
-      if (Array.isArray(parsed)) return parsed as Record<string, unknown>[];
-    } catch {
-      // One bounded pass per IP; the next IP still gets its own decision.
-    }
-  }
-  return null;
 }
 
 /**
@@ -1870,234 +1757,16 @@ export const COLLECTORS: RetailerCollector[] = [
       return nextStoreHits(html, query);
     },
   },
-  {
-    merchant: "PC Kuwait",
-    country: "KW",
-    collect: async (query, fetchImpl) => {
-      // REEA-272: lead with the WooCommerce Store API JSON (`/wp-json/wc/
-      // store/v1/products`) — the challenge-tolerant endpoint the brief calls
-      // for. It answers even a bare accept-only request on the first attempt
-      // without the CF managed challenge (verified live 2026-09-08 from cold
-      // datacenter egress), while the HTML archive still needs an identity
-      // handshake. If the JSON hop can't answer, fall back to the
-      // `post_type=product` archive page (prices + stock; the plain blog
-      // search view carries neither) over the identity-alternating handshake
-      // the other CF-fronted stores get, with its doubled window.
-      //
-      // REEA-357: the Store API's `search` matches nearly exactly against
-      // titles, so natural multi-word shopper queries ("dell laptop") can
-      // answer a valid-but-empty array even though the store carries dozens
-      // of matching devices (measured live 2026-09-09: `dell laptop` → 0
-      // items, `dell` → 23). When the whole-query search comes back empty,
-      // retry per word inside the SAME hop window and merge; the shared
-      // brandAwareCoverage gate then keeps only titles answering the full
-      // query. Single-word queries and non-empty answers cost exactly what
-      // they cost before.
-      const apiUrl = (q: string) =>
-        `https://pckuwait.com/wp-json/wc/store/v1/products?search=${encodeURIComponent(q)}&per_page=${LIVE_SEARCH_HITS_PER_PAGE}`;
-      // Cached first: with an explicit `force-cache` + bounded revalidate the
-      // Next data cache keeps the JSON payload across serverless invocations
-      // even inside the force-dynamic results segment (REEA-272 option 2 —
-      // cache that persists across invocations), so one answered hop keeps
-      // the adapter serving hits while later cold instances re-run behind
-      // the revalidate window. The attempt itself wears the same
-      // verified-crawler identity the handshake leads with (REEA-369: the
-      // bare accept-only shape is the fragile one on CF-fronted zones — the
-      // first attempt must not be it). REEA-369: the window is the doubled one the
-      // other CF-fronted hops get — measured 2026-09-09, the cold TLS + WP
-      // query hop to pckuwait lands ~0.7–0.9 s from a datacenter egress but
-      // a cold serverless instance can spend most of a single 4 s window on
-      // connection setup alone; when the window squeezed, EVERY attempt in
-      // the chain (whole query + the REEA-357 per-word re-search all share
-      // it) aborted without the endpoint ever being asked, and the merchant
-      // recorded its 403-shaped note while the same query answered fine on
-      // a warm hop. Only a cache miss with a squeezed window falls to the
-      // archive page below.
-      const jsonWindow = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
-      const asItems = (parsed: unknown): Record<string, unknown>[] =>
-        Array.isArray(parsed) ? (parsed as Record<string, unknown>[]) : [];
-      // Whether the JSON endpoint itself answered at least once (array
-      // parsed, even empty). An answered-but-empty search is a valid live
-      // answer — the store simply carries nothing for the phrase — and the
-      // REEA-357 per-word re-search is the designed top-up; the HTML archive
-      // hop then only runs when the JSON endpoint itself never answered.
-      // That keeps the CF-challenge-prone archive hop off the common path
-      // (REEA-369 QA rerun: the recorded 403 notes came through it while the
-      // JSON endpoint was answering fine).
-      let answered = false;
-      // REEA-399 — one bounded second round behind the polite pause: a
-      // 403/503 blip on the CF-fronted JSON endpoint that burns through the
-      // cache → handshake → bare chain within one window is exactly what the
-      // QA baseline recorded on intermittent cells; the next attempt after
-      // ~200 ms (the REEA-149/REEA-290 pause, polite to the zone's limiter)
-      // answers fine in those cases. Rounds stay inside the doubled window —
-      // the joined signal cuts the chain at the ceiling either way, and a
-      // spent window skips the retry instead of stacking on top of it.
-      // REEA-526 — attempt order inside one round: BARE GET first, cache
-      // replay second, rotating handshake last. Measured on the deployed
-      // path: the completion-budget note stood 40/40 fetches while the same
-      // bare accept-only GET against this endpoint answered in ~0.5 s /
-      // 72 KB — the replay-led chain burned the finalize budget on the
-      // crawler-shaped attempt before the network answer ever landed on a
-      // cold instance. The bare shape is this zone's fastest identity from
-      // BOTH egresses (REEA-408's echo finding + the REEA-369 note itself),
-      // so it now leads and the KV replay rides second: a warm entry still
-      // shortens the hop when the bare attempt blips, and the handshake
-      // stays the bounded fallback for odd cold-window cases. Other CF
-      // zones keep the handshake-led order (nextstore answers THAT shape),
-      // this one is per-zone.
-      const apiRound = async (q: string): Promise<Record<string, unknown>[] | null> => {
-        const bareAttempt = async (): Promise<Record<string, unknown>[] | null> => {
-          const bare = await fetchImpl(apiUrl(q), {
-            headers: { accept: "application/json" },
-            cache: "no-store",
-            signal: jsonWindow,
-          } as RequestInit);
-          if (!bare.ok) return null;
-          const parsed = asItems(JSON.parse(await bare.text()));
-          answered = true;
-          return parsed;
-        };
-        const replayAttempt = async (): Promise<Record<string, unknown>[] | null> => {
-          // REEA-369: a replayed cache entry only counts when it actually
-          // answered; a stale non-ok entry must not short-circuit the
-          // handshake below.
-          const cached = await fetchImpl(apiUrl(q), {
-            headers: { ...VERIFIED_BOT_HEADERS, accept: "application/json" },
-            cache: "force-cache",
-            next: { revalidate: 300 },
-            signal: jsonWindow,
-          } as RequestInit);
-          if (!cached.ok) return null;
-          const parsed = asItems(JSON.parse(await cached.text()));
-          answered = true;
-          return parsed;
-        };
-        // REEA-550 hedge — the bare shape still leads, and it leads ALONE
-        // on the fast path. A cold deploy instance pays the full TLS + WP
-        // setup before the bare accept-only GET lands, and measured on the
-        // deployed edge that alone crosses the finalize cutoff every round
-        // (standing budget/abort notes while the endpoint itself answers in
-        // well under a second from a warm line). So only while bare is
-        // STILL silent past a short slice does the warm KV replay join it
-        // concurrently — whichever answered shape lands first wins, one
-        // merged round either way. A blip inside the slice keeps today's
-        // sequential order: replay right after, handshake last. Malformed
-        // JSON falls to the replay like before.
-        const bareP = bareAttempt().catch(() => null);
-        let hedgeTimer: ReturnType<typeof setTimeout> | undefined;
-        const hedged = new Promise<"hedged">((resolve) => {
-          hedgeTimer = setTimeout(() => resolve("hedged"), PCK_BARE_HEDGE_MS);
-        });
-        const first = await Promise.race([bareP.then((v) => v ?? ("blip" as const)), hedged]);
-        clearTimeout(hedgeTimer);
-        if (first !== "hedged" && first !== "blip") return first; // fast path: bare led alone
-        // REEA-602 recovery burst — the bare shape hedged (silent past the
-        // slice) or only blipped. Issue the pinned Static-IPs tier on the SAME
-        // tick as the warm KV replay, awaited by precedence: the plain shapes
-        // keep first call (hedged keeps the REEA-550 bare/replay race, a blip
-        // keeps the replay-alone await), the pinned tier rides behind them
-        // inside the SAME window, and the identity handshake stays the bounded
-        // fallback behind everything. The tier-after-blips placement spent the
-        // whole doubled window on the plain shapes before the pinned hop even
-        // started (graded 0/20 on 688004f); concurrent issue means whichever
-        // source can answer has paid roughly one round-trip of wait.
-        const replayP = replayAttempt().catch(() => null);
-        const pinnedP = jsonWindow.aborted
-          ? Promise.resolve(null as Record<string, unknown>[] | null)
-          : pckStaticIpJson(fetchImpl, apiUrl(q), jsonWindow).catch(() => null);
-        const result = first === "hedged"
-          ? ((await Promise.race([bareP, replayP])) ?? (await pinnedP))
-          : ((await replayP) ?? (await pinnedP));
-        if (result) {
-          answered = true;
-          return result;
-        }
-        try {
-          // REEA-369: the identity-alternating handshake as the bounded
-          // fallback for rounds where both plain shapes only blipped.
-          const jsonRes = await fetchThroughChallenge(
-            fetchImpl,
-            apiUrl(q),
-            { headers: { accept: "application/json" } },
-            jsonWindow,
-          );
-          if (jsonRes.ok) {
-            const parsed = asItems(JSON.parse(await jsonRes.text()));
-            answered = true;
-            return parsed;
-          }
-        } catch {
-          // Handshake spent the window — the archive page below answers with
-          // the same data shape.
-        }
-        return null;
-      };
-      const apiItems = async (q: string): Promise<Record<string, unknown>[]> => {
-        // The bounded second round is one per hop: it stacks only while the
-        // hop-global `answered` flag is still unset. Each call's FIRST
-        // attempt runs unconditionally — otherwise the empty-but-answered
-        // whole-query search would also blank the REEA-357 per-word
-        // re-search that follows it.
-        for (let round = 0; round < 2 && !jsonWindow.aborted && (round === 0 || !answered); round++) {
-          if (round > 0) await new Promise((r) => setTimeout(r, AMAZON_RETRY_BACKOFF_MS));
-          const parsed = await apiRound(q);
-          if (parsed) return parsed;
-        }
-        return [];
-      };
-      const seen = new Set<string>();
-      const items: Record<string, unknown>[] = [];
-      const mergeItems = (incoming: Record<string, unknown>[]) => {
-        for (const item of incoming) {
-          const key = String(item.permalink ?? item.name ?? "");
-          if (!seen.has(key)) {
-            seen.add(key);
-            items.push(item);
-          }
-        }
-      };
-      mergeItems(await apiItems(query));
-      if (items.length === 0) {
-        // Empty whole-query answer: one bounded per-word re-search, still
-        // riding the JSON window. REEA-416 — curated Latin forms of Arabic
-        // tokens lead the set: this Latin-title catalog answers `rice` while
-        // every Arabic spelling returns a bare []. Forms ride ahead of the
-        // raw words in the SAME bounded cap; the shared gate still scores
-        // rows against the ORIGINAL query, so near-miss titles drop exactly
-        // as before. REEA-550 — the word hops are independent round-trips,
-        // so fire them together (same concurrent pattern the Sultan Center
-        // hop carries): on the completion-budget clock a SEQUENTIAL chain of
-        // whole-query + up to three word rounds is what recorded the standing
-        // "no answer within the completion budget" note for this merchant on
-        // every deploy-edge round, even though a single Store API GET answers
-        // in well under a second. Concurrent rounds ride the SAME joined
-        // window: one phrase round-trip plus the slowest word hop. Failed
-        // hops contribute nothing; mergeItems dedups by permalink.
-        const words = Array.from(
-          new Set([...latinQueryForms(query), ...query.split(/\s+/).filter((w) => w.length > 1)]),
-        ).slice(0, 3);
-        const hops = await Promise.allSettled(words.map((word) => apiItems(word)));
-        for (const hop of hops) {
-          if (hop.status === "fulfilled") mergeItems(hop.value);
-        }
-      }
-      // An empty answer after the whole-query + per-word pass is NOT proof
-      // the store carries nothing (measured 2026-09-09: the Store API
-      // answers `dell laptop`/`basmati rice` with a bare [] while the
-      // archive page carries the cards). Keep the archive hop eligible
-      // whenever the merged JSON answer is still empty; it only skips when
-      // JSON already produced hits.
-      if (answered && items.length > 0) return pcKuwaitApiHits(items, query);
-      const res = await fetchThroughChallenge(
-        fetchImpl,
-        `https://pckuwait.com/?s=${encodeURIComponent(query)}&post_type=product`,
-        {},
-        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
-      );
-      return pcKuwaitHits(await res.text(), query);
-    },
-  },
+  // REEA-901 — the PC Kuwait lane is RETIRED from the live rotation: Cloudflare
+  // answers every hop shape (bare GET lead, KV replay, pinned anycast pair,
+  // identity handshake — /api/echo probes all of them) with HTTP 403 from the
+  // deployed egress, so the lane recorded 36 attempts / 36 failures and zero
+  // offers across W37 while every other adapter served. No shippable technical
+  // path exists this cycle (the block is an IP-reputation edge decision on the
+  // Vercel range). Restore the collector from git history (this commit) once
+  // /api/echo reports pckuwait.com answering 200 from the deployed runtime —
+  // that probe is kept as the re-admission tripwire.
+
   {
     merchant: "Lulu Hypermarket",
     country: "KW",

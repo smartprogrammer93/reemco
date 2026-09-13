@@ -53,6 +53,12 @@ const ECHO_WINDOW_MS = 6_000;
 // Mirrors the live hop windows: the handshake gets 2x LIVE_SEARCH_TIMEOUT_MS.
 const ZONE_WINDOW_MS = 8_000;
 const LULU_URL = "https://www.luluhypermarket.com/en/search?query=basmati+rice";
+// REEA-901 — the PC Kuwait lane is retired from the live rotation (this zone's
+// edge answers every hop shape with HTTP 403 from the deployed egress), but
+// these pckuwait probes STAY: they are the re-admission tripwire. When
+// `zones.pckuwait.com` / `pinned.pckuwait.com` report a real 200 answer from
+// the deployed runtime again, the collector can be restored from git history
+// (see the retirement note at the COLLECTORS list in live-search.ts).
 const PCK_URL = "https://pckuwait.com/wp-json/wc/store/v1/products?search=dell&per_page=24";
 // Mirrors the collector's per-zone curated pairs (live-search.ts): each zone
 // rides its own edge, so the observation table walks each pair separately.

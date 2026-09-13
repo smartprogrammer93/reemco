@@ -1341,21 +1341,10 @@ export async function searchRetailerFallback(
     if (!found) throw new Error("No matching product found on Next Store search");
     return found;
   }
-  if (host.endsWith("pckuwait.com")) {
-    // post_type=product lands on the WooCommerce archive — the plain blog
-    // search view carries no prices. REEA-272: rides the same handshake as
-    // the other CF-fronted stores, mirroring the live collector hop in
-    // live-search.ts (adapter symmetry) so one cold hop answers both paths.
-    const res = await fetchThroughChallenge(
-      fetchImpl,
-      `https://pckuwait.com/?s=${encodeURIComponent(productTitle)}&post_type=product`,
-      {},
-      AbortSignal.timeout(FALLBACK_TIMEOUT_MS),
-    );
-    const found = parsePcKuwaitSearch(await res.text(), productTitle);
-    if (!found) throw new Error("No matching product found on PC Kuwait search");
-    return found;
-  }
+  // REEA-901 — the pckuwait.com branch retired with its lane: Cloudflare
+  // answers every hop shape with HTTP 403 from the deployed egress (36/36
+  // adapter failures W37). parsePcKuwaitSearch stays — the Yousifi and
+  // Alghanim Woo archive hops share it.
   if (host.endsWith("luluhypermarket.com")) {
     // Akinon SSR search page on the same Cloudflare managed-challenge setup
     // as nextstore — same bounded identity-alternating handshake.

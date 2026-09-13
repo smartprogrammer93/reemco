@@ -1,8 +1,7 @@
 /**
  * REEA-550 — lane coverage for the fixed-query regressions on served stamp
  * 3571c026: Quadra Stores zeroed by the control query, Lulu Hypermarket
- * answered zero silently behind the CF block shell, PC Kuwait missed the
- * completion budget on Arabic phrases with the bridge answered in reach.
+ * answered zero silently behind the CF block shell, the retired PC Kuwait lane’s historical shape (removed with the lane, REEA-901).
  * Injected fetches keep the hops deterministic; the fixtures mirror shapes
  * captured live 2026-09-10.
  */
@@ -158,76 +157,4 @@ describe("REEA-550 collector lanes", () => {
     expect(note?.error).toBeUndefined();
   }, 15000);
 
-  it("PC Kuwait Arabic phrase merges the bridge word rounds within one bounded pass", async () => {
-    resetDiscoveryCache();
-    const seenQ: string[] = [];
-    const dove = {
-      name: "Dove White Beauty Bar Soap",
-      permalink: "https://pckuwait.com/product/dove-white/",
-      is_in_stock: true,
-      prices: { price: "195", currency_code: "KWD", currency_minor_unit: 3 },
-    };
-    const { notes } = await collectLiveResults("\u062f\u0648\u0641 \u0635\u0627\u0648\u0646", {
-      fetchImpl: async (url) => {
-        if (url.includes("wp-json/wc/store/v1/products")) {
-          const q = decodeURIComponent(url.match(/[?&]search=([^&]*)/)?.[1] ?? "");
-          seenQ.push(q);
-          const rows = q === "dove" || q === "soap" ? [dove] : [];
-          return new Response(JSON.stringify(rows), { headers: { "content-type": "application/json" } });
-        }
-        return new Response("{}");
-      },
-    });
-    // REEA-635 C3 — with the dispatch-level LatinBridge the whole-query hop
-    // LEADS bridged: the aliased token arrives in its curated Latin spelling
-    // ("dove") and the token no alias claims rides the shopper spelling —
-    // so one bounded whole-query round reaches the Store API on the spelling
-    // the Latin-only catalog carries. No empty Arabic round ahead of it; the
-    // capped word rounds behind it keep answering whatever the phrase needs.
-    expect(seenQ[0]).toBe("dove \u0635\u0627\u0648\u0646");
-    expect(seenQ).toContain("dove");
-    const note = notes.find((n) => n.merchant === "PC Kuwait");
-    expect((note?.hits ?? 0)).toBeGreaterThanOrEqual(1);
-    expect(note?.error).toBeUndefined();
-  });
-
-  it("PC Kuwait JSON hop reaches the pinned Static-IPs tier ahead of the handshake rotation", async () => {
-    resetDiscoveryCache();
-    const dove = {
-      name: "Dove White Beauty Bar Soap",
-      permalink: "https://pckuwait.com/product/dove-white/",
-      is_in_stock: true,
-      prices: { price: "195", currency_code: "KWD", currency_minor_unit: 3 },
-    };
-    const seenUrls: string[] = [];
-    const { notes } = await collectLiveResults("soap", {
-      fetchImpl: async (url) => {
-        seenUrls.push(url);
-        if (url.includes("wp-json/wc/store/v1/products")) {
-          // The hostname shapes (bare GET, KV replay, identity handshake)
-          // land on the CF block page from the deployed egress — measured
-          // ~1.4 s per attempt, non-ok every time. Per-zone reality: THIS
-          // zone's edge answers on its own pair; the other zone's pair (the
-          // Lulu edge) holds the block page for Store API traffic.
-          if (url.startsWith("http://172.67.189.78") || url.startsWith("http://104.21.81.113")) {
-            const q = decodeURIComponent(url.match(/[?&]search=([^&]*)/)?.[1] ?? "");
-            const rows = q === "soap" ? [dove] : [];
-            return new Response(JSON.stringify(rows), { headers: { "content-type": "application/json" } });
-          }
-          return new Response("Just a moment...", { status: 403, headers: { "content-type": "text/html" } });
-        }
-        return new Response("{}");
-      },
-    });
-    // REEA-602 support — with every hostname shape blocked, the pinned
-    // Static-IPs hop answers the Store API JSON ahead of the identity
-    // rotation burning the doubled window; the lane still contributes rows.
-    // The reaching IPs are PC Kuwait's OWN pair — a flattened cross-zone
-    // pair would spend both bounded passes on the Lulu edge and starve the
-    // lane (this assertion is the regression pin for that split).
-    expect(seenUrls.some((u) => /^https?:\/\/(172\.67\.189\.78|104\.21\.81\.113)\b/.test(u))).toBe(true);
-    const note = notes.find((n) => n.merchant === "PC Kuwait");
-    expect((note?.hits ?? 0)).toBeGreaterThanOrEqual(1);
-    expect(note?.error).toBeUndefined();
-  });
 });

@@ -27,7 +27,17 @@ const QUERIES = (process.env.LINK_SMOKE_QUERIES || "sony,iphone")
 const PER_RETAILER = Math.max(1, Math.min(20, Number(process.env.LINK_SMOKE_PER_RETAILER) || 8));
 const PAUSE_MS = Math.max(0, Number(process.env.LINK_SMOKE_PAUSE_MS) || 300);
 const FETCH_TIMEOUT_MS = 10_000;
-const UA = "Mozilla/5.0 (compatible; reemco-link-smoke/1.0)";
+// REEA-901 — the liveness check rides the verified-crawler identity, the SAME
+// allow-listed identity the live adapters lead with (VERIFIED_BOT_HEADERS in
+// search-fallback.ts). Measured 2026-09-13: CF-fronted storefronts (Next
+// Store measured, Lulu the same family) answer plain/Mozilla UAs with the
+// HTTP 403 challenge shell on product URLs a real browser passes
+// interactively — W37 recorded Next Store 3 checked / 3 "dead" while every
+// sampled URL answered 200 to this identity. A non-interactive 403 from the
+// zone's bot rule is not a dead link; measuring it as one poisons the
+// retailer's dead-link share.
+const CHECK_UA =
+  "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -63,7 +73,7 @@ async function collectOffers(query) {
 
 async function checkUrl(url) {
   try {
-    const res = await fetchTimeout(url, { headers: { "user-agent": UA } });
+    const res = await fetchTimeout(url, { headers: { "user-agent": CHECK_UA } });
     return res.status >= 200 && res.status < 400;
   } catch {
     return false; // unreachable / timeout counts as dead

@@ -29,11 +29,8 @@ import {
   LIVE_SEARCH_BUDGET_MS,
   LIVE_SEARCH_HITS_PER_PAGE,
   LIVE_SEARCH_TIMEOUT_MS,
-  PCK_BARE_HEDGE_MS,
   nextStoreHits,
   ounassHits,
-  pcKuwaitApiHits,
-  pcKuwaitHits,
   quadraHits,
   resetDiscoveryCache,
   sultanCenterHits,
@@ -247,313 +244,6 @@ describe("hit parsers", () => {
       '<div class="stock unavailable">Out of stock</div>';
     const hits = nextStoreHits(html, "lg washing machine");
     expect(hits[0].inStock).toBe(false);
-  });
-
-  it("pcKuwaitHits reads WooCommerce sale prices off the product archive (REEA-238)", () => {
-    // Trimmed from the captured live archive (2026-09-08): loop link wraps the
-    // h2 title, price block keeps ins(current)/del(regular) with KD symbols.
-    const html =
-      '<li class="product-type-simple"><a href="https://pckuwait.com/shop/logitech-m330-silent-plus/" class="woocommerce-loop-product__link"><img alt="Logitech M330" />' +
-      '<h2 class="woocommerce-loop-product__title">Logitech M330 Silent Plus Mouse</h2></a>' +
-      '<span class="price"><ins><span class="woocommerce-Price-amount amount"><span class="woocommerce-Price-currencySymbol">KD</span>&nbsp;11.500</span></ins>' +
-      '<del><span class="woocommerce-Price-amount amount"><span class="woocommerce-Price-currencySymbol">KD</span>&nbsp;13.000</span></del></span></li>';
-    const hits = pcKuwaitHits(html, "logitech mouse");
-    expect(hits[0]).toMatchObject({
-      merchant: "PC Kuwait",
-      title: "Logitech M330 Silent Plus Mouse",
-      price: 11.5,
-      wasPrice: 13,
-      currency: "KWD",
-      url: "https://pckuwait.com/shop/logitech-m330-silent-plus/",
-      inStock: true,
-    });
-  });
-
-  it("pcKuwaitApiHits reads Store API JSON with minor-unit prices (REEA-272)", () => {
-    // Trimmed from the captured `/wp-json/wc/store/v1/products` payload
-    // (2026-09-08): prices are minor-unit strings, KD uses three decimals.
-    const payload = [
-      {
-        name: "Logitech M330 Silent Plus Mouse",
-        permalink: "https://pckuwait.com/product/logitech-m330-silent-plus/",
-        is_in_stock: true,
-        images: [{ src: "https://pckuwait.com/wp-content/uploads/m330.jpg" }],
-        prices: {
-          price: "11500",
-          regular_price: "13000",
-          currency_code: "KWD",
-          currency_minor_unit: 3,
-        },
-      },
-      { name: "No Price Keyboard", prices: {} },
-    ];
-    const hits = pcKuwaitApiHits(payload, "logitech mouse");
-    expect(hits).toHaveLength(1);
-    expect(hits[0]).toMatchObject({
-      merchant: "PC Kuwait",
-      title: "Logitech M330 Silent Plus Mouse",
-      price: 11.5,
-      wasPrice: 13,
-      currency: "KWD",
-      url: "https://pckuwait.com/product/logitech-m330-silent-plus/",
-      image: "https://pckuwait.com/wp-content/uploads/m330.jpg",
-      inStock: true,
-    });
-  });
-
-  it("PC Kuwait hop re-searches per word when the whole-query search is empty (REEA-357)", async () => {
-    resetDiscoveryCache();
-    // Live-measured Store API behaviour (2026-09-09): the near-exact phrase
-    // match answers `dell laptop` with an empty array while `dell` answers 23
-    // items — the hop must still surface hits for natural multi-word queries.
-    const pckuwait = (q: string) => {
-      if (q === "dell") {
-        return [
-          {
-            name: "Dell KM7321W Pro Plus Keyboard Wireless Combo",
-            permalink: "https://pckuwait.com/product/dell-km7321w/",
-            is_in_stock: true,
-            prices: { price: "29900", currency_code: "KWD", currency_minor_unit: 3 },
-          },
-        ];
-      }
-      if (q === "laptop") {
-        return [
-          {
-            name: "Dell KM7321W Pro Plus Keyboard Wireless Combo",
-            permalink: "https://pckuwait.com/product/dell-km7321w/",
-            is_in_stock: true,
-            prices: { price: "29900", currency_code: "KWD", currency_minor_unit: 3 },
-          },
-          {
-            name: "Asus Vivobook 15 Laptop Core i5",
-            permalink: "https://pckuwait.com/product/asus-vivobook-15/",
-            is_in_stock: true,
-            prices: { price: "119000", currency_code: "KWD", currency_minor_unit: 3 },
-          },
-        ];
-      }
-      return [];
-    };
-    const { notes } = await collectLiveResults("dell laptop", {
-      fetchImpl: async (url) => {
-        if (url.includes("wp-json/wc/store/v1/products")) {
-          const q = decodeURIComponent(url.match(/[?&]search=([^&]*)/)?.[1] ?? "");
-          return new Response(JSON.stringify(pckuwait(q)), { headers: { "content-type": "application/json" } });
-        }
-        return new Response("{}");
-      },
-    });
-    const note = notes.find((n) => n.merchant === "PC Kuwait");
-    // The shared combo card merges to one entry: keyboard + laptop = 2 hits,
-    // and the note carries no error field.
-    expect(note?.hits).toBe(2);
-    expect(note?.error).toBeUndefined();
-    // REEA-488 item 2: every stage note carries its coupon coverage count —
-    // this hop's contract surfaced no coupon info, and the note says so with
-    // an honest 0 beside the hit count instead of staying silent.
-    expect(note?.coupons).toBe(0);
-  });
-
-  it("PC Kuwait hop stops at the first non-empty whole-query answer (REEA-357)", async () => {
-    resetDiscoveryCache();
-    const calls: string[] = [];
-    await collectLiveResults("iphone", {
-      fetchImpl: async (url) => {
-        if (url.includes("wp-json/wc/store/v1/products")) {
-          calls.push(url);
-          return new Response(
-            JSON.stringify([
-              {
-                name: "Apple iPhone 15 128GB",
-                permalink: "https://pckuwait.com/product/iphone-15/",
-                is_in_stock: true,
-                prices: { price: "185000", currency_code: "KWD", currency_minor_unit: 3 },
-              },
-            ]),
-            { headers: { "content-type": "application/json" } },
-          );
-        }
-        return new Response("{}");
-      },
-    });
-    // Phrase hit answers the hop: exactly one Store API search, no per-word
-    // follow-ups, so the common path stays as cheap as before the fix.
-    expect(calls).toHaveLength(1);
-  });
-
-  it("PC Kuwait Arabic probe re-searches the curated Latin forms (REEA-416)", async () => {
-    resetDiscoveryCache();
-    // Measured live: the Store API answers `keyboard` with priced rows while
-    // every Arabic spelling (phrase or single token) returns a bare []. The
-    // curated Latin forms lead the SAME bounded re-search set; the shared
-    // gate still scores rows against the ORIGINAL Arabic query through the
-    // alias bridge (كيبورد → keyboard).
-    const seenQ: string[] = [];
-    const { notes } = await collectLiveResults("كيبورد", {
-      fetchImpl: async (url) => {
-        if (url.includes("wp-json/wc/store/v1/products")) {
-          const q = decodeURIComponent(url.match(/[?&]search=([^&]*)/)?.[1] ?? "");
-          seenQ.push(q);
-          const rows =
-            q === "keyboard"
-              ? [
-                  {
-                    name: "Keychron Q16 HE Mechanical Keyboard",
-                    permalink: "https://pckuwait.com/product/q16-he/",
-                    is_in_stock: true,
-                    prices: { price: "64000", currency_code: "KWD", currency_minor_unit: 3 },
-                  },
-                ]
-              : [];
-          return new Response(JSON.stringify(rows), { headers: { "content-type": "application/json" } });
-        }
-        return new Response("{}");
-      },
-    });
-    expect(seenQ).toContain("keyboard");
-    const note = notes.find((n) => n.merchant === "PC Kuwait");
-    expect((note?.hits ?? 0)).toBeGreaterThanOrEqual(1);
-    expect(note?.error).toBeUndefined();
-  });
-
-  it("PC Kuwait hop leads with the bare GET and rides the KV replay second (REEA-526)", async () => {
-    resetDiscoveryCache();
-    // Measured on the deployed path: the bare accept-only GET answers the
-    // Store API in well under a second while the completion-budget note
-    // stood on every fetch — the replay-led chain burned the finalize
-    // window before the network answer landed. The attempt ORDER is the
-    // fix: bare first, cache replay second, handshake last. This mock blips
-    // the bare attempt once (503) so the replay behind it answers; the
-    // recorded shape per attempt asserts the order.
-    const attempts: { cache: string; headerKeys: string }[] = [];
-    const { notes } = await collectLiveResults("iphone", {
-      fetchImpl: async (url, init) => {
-        if (url.includes("wp-json/wc/store/v1/products")) {
-          attempts.push({
-            cache: String((init as { cache?: string } | undefined)?.cache ?? ""),
-            headerKeys: Object.keys((init?.headers as Record<string, string>) ?? {}).join(","),
-          });
-          const rows = [
-            {
-              name: "Apple iPhone 15 128GB",
-              permalink: "https://pckuwait.com/product/iphone-15/",
-              is_in_stock: true,
-              prices: { price: "185000", currency_code: "KWD", currency_minor_unit: 3 },
-            },
-          ];
-          // First attempt blips, the ride-along replay answers.
-          if (attempts.length === 1) return new Response("[]", { status: 503 });
-          return new Response(JSON.stringify(rows), {
-            headers: { "content-type": "application/json" },
-          });
-        }
-        return new Response("{}");
-      },
-    });
-    expect(attempts.length).toBeGreaterThanOrEqual(2);
-    // Lead attempt: bare accept-only identity, uncached.
-    expect(attempts[0].headerKeys).toBe("accept");
-    expect(attempts[0].cache).toBe("no-store");
-    // Second attempt: the KV replay with the crawler identity.
-    expect(attempts[1].cache).toBe("force-cache");
-    expect(attempts[1].headerKeys.length).toBeGreaterThan("accept".length);
-    const note = notes.find((n) => n.merchant === "PC Kuwait");
-    expect(note?.hits).toBe(1);
-    expect(note?.error).toBeUndefined();
-  });
-
-  it("PC Kuwait hop rides the KV replay concurrently when the bare GET is silent past the hedge slice (REEA-550)", async () => {
-    resetDiscoveryCache();
-    // Measured on the deployed stamp: on cold instances the bare accept-only
-    // GET spends the whole finalize window on TLS + WP setup before it
-    // answers, so every round closed with a budget note while the endpoint
-    // itself answered fine from a warm line. The hedge: while bare is STILL
-    // pending past PCK_BARE_HEDGE_MS, the KV replay starts alongside it and
-    // whichever shape answers first wins. Here bare is deliberately slower
-    // than the slice, the replay answers immediately — and must start BEFORE
-    // bare has answered, not after.
-    let bareDone = false;
-    let replaySawBarePending: boolean | undefined;
-    const attempts: string[] = [];
-    const { notes } = await collectLiveResults("iphone", {
-      fetchImpl: async (url, init) => {
-        if (!url.includes("wp-json/wc/store/v1/products")) return new Response("{}");
-        const cache = String((init as { cache?: string } | undefined)?.cache ?? "");
-        attempts.push(cache);
-        if (cache === "no-store") {
-          // Bare leads but only answers after the hedge slice has fired.
-          await new Promise((r) => setTimeout(r, PCK_BARE_HEDGE_MS + 150));
-          bareDone = true;
-        } else {
-          replaySawBarePending = !bareDone;
-        }
-        const rows = [
-          {
-            name: "Apple iPhone 15 128GB",
-            permalink: "https://pckuwait.com/product/iphone-15/",
-            is_in_stock: true,
-            prices: { price: "185000", currency_code: "KWD", currency_minor_unit: 3 },
-          },
-        ];
-        return new Response(JSON.stringify(rows), {
-          headers: { "content-type": "application/json" },
-        });
-      },
-    });
-    // Bare led alone first, the replay only joined once the slice expired —
-    // and it joined WHILE bare was still in flight, not after.
-    expect(attempts.slice(0, 2)).toEqual(["no-store", "force-cache"]);
-    expect(replaySawBarePending).toBe(true);
-    const note = notes.find((n) => n.merchant === "PC Kuwait");
-    expect(note?.hits).toBe(1);
-    expect(note?.error).toBeUndefined();
-  });
-
-  it("PC Kuwait hop falls through to the archive page when the Store API answers an HTML shell (REEA-432)", async () => {
-    resetDiscoveryCache();
-    // Measured on the deployed stamp: this CF-fronted zone sometimes answers
-    // the JSON Store endpoint with its interstitial HTML shell (HTTP-ok, not
-    // JSON). A malformed body is NOT an answer — the hop-global flag must
-    // stay unset so the designed archive HTML hop still runs and the
-    // merchant keeps hits instead of recording hits:0 every round.
-    const storeCalls: string[] = [];
-    const archiveCalls: string[] = [];
-    const { notes } = await collectLiveResults("iphone", {
-      fetchImpl: async (url) => {
-        if (url.includes("/wp-json/wc/store/v1/products")) {
-          storeCalls.push(url);
-          // The realistic production shape of the blip: a CF-interstitial
-          // HTML body with an ok status on the JSON endpoint.
-          return new Response(
-            '<!DOCTYPE html><html><head><title>Just a moment...</title></head><body><div id="cf-error-details">Just a moment...</div></body></html>',
-            { headers: { "content-type": "text/html; charset=utf-8" } },
-          );
-        }
-        if (url.includes("post_type=product")) {
-          archiveCalls.push(url);
-          // The archive hop answers with live WooCommerce loop cards.
-          return new Response(
-            '<li class="product-type-simple"><a href="https://pckuwait.com/shop/apple-iphone-15/" class="woocommerce-loop-product__link"><img alt="Apple iPhone 15" />' +
-              '<h2 class="woocommerce-loop-product__title">Apple iPhone 15 128GB</h2></a>' +
-              '<span class="price"><span class="woocommerce-Price-amount amount"><span class="woocommerce-Price-currencySymbol">KD</span>&nbsp;325.000</span></span></li>',
-            { headers: { "content-type": "text/html; charset=utf-8" } },
-          );
-        }
-        return new Response("{}");
-      },
-    });
-    // The JSON attempts were made (live-at-query-time kept), and the archive
-    // hop ran for the ORIGINAL phrase against the WooCommerce search view.
-    expect(storeCalls.length).toBeGreaterThan(0);
-    expect(archiveCalls.length).toBeGreaterThan(0);
-    expect(archiveCalls[0]).toContain("s=iphone");
-    expect(archiveCalls[0]).toContain("post_type=product");
-    const note = notes.find((n) => n.merchant === "PC Kuwait");
-    // The archive-sourced cards land despite the malformed JSON answer —
-    // hits > 0 with the archive title through the shared relevance gate.
-    expect((note?.hits ?? 0)).toBeGreaterThan(0);
-    expect(note?.error).toBeUndefined();
   });
 
   it("Quadra hop tops up the over-narrow suggest envelope from the newest page (REEA-526)", async () => {
@@ -834,12 +524,18 @@ describe("hit parsers", () => {
   it("brand+category Arabic queries keep the matching row and drop near-miss rows", () => {
     // `لابتوب ديل` on the Store API shape: the laptop row answers both the
     // curated category form and (via the brand alias) the brand token; the
-    // tea row answers neither and the gate holds it out.
-    const hits = pcKuwaitApiHits(
-      [
-        { name: 'Latitude 5440 Laptop 14" i5', permalink: "https://pckuwait.com/lat-5440", prices: { price: "119000", regular_price: "125000", currency_minor_unit: "3", currency_code: "KWD" }, is_in_stock: true },
-        { name: "Lipton Yellow Label Black Tea", permalink: "https://pckuwait.com/lipton", prices: { price: "450", currency_minor_unit: "3" }, is_in_stock: true },
-      ],
+    // tea row answers neither and the gate holds it out. Vehicle retargeted
+    // to the Sultan Center Store shape after the PC Kuwait lane retired
+    // (REEA-901) — the gate under test is the shared one in relevance.ts.
+    const hits = sultanCenterHits(
+      {
+        products: {
+          product_list: [
+            { name: 'Latitude 5440 Laptop 14" i5', sku: "1", price: "119.000", slug: "lat-5440", is_in_stock: "1" },
+            { name: "Lipton Yellow Label Black Tea", sku: "2", price: "0.450", slug: "lipton", is_in_stock: "1" },
+          ],
+        },
+      },
       "لابتوب ديل",
     );
     expect(hits).toHaveLength(1);
@@ -1957,9 +1653,9 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     resetDiscoveryCache();
     const staged = collectLiveResultsStaged("samsung", { fetchImpl: mixedSpeedFetch(), country: "KW" });
 
-    // One boundary per KW retailer in the run (twenty-three since the
+    // One boundary per KW retailer in the run (twenty-two since the
     // REEA-723 batch tail).
-    expect(staged.stages).toHaveLength(23);
+    expect(staged.stages).toHaveLength(22);
 
     const first = await firstPaintedFlush(staged);
     expect(first.products).toHaveLength(1);
@@ -1982,7 +1678,7 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     expect(merchants.has("Sultan Center")).toBe(true);
     // Merchants whose mocks never answer are all reported as notes (twenty-three
     // of the twenty-three retailers).
-    expect(finalSnap.notes).toHaveLength(23);
+    expect(finalSnap.notes).toHaveLength(22);
   });
 
   // REEA-871 — the adapter attempts/failures counters read off the run's own
@@ -1995,8 +1691,8 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     const telemetry = await staged.adapterTelemetry;
     // One attempt per retailer in the fan-out — the same 23 merchants the
     // coverage notes name.
-    expect(Object.values(telemetry.attempts).reduce((a, b) => a + b, 0)).toBe(23);
-    expect(Object.keys(telemetry.attempts)).toHaveLength(23);
+    expect(Object.values(telemetry.attempts).reduce((a, b) => a + b, 0)).toBe(22);
+    expect(Object.keys(telemetry.attempts)).toHaveLength(22);
     expect(Object.keys(telemetry.attempts)).toEqual(
       expect.arrayContaining(["Xcite", "Blink", "Eureka", "Sultan Center"]),
     );
@@ -2115,8 +1811,8 @@ describe("completion-budget finalize (REEA-398)", () => {
     expect(merchants.has("Eureka")).toBe(false);
     // …plus one honest budget note per still-silent merchant: the coverage
     // line of the FINALIZED page names every gap, with the budget as its
-    // reason — across all twenty-three KW retailers in the run.
-    expect(snap.notes).toHaveLength(23);
+    // reason — across all twenty-two KW retailers in the run.
+    expect(snap.notes).toHaveLength(22);
     expect(snap.notes.find((n) => n.merchant === "Eureka")?.error).toMatch(/completion budget/);
     expect(snap.notes.find((n) => n.merchant === "Sultan Center")?.error).toMatch(/completion budget/);
     // The page clock sits inside the REEA-693 item-1 first-paint bar: the
@@ -2497,8 +2193,8 @@ describe("whole-chain budget signal (REEA-224 F4)", () => {
     expect(elapsed).toBeGreaterThanOrEqual(LIVE_SEARCH_TIMEOUT_MS * 2 - 1_500);
     expect(elapsed).toBeLessThan(LIVE_SEARCH_BUDGET_MS + 2_000);
     // Graceful degradation: every silent retailer is still reported (all
-    // twenty-three KW collectors are stalled here, REEA-378 included).
-    expect(notes).toHaveLength(23);
+    // twenty-two KW collectors are stalled here, REEA-378 included).
+    expect(notes).toHaveLength(22);
   }, 25_000);
 });
 

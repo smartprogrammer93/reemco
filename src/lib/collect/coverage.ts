@@ -82,7 +82,10 @@ export const COVERAGE_ORDER = [
   "Amazon.eg",
   "Quadra Stores",
   "Next Store",
-  "PC Kuwait",
+  // REEA-901 — "PC Kuwait" retired from the live rotation (deployed-egress
+  // HTTP 403 on every hop shape, 36/36 adapter failures W37); the parity pin
+  // keeps this list == COLLECTORS order, so the retired name leaves with its
+  // collector.
   "Lulu Hypermarket",
   "Switch",
   "Wibi",
