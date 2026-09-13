@@ -110,6 +110,68 @@ describe("product filtering", () => {
     const once = filterProductsByStock(products, false);
     expect(filterProductsByStock(once, false)).toEqual(once);
   });
+
+  // REEA-822 — the exact-SKU keep predicate: a card the query's part number
+  // names must survive the default card-level drop when ALL its live offers
+  // are out of stock (an honest zero may only state the SKU has no offers at
+  // all, never that its only answer is merely unavailable).
+  describe("exact-SKU keep predicate (REEA-822)", () => {
+    const oosOnly: NormalizedProduct = {
+      productId: "samsung-galaxy-s25-silicone-case-ef-ps931cbegww-black",
+      title: "Samsung Galaxy S25 Silicone Case, EF-PS931CBEGWW – Black",
+      brand: "Samsung",
+      offers: [
+        { merchant: "Xcite", price: 1, currency: "KWD", url: "https://xcite.example/p", inStock: false },
+      ],
+      coupons: [],
+      variations: [],
+      alternatives: [],
+    };
+    const oosFiller: NormalizedProduct = {
+      productId: "generic-case",
+      title: "Universal Silicone Case",
+      brand: "",
+      offers: [
+        { merchant: "Blink", price: 2, currency: "KWD", url: "https://blink.example/p", inStock: false },
+      ],
+      coupons: [],
+      variations: [],
+      alternatives: [],
+    };
+    const keep = (p: NormalizedProduct) => p.title.includes("EF-PS931CBEGWW");
+
+    it("keeps a kept all-OOS card with its full live offer set", () => {
+      const filtered = filterProductsByStock([oosFiller, oosOnly], false, keep);
+      // The non-matching OOS filler drops; only the code-matched card survives.
+      expect(filtered.map((p) => p.productId)).toEqual([
+        "samsung-galaxy-s25-silicone-case-ef-ps931cbegww-black",
+      ]);
+      // The kept card's offers stay UNFILTERED so the card renders its
+      // honest out-of-stock state (StockDot out + OOS row) instead of an
+      // offerless shell.
+      expect(filtered[0].offers).toHaveLength(1);
+      expect(filtered[0].offers[0].inStock).toBe(false);
+    });
+
+    it("never invents a card: a kept match still needs live offers", () => {
+      const empty: NormalizedProduct = { ...oosFiller, productId: "no-offers", offers: [] };
+      expect(filterProductsByStock([empty], false, keep)).toEqual([]);
+    });
+
+    it("drops non-matching all-OOS cards exactly as before", () => {
+      expect(filterProductsByStock([oosFiller], false, keep)).toEqual([]);
+    });
+
+    it("is a no-op passthrough with the toggle enabled regardless of keep", () => {
+      const list = [oosFiller, oosOnly];
+      expect(filterProductsByStock(list, true, keep)).toBe(list);
+    });
+
+    it("is idempotent with the keep in place", () => {
+      const once = filterProductsByStock([oosFiller, oosOnly], false, keep);
+      expect(filterProductsByStock(once, false, keep)).toEqual(once);
+    });
+  });
 });
 
 describe("Best-price badge index (REEA-213)", () => {

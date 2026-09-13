@@ -11,7 +11,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createQueryCache, queryCacheKey } from "@/lib/query-cache";
 import { collectLiveResultsStaged, resetDiscoveryCache } from "@/lib/collect/live-search";
 import { mirrorSharedQuerySnapshot, replaySharedQuerySnapshot } from "@/lib/collect/query-layer";
-import { narrowSkuLead } from "@/lib/relevance";
+import { narrowSkuLead, exactSkuKeep } from "@/lib/relevance";
+import { filterProductsByStock } from "@/lib/stock";
 import type { NormalizedProduct } from "@/types/product";
 
 process.env.KV_REST_API_URL = "https://kv.example.test/";
@@ -75,6 +76,44 @@ describe("narrowSkuLead — the serve-time guard", () => {
     const en = narrowSkuLead(SKU_Q, [FILLER_A, MATCHER]).map((p) => p.productId);
     const ar = narrowSkuLead(`${SKU_Q} أسود`, [FILLER_A, MATCHER]).map((p) => p.productId);
     expect(ar).toEqual(en);
+  });
+});
+
+/** REEA-822 — the stock-filter keep-predicate for the same intent: the
+ *  code-matched card survives the default showOutOfStock=false card-level
+ *  drop, so an all-OOS answer renders its honest out-of-stock state instead
+ *  of erasing the lead into a fake zero (REEA-758 check 1). */
+describe("exactSkuKeep — the stock-filter keep guard", () => {
+  const OOS_MATCHER: NormalizedProduct = {
+    ...MATCHER,
+    offers: [{ merchant: "Xcite", price: 1, currency: "KWD", url: "https://xcite.example/p", inStock: false }],
+  };
+
+  it("returns undefined for queries without the code shape — plain REEA-186 contract", () => {
+    expect(exactSkuKeep("iPhone 17 Pro")).toBeUndefined();
+    expect(exactSkuKeep("")).toBeUndefined();
+  });
+
+  it("accepts the code-bearing card in both hyphen/space spellings", () => {
+    const keep = exactSkuKeep(SKU_Q)!;
+    expect(keep(MATCHER)).toBe(true);
+    expect(keep(FILLER_A)).toBe(false);
+    // The other spelling direction folds the same way.
+    const spaced = product("s1", "EF PS931CBEGWW Black");
+    expect(exactSkuKeep("EF-PS931CBEGWW")!(spaced)).toBe(true);
+  });
+
+  it("keeps an all-OOS matched card and drops OOS-only filler (filterProductsByStock)", () => {
+    const OOS_FILLER: NormalizedProduct = {
+      ...FILLER_A,
+      offers: [{ merchant: "Blink", price: 2, currency: "KWD", url: "https://blink.example/p", inStock: false }],
+    };
+    const filtered = filterProductsByStock([OOS_FILLER, OOS_MATCHER], false, exactSkuKeep(SKU_Q));
+    expect(filtered.map((p) => p.productId)).toEqual(["m1"]);
+    expect(filtered[0].offers).toHaveLength(1);
+    expect(filtered[0].offers[0].inStock).toBe(false);
+    // Without the keep the same list reads as the honest zero it used to.
+    expect(filterProductsByStock([OOS_FILLER, OOS_MATCHER], false)).toEqual([]);
   });
 });
 

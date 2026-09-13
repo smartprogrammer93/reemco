@@ -717,3 +717,22 @@ export function narrowSkuLead<T extends { title: string }>(
   if (lead.length === 0) return [...products];
   return [...lead, ...rest];
 }
+
+/** REEA-822 — the stock-filter keep-predicate for exact-SKU intent. Under a
+ *  part-number-shaped query the page is about THAT item (REEA-721/REEA-743):
+ *  when every live offer on the matching card is out of stock, dropping the
+ *  card under the default showOutOfStock=false view makes the page read an
+ *  honest zero for a SKU that EXISTS — the one state the REEA-758 check-1
+ *  lead-guard forbids. The matched card must therefore survive the default
+ *  card-level drop and render its real out-of-stock state. Returns undefined
+ *  for queries without the code shape so the stock filter keeps its plain
+ *  REEA-186 contract everywhere else (toggle semantics untouched: non-matched
+ *  cards still lose their OOS-only cards and rows, and ?oos=1 still reveals
+ *  in place). Locale-independent — reads only the query and the title. */
+export function exactSkuKeep(
+  query: string,
+): ((p: { title: string }) => boolean) | undefined {
+  const codes = skuCodeTokens(query);
+  if (codes.length === 0) return undefined;
+  return (p) => titleCarriesCode(p.title, codes);
+}

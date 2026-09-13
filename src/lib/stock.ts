@@ -65,16 +65,28 @@ export function filterOffersByStock<T extends Pick<PriceOffer, "inStock">>(
  * product (alternatives with no visible offer are dropped). On the server path
  * this runs after the server's identical pass, so it is idempotent there and
  * is the whole filter on the static-host catalog fallback.
+ *
+ * REEA-822 — the optional `keep` predicate exempts matching cards from the
+ * card-level drop when ALL their offers are out of stock: the card survives
+ * with its full live offer set and renders its honest out-of-stock state.
+ * The exact-SKU results view passes the REEA-743 code match here — an
+ * honest zero may only state that the SKU has no offers at all, never that
+ * its only answer is merely unavailable (REEA-758 check-1 lead guard). Every
+ * non-matching card keeps the plain REEA-186 contract.
  */
 export function filterProductsByStock(
   products: NormalizedProduct[],
   showOutOfStock: boolean,
+  keep?: (p: NormalizedProduct) => boolean,
 ): NormalizedProduct[] {
   if (showOutOfStock) return products;
   const out: NormalizedProduct[] = [];
   for (const p of products) {
     const offers = filterOffersByStock(p.offers, false);
-    if (offers.length === 0) continue;
+    if (offers.length === 0) {
+      if (keep?.(p) && p.offers.length > 0) out.push(p);
+      continue;
+    }
     const alternatives = p.alternatives.flatMap((a) => {
       const alt = products.find((x) => x.productId === a.productId);
       if (!alt) return [a];

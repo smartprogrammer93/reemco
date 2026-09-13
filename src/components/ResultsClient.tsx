@@ -25,7 +25,7 @@ import {
 import { trackEvents } from "@/lib/telemetry";
 import { HeadingGhost, SkeletonCard, StampGhost, coverageLhTier } from "@/components/SkeletonSlots";
 import { PRODUCTS } from "@/lib/feed";
-import { isAccessoryTitle, partitionForQuery } from "@/lib/relevance";
+import { isAccessoryTitle, partitionForQuery, exactSkuKeep } from "@/lib/relevance";
 import { coverageLine, type LiveSearchResult } from "@/lib/collect/coverage";
 import { markLiveRefresh, withRefreshBypass } from "@/lib/query-cache";
 import { clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
@@ -362,9 +362,13 @@ function SelectionRow({
 }
 
 /* Selections apply BEFORE slicing, per snapshot — same chain (country, then
-   stock) the plain path runs, so staged and converged views agree. */
+   stock) the plain path runs, so staged and converged views agree. REEA-822:
+   the exact-SKU keep-predicate rides the stock stage so the code-matched card
+   survives the default OOS card-level drop (its all-OOS offer set renders
+   honestly as out-of-stock instead of erasing the lead into a fake zero). */
 function stagedView(
   snap: LiveSearchResult,
+  query: string,
   page: number,
   country: CountryCode | null,
   showOutOfStock: boolean,
@@ -372,6 +376,7 @@ function stagedView(
   const filtered = filterProductsByStock(
     filterProductsByCountry(snap.products, country),
     showOutOfStock,
+    exactSkuKeep(query),
   );
   return filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 }
@@ -453,12 +458,12 @@ function StageAppend(props: {
   const { stages, index, page, country, showOutOfStock } = props;
   const t = getStrings(props.locale ?? clientLocale());
   const snap = use(stages[index]);
-  const visible = stagedView(snap, page, country, showOutOfStock);
+  const visible = stagedView(snap, props.query, page, country, showOutOfStock);
   // Snapshots are cumulative, so comparing against the adjacent prior stage is
   // enough to isolate what this flush adds. At index 0 the "prior" is the
   // same stage — everything visible is fresh.
   const prevSnap = use(stages[Math.max(0, index - 1)]);
-  const prevVisible = stagedView(prevSnap, page, country, showOutOfStock);
+  const prevVisible = stagedView(prevSnap, props.query, page, country, showOutOfStock);
   const prevIds = new Set(prevVisible.map((p) => p.productId));
   const fresh = index === 0 ? visible : visible.filter((p) => !prevIds.has(p.productId));
   // REEA-222: badge ownership follows the first flush that actually RENDERS
@@ -554,7 +559,7 @@ function ResultsHeading(props: {
   locale?: Locale;
 }) {
   const snap = use(props.stage);
-  const visible = stagedView(snap, props.page, props.country, props.showOutOfStock);
+  const visible = stagedView(snap, props.query, props.page, props.country, props.showOutOfStock);
   if (visible.length === 0 && snap.settled === false) {
     return <HeadingGhost />;
   }
@@ -668,12 +673,13 @@ function StagePendingRow(props: {
    fan-out, no second fetch, nothing bundled. */
 export function renderedAcrossStages(
   stages: readonly Promise<LiveSearchResult>[],
+  query: string,
   page: number,
   country: CountryCode | null,
   showOutOfStock: boolean,
 ): Promise<NormalizedProduct[]> {
   return Promise.all(
-    stages.map((stage) => stage.then((snap) => stagedView(snap, page, country, showOutOfStock))),
+    stages.map((stage) => stage.then((snap) => stagedView(snap, query, page, country, showOutOfStock))),
   ).then((views) => {
     const seenIds = new Set<string>();
     const rows: NormalizedProduct[] = [];
@@ -690,6 +696,7 @@ export function renderedAcrossStages(
 
 function StageCoverage(props: {
   stages: readonly Promise<LiveSearchResult>[];
+  query: string;
   page: number;
   country: CountryCode | null;
   showOutOfStock: boolean;
@@ -699,8 +706,8 @@ function StageCoverage(props: {
   const snap = use(props.stages[props.stages.length - 1]);
   const products = use(
     useMemo(
-      () => renderedAcrossStages(props.stages, props.page, props.country, props.showOutOfStock),
-      [props.stages, props.page, props.country, props.showOutOfStock],
+      () => renderedAcrossStages(props.stages, props.query, props.page, props.country, props.showOutOfStock),
+      [props.stages, props.query, props.page, props.country, props.showOutOfStock],
     ),
   );
   // REEA-574 R1 + REEA-601 — contributor names are recomputed at paint time
@@ -789,7 +796,7 @@ function StagedResults(props: {
   // REEA-37 funnel events fire once per CONVERGED result set (identity with
   // the REEA-186 stock selection included), so partial flushes never emit
   // half-count impression storms.
-  const products = finalSnap ? stagedView(finalSnap, page, country, showOutOfStock) : null;
+  const products = finalSnap ? stagedView(finalSnap, query, page, country, showOutOfStock) : null;
   const eventsKey = products
     ? `${query}|${page}|${products.length}|${showOutOfStock ? 1 : 0}`
     : "";
@@ -906,6 +913,7 @@ function StagedResults(props: {
       <Suspense fallback={<StampGhost locale={locale} />}>
         <StageCoverage
           stages={stages}
+          query={query}
           page={page}
           country={country}
           showOutOfStock={showOutOfStock}
@@ -1033,10 +1041,12 @@ function ResultsInner(props: {
   // The server filters offers BEFORE grouping, so everything derived
   // (counts, cheapest-first, alternatives) already honors the selection; this
   // pass is idempotent there and is the whole filter on the static-host
-  // catalog fallback. Same for the stock selection (REEA-186).
+  // catalog fallback. Same for the stock selection (REEA-186); REEA-822 adds
+  // the exact-SKU keep so the fallback path matches the staged view's rule.
   const products = filterProductsByStock(
     filterProductsByCountry(served, country),
     showOutOfStock,
+    exactSkuKeep(query),
   );
   const matchCount = products.length;
   const zero = query.length > 0 && matchCount === 0;

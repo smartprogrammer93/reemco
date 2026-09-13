@@ -627,6 +627,26 @@ html[lang="ar"] .coupon-via {
   }
 }
 
+/* REEA-822 — the results route fills the first viewport from first paint so
+   the footer never renders INSIDE the loading/provisional shell. Measured on
+   stamp 0d2e1eb at 375x812 (Fast-3G, scripts/reea822-cls-probe.mjs): the
+   load shell is ~538px tall, the footer paints at y=651 inside the viewport,
+   and the first streamed flush lands as the append-only union of the per-
+   stage views (up to stages x PAGE_SIZE cards) — the footer is pushed out of
+   the viewport in one frame and layout-shift records 0.1983. With the shell
+   >= 100svh the footer starts below the fold and every later swap moves it
+   further down or below the fold — nothing in the viewport moves. Applied to
+   the route's page wrapper (covers the provisional/streamed/converged phases
+   in one owner) and the route-level loading flash (results/loading.tsx;
+   client navigations inherit it through the page wrapper). Trade-off,
+   accepted: on short settled pages of this route (e.g. the honest-zero empty
+   state) the main column stretches to the viewport and the footer sits below
+   the fold. */
+.results-viewport-reserve {
+  min-height: 100vh;
+  min-height: 100svh;
+}
+
 /* ============================================================================
  * The Arrival — the signature moment (Brief v4). On results load a slim amber
  * pulse bar sweeps left→right while retailer chips ignite one-by-one

@@ -98,3 +98,10 @@ describe("ResultsLoading busy state (REEA-447 R1)", () => {
     expect(html).toContain('aria-busy="true"');
   });
 });
+
+describe("ResultsLoading viewport reserve (REEA-822)", () => {
+  it("carries .results-viewport-reserve so the footer never paints inside the flash", async () => {
+    const html = await renderFlash();
+    expect(html).toContain("results-viewport-reserve");
+  });
+});

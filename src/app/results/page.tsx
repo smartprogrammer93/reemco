@@ -169,7 +169,7 @@ export default async function ResultsPage({
 
   return (
     <div
-      className="mx-auto w-full px-6 py-6"
+      className="results-viewport-reserve mx-auto w-full px-6 py-6"
       style={{ maxWidth: "var(--rc-layout-max-w)" }}
     >
       <ResultsClient

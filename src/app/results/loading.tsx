@@ -3,12 +3,16 @@
  * live-collection label + 3 card ghosts. Shown while the query-time retailer
  * fan-out is in flight (server render and client navigations alike).
  *
- * REEA-224 item 2: the ghosts reserve the REAL card geometry (radius, card
+ * REEA-224 identical-markup rule: the ghosts reserve the REAL card geometry (radius, card
  * padding, gutter — see .skeleton-card in globals.css) and a heading slot for
  * the `N results for …` h1 rides between the stamp line and the cards, so the
  * footer keeps its vertical position from first paint to settled grid. The
  * whole block is removed on first paint by the Suspense boundary; the real
  * h1 itself ships in the first streamed flush (ResultsClient.StageAppend).
+ *
+ * REEA-822: the container carries .results-viewport-reserve so the loading
+ * flash fills the first viewport and the footer never paints inside it —
+ * the page wrapper on the settled route carries the same class.
  */
 import { getStrings } from "@/lib/i18n";
 import { resolveRequestLocale } from "@/lib/i18n-server";
@@ -27,7 +31,7 @@ export default async function ResultsLoading() {
   const t = getStrings(locale);
   return (
     <div
-      className="mx-auto w-full space-y-4 px-6 py-6"
+      className="results-viewport-reserve mx-auto w-full space-y-4 px-6 py-6"
       style={{ maxWidth: "var(--rc-layout-max-w)" }}
     >
       {/* REEA-447 R1 — busy state mirrors LoadingFallback exactly (REEA-224

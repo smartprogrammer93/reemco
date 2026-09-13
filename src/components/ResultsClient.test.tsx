@@ -932,3 +932,72 @@ describe("first-flush reserves (REEA-778)", () => {
     expect(ar).toContain("min-height:2lh");
   });
 });
+
+/* REEA-822 — exact-SKU lead vs the default OOS filter. The streamed payload
+   carries the SKU card with one out-of-stock offer; under showOutOfStock=false
+   the card must STILL lead (honest out-of-stock state), not vanish into the
+   honest-zero empty state. A non-matching all-OOS card stays hidden. */
+describe("exact-SKU lead under the default stock view (REEA-822)", () => {
+  const SKU_CARD: NormalizedProduct = {
+    productId: "samsung-galaxy-s25-silicone-case-ef-ps931cbegww-black",
+    title: "Samsung Galaxy S25 Silicone Case, EF-PS931CBEGWW – Black",
+    brand: "Samsung",
+    offers: [
+      { merchant: "Xcite", price: 1, currency: "KWD", url: "https://xcite.example/p", inStock: false },
+    ],
+    coupons: [],
+    variations: [],
+    alternatives: [],
+    scrapedAt: new Date().toISOString(),
+  };
+  const OOS_FILLER: NormalizedProduct = {
+    productId: "generic-case",
+    title: "Universal Silicone Case",
+    brand: "",
+    offers: [
+      { merchant: "Blink", price: 2, currency: "KWD", url: "https://blink.example/p", inStock: false },
+    ],
+    coupons: [],
+    variations: [],
+    alternatives: [],
+    scrapedAt: new Date().toISOString(),
+  };
+
+  it("renders the all-OOS code-matched card as the lead under showOutOfStock=false", async () => {
+    searchParams.set("q", "EF-PS931CBEGWW");
+    searchParams.delete("oos");
+    const snap: LiveSearchResult = {
+      products: [SKU_CARD, OOS_FILLER],
+      notes: [],
+      suggestions: [],
+      settled: true,
+    };
+    await act(async () => {
+      render(
+        <ResultsClient query="EF-PS931CBEGWW" page={1} country={null} showOutOfStock={false} locale="en" stages={[Promise.resolve(snap), Promise.resolve(snap)]} />,
+      );
+    });
+    const text = document.body.textContent ?? "";
+    // The lead card is IN — with its honest out-of-stock state — and the page
+    // is not the zero state.
+    expect(text).toContain("Samsung Galaxy S25 Silicone Case, EF-PS931CBEGWW – Black");
+    expect(text).not.toContain("No matches");
+    expect(text).toContain("1 result for");
+    // The OOS-only filler without the code stays hidden under the default view.
+    expect(text).not.toContain("Universal Silicone Case");
+  });
+
+  it("keeps the honest zero when the SKU truly has no offers", async () => {
+    searchParams.set("q", "EF-ZZZZ9900XX");
+    searchParams.delete("oos");
+    const snap: LiveSearchResult = { products: [OOS_FILLER], notes: [], suggestions: [], settled: true };
+    await act(async () => {
+      render(
+        <ResultsClient query="EF-ZZZZ9900XX" page={1} country={null} showOutOfStock={false} locale="en" stages={[Promise.resolve(snap), Promise.resolve(snap)]} />,
+      );
+    });
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("0 results for");
+    expect(text).not.toContain("Universal Silicone Case");
+  });
+});
