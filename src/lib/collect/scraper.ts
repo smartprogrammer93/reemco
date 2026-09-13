@@ -32,23 +32,117 @@ export interface ScrapeOutcome {
   timedOut?: boolean;
 }
 
-/** Extract a unit price from JSON-LD blocks, then meta tags. */
-export function extractPrice(html: string): number | null {
-  // JSON-LD: "price": 12.34 (offers schema.org/Offer or Product.offers)
+/**
+ * Open Graph product price meta tags: the platform's own formatted major-unit
+ * value. Shopify stamps og:price:amount from the PDP URL's canonical variant,
+ * so it matches the search-path price for that exact product (measured live
+ * 2026-09-13: zayoom "379.90", blink "369.00", astore "408.00", quadra
+ * "257.90", switch "9.9", wibi "409.9" — every one equal to the suggest.json
+ * price the /search adapters render). Decimal allowance is 1–3: KWD is a
+ * three-decimal currency and some storefronts stamp "379.900".
+ */
+const META_PRICE_RES = [
+  /<meta[^>]+property=["'](?:product:price:amount|og:price:amount)["'][^>]+content=["']([0-9]+(?:\.[0-9]{1,3})?)["']/i,
+  /<meta[^>]+content=["']([0-9]+(?:\.[0-9]{1,3})?)["'][^>]+property=["'](?:product:price:amount|og:price:amount)["']/i,
+];
+
+/** Currency meta guard: reject a meta price stamped in another currency. */
+function metaPriceCurrencyOf(html: string): string | null {
+  const m =
+    html.match(/<meta[^>]+property=["'](?:product:price:currency|og:price:currency)["'][^>]+content=["']([A-Za-z]{3})["']/i) ??
+    html.match(/<meta[^>]+content=["']([A-Za-z]{3})["'][^>]+property=["'](?:product:price:currency|og:price:currency)["']/i);
+  return m ? m[1].toUpperCase() : null;
+}
+
+/** "KD" is the local spelling of KWD (same rule the card scanners use). */
+function sameCurrency(a: string, b: string): boolean {
+  const norm = (c: string) => {
+    const u = c.trim().toUpperCase();
+    return u === "KD" ? "KWD" : u;
+  };
+  return norm(a) === norm(b);
+}
+
+/**
+ * REEA-896 — read a price out of REAL application/ld+json blocks only,
+ * parsed as JSON. The pre-896 "JSON-LD" step was an unscoped regex over the
+ * whole document, so on Shopify PDPs it matched the theme's inline variant
+ * array first — `"price":37990`, minor units the theme ships alongside the
+ * real schema.org record — and the product-page collection rendered
+ * fils-scale integers as KD (Zayoom 379.900 → KD 37,990; the same class on
+ * blink/astore/quadra/switch/wibi PDPs). Walks Product/Offer/AggregateOffer
+ * nodes; when the retailer's expected currency is known, a declared
+ * priceCurrency must agree, so a cross-currency record can never be taken as
+ * the page price.
+ */
+function jsonLdOfferPrice(node: unknown, expectedCurrency: string | undefined): number | null {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const v = jsonLdOfferPrice(child, expectedCurrency);
+      if (v != null) return v;
+    }
+    return null;
+  }
+  if (!node || typeof node !== "object") return null;
+  const record = node as Record<string, unknown>;
+  const type = typeof record["@type"] === "string" ? record["@type"] : "";
+  const rawPrice = record.price;
+  if (rawPrice != null && /(?:^|\b)(?:Offer|Product|AggregateOffer)(?:\b|$)/.test(type)) {
+    const cur = typeof record.priceCurrency === "string" ? record.priceCurrency : undefined;
+    const currencyOk =
+      expectedCurrency == null || cur == null || sameCurrency(cur, expectedCurrency);
+    const value =
+      typeof rawPrice === "number"
+        ? rawPrice
+        : typeof rawPrice === "string"
+          ? Number.parseFloat(rawPrice.replace(/,/g, "").trim())
+          : NaN;
+    if (currencyOk && Number.isFinite(value) && value > 0) return value;
+  }
+  for (const child of Object.values(record)) {
+    const v = jsonLdOfferPrice(child, expectedCurrency);
+    if (v != null) return v;
+  }
+  return null;
+}
+
+/**
+ * Extract a unit price from a retailer PDP, most trustworthy signal first
+ * (REEA-896): product:price:amount / og:price:amount meta (the platform's
+ * canonical major-unit value for this URL, rejected when its own currency
+ * meta disagrees with the retailer's), then real application/ld+json
+ * Product/Offer blocks, then the legacy whole-document first-"price" scan —
+ * pages with neither structured signal keep the exact pre-REEA-896 behavior.
+ * `expectedCurrency` (the seed offer's currency) guards the structured reads
+ * against cross-currency records; the legacy scan is unchanged and unguarded,
+ * exactly as before.
+ */
+export function extractPrice(html: string, expectedCurrency?: string): number | null {
+  const metaCur = metaPriceCurrencyOf(html);
+  for (const re of META_PRICE_RES) {
+    const m = html.match(re);
+    if (m) {
+      const v = Number.parseFloat(m[1]);
+      const currencyOk = metaCur == null || expectedCurrency == null || sameCurrency(metaCur, expectedCurrency);
+      if (currencyOk && Number.isFinite(v) && v > 0) return v;
+    }
+  }
+  for (const block of html.matchAll(
+    /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi,
+  )) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(block[1]);
+    } catch {
+      continue; // malformed record — try the next block
+    }
+    const v = jsonLdOfferPrice(parsed, expectedCurrency);
+    if (v != null) return v;
+  }
+  // Legacy scan (pre-REEA-896 behavior, last resort): "price": 12.34 anywhere.
   const jsonLd = html.match(/"price"\s*:\s*"?([0-9]+(?:[.,][0-9]{1,2})?)"?/i);
   if (jsonLd) {
     const v = Number.parseFloat(jsonLd[1].replace(",", "."));
-    if (Number.isFinite(v) && v > 0) return v;
-  }
-  const meta =
-    html.match(
-      /<meta[^>]+property=["'](?:product:price:amount|og:price:amount)["'][^>]+content=["']([0-9]+(?:\.[0-9]{1,2})?)["']/i,
-    ) ??
-    html.match(
-      /<meta[^>]+content=["']([0-9]+(?:\.[0-9]{1,2})?)["'][^>]+property=["'](?:product:price:amount|og:price:amount)["']/i,
-    );
-  if (meta) {
-    const v = Number.parseFloat(meta[1]);
     if (Number.isFinite(v) && v > 0) return v;
   }
   return null;
@@ -161,7 +255,9 @@ async function tryDirectFetch(
     return null; // transient HTTP/network error — caller tries search fallback
   }
   if (isSoftNotFound(html)) return null; // branded soft-404 shell — re-discover via search
-  const price = extractPrice(html);
+  // REEA-896: the seed offer's currency guards the structured reads (meta +
+  // JSON-LD) against cross-currency records on the same page.
+  const price = extractPrice(html, offer.currency);
   if (price == null) return null; // unparseable/client-rendered — try fallback
   return {
     offers: [
