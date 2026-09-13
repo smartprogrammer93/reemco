@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { after } from "next/server";
 import ProductResultCard from "@/components/ProductResultCard";
 import CollectionPanel from "@/components/CollectionPanel";
 import { startProductCollectionStaged } from "@/lib/collect/runner";
+import type { StagedProductCollection } from "@/lib/collect/runner";
 import { PRODUCTS } from "@/lib/feed";
 import { resolveProductIdentity } from "@/lib/product-identity";
 import {
@@ -61,16 +63,38 @@ export default async function ProductPage({
   // (shell <= 2s) and the first offer lands in its own streamed boundary as
   // soon as a retailer answers. The manual Collect-now stays exactly as it
   // is — the no-JS / boundary-not-yet-flushed fallback.
-  const firstStage = process.env.STATIC_EXPORT
-    ? undefined
-    : startProductCollectionStaged(shown)
-        .then((s) => s.firstStage)
-        // a handshake that never started is not an error state: the panel
-        // falls back to its old client-initiated path (see CollectionPanel).
-        .then(
-          (snap) => snap,
+  // REEA-882 — the page keeps the full StagedProductCollection handle (not
+  // just firstStage) and registers `after()` on the run's finalStage, so the
+  // serverless invocation outlives the streamed response until the WHOLE run
+  // settles (the runner's own budget watchdog finalizes terminal states).
+  // Holding only firstStage left the rest of runCollection a floating
+  // promise: the invocation froze when the stream ended, the runner died
+  // mid-run with subtasks stuck `collecting`, and the REEA-870 reap marked
+  // every product-page job `failed` with 0 offers at ~30s. Same shape as the
+  // results page (`staged.allSettled` behind after(), REEA-398).
+  const stagedCollection: Promise<StagedProductCollection | null> | undefined =
+    process.env.STATIC_EXPORT
+      ? undefined
+      : startProductCollectionStaged(shown).then(
+          (s) => s,
           () => null,
         );
+  const firstStage = stagedCollection?.then((s) => s?.firstStage ?? null);
+
+  // REEA-882 — keep the invocation alive past the streamed response until the
+  // run's tail finalizes: the page-level counterpart of the results page's
+  // `after(() => staged.allSettled)` (REEA-398). Registered on the page, not
+  // in the runner lib, so the runner stays request-scope-free for tests.
+  // maxDuration (45s) already covers the runner's 10s budget with headroom.
+  if (stagedCollection) {
+    after(() =>
+      stagedCollection.then(
+        (s) => s?.finalStage,
+        // a start that never began has no run tail to keep alive.
+        () => undefined,
+      ),
+    );
+  }
 
   return (
     <div
