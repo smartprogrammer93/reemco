@@ -7,7 +7,6 @@
  */
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { act } from "react";
-import { coverageLine } from "@/lib/collect/coverage";
 import { renderToReadableStream, renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -564,6 +563,188 @@ describe("staged progressive results (REEA-178)", () => {
 
     expect(document.querySelectorAll(".best-flag-pending")).toHaveLength(0);
     expect(document.querySelectorAll(".best-flag")).toHaveLength(1);
+  });
+
+  it("REEA-847: withholds the flag for the checking state when the interim lead is a Kuwait-primary merchant priced non-KWD (Jarir SAR)", async () => {
+    // Live repro (REEA-847, QA verdict on served stamp 63876d0): on cold
+    // queries the first flush led with a Jarir offer priced in SAR. Jarir IS
+    // one of the Kuwait-primary four, so kuwaitPendingStatus computed false,
+    // the REEA-835 withhold never fired, and the unqualified "Best price"
+    // sat on a non-KWD lead while the KWD stores (Xcite/Eureka/Sultan
+    // Center) were still in flight — the pending pill never rendered on any
+    // cold run. The withhold now also keys on the flagged offer's own
+    // currency, so ANY non-KWD interim lead is withheld while the batch may
+    // still land.
+    searchParams.set("q", "iphone 17 pro max 512gb blue titanium");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    let resolveFinal: (v: LiveSearchResult) => void = () => {};
+    const JARIR_SAR_LEAD: NormalizedProduct = {
+      productId: "iphone-17-pro-max-512-silver",
+      title: "Apple iPhone 17 Pro Max 512GB Silver",
+      brand: "Apple",
+      offers: [
+        { merchant: "Jarir", price: 6699, currency: "SAR", url: "https://www.jarir.example/p1", inStock: true },
+      ],
+      coupons: [],
+      variations: [],
+      alternatives: [],
+      scrapedAt: new Date().toISOString(),
+    };
+    const SETTLED: NormalizedProduct = {
+      ...JARIR_SAR_LEAD,
+      offers: [
+        { merchant: "Xcite", price: 359.9, currency: "KWD", url: "https://xcite.example/p1", inStock: true },
+        ...JARIR_SAR_LEAD.offers,
+      ],
+    };
+    const stages: Promise<LiveSearchResult>[] = [
+      // First flush: a Kuwait-PRIMARY merchant answered (Jarir), so the
+      // snapshot flag is false — but its lead is SAR, non-KWD, and the batch
+      // may still land. The flag slot must still carry the checking state.
+      Promise.resolve({
+        products: [JARIR_SAR_LEAD],
+        notes: [{ merchant: "Jarir", hits: 1 }],
+        suggestions: [JARIR_SAR_LEAD],
+        kuwaitPendingStatus: false,
+      }),
+      new Promise<LiveSearchResult>((res) => {
+        resolveFinal = res;
+      }),
+    ];
+
+    await act(async () => {
+      render(
+        <ResultsClient query="iphone 17 pro max 512gb blue titanium" page={1} country={null} stages={stages} />,
+      );
+    });
+
+    // Pending first paint: the Jarir SAR lead wears the checking pill, never
+    // an unqualified "Best price".
+    expect(document.querySelectorAll(".best-flag:not(.best-flag-pending)")).toHaveLength(0);
+    const pending = document.querySelectorAll(".best-flag-pending");
+    expect(pending).toHaveLength(1);
+    expect(pending[0].textContent).toContain("Checking Kuwait stores");
+    expect(pending[0].closest("article")?.textContent).toContain("iPhone 17 Pro Max 512GB");
+
+    // Settled: the KWD Xcite offer leads, so the flag slot swaps back to the
+    // current settled rules — same slot, no layout shift.
+    await act(async () => {
+      resolveFinal({ products: [SETTLED], notes: [], suggestions: [] });
+      await Promise.resolve();
+    });
+    expect(document.querySelectorAll(".best-flag-pending")).toHaveLength(0);
+    const settledFlags = document.querySelectorAll(".best-flag");
+    expect(settledFlags).toHaveLength(1);
+    expect(settledFlags[0].textContent).toContain("Best price");
+  });
+
+  it("REEA-847: a KWD lead from a Kuwait-primary merchant keeps the flag on an intermediate flush (no over-withhold)", async () => {
+    // The REEA-847 currency rule must not widen the withhold to KWD leads:
+    // when a Kuwait-primary merchant answered with a KWD offer leading the
+    // card, an intermediate flush keeps the settled flag rules (AC1's
+    // condition names non-KWD leads only).
+    searchParams.set("q", "iphone 17 pro");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    const XCITE_KWD_LEAD: NormalizedProduct = {
+      productId: "iphone-17-pro-kw",
+      title: "Apple iPhone 17 Pro 256GB",
+      brand: "Apple",
+      offers: [
+        { merchant: "Xcite", price: 389, currency: "KWD", url: "https://xcite.example/p1", inStock: true },
+      ],
+      coupons: [],
+      variations: [],
+      alternatives: [],
+      scrapedAt: new Date().toISOString(),
+    };
+    const stages: Promise<LiveSearchResult>[] = [
+      Promise.resolve({
+        products: [XCITE_KWD_LEAD],
+        notes: [{ merchant: "Xcite", hits: 1 }],
+        suggestions: [XCITE_KWD_LEAD],
+        kuwaitPendingStatus: false,
+      }),
+      new Promise<LiveSearchResult>(() => {}),
+    ];
+
+    await act(async () => {
+      render(<ResultsClient query="iphone 17 pro" page={1} country={null} stages={stages} />);
+    });
+
+    expect(document.querySelectorAll(".best-flag-pending")).toHaveLength(0);
+    const flags = document.querySelectorAll(".best-flag");
+    expect(flags).toHaveLength(1);
+    expect(flags[0].textContent).toContain("Best price");
+  });
+
+  it("REEA-847: the SERVED streamed first-paint markup carries the checking pill for a Jarir SAR cold lead (no-JS view)", async () => {
+    // QA samples the streamed document itself (polling + MutationObserver
+    // from first paint), so the pill must ride the SERVER-rendered flush
+    // markup, not just the hydrated client tree. Async SSR of the exact
+    // REEA-847 cold shape: flush 0 leads with the Jarir SAR offer.
+    searchParams.set("q", "iphone 17 pro max 512gb blue titanium");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    const JARIR_SAR_LEAD: NormalizedProduct = {
+      productId: "iphone-17-pro-max-512-silver",
+      title: "Apple iPhone 17 Pro Max 512GB Silver",
+      brand: "Apple",
+      offers: [
+        { merchant: "Jarir", price: 6699, currency: "SAR", url: "https://www.jarir.example/p1", inStock: true },
+      ],
+      coupons: [],
+      variations: [],
+      alternatives: [],
+      scrapedAt: new Date().toISOString(),
+    };
+    const XCITE_KWD: NormalizedProduct = {
+      ...JARIR_SAR_LEAD,
+      productId: "iphone-17-pro-max-512-kw",
+      offers: [
+        { merchant: "Xcite", price: 359.9, currency: "KWD", url: "https://xcite.example/p1", inStock: true },
+      ],
+    };
+    const stages: Promise<LiveSearchResult>[] = [
+      Promise.resolve({
+        products: [JARIR_SAR_LEAD],
+        notes: [{ merchant: "Jarir", hits: 1 }],
+        suggestions: [JARIR_SAR_LEAD],
+      }),
+      // Cumulative settled flush: only the Xcite row is fresh here, and it
+      // does not own the badge (a prior block rendered) — so the streamed
+      // union paints exactly ONE flag slot, the pending pill on flush 0.
+      Promise.resolve({
+        products: [JARIR_SAR_LEAD, XCITE_KWD],
+        notes: [{ merchant: "Jarir", hits: 1 }],
+        suggestions: [JARIR_SAR_LEAD],
+        settled: true,
+      }),
+    ];
+    const stream = await renderToReadableStream(
+      <ResultsClient
+        query="iphone 17 pro max 512gb blue titanium"
+        page={1}
+        country={null}
+        locale="en"
+        stages={stages}
+      />,
+    );
+    let html = "";
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      html += decoder.decode(value, { stream: true });
+    }
+    // The Jarir SAR lead's flag slot is the checking state in the served
+    // document — no unqualified "Best price" anywhere in the first paint.
+    expect(html).toContain("best-flag-pending");
+    expect(html).toContain("Checking Kuwait stores");
+    expect(html).toContain("Apple iPhone 17 Pro Max 512GB Silver");
+    expect(html).not.toContain('class="best-flag"');
   });
 });
 

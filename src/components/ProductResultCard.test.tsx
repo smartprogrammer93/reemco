@@ -556,9 +556,6 @@ describe("REEA-836 — displayed title hygiene", () => {
     const h2 = container.querySelector("h2");
     expect(h2?.textContent).toBe("Sony WH-1000XM6");
     expect(h2?.getAttribute("title")).toBeNull();
-    const h2 = container.querySelector("h2");
-    expect(h2?.textContent).toBe("Sony WH-1000XM6");
-    expect(h2?.getAttribute("title")).toBeNull();
     expect(container.querySelector("details")).toBeNull();
   });
 });
