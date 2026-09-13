@@ -556,6 +556,133 @@ describe("REEA-836 — displayed title hygiene", () => {
     const h2 = container.querySelector("h2");
     expect(h2?.textContent).toBe("Sony WH-1000XM6");
     expect(h2?.getAttribute("title")).toBeNull();
+    const h2 = container.querySelector("h2");
+    expect(h2?.textContent).toBe("Sony WH-1000XM6");
+    expect(h2?.getAttribute("title")).toBeNull();
     expect(container.querySelector("details")).toBeNull();
+  });
+});
+
+describe("REEA-847 — honest first paint keys on the FLAGGED offer's currency", () => {
+  // QA repro (REEA-843): a cold query's first flush led with a Kuwait-primary
+  // merchant's SAR offer (Jarir ships SAR) wearing an unqualified "Best
+  // price" while the KWD stores were still in flight — the snapshot's
+  // kuwaitPendingStatus was false because merchant presence, not currency,
+  // answered "Kuwait replied". The card therefore decides on the EXACT offer
+  // that would wear the flag: while the batch may still land, a non-KWD lead
+  // carries the checking pill; a KWD lead (or a settled render) keeps the
+  // flag per the settled rules (AC4).
+  const sarLead = (over: Partial<NormalizedProduct> = {}): NormalizedProduct => ({
+    productId: "p1",
+    title: "Apple iPhone 17 Pro Max 512GB",
+    brand: "Apple",
+    offers: [
+      { merchant: "Jarir", price: 6699, currency: "SAR", url: "https://www.jarir.example/p", inStock: true },
+    ],
+    coupons: [],
+    variations: [],
+    alternatives: [],
+    scrapedAt: "2026-09-13T00:00:00.000Z",
+    ...over,
+  });
+
+  it("batch pending + non-KWD flagged offer -> checking pill, no unqualified Best price (AC1 shape)", () => {
+    const { container } = render(
+      <ProductResultCard product={sarLead()} isBest kuwaitBatchPending kuwaitPendingStatus={false} query="iphone 17 pro" rank={0} />,
+    );
+    expect(container.querySelectorAll(".best-flag:not(.best-flag-pending)")).toHaveLength(0);
+    const pending = container.querySelectorAll(".best-flag-pending");
+    expect(pending).toHaveLength(1);
+    expect(pending[0].textContent).toContain("Checking Kuwait stores");
+  });
+
+  it("batch pending + KWD flagged offer -> the flag renders per the settled rules", () => {
+    const { container } = render(
+      <ProductResultCard
+        product={sarLead({ offers: [{ merchant: "Blink", price: 364.9, currency: "KWD", url: "https://blink.example/p", inStock: true }] })}
+        isBest
+        kuwaitBatchPending
+        kuwaitPendingStatus={false}
+        query="iphone 17 pro"
+        rank={0}
+      />,
+    );
+    expect(container.querySelectorAll(".best-flag-pending")).toHaveLength(0);
+    expect(container.querySelectorAll(".best-flag")).toHaveLength(1);
+  });
+
+  it("settled render (no batch pending) + non-KWD flagged offer -> flag stays (AC4 guard)", () => {
+    const { container } = render(
+      <ProductResultCard product={sarLead()} isBest kuwaitBatchPending={false} kuwaitPendingStatus={false} query="iphone 17 pro" rank={0} />,
+    );
+    expect(container.querySelectorAll(".best-flag-pending")).toHaveLength(0);
+    expect(container.querySelectorAll(".best-flag")).toHaveLength(1);
+  });
+
+  it("batch pending + snapshot flags zero Kuwait-primary offers -> checking pill even over a KWD lead (REEA-835 shape)", () => {
+    const { container } = render(
+      <ProductResultCard
+        product={sarLead({ offers: [{ merchant: "Blink", price: 364.9, currency: "KWD", url: "https://blink.example/p", inStock: true }] })}
+        isBest
+        kuwaitBatchPending
+        kuwaitPendingStatus
+        query="iphone 17 pro"
+        rank={0}
+      />,
+    );
+    expect(container.querySelectorAll(".best-flag:not(.best-flag-pending)")).toHaveLength(0);
+    expect(container.querySelectorAll(".best-flag-pending")).toHaveLength(1);
+  });
+});
+
+describe("REEA-848 — offer-row layout contract (chip/stock gap, CTA containment, AR chips)", () => {
+  // Pins the served classes the three visual defects ride on (spec: REEA-848
+  // visual-spec doc). Geometry (no overlap / CTA inside the card at 1280) is
+  // browser QA per the doc's AC; these pins keep the wrap/compact contract
+  // from regressing back into forced-nowrap clusters.
+  it("clusters wrap between whole tokens instead of forcing nowrap; chips and CTA carry the REEA-848 contract", () => {
+    const p = product(false);
+    // The card reorders offers (cross-currency cheapest-first), so label EVERY
+    // offer — the pinned contract must hold on whatever row renders first.
+    for (const o of p.offers) o.label = "MIDDLE EAST VERSION";
+    const { container } = render(<ProductResultCard product={p} query="headphones" rank={0} />);
+    const row = container.querySelector("li.offer-row") as HTMLElement;
+    expect(row).toBeTruthy();
+    const [left, right] = Array.from(row.children) as HTMLElement[];
+    // Fix 1 — neither cluster forces nowrap from sm up: wrap is the
+    // containment mechanism, so the chip can never be painted over by the
+    // stock dot and the row can never overflow the card.
+    expect(left.className).toContain("flex-wrap");
+    expect(left.className).not.toContain("sm:flex-nowrap");
+    expect(left.className).not.toContain("min-w-[160px]");
+    expect(right.className).toContain("flex-wrap");
+    expect(right.className).not.toContain("sm:flex-nowrap");
+    expect(right.className).not.toContain("sm:shrink-0");
+    // Fix 1 gap scale: 12px between the clusters (min chip↔dot gap), 8px
+    // inside the label cluster; wrap line gaps ride the 2/4px baseline scale.
+    expect(left.className).toContain("gap-x-2");
+    expect(left.className).toContain("gap-y-0.5");
+    expect(right.className).toContain("gap-x-3");
+    expect(right.className).toContain("gap-y-1");
+    // Fix 2: CTA states the compact rule itself at every width (the unlayered
+    // 1280px CSS rule needs utility backup below 1280); the label never
+    // truncates (white-space:nowrap stays on .offer-row .btn-primary).
+    const btn = row.querySelector("a.btn-primary") as HTMLElement;
+    expect(btn.className).toContain("min-h-9");
+    expect(btn.className).toContain("px-3");
+    expect(btn.className).not.toContain("min-h-11");
+    // Fix 3: variant chip — 36ch floor, unshrinkable, dir=auto keeps Latin
+    // variant strings one unbroken LTR run inside the RTL row.
+    const chip = (Array.from(row.getElementsByTagName("span")).find(
+      (el) => el.getAttribute("dir") === "auto",
+    ) ?? null) as HTMLElement | null;
+    expect(chip?.className).toContain("max-w-[36ch]");
+    expect(chip?.className).toContain("shrink-0");
+    expect(chip?.getAttribute("dir")).toBe("auto");
+    // The savings chip never shrinks into the stock dot either.
+    const lowest = Array.from(row.querySelectorAll(".label-token")).find(
+      (el) => el.textContent === "Lowest listed price",
+    );
+    expect(lowest?.className).toContain("shrink-0");
   });
 });

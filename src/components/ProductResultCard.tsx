@@ -1,7 +1,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import type { NormalizedProduct, PriceOffer, ProductAlternative } from "@/types/product";
-import { buildResultsHref, type CountryCode } from "@/lib/country";
+import { buildResultsHref, currencyForCountry, type CountryCode } from "@/lib/country";
 import { effectivePriceKwd, formatCountryPrice, formatKWD, formatPrimaryPrice, sortOffers } from "@/lib/format";
 import { canonicalKey, dedupVariantKey, gradeBadgeLabel } from "@/lib/collect/canonical-product";
 import { collectedClock, relativeAge } from "@/lib/relative-time";
@@ -119,11 +119,13 @@ function PriceBlock({
   country: CountryCode | null;
   /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
   locale?: Locale;
-  /** REEA-835 — while the Kuwait batch is still pending, the lead card
-   *  withholds the unqualified Best-price flag and shows the honest checking
-   *  state in the SAME slot (one box, no layout shift) — an EGP lead must
+  /** REEA-835/847 — the combined checking decision (see ProductResultCard):
+   *  while the Kuwait batch may still land AND (zero Kuwait-primary offers
+   *  rendered OR the flagged offer is non-KWD), the lead card withholds the
+   *  unqualified Best-price flag and shows the honest checking state in the
+   *  SAME slot (one box, no layout shift) — an interim non-KWD lead must
    *  never read as a Kuwait best price on first paint. The slot swaps back
-   *  to the flag when the batch settles (kuwaitPending clears). */
+   *  to the flag when the batch settles (the flag clears). */
   kuwaitPending?: boolean;
 }) {
   const t = getStrings(locale ?? clientLocale());
@@ -266,7 +268,8 @@ export function foldAlternativeRows(rows: ProductAlternative[]): ProductAlternat
 export default function ProductResultCard({
   product,
   isBest = false,
-  kuwaitPending = false,
+  kuwaitBatchPending = false,
+  kuwaitPendingStatus = false,
   variant = "card",
   query = "",
   rank = -1,
@@ -280,12 +283,29 @@ export default function ProductResultCard({
   /** True when this offer carries the best effective price on the page (§3.3 Von Restorff). */
   isBest?: boolean;
   /**
-   * REEA-835 — true while the Kuwait retailer batch is still pending for the
-   * current staged render: the lead card (isBest) then withholds the
-   * unqualified "Best price" flag and shows the honest checking state
-   * instead. Default false keeps every other surface byte-for-byte.
+   * REEA-835/847 — the two facts the lead card's flag slot needs, kept apart
+   * so the decision can ride the EXACT offer that would wear the flag:
+   *
+   * - `kuwaitBatchPending`: the Kuwait retailer batch may still land for this
+   *   render (an intermediate flush, or a `settled:false` finalized snapshot
+   *   whose follow-up feed has not answered yet).
+   * - `kuwaitPendingStatus`: the rendered set carries ZERO offers from the
+   *   Kuwait-primary four (the REEA-793 snapshot flag).
+   *
+   * While the batch is pending, the lead card (isBest) withholds the
+   * unqualified "Best price" flag and shows the honest checking state when
+   * EITHER no Kuwait-primary offer rendered at all (REEA-835's Amazon.eg EGP
+   * shape) OR the flagged offer itself is not a KWD price — a Kuwait-primary
+   * merchant answering does NOT make the lead honest: Jarir's hits are SAR
+   * (REEA-847 live repro: the first cold flush led with a Jarir SAR offer
+   * wearing "Best price" while the KWD stores were still in flight). The
+   * lead-currency side reads the SAME currency the price row leads with
+   * (REEA-283: the selected market's currency, else the offer's native one),
+   * so an explicitly selected non-KWD market keeps its honest flag. Default
+   * false/false keeps every other surface byte-for-byte.
    */
-  kuwaitPending?: boolean;
+  kuwaitBatchPending?: boolean;
+  kuwaitPendingStatus?: boolean;
   variant?: "card" | "detail";
   /** REEA-37 funnel context for item_clicked events (-1 = product detail page). */
   query?: string;
@@ -328,6 +348,20 @@ export default function ProductResultCard({
     primaryCoupon ?? null,
   );
   const best = offers[0];
+  // REEA-847 — the flag slot's checking state, decided on the EXACT offer the
+  // flag would sit on. While the Kuwait batch may still land, withhold the
+  // unqualified "Best price" when no Kuwait-primary offer rendered at all
+  // (REEA-835) OR the flagged offer is not a KWD price — counting a
+  // Kuwait-primary merchant as "Kuwait answered" is not enough when its hits
+  // are non-KWD (Jarir ships SAR), which is how the pill never fired on cold
+  // queries whose first flush led with a Jarir SAR offer. The currency side
+  // mirrors the price row's lead figure (REEA-283): the explicitly selected
+  // market's currency wins, else the offer's native one.
+  const kuwaitChecking =
+    kuwaitBatchPending &&
+    (kuwaitPendingStatus ||
+      (best != null &&
+        (country ? currencyForCountry(country) : best.currency).trim().toUpperCase() !== "KWD"));
   // Base figure for the swatch chips (REEA-254 + REEA-604): the cheapest
   // EFFECTIVE figure in KWD-space on this card — the same key the rows sort
   // on — so mixed-currency cards keep one unit on the chips. The server-side
@@ -410,7 +444,7 @@ export default function ProductResultCard({
             oos={oos}
             country={country}
             locale={locale}
-            kuwaitPending={kuwaitPending}
+            kuwaitPending={kuwaitChecking}
           />
         )}
       </div>
@@ -565,27 +599,20 @@ export default function ProductResultCard({
                   key={`${o.merchant}-${o.url}`}
                   /* REEA-203: ONE row structure per breakpoint — below sm every
                      row stacks its label line above the right-aligned action
-                     cluster; from sm up every row renders inline with no row-level
-                     reflow (no sm:wrap — a chip on the label column must not push
-                     the action cluster onto its own line like a wrap would). The
-                     label column absorbs its own wraps; the action cluster keeps
-                     its intrinsic width so every row shares one baseline. */
+                     cluster; from sm up every row renders inline. REEA-848:
+                     both clusters may wrap from sm up (between whole nowrap
+                     tokens) — the old forced-nowrap clusters could not shrink
+                     at 1280 and overflowed the card. */
                   className="offer-row flex flex-col justify-between gap-1 py-1 sm:flex-row sm:items-center sm:gap-x-2"
                   style={{ borderTop: "1px solid var(--rc-line)" }}
                 >
-                  {/* REEA-224 item 1 (measured on the deployed shell): the
-                      merchant name and its chips are ONE inline unit. With
-                      flex-wrap the column stacked the ~156px chip under the
-                      name at 1280 (row grew 53 -> ~62px), breaking the
-                      equal-height rhythm. Name + one-line chips (each
-                      whitespace-nowrap) ride inline; the design-pass 160px
-                      floor keeps the column at least chip-wide; chips shrink
-                      as whole units, never half-wrap their own text. */}
-                  {/* REEA-646: below sm the stacked row leaves this group in a
-                      ~327px column; flex-wrap breaks only BETWEEN whole nowrap
-                      tokens (name/chips keep their text), and sm:flex-nowrap
-                      keeps the inline shape identical from sm up (REA-224). */}
-                  <span className="flex min-w-[160px] flex-wrap items-center gap-2 sm:flex-nowrap">
+                  {/* REEA-848 (supersedes REEA-224 item 1's nowrap contract):
+                      merchant name and chips are ONE inline wrap unit — wrap
+                      breaks only BETWEEN whole nowrap tokens, never inside
+                      them. min-w-0 replaces the 160px floor so this cluster
+                      yields width to the action cluster at 1280 instead of
+                      squeezing it past the card border. */}
+                  <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
                     <span style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
                       {/* REEA-451 F6 — bidi isolation around the Latin store name
                           so bidi reordering can't flip it inside Arabic chrome. */}
@@ -595,10 +622,18 @@ export default function ProductResultCard({
                         qualifier visible — the label the retailer wrote
                         ("Japanese Version"), never folded away. Same chip
                         shape as the grade badge; long labels clip with an
-                        ellipsis (title attr carries the full text). */}
+                        ellipsis (title attr carries the full text). REEA-848:
+                        36ch floor + shrink-0 so the chip ellipsizes only under
+                        real pressure (28ch of the mono meta font clipped
+                        "MIDDLE EAST VERSION" mid-word), and dir="auto" keeps
+                        Latin variant strings ("MIDDLE EAST VERSION",
+                        "JAPANESE") one unbroken LTR run inside the RTL row —
+                        mixed-direction clipping was what produced "E EAST
+                        VERSION" / "PANESE VERSION". */}
                     {o.label ? (
                       <span
-                        className="label-token inline-flex min-w-0 max-w-[28ch] items-center whitespace-nowrap overflow-hidden text-ellipsis rounded px-2 py-0.5"
+                        dir="auto"
+                        className="label-token inline-flex min-w-0 max-w-[36ch] shrink-0 items-center whitespace-nowrap overflow-hidden text-ellipsis rounded px-2 py-0.5"
                         title={o.label}
                         style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px solid var(--rc-line)" }}
                       >
@@ -618,36 +653,23 @@ export default function ProductResultCard({
                     ) : null}
                     {isLowest && (
                       <span
-                        className="label-token whitespace-nowrap rounded px-2 py-0.5"
+                        className="label-token whitespace-nowrap shrink-0 rounded px-2 py-0.5"
                         style={{ background: "var(--rc-savings-bg)", color: "var(--rc-savings)" }}
                       >
                         {t.lowestListed}
                       </span>
                     )}
                   </span>
-                  {/* REEA-224 item 3 (measured on the deployed shell): the
-                      cluster stays a single nowrap flex line — with flex-wrap
-                      the dot+price block stacked on its own line ABOVE the
-                      button at ~480 (cluster grew to ~80px), so the button
-                      sat bottom-aligned instead of centered against the
-                      wrapped price block. Without wrap the combined
-                      KWD-stamp span (min-w-0) wraps within its own box while
-                      the shrink-0 button (min-h-11) stays pinned at the row's
-                      right edge; items-center centers it against the wrapped
-                      price block. Overflow at narrow widths is absorbed by
-                      the min-w-0 price span, keeping the CTA inside the card
-                      (REEA-75 M2 intent). */}
-                  {/* REEA-646: the cluster's min-content is the SUM of its
-                      nowrap tokens (~267-358px measured), so below sm — where
-                      the stacked row leaves the cluster alone in its column —
-                      it now wraps BETWEEN whole tokens (each token stays
-                      intact, REEA-448 G3 copy contract intact). From sm up
-                      sm:flex-nowrap reproduces the one-inline-line shape
-                      above, so the equal-height rhythm (REA-224) and the
-                      >=1280 squeeze are untouched. Containment comes from the
-                      wrap capacity, which is continuous — not tuned to one
-                      viewport. */}
-                  <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-3 sm:flex-nowrap sm:shrink-0">
+                  {/* REEA-848 (supersedes REEA-224 item 3 / REEA-646 nowrap
+                      contract): the cluster wraps BETWEEN whole tokens from sm
+                      up — forced nowrap could not shrink at 1280, painting the
+                      stock dot over the LOWEST LISTED PRICE chip and the
+                      button past the card border. gap-x-3 (12px) is the
+                      minimum chip↔stock-dot gutter; gap-y-1 keeps wrapped
+                      lines on the 4px baseline scale. min-w-0 keeps the
+                      cluster shrinkable; items-center + justify-end hold the
+                      wrapped shape against the row's inline end. */}
+                  <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-1">
                     <StockDot state={o.inStock ? "in" : "out"} locale={locale} />
                     {/* REEA-283: the row's figure leads in the selected country's
                         currency (the offer's native figure with no selection);
@@ -676,7 +698,7 @@ export default function ProductResultCard({
                         query={query}
                         rank={rank}
                         itemId={product.productId}
-                        className="btn-primary focusable min-h-11 shrink-0 px-4"
+                        className="btn-primary focusable min-h-9 shrink-0 px-3"
                       >
                         {t.goToStore}
                       </TrackedOutboundLink>
