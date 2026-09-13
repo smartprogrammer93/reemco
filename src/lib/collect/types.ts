@@ -65,17 +65,20 @@ export const CACHE_TTL_MS = 10 * 60 * 1000; // labeled-repeat freshness window
  */
 export const PER_RETAILER_TIMEOUT_MS = 4 * 1000; // per-adapter, independent
 /**
- * REEA-264 — Sultan Center lane ceiling, the documented per-lane exception
- * to the shared 4 s budget. Tail attribution on the deployed edge (REEA-257):
- * SC content lands avg ~3.5-3.6 s — inside the shared budget, so nothing cut
- * it — yet as last arranger it kept gating the full-set render (p90 stuck at
- * ~4.9 s against the 4 s bar). The lane rides its own ~2 s effective cap:
- * whatever the storefront answers by then flushes with the progressive
- * stages; a cut hop keeps settling behind the finalized response into the
- * converged tail / follow-up feed (REEA-398), never a bundled snapshot.
- * Every other adapter keeps PER_RETAILER_TIMEOUT_MS unchanged.
+ * REEA-866 — the REEA-264 per-lane SC exception (SC_LANE_TIMEOUT_MS = 2 s,
+ * applied via laneCeilingFor) is RETIRED: Sultan Center rides the shared
+ * per-retailer budget again. The measured reason the 2 s cap existed — SC as
+ * last arranger gating the full-set render — is obsolete under the
+ * completion-budget staged render (REEA-693/756): the page finalizes on its
+ * own clock and late rows fold in through the follow-up feed, so a slow lane
+ * can no longer gate anything. What the cap DID do on the live edge was
+ * abort most SC rounds: the storefront's mobile/api/search answers in
+ * ~1.4–3.5 s (median ~3 s, 13 live samples, REEA-866), so a 2 s window cut
+ * the phrase round AND the REEA-290 retry (its own 2 s window) — Sultan
+ * Center served 4 offers in W37 (REEA-861 metrics-read-1) while every other
+ * adapter served 1,473–20,180. On the shared 4 s budget every measured SC
+ * round-trip (max 3.54 s) completes.
  */
-export const SC_LANE_TIMEOUT_MS = 2 * 1000; // Sultan Center lane only
 export const SOFT_CEILING_MS = 6 * 1000; // render arrived offers, keep chips
 export const OVERALL_BUDGET_MS = 10 * 1000; // hard ceiling
 

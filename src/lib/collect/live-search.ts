@@ -45,7 +45,7 @@ import { readCappedResponse } from "@/lib/collect/read-body";
 import { mirrorSharedQuerySnapshot, replaySharedQuerySnapshot } from "@/lib/collect/query-layer";
 import { attachSeenRanges, type SeenRow } from "@/lib/seen-range";
 import { sanitizeExternalUrl } from "@/lib/safe-url";
-import { SC_LANE_TIMEOUT_MS } from "@/lib/collect/types";
+import { PER_RETAILER_TIMEOUT_MS } from "@/lib/collect/types";
 import { effectivePriceKwd, formatPrice } from "@/lib/format";
 import { canonicalFields, compatibleFields, listingLabel, type CanonicalFields } from "@/lib/collect/canonical-product";
 import {
@@ -1661,12 +1661,15 @@ export const COLLECTORS: RetailerCollector[] = [
       // when empty, one bounded per-word re-search inside the SAME window
       // (max 3 words, dedup by sku) and merge. The shared coverage gate in
       // sultanCenterHits still keeps only titles answering the full query.
-      // REEA-264 — the lane rides its own ~2 s effective cap instead of the
-      // doubled shared window: the measured ~3.5-3.6 s average arrival fit
-      // under the shared budget yet gated the full-set render (REEA-257).
-      // A hop cut at ~2 s still retries once behind the finalized response,
-      // so late rows ride the converged tail into the follow-up feed.
-      const window = AbortSignal.timeout(SC_LANE_TIMEOUT_MS);
+      // REEA-866 — back on the SHARED per-retailer budget (the REEA-264 ~2 s
+      // lane cap is retired): the cap's reason (SC gating the full-set
+      // render) died with the completion-budget staged render (REEA-693/756),
+      // while on the live edge it aborted most rounds — the storefront's
+      // measured ~1.4–3.5 s answers (median ~3 s) exceed 2 s ~70% of the
+      // time, and the REEA-290 retry's own 2 s window was cut the same way
+      // (W37: 4 SC offers served). Phrase round + word re-search share this
+      // one window, as before.
+      const window = AbortSignal.timeout(PER_RETAILER_TIMEOUT_MS);
       const sultanSearch = async (q: string): Promise<unknown> => {
       const res = await fetchChecked(
         fetchImpl,
