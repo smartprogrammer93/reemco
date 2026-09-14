@@ -21,10 +21,16 @@ process.env.KV_REST_API_TOKEN = "";
 
 const { GET: weeklyGET } = await import("@/app/api/metrics/weekly/route");
 const { POST: smokePOST } = await import("@/app/api/metrics/link-smoke/route");
-const { recordSearchOutcome } = await import("@/lib/metrics");
+const { recordSearchOutcome, isoWeekKey } = await import("@/lib/metrics");
 const { appendEvents } = await import("@/lib/event-store");
 
-const WEEK_MS = Date.UTC(2026, 8, 12); // 2026-W37
+// The route-side writes (smoke ingest, event timestamps) ride the REAL clock
+// — the weekly route and the event store stamp `Date.now()` — so every
+// assertion must target the week the clock actually lands in. The fixture
+// originally hardcoded 2026-W37 and went red the day the real clock rolled
+// into W38 (2026-09-14), breaking the CI-parity chain for every deploy.
+const WEEK_MS = Date.now(); // current real week, whatever it is
+const WEEK_KEY = isoWeekKey(WEEK_MS);
 
 function jsonReq(url: string, body?: unknown, headers: Record<string, string> = {}): Request {
   return new Request(url, {
@@ -66,7 +72,7 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
       retention_weeks: number;
       window_weeks: number;
     };
-    const week = body.weeks["2026-W37"] as Record<string, unknown>;
+    const week = body.weeks[WEEK_KEY] as Record<string, unknown>;
     expect(body.retention_weeks).toBe(26);
     expect(body.window_weeks).toBe(4);
     expect(week.searches).toBe(2);
@@ -122,7 +128,7 @@ describe("REEA-807 POST /api/metrics/link-smoke", () => {
     expect(res.status).toBe(202);
     const { readWeeklyCounters } = await import("@/lib/metrics");
     const weeks = await readWeeklyCounters({});
-    expect(weeks["2026-W37"].link_smoke).toMatchObject({ runs: 1, checked: 6, dead: 1 });
+    expect(weeks[WEEK_KEY].link_smoke).toMatchObject({ runs: 1, checked: 6, dead: 1 });
   });
 
   it("rejects non-JSON, invalid payloads, and impossible math", async () => {
