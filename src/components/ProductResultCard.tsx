@@ -4,10 +4,11 @@ import type { NormalizedProduct, PriceOffer, ProductAlternative } from "@/types/
 import { buildResultsHref, currencyForCountry, type CountryCode } from "@/lib/country";
 import { effectivePriceKwd, formatCountryPrice, formatKWD, formatPrimaryPrice, sortOffers } from "@/lib/format";
 import { canonicalKey, dedupVariantKey, gradeBadgeLabel } from "@/lib/collect/canonical-product";
-import { collectedClock, relativeAge } from "@/lib/relative-time";
+import { ageSeconds, collectedClock, relativeAge } from "@/lib/relative-time";
 import CouponLine, { buildCouponRows } from "@/components/CouponLine";
 import ShareSummaryButton from "@/components/ShareSummaryButton";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
+import OfferCtaLabel, { LiveAge } from "@/components/OfferCtaLabel";
 import { resolveOfferUrl } from "@/lib/links";
 import { formatSeenRangeLabel } from "@/lib/seen-range";
 import { cleanDisplayTitle, displayTitleChanged } from "@/lib/display-title";
@@ -199,6 +200,85 @@ function PriceBlock({
 }
 
 /**
+ * REEA-930 scope 2/3 — the lead card's primary CTA: the one outbound action
+ * that completes the shopper's job, carrying the two decision signals the
+ * 0.37%-CTR CTA lacked. The decision line states the best EFFECTIVE price
+ * and the destination retailer ("Best effective price KD 42.90 → Xcite");
+ * when the card's best coupon actually lowers this offer, the figure IS the
+ * post-coupon one and the line says so verbatim (existing effectiveTail —
+ * REEA-784/REEA-760 honesty rules carry over). The freshness line re-derives
+ * the collection age from the offer's own `collectedAt` (OfferCtaLabel's
+ * LiveAge: baked-clock first paint, live tick after hydration, no refetch).
+ *
+ * Pending state (scope 3): while the Kuwait batch may still land, the
+ * decision line carries the exact REEA-835/847 checking state the flag slot
+ * uses — the SAME `kuwaitChecking` decision, so one card never tells two
+ * stories — and never an unqualified "Best …" claim. The destination stays
+ * clickable either way (graceful degradation: an interim offer is a real
+ * offer), and the settled swap is copy-only, so nothing shifts.
+ */
+function LeadOfferCta({
+  merchant,
+  href,
+  effectiveLabel,
+  couponed,
+  pending,
+  collectedAt,
+  initialSeconds,
+  query,
+  rank,
+  itemId,
+  locale,
+}: {
+  merchant: string;
+  href: string;
+  /** Country-led effective figure (REEA-283/REEA-896 formatter chain). */
+  effectiveLabel: string;
+  /** True when the effective figure folds a coupon — names the basis. */
+  couponed: boolean;
+  /** REEA-835/847 checking state — suppresses the "Best effective price" claim. */
+  pending: boolean;
+  collectedAt?: string;
+  initialSeconds: number | null;
+  query: string;
+  rank: number;
+  itemId: string;
+  locale?: Locale;
+}) {
+  const t = getStrings(locale ?? clientLocale());
+  return (
+    <div className="mt-3">
+      <TrackedOutboundLink
+        href={href}
+        query={query}
+        rank={rank}
+        itemId={itemId}
+        className="cta-lead r2-btn focusable w-full"
+      >
+        <span className="cta-lead-main">
+          {pending ? (
+            <span role="status">{t.kuwaitChecking}</span>
+          ) : (
+            <>
+              <span>{t.ctaBestLead}</span>
+              <bdi className="tabular">{effectiveLabel}</bdi>
+              {couponed && <span>{t.effectiveTail}</span>}
+              <span aria-hidden>{t.ctaArrow}</span>
+              <bdi>{merchant}</bdi>
+            </>
+          )}
+        </span>
+        {collectedAt != null && initialSeconds != null && (
+          <span className="cta-lead-age">
+            {t.ctaCheckedLead} <LiveAge collectedAt={collectedAt} initialSeconds={initialSeconds} locale={locale} />
+          </span>
+        )}
+      </TrackedOutboundLink>
+    </div>
+  );
+}
+
+/**
  * REEA-787 — variant-aware retailer-row fold, applied right AFTER sortOffers
  * so it inherits the single REEA-604 ordering key and the stable live-first
  * order. One row survives per (merchant(lower) | folded variant tier | grade
@@ -384,6 +464,39 @@ export default function ProductResultCard({
   // retailer that actually leads this card.
   const couponRows = buildCouponRows(product.coupons, offers, country);
 
+  // REEA-930 scope 2 — lead-card primary CTA. It rides the flagged best offer
+  // (the SAME offer the Best-price flag sits on — one claim per card) and
+  // only when that offer is actionable (in stock, resolvable REEA-13 href —
+  // the exact gate the row buttons already use). Its figure is the card's ONE
+  // effective-price arithmetic (effectivePriceKwd — the same key sortOffers
+  // ranks on and the coupon line prints), rendered through the shared
+  // country-led formatter chain (REEA-283 lead currency, REEA-896 KD unit
+  // rule), NBSP-normalized like the coupon line's figure.
+  const bestHref = best != null ? resolveOfferUrl(best, product.title) : null;
+  const showLeadCta = !detail && isBest && best != null && best.inStock && !!bestHref;
+  const leadEff =
+    best != null
+      ? effectivePriceKwd(best.price, best.currency, {
+          wasPrice: best.wasPrice,
+          couponDiscount: primaryCoupon?.discount ?? null,
+        })
+      : null;
+  const leadEffPlain =
+    best != null ? effectivePriceKwd(best.price, best.currency, { wasPrice: best.wasPrice }) : null;
+  // REEA-784/REEA-760 basis rule: the post-coupon figure may only print with
+  // its basis named — say "with coupon" exactly when the coupon actually
+  // lowered THIS offer's figure, never decoratively.
+  const leadCouponed =
+    primaryCoupon != null && leadEff != null && leadEffPlain != null && leadEff < leadEffPlain;
+  const leadEffLabel =
+    leadEff != null
+      ? formatCountryPrice(leadEff, "KWD", country).primary.replace(/\u00A0/g, " ")
+      : null;
+  // REEA-930 scope 1 — the lead CTA's freshness line derives from the best
+  // offer's own hop stamp against the baked render clock (hydration-stable;
+  // LiveAge re-ticks client-side without a refetch).
+  const leadAgeSecs = best != null ? ageSeconds(best.collectedAt, renderStartMs) : null;
+
   return (
     <article
       className={`result-card${oos ? " is-oos" : ""}${cascadeIndex != null ? " pulse-cascade" : ""}`}
@@ -448,6 +561,30 @@ export default function ProductResultCard({
           />
         )}
       </div>
+
+      {/* REEA-930 scope 2/3 — the lead card's primary CTA, directly under
+          the price it acts on (decision info above, action immediately after)
+          so it stays as high as the card allows inside the ≤375px first
+          viewport (AC5) — the REEA-760 coupon evidence lines remain below as
+          attribution detail; the CTA already names the post-coupon basis.
+          When it renders, the best row's own button stands down — ONE primary
+          action per card (REEA-657's one-signal rule applied to the CTA),
+          never two buttons to the same destination. */}
+      {showLeadCta && bestHref && leadEffLabel != null && (
+        <LeadOfferCta
+          merchant={best.merchant}
+          href={bestHref}
+          effectiveLabel={leadEffLabel}
+          couponed={leadCouponed}
+          pending={kuwaitChecking}
+          collectedAt={best.collectedAt}
+          initialSeconds={leadAgeSecs}
+          query={query}
+          rank={rank}
+          itemId={product.productId}
+          locale={locale}
+        />
+      )}
 
       {/* REEA-836 AC3 — transparency, not data loss: when the rendered title
           was cleaned, the retailer's FULL original string stays one tap away
@@ -691,8 +828,13 @@ export default function ProductResultCard({
                     {/* REEA-13: render scraped hrefs only through validation;
                         REEA-116: direct retailer product URLs for every
                         adapter host; Bing search only when no URL captured
-                        (resolveOfferUrl). */}
-                    {o.inStock && href ? (
+                        (resolveOfferUrl). REEA-930 scope 1: the row CTA is
+                        freshness-anchored ("Checked 12s ago · Xcite") off the
+                        offer's own hop stamp; no usable stamp falls back to
+                        the plain label. REEA-930 scope 2: the flagged best
+                        row stands its button down while the card's primary
+                        CTA renders — one primary action per card. */}
+                    {o.inStock && href && !(showLeadCta && i === 0) ? (
                       <TrackedOutboundLink
                         href={href}
                         query={query}
@@ -700,7 +842,13 @@ export default function ProductResultCard({
                         itemId={product.productId}
                         className="btn-primary focusable min-h-9 shrink-0 px-3"
                       >
-                        {t.goToStore}
+                        <OfferCtaLabel
+                          merchant={o.merchant}
+                          collectedAt={o.collectedAt}
+                          initialSeconds={ageSeconds(o.collectedAt, renderStartMs)}
+                          locale={locale}
+                          fallback={t.goToStore}
+                        />
                       </TrackedOutboundLink>
                     ) : null}
                   </span>

@@ -859,6 +859,35 @@ html[lang="ar"] .coupon-via {
   box-shadow: var(--rc-focus-ring);
 }
 
+/* REEA-930 — lead-card primary CTA: a two-line button (decision line +
+   freshness line) on the .r2-btn filled treatment. The main line wraps
+   BETWEEN whole tokens only (REEA-848 rule), so a long effective figure or
+   retailer name drops to its own line at ≤375px instead of clipping; the
+   freshness line is muted, small and tabular so a ticking age changes no
+   width around it (AC1 no-shift). Full-width inside the card, min tap
+   target kept. */
+.cta-lead {
+  flex-direction: column;
+  gap: var(--rc-space-1);
+  min-height: 52px;
+  padding-block: var(--rc-space-2);
+  white-space: normal;
+}
+
+.cta-lead .cta-lead-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  column-gap: var(--rc-space-1);
+}
+
+.cta-lead .cta-lead-age {
+  font: var(--rc-text-small);
+  font-weight: 400;
+  opacity: 0.85;
+}
+
 /* Reduced motion: plain fades only — no transforms, no stagger, no sweep. */
 @media (prefers-reduced-motion: reduce) {
   .result-card,

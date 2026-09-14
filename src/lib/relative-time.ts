@@ -53,3 +53,23 @@ export function collectedClock(iso: string | undefined): string | null {
   const mm = String(d.getUTCMinutes()).padStart(2, "0");
   return `${hh}:${mm}`;
 }
+
+/**
+ * REEA-930 scope 1 — whole-second age of a collection stamp, for the CTA
+ * freshness line. Null for missing/invalid/future stamps (the same honesty
+ * rule as relativeAge: callers fall back to the plain label, never fabricate
+ * a time). Deliberately unformatted — the bucket copy lives in
+ * i18n.localizedAge so the CTA can localize it; the clock stays injectable
+ * (baked renderStartMs on the server, Date.now() only in the live ticker).
+ */
+export function ageSeconds(
+  iso: string | undefined,
+  now: number = Date.now(),
+): number | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  const ageMs = now - t;
+  if (ageMs < 0) return null;
+  return Math.floor(ageMs / 1000);
+}

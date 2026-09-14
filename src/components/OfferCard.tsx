@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
+import OfferCtaLabel from "@/components/OfferCtaLabel";
 import { safeHref } from "@/lib/safe-url";
-import { isTenMinutesOld, relativeAge } from "@/lib/relative-time";
+import { ageSeconds, isTenMinutesOld, relativeAge } from "@/lib/relative-time";
 import { formatPrice } from "@/lib/format";
 import type { Coupon } from "@/types/product";
 import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
@@ -203,7 +204,21 @@ export default function OfferCard({
         itemId={merchant}
         className={`${isBest ? "r2-btn" : "btn-outline focusable"} mt-3 min-h-11 w-full px-4 py-2`}
       >
-        {t.viewAtLead} {merchant}
+        {/* REEA-930 scope 1 — freshness-anchored CTA: the collection age comes
+            from THIS offer's own collectedAt hop stamp and re-ticks on the
+            client without a refetch; a missing/invalid stamp falls back to
+            the plain "View at {merchant}" label (AC1). */}
+        <OfferCtaLabel
+          merchant={merchant}
+          collectedAt={collectedAt}
+          initialSeconds={ageSeconds(collectedAt)}
+          locale={locale}
+          fallback={
+            <>
+              {t.viewAtLead} {merchant}
+            </>
+          }
+        />
       </TrackedOutboundLink>
     </article>
   );

@@ -90,6 +90,23 @@ const en = {
   seenRecentlyWindow: "last 14 days",
   viewAtLead: "View at",
   goToStore: "Go to store",
+  // REEA-930 scope 1 — freshness-anchored offer CTA. The age ladder mirrors
+  // relativeAge's s/m/h/d buckets but localizes the COPY (the CTA is
+  // shopper-facing prose, not the ASCII figure/label space prices ride —
+  // REEA-488); the digits themselves stay Latin in both locales, same as
+  // freshUpdatedMinutes AR. ctaCheckedLead + localizedAge compose
+  // "Checked 12s ago · Xcite" / "تم التحقق قبل 12ث · اكسترا".
+  ctaCheckedLead: "Checked",
+  ageSec: "{n}s ago",
+  ageMin: "{n}m ago",
+  ageHour: "{n}h ago",
+  ageDay: "{n}d ago",
+  // REEA-930 scope 2 — lead-card primary CTA decision line:
+  // "Best effective price KD 42.90 → Xcite"; when the figure folds a coupon
+  // the existing effectiveTail ("with coupon" / "بالكوبون") names the basis.
+  // The arrow flips with the reading direction, matching viewAtRetailer's ←.
+  ctaBestLead: "Best effective price",
+  ctaArrow: "→",
   pricesSectionAria: "Prices and availability by retailer",
   pricesHeading: "Prices at retailers · excl. delivery",
   colourOptionsAria: "Colour options",
@@ -258,6 +275,14 @@ const ar: typeof en = {
   seenRecentlyWindow: "آخر 14 يومًا",
   viewAtLead: "افتح لدى",
   goToStore: "إلى المتجر",
+  // REEA-930 — AR CTA pair (see the EN block for the composition rules).
+  ctaCheckedLead: "تم التحقق",
+  ageSec: "قبل {n}ث",
+  ageMin: "قبل {n}د",
+  ageHour: "قبل {n}س",
+  ageDay: "قبل {n}ي",
+  ctaBestLead: "أفضل سعر فعلي",
+  ctaArrow: "←",
   pricesSectionAria: "الأسعار والتوافر حسب المتجر",
   pricesHeading: "أسعار المتاجر · دون التوصيل",
   colourOptionsAria: "خيارات اللون",
@@ -386,6 +411,21 @@ export function localeDir(locale: Locale): "rtl" | "ltr" {
 /** Replace {q}/{n}/{x}/{cur} placeholders in a table value. */
 export function fill(tpl: string, values: Record<string, string | number>): string {
   return tpl.replace(/\{(\w+)\}/g, (_, key: string) => String(values[key] ?? ""));
+}
+
+/**
+ * REEA-930 scope 1 — localized short age for offer-CTA freshness lines, the
+ * same s/m/h/d bucket ladder as relativeAge but in the locale's copy. Pure
+ * and deterministic in (locale, seconds) so SSR and hydration agree when both
+ * derive from the same baked clock; negative/NaN inputs never reach here
+ * (ageSeconds filters them). Latin digits in both locales, per REEA-488.
+ */
+export function localizedAge(locale: Locale, seconds: number): string {
+  const t = getStrings(locale);
+  const s = Math.max(0, Math.floor(seconds));
+  const n =
+    s < 60 ? s : s < 3600 ? Math.floor(s / 60) : s < 86400 ? Math.floor(s / 3600) : Math.floor(s / 86400);
+  return fill(s < 60 ? t.ageSec : s < 3600 ? t.ageMin : s < 86400 ? t.ageHour : t.ageDay, { n });
 }
 
 /* ---- Resolution chain: cookie → Accept-Language hint → "en". ------------ */
