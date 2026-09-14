@@ -28,7 +28,11 @@
  *    line (REEA-290); this feed only moves the late offers themselves.
  */
 import type { LiveSearchResult } from "@/lib/collect/live-search";
-import { collectLiveResultsStaged, followUpSnapshot } from "@/lib/collect/live-search";
+import {
+  collectLiveResultsStaged,
+  followUpSnapshot,
+  FOLLOW_UP_WAIT_MS,
+} from "@/lib/collect/live-search";
 import { sanitizeSearchQuery } from "@/lib/search-params";
 import { LOCALE_COOKIE, resolveUiLocale } from "@/lib/i18n";
 
@@ -39,8 +43,13 @@ export const dynamic = "force-dynamic";
 // keeps the whole request inside one short window.
 export const maxDuration = 20;
 
-/** Bounded wait for the pending run to converge. */
-const FOLLOW_UP_WAIT_MS = 8_000;
+/** Bounded wait for the pending run to converge.
+ *
+ * REEA-1001 — lives on LIVE_SEARCH_BUDGET_MS (exported from live-search) and
+ * is pinned == it in live-search.test.ts: the previous standalone 8 s literal
+ * predated the budget raise to 16 s, lost the race below on every serve
+ * (measured convergence 13.2–16.2 s), and the feed answered `null` on every
+ * request — the late Kuwait offers never folded into the open page. */
 
 export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);

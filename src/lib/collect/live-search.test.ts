@@ -20,6 +20,7 @@ import {
   danubeHomeHits,
   deepenSilent,
   followUpSnapshot,
+  FOLLOW_UP_WAIT_MS,
   RESULTS_COMPLETION_BUDGET_MS,
   STAGE_TAIL_HEADROOM_MS,
   eurekaHits,
@@ -30,6 +31,7 @@ import {
   LIVE_SEARCH_BUDGET_MS,
   LIVE_SEARCH_HITS_PER_PAGE,
   LIVE_SEARCH_TIMEOUT_MS,
+  SULTAN_CENTER_WINDOW_MS,
   nextStoreHits,
   ounassHits,
   quadraHits,
@@ -1424,6 +1426,22 @@ describe("collectLiveResults page width (REEA-156)", () => {
     // Two bounded rounds (parallel fan-out + enriched retry), each at most
     // the doubled two-step chain — the documented ceiling covers them both.
     expect(LIVE_SEARCH_BUDGET_MS).toBeGreaterThanOrEqual(LIVE_SEARCH_TIMEOUT_MS * 2 * 2);
+  });
+
+  it("covers the SC window and the follow-up wait inside the run budget (REEA-1001)", () => {
+    // The Sultan Center collector's window is its own measured constant (the
+    // shared 4 s per-attempt ceiling aborted the lane on the cold ~5.1 s hop
+    // shape): it must stay above the measured cold bound and inside the chain
+    // ceiling — a window past the budget would be decided by the budget
+    // signal anyway, so a wider constant would be dead configuration.
+    expect(SULTAN_CENTER_WINDOW_MS).toBeGreaterThan(5_100); // measured cold edge
+    expect(SULTAN_CENTER_WINDOW_MS).toBeLessThanOrEqual(LIVE_SEARCH_BUDGET_MS);
+    // The follow-up feed's wait must cover the run's convergence ceiling —
+    // the previous standalone 8 s literal predated the budget raise, lost the
+    // race on every serve, and late offers never folded into the page
+    // (REEA-1001). Derived, not independent: a future budget raise carries
+    // the wait with it.
+    expect(FOLLOW_UP_WAIT_MS).toBe(LIVE_SEARCH_BUDGET_MS);
   });
 
   describe("country filter (REEA-170)", () => {

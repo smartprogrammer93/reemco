@@ -45,7 +45,7 @@ import { readCappedResponse } from "@/lib/collect/read-body";
 import { mirrorSharedQuerySnapshot, replaySharedQuerySnapshot } from "@/lib/collect/query-layer";
 import { attachSeenRanges, type SeenRow } from "@/lib/seen-range";
 import { sanitizeExternalUrl } from "@/lib/safe-url";
-import { PER_RETAILER_TIMEOUT_MS, normalizedListingUrlOf } from "@/lib/collect/types";
+import { normalizedListingUrlOf } from "@/lib/collect/types";
 import { effectivePriceKwd, formatPrice } from "@/lib/format";
 import {
   computeCohortSanity,
@@ -94,6 +94,23 @@ import { deviceLeadFlags } from "@/lib/collect/coverage";
  */
 export const LIVE_SEARCH_TIMEOUT_MS = 4_000;
 /**
+ * REEA-1001 — the Sultan Center collector rides its own window, wider than
+ * the shared per-attempt ceiling. Divergence reason (adapter symmetry: stated
+ * and measured): the SC mobile search POST is the slowest integrated hop —
+ * the deployed runtime's own /api/echo answered it in 2.9 s warm while the
+ * same POST from a cold edge took 5.1 s, and the shared 4 s window aborted
+ * the lane outright on the cold shape (per-run note
+ * "Sultan Center:0(The operation was aborted due to timeout)" on `cucumber`
+ * while the identical raw POST answered 24 items). SC is the integrated
+ * retailer that carries groceries — the one source a `cucumber` query has in
+ * Kuwait — so a cold-start abort blanks the whole grocery lane. 6.5 s covers
+ * the measured cold bound with headroom for the phrase round before the
+ * bounded per-word re-search (REEA-416) shares the remainder; the whole chain
+ * still fits LIVE_SEARCH_BUDGET_MS and the page's completion-budget first
+ * paint never waited on this lane anyway.
+ */
+export const SULTAN_CENTER_WINDOW_MS = 6_500;
+/**
  * Ceiling for the whole query-time chain: bounded per-attempt windows above,
  * one round of parallel collectors plus one bounded enrichment retry for
  * silent retailers (REEA-149). Each round's slowest hop is the two-step
@@ -104,6 +121,19 @@ export const LIVE_SEARCH_TIMEOUT_MS = 4_000;
  * / per-attempt window decide).
  */
 export const LIVE_SEARCH_BUDGET_MS = 16_000;
+/**
+ * REEA-1001 — how long /api/results-followup waits for a pending run to
+ * converge before answering `null` (the page keeps its completion-budget
+ * flush). Derived from the run's own ceiling, not an independent literal: a
+ * shorter wait races the budget and always loses — measured cucumber runs
+ * converge at 13.2–16.2 s, so the previous 8 s literal made the feed answer
+ * `null` on every serve and the late Kuwait offers (SC groceries, Xcite
+ * pharmacy) never folded into the open page. The route's maxDuration stays
+ * above this wait plus the cross-worker re-collection overhead. Pinned
+ * against LIVE_SEARCH_BUDGET_MS in live-search.test.ts so a future budget
+ * raise cannot silently strand the fold again.
+ */
+export const FOLLOW_UP_WAIT_MS = LIVE_SEARCH_BUDGET_MS;
 /**
  * REEA-398 — per-query completion budget for the streamed results page.
  * The page finalizes on this clock: whatever has answered lands in the
@@ -1560,8 +1590,10 @@ export const COLLECTORS: RetailerCollector[] = [
       // measured ~1.4–3.5 s answers (median ~3 s) exceed 2 s ~70% of the
       // time, and the REEA-290 retry's own 2 s window was cut the same way
       // (W37: 4 SC offers served). Phrase round + word re-search share this
-      // one window, as before.
-      const window = AbortSignal.timeout(PER_RETAILER_TIMEOUT_MS);
+      // one window, as before. REEA-1001: the window is SC's own measured
+      // constant (SULTAN_CENTER_WINDOW_MS), not the shared 4 s per-attempt
+      // ceiling — see the constant's divergence note above.
+      const window = AbortSignal.timeout(SULTAN_CENTER_WINDOW_MS);
       const sultanSearch = async (q: string): Promise<unknown> => {
       const res = await fetchChecked(
         fetchImpl,
