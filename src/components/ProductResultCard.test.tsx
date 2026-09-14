@@ -683,3 +683,57 @@ describe("REEA-848 — offer-row layout contract (chip/stock gap, CTA containmen
     expect(lowest?.className).toContain("shrink-0");
   });
 });
+
+describe("REEA-944 — pending-pill containment contract (REEA-863 spec)", () => {
+  // QA (REEA-863): at the 1280px two-column layout the pending pill's nowrap
+  // intrinsic width inflated the price block's max-content past the lead
+  // card's edge (~15px, EN right edge / AR left edge). Geometry at 1280×900
+  // (containment, ≥8px conversion gap, real ellipsis) is browser QA per the
+  // spec's AC; these pins keep the served class contract from regressing:
+  // the pill must be shrinkable+truncatable, the flag row wrappable, and the
+  // price block yieldable — with the full string in the title attribute.
+  const sarLead = (): NormalizedProduct => ({
+    productId: "p1",
+    title: "Apple iPhone 17 Pro Max 512GB",
+    brand: "Apple",
+    offers: [
+      { merchant: "Jarir", price: 6699, currency: "SAR", url: "https://www.jarir.example/p", inStock: true },
+    ],
+    coupons: [],
+    variations: [],
+    alternatives: [],
+    scrapedAt: "2026-09-13T00:00:00.000Z",
+  });
+
+  it("pending pill is contained: shrinkable pill, wrappable flag row, yieldable price block, title fallback", () => {
+    const { container } = render(
+      <ProductResultCard product={sarLead()} isBest kuwaitBatchPending kuwaitPendingStatus={false} query="iphone 17 pro" rank={0} />,
+    );
+    const pill = container.querySelector(".best-flag-pending") as HTMLElement;
+    expect(pill).toBeTruthy();
+    // Full string stays reachable when the pill ellipsizes (spec §2).
+    expect(pill.getAttribute("title")).toContain("Checking Kuwait stores");
+    // The flag row (pill's direct parent) wraps and can shrink: the
+    // containment mechanism, not a hard pill width.
+    const flagRow = pill.parentElement as HTMLElement;
+    expect(flagRow.className).toContain("flex-wrap");
+    expect(flagRow.className).toContain("min-w-0");
+    // The 8px horizontal gap scale between pill and conversion figure.
+    expect(flagRow.className).toContain("gap-x-2");
+    // The price block yields spare width instead of overflowing the card —
+    // min-w-0 in place of shrink-0 (flex line-breaking still uses
+    // hypothetical sizes, so the REEA-75 wrap behaviour is unchanged).
+    const priceBlock = flagRow.parentElement as HTMLElement;
+    expect(priceBlock.className).toContain("min-w-0");
+    expect(priceBlock.className).not.toContain("shrink-0");
+  });
+
+  it("settled flag keeps its natural size — containment is scoped to the pending pill", () => {
+    const { container } = render(
+      <ProductResultCard product={sarLead()} isBest kuwaitBatchPending={false} kuwaitPendingStatus={false} query="iphone 17 pro" rank={0} />,
+    );
+    const flag = container.querySelector(".best-flag:not(.best-flag-pending)") as HTMLElement;
+    expect(flag).toBeTruthy();
+    expect(flag.className).not.toContain("min-w-0");
+  });
+});

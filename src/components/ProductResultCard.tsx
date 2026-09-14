@@ -142,8 +142,18 @@ function PriceBlock({
     // REEA-95 step-5 mobile pass: at narrow widths the price block takes the
     // full row so its chips wrap inside the viewport instead of forcing the
     // card wider than the screen (sm: restores side-by-side with the title).
-    <div className="ml-auto w-full shrink-0 text-right sm:w-auto">
-      <div className="flex flex-wrap items-baseline justify-end gap-x-2 gap-y-1">
+    // REEA-944: min-w-0 (in place of shrink-0) lets the block yield spare
+    // width instead of overflowing the card when the pending pill's intrinsic
+    // width exceeds the line — flex line-breaking uses hypothetical (unshrunk)
+    // sizes, so the REEA-75/M4 wrap behaviour is unchanged; only the overflow
+    // case now shrinks, and the nowrap price figures keep min-width:auto.
+    <div className="ml-auto w-full min-w-0 text-right sm:w-auto">
+      {/* REEA-944 — the pill's parent flag row: min-width:0 per the REEA-863
+          spec; flex-wrap + the 8px horizontal gap (gap-x-2 = --rc-space-2) are
+          already stated here, and the nowrap conversion figure (.price-alt)
+          keeps its implicit flex-shrink:0 via min-width:auto — numbers never
+          ellipsize, the pill absorbs the squeeze. */}
+      <div className="flex min-w-0 flex-wrap items-baseline justify-end gap-x-2 gap-y-1">
         <span
           className="price-cur tabular"
           style={{
@@ -183,7 +193,7 @@ function PriceBlock({
             Same slot either way, so the settled swap moves nothing. */}
         {isBest ? (
           kuwaitPending ? (
-            <span className="best-flag best-flag-pending" role="status">
+            <span className="best-flag best-flag-pending" role="status" title={t.kuwaitChecking}>
               <bdi>{t.kuwaitChecking}</bdi>
             </span>
           ) : (
@@ -486,8 +496,29 @@ export default function ProductResultCard({
   // REEA-784/REEA-760 basis rule: the post-coupon figure may only print with
   // its basis named — say "with coupon" exactly when the coupon actually
   // lowered THIS offer's figure, never decoratively.
+  //
+  // REEA-947 AC2 — the delivered-discount restatement the first rule misses.
+  // The REEA-603 coupon signal stamps the retailer's RUNNING discount
+  // (compare-at above selling price) as an auto-applied coupon whose discount
+  // string is the was→selling delta ("KD 40.10"). That discount is ALREADY
+  // folded into the selling price, so the parseable-coupon comparison above
+  // (leadEff < leadEffPlain) sees two equal figures and stays silent — while
+  // the shopper-visible story is exactly "listed KD 400, coupon → KD 359.90"
+  // (the REEA-943 QA case, measured live: lead offer Wibi 359.90 / wasPrice
+  // 400, coupons[] led by an unparseable "KD 55" from another retailer, the
+  // derived "KD 40.10" riding further down the array). When the LEAD offer
+  // itself carries that compare-at and the card carries a coupon signal at
+  // all, the printed figure is the post-coupon one — below the listed anchor,
+  // with the coupon row's auto-applied chip backing the claim on the same
+  // card — so the basis must be named. The figure arithmetic is untouched:
+  // folding the delta string again would double-count the discount
+  // (359.90 − 40.10), so the claim keys on the listed anchor, not on a second
+  // application.
+  const leadCompareAtCouponed =
+    primaryCoupon != null && best != null && best.wasPrice != null && best.wasPrice > best.price;
   const leadCouponed =
-    primaryCoupon != null && leadEff != null && leadEffPlain != null && leadEff < leadEffPlain;
+    (primaryCoupon != null && leadEff != null && leadEffPlain != null && leadEff < leadEffPlain) ||
+    leadCompareAtCouponed;
   const leadEffLabel =
     leadEff != null
       ? formatCountryPrice(leadEff, "KWD", country).primary.replace(/\u00A0/g, " ")
