@@ -106,9 +106,25 @@ export function filterProductsByStock(
  * rendered block (Devices container, plain list) so the badge never scans
  * past the top block — cheaper lower-tier cards cannot steal it.
  */
+/**
+ * REEA-213 — which card in a FINAL sorted list carries the single "Best
+ * price" badge: the first card that has at least one in-stock offer; when no
+ * card in the list is stocked, the first card. Callers compute it per
+ * rendered block (Devices container, plain list) so the badge never scans
+ * past the top block — cheaper lower-tier cards cannot steal it.
+ * REEA-963 FR-1.4 — a best-price claim rests only on offers that passed the
+ * query-time sanity pass: cards whose in-stock offers are ALL flagged are
+ * skipped, and when the list holds in-stock offers but every one is flagged
+ * the claim is suppressed (-1) instead of resting on flagged prices. The
+ * zero-stock fallback keeps the old first-card rule.
+ */
 export function bestBadgeIndex(products: readonly NormalizedProduct[]): number {
-  const i = products.findIndex((p) => p.offers.some((o) => o.inStock));
+  const i = products.findIndex((p) =>
+    p.offers.some((o) => o.inStock && o.sanity?.status !== "flagged"),
+  );
   if (i >= 0) return i;
+  const anyStocked = products.findIndex((p) => p.offers.some((o) => o.inStock));
+  if (anyStocked >= 0) return -1; // stocked, but only flagged offers — no claim
   return products.length > 0 ? 0 : -1;
 }
 

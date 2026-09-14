@@ -47,6 +47,11 @@ import { attachSeenRanges, type SeenRow } from "@/lib/seen-range";
 import { sanitizeExternalUrl } from "@/lib/safe-url";
 import { PER_RETAILER_TIMEOUT_MS, normalizedListingUrlOf } from "@/lib/collect/types";
 import { effectivePriceKwd, formatPrice } from "@/lib/format";
+import {
+  computeCohortSanity,
+  logSanitySummary,
+  type CohortSanity,
+} from "@/lib/collect/price-sanity";
 import { canonicalFields, compatibleFields, listingLabel, type CanonicalFields } from "@/lib/collect/canonical-product";
 import {
   arabicBrandIntent,
@@ -2139,8 +2144,30 @@ export function groupHits(
   includeAlternatives = true,
   locale?: "en" | "ar",
 ): NormalizedProduct[] {
-  const groups = buildGroups(query, hits);
-  return finalizeGroups(rankByRelevance(query, groups), includeAlternatives, query, locale);
+  // REEA-963 R1 — the cohort pass runs FIRST, over every offer the adapters
+  // returned for this query execution: one (retailer, SKU) survivor per
+  // listing (freshest fetch wins, E5), the query-cohort median and the
+  // per-offer sanity flags (outlier / currency mis-map / no usable price).
+  // Grouping reads the DEDUPED cohort so a stale twin of the same listing
+  // can never double-count in a merge or a median; flags attach to offers
+  // by object identity and ride the rendered rows.
+  const sanity = computeCohortSanity(queryIdForSanity(query, locale), hits);
+  const groups = buildGroups(query, sanity.deduped);
+  const products = finalizeGroups(
+    rankByRelevance(query, groups),
+    includeAlternatives,
+    query,
+    locale,
+    sanity,
+  );
+  // AC-7 — one structured summary line per render cohort evaluation.
+  logSanitySummary(sanity.summary);
+  return products;
+}
+
+/** AC-7 query id: the normalized query + locale fork of the render. */
+function queryIdForSanity(query: string, locale?: "en" | "ar"): string {
+  return locale ? `${query.trim()}#${locale}` : query.trim();
 }
 
 /**
@@ -2437,25 +2464,67 @@ function canonicalGroupTitle(group: HitGroup, locale?: "en" | "ar"): string {
  *  numerics bridged straight into `priceDelta` made a SAR figure read as a
  *  KWD figure on the chip (live QA case: Blue/Silver "KWD 6,199.000" beside
  *  Cosmic "KWD 419.900" on one card). */
-function colorSwatches(group: HitGroup, offers: PriceOffer[]): ProductVariation[] {
-  const colorBest = new Map<string, number>();
+/**
+ * REEA-254 color swatches — when a merged card's offers carry more than one
+ *  color, each color gets its own best-price chip. The color's best minus the
+ *  card's best rides in `priceDelta` so the card renders the absolute figure;
+ *  one color (or none) keeps the plain single-price card. Sorted cheapest
+ *  first, color name as the alphabetical tie-break.
+ *  REEA-254 item B: every comparison here runs on KWD-space numerics
+ *  (toKwdNumeric), so a colour whose only listing is SAR-priced is compared —
+ *  and its delta computed — on the same scale as the KWD listings. Raw
+ *  numerics bridged straight into `priceDelta` made a SAR figure read as a
+ *  KWD figure on the chip (live QA case: Blue/Silver "KWD 6,199.000" beside
+ *  Cosmic "KWD 419.900" on one card).
+ *  REEA-963 FR-3 — variant-family rollup rules: only offers CLASSIFIED into
+ *  the family (a color field on their title) may feed a per-variant row
+ *  (unclassified offers never silently merge — FR-3.2, the `color === ""`
+ *  skip below), and flagged offers are excluded from every variant price
+ *  (FR-3.3): a color whose members are ALL flagged renders the warning state
+ *  (`needsVerification`) instead of a price, and the card baseline the
+ *  deltas ride on comes from non-flagged offers only.
+ */
+function colorSwatches(
+  group: HitGroup,
+  offers: PriceOffer[],
+  sanityByOffer?: CohortSanity<SearchHit>["byOffer"],
+): ProductVariation[] {
+  const colorBest = new Map<string, number | null>();
   for (const o of group.offers) {
     const color = canonicalFields(o.title).color;
-    if (color === "") continue;
+    if (color === "") continue; // FR-3.2 — unclassified offers never merge into variant rows
+    if (sanityByOffer?.get(o)?.status === "flagged") {
+      // FR-3.3 — a flagged member still CLASSIFIES its color into the family:
+      // the row exists, but cannot carry a price. `null` = saw the color,
+      // every member flagged so far (a later non-flagged member upgrades it).
+      if (!colorBest.has(color)) colorBest.set(color, null);
+      continue;
+    }
     const value = effectiveKeyOf(o);
     const prev = colorBest.get(color);
-    if (prev === undefined || value < prev) colorBest.set(color, value);
+    if (prev === undefined || prev === null || value < prev) colorBest.set(color, value);
   }
   if (colorBest.size < 2) return [];
-  const cardBest = Math.min(...offers.map((o) => effectiveKeyOf(o)));
+  // FR-3.3 — the card's delta base is the cheapest NON-FLAGGED member offer;
+  // null when every member is flagged (each chip then shows the warning
+  // state). Reads the group's source hits — the map is keyed by the exact
+  // hit objects the cohort pass saw.
+  let cardBest: number | null = null;
+  for (const o of group.offers) {
+    if (sanityByOffer?.get(o)?.status === "flagged") continue;
+    const v = effectiveKeyOf(o);
+    if (cardBest == null || v < cardBest) cardBest = v;
+  }
   return [...colorBest.entries()]
-    .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))
+    .sort((a, b) => (a[1] ?? Infinity) - (b[1] ?? Infinity) || a[0].localeCompare(b[0]))
     .map(([color, price]) => ({
       id: color,
       label: color.charAt(0).toUpperCase() + color.slice(1),
       // Cent-rounded KWD-space difference: currency arithmetic stays readable
       // on the wire (25.1, not the float-sum 25.100000000000023).
-      priceDelta: Math.round((price - cardBest) * 100) / 100,
+      priceDelta:
+        price != null && cardBest != null ? Math.round((price - cardBest) * 100) / 100 : 0,
+      ...(price == null || cardBest == null ? { needsVerification: true } : {}),
     }));
 }
 
@@ -2502,7 +2571,27 @@ function mergeSameTitleGroups(groups: HitGroup[]): HitGroup[] {
   return out;
 }
 
-function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, query: string, locale?: "en" | "ar"): NormalizedProduct[] {
+function finalizeGroups(
+  selected: HitGroup[],
+  includeAlternatives: boolean,
+  query: string,
+  locale?: "en" | "ar",
+  sanity?: CohortSanity<SearchHit>,
+): NormalizedProduct[] {
+  // REEA-963 FR-1.4 — the rollup price of a group ("from KD X") comes ONLY
+  // from non-flagged offers; null when every member offer is flagged (E2) —
+  // such a group is excluded from every alternatives/pairs-with pool instead
+  // of publishing a price it cannot claim.
+  const sanityByOffer = sanity?.byOffer;
+  const rollupPriceOf = (g: HitGroup): number | null => {
+    let min: number | null = null;
+    for (const o of g.offers) {
+      if (sanityByOffer?.get(o)?.status === "flagged") continue;
+      const v = effectiveKeyOf(o);
+      if (min == null || v < min) min = v;
+    }
+    return min;
+  };
   // REEA-721: collapse title-identical twins BEFORE any derived figure is
   // read, so the alternatives pool, the cheapest-of-card comparisons and the
   // rendered rows all describe the merged card set. The dedupe key reads the
@@ -2517,11 +2606,14 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, quer
   // refers to it afterwards; the per-row arrays stay a handful of distinct
   // entries. Content: groups strictly cheaper than this one in KWD-space and
   // close in family (see alternativesFor), self excluded, fromPrice = that
-  // group's cheapest live offer.
+  // group's cheapest live offer. REEA-963: the figure reads non-flagged
+  // offers only; a group with no non-flagged offer is rollup-excluded.
   const metas = new Map<HitGroup, ProductAlternative>();
-  const metaOf = (g: HitGroup): ProductAlternative => {
+  const metaOf = (g: HitGroup): ProductAlternative | null => {
     let m = metas.get(g);
     if (!m) {
+      const fromPrice = rollupPriceOf(g);
+      if (fromPrice == null) return null; // E2 — no price claim from all-flagged offers
       const otherTitle = canonicalGroupTitle(g, locale);
       m = {
         productId: slugify(otherTitle),
@@ -2530,7 +2622,7 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, quer
         // through formatPrimaryPrice(x, "KWD"), so mixed-currency groups show
         // the cheapest-after-conversion figure, not whichever raw numeric is
         // smallest.
-        fromPrice: Math.min(...g.offers.map((o) => effectiveKeyOf(o))),
+        fromPrice,
       };
       metas.set(g, m);
     }
@@ -2583,12 +2675,16 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, quer
   // R3: items that neither do the job nor complement the device never pass
   // the family gate — they are dropped from BOTH rows, not demoted into one.
   const alternativesFor = (group: HitGroup): ProductAlternative[] => {
-    const mine = metaOf(group).fromPrice;
+    const mine = metaOf(group);
+    if (!mine) return []; // E2 — this card's own offers are all flagged: no comparison claim
     const matchedTitle = canonicalGroupTitle(group, locale);
     return groups
       .filter((other) => other !== group && other.accessory === group.accessory)
       .filter((other) => {
-        if (metaOf(other).fromPrice >= mine) return false;
+        // REEA-963 — a rollup-excluded (all-flagged) group never merges into
+        // an alternatives row (FR-1.4 applied to the module).
+        const otherMeta = metaOf(other);
+        if (!otherMeta || otherMeta.fromPrice >= mine.fromPrice) return false;
         // R1/R3 gate first: a different product class (an Avent soother
         // under an air-fryer query) or book/mix noise leaves the row even
         // when the brands agree — the queried job defines the class. Only
@@ -2597,18 +2693,31 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, quer
         if (cls !== "comparable") return false;
         return inSameFamily(group, other);
       })
-      .sort((a, b) => metaOf(a).fromPrice - metaOf(b).fromPrice)
+      .sort((a, b) => metaOf(a)!.fromPrice - metaOf(b)!.fromPrice)
       .slice(0, 5)
-      .map(metaOf);
+      .map((g) => metaOf(g)!);
   };
   const pairsWithFor = (group: HitGroup): ProductAlternative[] => {
     if (group.accessory) return [];
     return groups
-      .filter((other) => other.accessory && inSameFamily(group, other))
-      .sort((a, b) => metaOf(a).fromPrice - metaOf(b).fromPrice)
+      .filter((other) => other.accessory && metaOf(other) && inSameFamily(group, other))
+      .sort((a, b) => metaOf(a)!.fromPrice - metaOf(b)!.fromPrice)
       .slice(0, 3)
-      .map(metaOf);
+      .map((g) => metaOf(g)!);
   };
+
+  // REEA-963 FR-3.2 observability — offers with NO variant classification
+  // inside a card that renders a variant section (≥2 classified colors):
+  // they never merge into a variant row; the summary counts them so the
+  // flagged/unclassified rate per adapter is measurable (spec §10).
+  if (sanity) {
+    for (const group of groups) {
+      const classified = group.offers.filter((o) => canonicalFields(o.title).color !== "");
+      if (new Set(classified.map((o) => canonicalFields(o.title).color)).size >= 2) {
+        sanity.summary.unclassifiedVariant += group.offers.length - classified.length;
+      }
+    }
+  }
 
   return groups.map((group, idx) => {
     const title = canonicalGroupTitle(group, locale);
@@ -2629,6 +2738,10 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, quer
         // REEA-486 AC-6: the listing's own qualifier beyond the card title —
         // it survives the merge so a folded variant row stays identifiable.
         const label = listingLabel(o.title, title);
+        // REEA-963 — the offer's own query-time sanity verdict rides the row;
+        // every render component reads THIS object (FR-2.1: one resolved
+        // price object per (retailer, SKU) per render).
+        const verdict = sanityByOffer?.get(o);
         return {
           merchant: o.merchant,
           price: o.price,
@@ -2647,6 +2760,7 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, quer
           // rows whose contract carries no photo simply have none (the card
           // then renders its text-only fallback).
           ...(o.image ? { image: o.image } : {}),
+          ...(verdict ? { sanity: verdict } : {}),
         };
       });
     // REEA-897 / REEA-908 spec §1 — one row per unique retailer+SKU FIRST,
@@ -2711,7 +2825,7 @@ function finalizeGroups(selected: HitGroup[], includeAlternatives: boolean, quer
       ...(photo ? { image: photo } : {}),
       offers,
       coupons: [...couponSeen.values()],
-      variations: colorSwatches(group, offers),
+      variations: colorSwatches(group, offers, sanityByOffer),
       alternatives: includeAlternatives ? alternativesFor(group) : [],
       pairsWith: includeAlternatives ? pairsWithFor(group) : [],
       scrapedAt,

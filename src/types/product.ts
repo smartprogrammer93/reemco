@@ -4,6 +4,28 @@
  * see src/lib/feed.ts for the loader.
  */
 
+/**
+ * REEA-963 R1 §4 — the per-offer sanity annotation computed at query time
+ * over the render cohort (all offers the adapters returned for one query
+ * execution). `status: "ok"` offers carry no reason; flagged offers stay
+ * visible but render a "price needs verification" affordance and are
+ * excluded from every rollup and best-price claim (spec FR-1.3/FR-1.4).
+ */
+export type SanityReason =
+  | "outlier_high"
+  | "outlier_low"
+  | "currency_mis_map"
+  | "unclassified_variant"
+  | "price_unavailable";
+
+export interface OfferSanity {
+  status: "ok" | "flagged";
+  /** Present when status is "flagged". */
+  reason?: SanityReason;
+  /** price / cohort-median ratio in KWD space; absent when no median was computed. */
+  ratioToMedian?: number;
+}
+
 export interface PriceOffer {
   merchant: string;
   price: number;
@@ -11,6 +33,12 @@ export interface PriceOffer {
   url: string;
   inStock: boolean;
   wasPrice?: number; // optional was-price for the F2 savings pill
+  /**
+   * REEA-963 — the query-time sanity verdict for THIS offer (the cohort pass
+   * in lib/collect/price-sanity.ts). Absent on surfaces that never ran the
+   * pass (catalog feed seeds, suggestion pills).
+   */
+  sanity?: OfferSanity;
   /**
    * REEA-167 §2 condition grade of this listing ("renewed-grade-b", …),
    * present only when it differs from `new`. Grades keep their own rows with
@@ -65,6 +93,13 @@ export interface ProductVariation {
   id: string;
   label: string; // e.g. "64GB / Black"
   priceDelta: number; // relative to the base offer
+  /**
+   * REEA-963 FR-3.3 — true when every offer classified into this variant
+   * family was flagged by the sanity pass: the chip renders the "price needs
+   * verification" warning state instead of a price (no price can be claimed
+   * from flagged members only).
+   */
+  needsVerification?: boolean;
 }
 
 export interface ProductAlternative {

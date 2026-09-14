@@ -70,6 +70,17 @@ const en = {
   // claim stays true whether 0 or 24 Kuwait adapters have answered so far.
   kuwaitChecking: "Checking Kuwait stores…",
   lowestListed: "Lowest listed price",
+  // REEA-963 R1 FR-1.3 — the sanity warning affordance: flagged offers stay
+  // visible but never read as trustworthy. The badge label is short (inline
+  // chip, designer brief: must NOT look like an error state); the per-reason
+  // explanation rides the native title attribute (one hover/tap away).
+  priceVerifyBadge: "Price needs verification",
+  priceUnavailable: "Price unavailable",
+  verifyOutlier:
+    "This figure is far from the typical price for this search, so it may not be comparable.",
+  verifyCurrency:
+    "The currency on this listing could not be verified, so the figure may be misstated.",
+  verifyNoPrice: "The retailer served no usable price for this listing.",
   saveLead: "Save",
   effectiveLead: "Effective",
   effectiveTail: "with coupon",
@@ -276,6 +287,13 @@ const ar: typeof en = {
   // ellipsis trails the sentence in the locale's own script.
   kuwaitChecking: "نتحقق من متاجر الكويت…",
   lowestListed: "أقل سعر معروض",
+  // REEA-963 — AR side of the sanity warning affordance (EN above). The badge
+  // stays short; the per-reason sentences ride the title attribute.
+  priceVerifyBadge: "السعر يحتاج إلى تحقق",
+  priceUnavailable: "السعر غير متوفر",
+  verifyOutlier: "هذا الرقم بعيد عن السعر المعتاد لهذا البحث، لذا قد لا يكون قابلًا للمقارنة.",
+  verifyCurrency: "لم نتمكن من التحقق من عملة هذا العرض، لذا قد يكون الرقم غير دقيق.",
+  verifyNoPrice: "لم يوفر المتجر سعرًا صالحًا لهذا العرض.",
   saveLead: "وفّر",
   effectiveLead: "السعر بعد الخصم",
   effectiveTail: "بالكوبون",

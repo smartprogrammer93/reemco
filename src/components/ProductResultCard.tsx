@@ -16,6 +16,32 @@ import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
 import FreshnessBadge from "@/components/FreshnessBadge";
 
 /**
+ * REEA-963 R1 FR-1 — the query-time sanity verdict helpers. A flagged offer
+ * stays visible but never reads as trustworthy: it renders the warning
+ * affordance and is excluded from every rollup, cheapest highlight and
+ * best-price claim on this card (FR-1.4). Ranking order is untouched
+ * (spec non-goal: sanity flags change presentation, not ranking).
+ */
+function offerFlagged(o: PriceOffer): boolean {
+  return o.sanity?.status === "flagged";
+}
+
+/** The native title-attribute sentence for a flagged offer's reason. */
+function verifyTitleFor(reason: string | undefined, t: ReturnType<typeof getStrings>): string {
+  switch (reason) {
+    case "outlier_high":
+    case "outlier_low":
+      return t.verifyOutlier;
+    case "currency_mis_map":
+      return t.verifyCurrency;
+    case "price_unavailable":
+      return t.verifyNoPrice;
+    default:
+      return t.priceVerifyBadge;
+  }
+}
+
+/**
  * Reemco Design v3 result card (§5.2–§5.4). Single token namespace from
  * globals.css — no hex literals. variant="card": results list.
  * variant="detail" (REEA-101 realtime AC-1): ships IDENTITIES ONLY in the
@@ -130,9 +156,16 @@ function PriceBlock({
   kuwaitPending?: boolean;
 }) {
   const t = getStrings(locale ?? clientLocale());
+  // REEA-963 FR-1.3 — the offer's own sanity verdict: flagged renders the
+  // warning affordance beside the figure; a price-unavailable offer (E3)
+  // renders the honest "price unavailable" state, never "KD 0".
+  const reason = offer.sanity?.status === "flagged" ? offer.sanity.reason : undefined;
+  const unavailable = reason === "price_unavailable";
   // REEA-75: ml-auto keeps the price right-aligned when the row wraps;
   // flex-wrap on the baseline row stops the Best badge clipping (M3).
-  const saved = offer.wasPrice != null && offer.wasPrice > offer.price;
+  // E3 — a price-unavailable offer has no honest savings arithmetic either.
+  const saved =
+    !unavailable && offer.wasPrice != null && offer.wasPrice > offer.price;
   // REEA-283: the selected country's currency LEADS the price rows (SA→SAR,
   // KW→KWD, EG→EGP); with no selection the offer's native figure leads. The
   // converted side rides behind as the muted `.price-alt` stamp — REEA-195's
@@ -154,17 +187,31 @@ function PriceBlock({
           keeps its implicit flex-shrink:0 via min-width:auto — numbers never
           ellipsize, the pill absorbs the squeeze. */}
       <div className="flex min-w-0 flex-wrap items-baseline justify-end gap-x-2 gap-y-1">
-        <span
-          className="price-cur tabular"
-          style={{
-            font: "var(--rc-text-price)",
-            color: isBest ? "var(--rc-savings)" : "var(--rc-ink)",
-            textDecoration: oos ? "line-through" : undefined,
-          }}
-        >
-          <bdi>{hero.primary}</bdi>
-        </span>
-        {hero.alt && <span className="price-alt">· <bdi>{hero.alt}</bdi></span>}
+        {unavailable ? (
+          // REEA-963 E3 — no usable price served: the honest state, never "KD 0".
+          <span className="price-cur tabular" style={{ font: "var(--rc-text-price)", color: "var(--rc-muted)" }}>
+            <bdi>{t.priceUnavailable}</bdi>
+          </span>
+        ) : (
+          <span
+            className="price-cur tabular"
+            style={{
+              font: "var(--rc-text-price)",
+              color: isBest ? "var(--rc-savings)" : "var(--rc-ink)",
+              textDecoration: oos ? "line-through" : undefined,
+            }}
+          >
+            <bdi>{hero.primary}</bdi>
+          </span>
+        )}
+        {!unavailable && hero.alt && <span className="price-alt">· <bdi>{hero.alt}</bdi></span>}
+        {/* REEA-963 FR-1.3 — the warning affordance stays WITH the flagged
+            figure (we do not hide data, we do not bless it either). */}
+        {reason && reason !== "price_unavailable" && (
+          <span className="price-warn" title={verifyTitleFor(reason, t)}>
+            <bdi>{t.priceVerifyBadge}</bdi>
+          </span>
+        )}
         {/* §5.3: strikethrough compare-at BESIDE the price, savings pill right
             after it — savings emphasis without stealing the price's crown.
             REEA-283: single-figure lines follow the LEAD currency too, so one
@@ -470,17 +517,22 @@ export default function ProductResultCard({
   // on — so mixed-currency cards keep one unit on the chips. The server-side
   // priceDelta rides on top of it; the card's coupon shifts every chip by the
   // same evidence, it never reorders them.
-  const cheapestListed =
-    offers.length > 0
+  // REEA-963 FR-1.4 — the rollup reads NON-FLAGGED offers only; null when
+  // every offer is flagged (E2: the card shows the warning state, never a
+  // "from KD X" built from flagged prices).
+  const cheapestListed = (() => {
+    const priced = offers.filter((o) => !offerFlagged(o));
+    return priced.length > 0
       ? Math.min(
-          ...offers.map((o) =>
+          ...priced.map((o) =>
             effectivePriceKwd(o.price, o.currency, {
               wasPrice: o.wasPrice,
               couponDiscount: primaryCoupon?.discount,
             }),
           ),
         )
-      : 0;
+      : null;
+  })();
   const oos = best != null && !best.inStock;
   // REEA-760 — coupon rows ride the CARD's own offer order (one key: the
   // sorted array the rows below render in), so the effective figure names the
@@ -496,7 +548,11 @@ export default function ProductResultCard({
   // country-led formatter chain (REEA-283 lead currency, REEA-896 KD unit
   // rule), NBSP-normalized like the coupon line's figure.
   const bestHref = best != null ? resolveOfferUrl(best, product.title) : null;
-  const showLeadCta = !detail && isBest && best != null && best.inStock && !!bestHref;
+  // REEA-963 FR-1.4 — the lead CTA IS a best-price claim ("Best effective
+  // price …"): a flagged lead offer can never carry it. The row's own
+  // outbound buttons stay (the destination remains one tap away).
+  const showLeadCta =
+    !detail && isBest && best != null && best.inStock && !!bestHref && !offerFlagged(best);
   const leadEff =
     best != null
       ? effectivePriceKwd(best.price, best.currency, {
@@ -596,7 +652,9 @@ export default function ProductResultCard({
         {!detail && best && (
           <PriceBlock
             offer={best}
-            isBest={isBest && !oos}
+            // REEA-963 FR-1.4 — a flagged lead offer never wears the
+            // unqualified "Best price" flag (excluded from best-price claims).
+            isBest={isBest && !oos && !offerFlagged(best)}
             hasCoupon={product.coupons.length > 0}
             oos={oos}
             country={country}
@@ -687,12 +745,22 @@ export default function ProductResultCard({
           bare, identical arithmetic in EN and AR. With a country selection
           formatCountryPrice still leads that market's currency (REEA-283) —
           the conversion is the same pair the offer rows print. */}
-      {!detail && best && (
+      {!detail && best && cheapestListed != null && (
         <p className="mt-3" style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
           <span className="tabular">{offers.length}</span>{" "}
           {offers.length === 1 ? t.retailersOne : t.retailersMany} · {t.fromWord}{" "}
           <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
             <bdi>{formatCountryPrice(cheapestListed, "KWD", country).primary}</bdi>
+          </span>
+        </p>
+      )}
+      {/* REEA-963 E2 — every offer on the card is sanity-flagged: the rollup
+          slot renders the warning state, never a "from KD X" built from
+          flagged prices. */}
+      {!detail && best && cheapestListed == null && offers.length > 0 && (
+        <p className="mt-3" style={{ font: "var(--rc-text-body)", color: "var(--rc-muted)" }}>
+          <span className="price-warn" title={t.verifyOutlier}>
+            <bdi>{t.priceVerifyBadge}</bdi>
           </span>
         </p>
       )}
@@ -735,9 +803,17 @@ export default function ProductResultCard({
               }}
             >
               {v.label}
-              <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
-                <bdi>{formatCountryPrice(cheapestListed + v.priceDelta, "KWD", country).primary}</bdi>
-              </span>
+              {/* REEA-963 FR-3.3 — a variant family whose members are all
+                  flagged renders the warning state, never a price. */}
+              {v.needsVerification ? (
+                <span className="price-warn" title={t.verifyOutlier}>
+                  <bdi>{t.priceVerifyBadge}</bdi>
+                </span>
+              ) : (
+                <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
+                  <bdi>{formatCountryPrice((cheapestListed ?? 0) + v.priceDelta, "KWD", country).primary}</bdi>
+                </span>
+              )}
             </span>
           ))}
         </section>
@@ -762,9 +838,16 @@ export default function ProductResultCard({
               const href = resolveOfferUrl(o, product.title);
               // Neutrally labeled cheapest available offer — catalog price
               // only, no commission input (REEA-60 §7.1/§7.4).
-              const isLowest = i === 0 && o.inStock;
+              // REEA-963 FR-1.4 — a flagged offer is never the cheapest
+              // highlight, however early it sorts.
+              const isLowest = i === 0 && o.inStock && !offerFlagged(o);
               // REEA-283: country-led lead figure + muted converted stamp.
               const row = formatCountryPrice(o.price, o.currency, country);
+              // REEA-963 — this row's own sanity verdict (FR-1.3 stays
+              // visible with the warning affordance; E3 renders the honest
+              // "price unavailable" state, never "KD 0").
+              const rowReason = offerFlagged(o) ? o.sanity?.reason : undefined;
+              const rowUnavailable = rowReason === "price_unavailable";
               // REEA-486 AC-2: the row's own hop stamp, aged against the same
               // baked render clock the freshness chip uses (hydration-stable).
               const age = relativeAge(o.collectedAt, renderStartMs);
@@ -859,10 +942,23 @@ export default function ProductResultCard({
                         with column-gap 8px (gap-2). The font-weight:600 ink
                         treatment stays on the PRIMARY span only. */}
                     <span className="flex min-w-0 flex-wrap items-baseline justify-end gap-2 sm:flex-nowrap" style={{ font: "var(--rc-text-body)" }}>
-                      <span className="price-cur tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
-                        <bdi>{row.primary}</bdi>
-                      </span>
-                      {row.alt && <span className="price-alt">· <bdi>{row.alt}</bdi></span>}
+                      {rowUnavailable ? (
+                        <span className="price-cur tabular" style={{ color: "var(--rc-muted)" }}>
+                          <bdi>{t.priceUnavailable}</bdi>
+                        </span>
+                      ) : (
+                        <span className="price-cur tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
+                          <bdi>{row.primary}</bdi>
+                        </span>
+                      )}
+                      {!rowUnavailable && row.alt && <span className="price-alt">· <bdi>{row.alt}</bdi></span>}
+                      {/* REEA-963 FR-1.3 — flagged row keeps its figure and
+                          gains the warning affordance (title carries why). */}
+                      {rowReason && !rowUnavailable && (
+                        <span className="price-warn" title={verifyTitleFor(rowReason, t)}>
+                          <bdi>{t.priceVerifyBadge}</bdi>
+                        </span>
+                      )}
                       {/* REEA-486 AC-2: this row's own collected-at, aged —
                           muted like the converted stamp, so the figure keeps
                           the crown but every offer reads traceable to its

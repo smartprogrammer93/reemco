@@ -137,10 +137,15 @@ export interface CountryPrice {
   alt: string | null;
 }
 
-/** Reference factor into KWD-space; KWD itself anchors the table at 1. */
-function toKwdFactor(code: string): number | undefined {
-  if (code === "KWD") return 1;
-  return TO_KWD[code];
+/** Reference factor into KWD-space; KWD itself anchors the table at 1.
+ *  REEA-963: exported for the price-sanity cohort pass — a code with no
+ *  factor here is an offer whose currency conversion FAILED (spec E4), the
+ *  detection signal for the `currency_mis_map` flag. */
+export function toKwdFactor(code: string): number | undefined {
+  const c = code.trim().toUpperCase();
+  if (!c) return undefined;
+  if (c === "KWD") return 1;
+  return TO_KWD[c];
 }
 
 /**
