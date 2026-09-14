@@ -27,17 +27,56 @@ const QUERIES = (process.env.LINK_SMOKE_QUERIES || "sony,iphone")
 const PER_RETAILER = Math.max(1, Math.min(20, Number(process.env.LINK_SMOKE_PER_RETAILER) || 8));
 const PAUSE_MS = Math.max(0, Number(process.env.LINK_SMOKE_PAUSE_MS) || 300);
 const FETCH_TIMEOUT_MS = 10_000;
-// REEA-901 — the liveness check rides the verified-crawler identity, the SAME
-// allow-listed identity the live adapters lead with (VERIFIED_BOT_HEADERS in
-// search-fallback.ts). Measured 2026-09-13: CF-fronted storefronts (Next
-// Store measured, Lulu the same family) answer plain/Mozilla UAs with the
-// HTTP 403 challenge shell on product URLs a real browser passes
-// interactively — W37 recorded Next Store 3 checked / 3 "dead" while every
-// sampled URL answered 200 to this identity. A non-interactive 403 from the
-// zone's bot rule is not a dead link; measuring it as one poisons the
-// retailer's dead-link share.
-const CHECK_UA =
-  "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+// REEA-901 + REEA-922 — the liveness check presents a PER-HOST identity,
+// documented here and versioned with the code. Policy (REEA-922 root cause,
+// CEO-confirmed fix sequence step 1): every identity in this table mirrors
+// the LEAD request identity the matching live adapter actually sends — the
+// smoke must measure the links the way our own traffic reaches them, never
+// invent a new checker shape. NO SILENT SWAPS: any change here re-baselines
+// the weekly dead-link number (run scripts/reea922-link-classify-probe.mjs
+// before/after) and says so in the change's commit message.
+//
+// - DEFAULT "verified-crawler": the claimed-crawler UA VERIFIED_BOT_HEADERS
+//   leads with (search-fallback.ts). Measured 2026-09-13 (REEA-901):
+//   CF-fronted storefronts (Next Store measured, Lulu the same family)
+//   answer plain/Mozilla UAs with the HTTP 403 challenge shell on product
+//   URLs a real browser passes interactively — W37 recorded Next Store
+//   3 checked / 3 "dead" while every sampled URL answered 200 to this
+//   identity. A non-interactive 403 from the zone's bot rule is not a dead
+//   link; measuring it as one poisons the retailer's dead-link share.
+// - amazon.eg "amazon-eg-adapter-lead": `user-agent: Mozilla/5.0` with
+//   `accept-encoding` pinned EMPTY — byte-for-byte the lead hop its adapter
+//   sends (REEA-397 pin in live-search.ts). Measured 2026-09-14 (REEA-922
+//   diagnosis): amazon.eg's edge answers a deterministic 503 apology page to
+//   the claimed-crawler UA when undici injects
+//   `accept-encoding: br, gzip, deflate` (8/8 sampled /dp URLs), while the
+//   adapter-shaped request answers 200 — the W37 Amazon.eg 15/49 "dead"
+//   share was checker identity, not rot.
+const DEFAULT_IDENTITY = {
+  label: "verified-crawler",
+  headers: {
+    "user-agent":
+      "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+  },
+};
+
+/** Per-host identity table — see the policy comment above. */
+const HOST_IDENTITIES = [
+  {
+    match: /(^|\.)amazon\.eg$/i,
+    label: "amazon-eg-adapter-lead",
+    headers: { "user-agent": "Mozilla/5.0", "accept-encoding": "" },
+  },
+];
+
+function identityFor(url) {
+  try {
+    const host = new URL(url).hostname;
+    return HOST_IDENTITIES.find((e) => e.match.test(host)) ?? DEFAULT_IDENTITY;
+  } catch {
+    return DEFAULT_IDENTITY;
+  }
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -73,7 +112,7 @@ async function collectOffers(query) {
 
 async function checkUrl(url) {
   try {
-    const res = await fetchTimeout(url, { headers: { "user-agent": CHECK_UA } });
+    const res = await fetchTimeout(url, { headers: identityFor(url).headers });
     return res.status >= 200 && res.status < 400;
   } catch {
     return false; // unreachable / timeout counts as dead
