@@ -238,6 +238,7 @@ function LeadOfferCta({
   query,
   rank,
   itemId,
+  queryId,
   locale,
 }: {
   merchant: string;
@@ -253,6 +254,8 @@ function LeadOfferCta({
   query: string;
   rank: number;
   itemId: string;
+  /** REEA-965 v1 metrics context — forwarded to the outbound link. */
+  queryId?: string;
   locale?: Locale;
 }) {
   const t = getStrings(locale ?? clientLocale());
@@ -263,6 +266,8 @@ function LeadOfferCta({
         query={query}
         rank={rank}
         itemId={itemId}
+        queryId={queryId}
+        retailer={merchant}
         className="cta-lead r2-btn focusable w-full"
       >
         <span className="cta-lead-main">
@@ -368,6 +373,7 @@ export default function ProductResultCard({
   renderStartMs,
   locale,
   cascadeIndex,
+  queryId,
 }: {
   product: NormalizedProduct;
   /** True when this offer carries the best effective price on the page (§3.3 Von Restorff). */
@@ -400,6 +406,13 @@ export default function ProductResultCard({
   /** REEA-37 funnel context for item_clicked events (-1 = product detail page). */
   query?: string;
   rank?: number;
+  /**
+   * REEA-965 — per-query-execution id from the server render (results page
+   * only). Present on results cards, the outbound CTAs fire the v1
+   * `result_click` / `first_result_click` metrics events beside the REEA-37
+   * funnel event; absent elsewhere, those surfaces stay byte-for-byte.
+   */
+  queryId?: string;
   /** REEA-170 active country selection, carried into alternatives queries. */
   country?: CountryCode | null;
   /** REEA-186 stock selection, carried into alternatives queries on the list. */
@@ -613,6 +626,7 @@ export default function ProductResultCard({
           query={query}
           rank={rank}
           itemId={product.productId}
+          queryId={queryId}
           locale={locale}
         />
       )}
@@ -871,6 +885,8 @@ export default function ProductResultCard({
                         query={query}
                         rank={rank}
                         itemId={product.productId}
+                        queryId={queryId}
+                        retailer={o.merchant}
                         className="btn-primary focusable min-h-9 shrink-0 px-3"
                       >
                         <OfferCtaLabel
