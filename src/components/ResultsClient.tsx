@@ -362,7 +362,13 @@ function SelectionRow({
        REEA-291 AC4: the pills and the checkbox filter the already-loaded
        payload IN PLACE (ResultsClient state); the Refresh button is the one
        explicit action that re-runs the live collection server-side. */
-    <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: "var(--rc-space-4)" }}>
+    /* REEA-945 — named hook for the ≤375px compaction block in globals.css:
+       on SE-class widths the row becomes one horizontally scrollable line
+       instead of wrapping to 3-4 lines above the results. */
+    <div
+      className="selection-row flex flex-wrap items-center gap-2"
+      style={{ marginBottom: "var(--rc-space-4)" }}
+    >
       <CountryFilter country={country} onSelect={onSelectCountry} locale={locale} />
       <StockToggle showOutOfStock={showOutOfStock} locale={locale} onToggle={onToggleStock} />
       <button type="button" onClick={onRefresh} className="query-pill query-pill-on-light focusable">

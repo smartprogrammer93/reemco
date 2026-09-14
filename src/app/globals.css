@@ -310,6 +310,37 @@ a:focus-visible {
   color: var(--rc-muted);
 }
 
+/* REEA-944 — pending-pill containment (REEA-863 spec, mirrors the REEA-848
+   offer-row contract: min-width:0 + truncation inside a flex row). At the
+   1280px two-column layout the pill's intrinsic min-content width ("Checking
+   Kuwait stores…" ≈ 200px, wider still under RTL shaping) won against its
+   shrinkable row siblings and pushed ~15px past the lead card's content box.
+   The pill may now shrink and ellipsize instead; the full string stays in the
+   `title` attribute on the span (ProductResultCard). Visual only — the
+   REEA-835/847 pending decision and the settle swap are untouched, and the
+   box (padding 2px 8px/10px, label font) does not change. */
+.best-flag-pending {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto; /* may shrink, never grows past the row */
+}
+
+/* The pill is an inline-flex box: text-overflow applies to block containers,
+   not to the flex container itself, so the ellipsis lives on the blockified
+   text item (the <bdi>) — min-width:0 lets it shrink below its one-line
+   intrinsic width, which is what turns a hard mid-glyph clip into a real
+   ellipsis. Direction-agnostic (works identically under dir="rtl"); no
+   directional properties added per the REEA-863 RTL rule. */
+.best-flag-pending bdi {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Freshness / provenance stamp: mono uppercase, dot + relative time, never
    omitted. REEA-283: nowrap + a min-width sized to the 'UPDATED {n} MINUTES
    AGO' copy — the chip keeps one line and its width no longer jiggle-shifts
@@ -635,6 +666,47 @@ html[lang="ar"] .coupon-via {
   html[lang="ar"] .coverage-line.has-status {
     min-height: 9em;
     min-height: 6lh !important;
+  }
+}
+
+/* REEA-945 — SE-class (≤375px) pre-results chrome compaction. Measured on a
+   prod serve (375x667, cold settled): the wrapped sticky header (113px) plus
+   the wrapping selection row (124px EN / 168px AR) put ~500px of chrome above
+   the results, pushing the lead primary CTA — the page's monetizable action —
+   below the fold (CTA bottom 768 EN / 778 AR). Two structural squeezes, both
+   scoped to ≤375px so no wider viewport changes:
+   R1 — header collapses to ONE row: the search form stops stacking its input
+   above a full-width submit button (input flexes, button shrinks to its
+   label), so wordmark + search + locale toggle share the 64px sticky bar.
+   R2 — the selection row (country pills + stock toggle + Refresh) becomes a
+   single horizontally scrollable line instead of wrapping to 3-4 lines; the
+   pills keep their 36px touch floor and scroll inside their OWN container, so
+   the page itself gains no horizontal overflow (AC3) and every control stays
+   present and honest (AC2). The REEA-835/847 coverage line / pending chip and
+   the REEA-848 CTA token-wrap rule are untouched; no data or ranking change. */
+@media (max-width: 375px) {
+  .site-header form {
+    flex-wrap: nowrap;
+  }
+  .site-header form input[type="search"] {
+    flex: 1 1 0%;
+    min-width: 0;
+  }
+  .site-header form button[type="submit"] {
+    width: auto;
+  }
+  .selection-row,
+  .selection-row nav {
+    flex-wrap: nowrap;
+  }
+  .selection-row {
+    overflow-x: auto;
+  }
+  .selection-row > * {
+    flex-shrink: 0;
+  }
+  .selection-row .query-pill {
+    flex-shrink: 0;
   }
 }
 
