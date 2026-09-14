@@ -39,6 +39,15 @@ import { arabicBrandIntent, matchesQueryToken, queryMatchTokens } from "@/lib/re
 import type { FetchImpl } from "@/lib/collect/scraper";
 import { getSharedKv } from "@/lib/collect/kv";
 import { readCappedResponse } from "@/lib/collect/read-body";
+// REEA-1009 — bet #2 flag + S1a/S2 constants (see bet2-flag.ts; flag OFF is
+// the pre-bet behavior, which is the §9 rollback contract).
+import {
+  BET2_NEXTSTORE_HOST,
+  BET2_NEXTSTORE_JAR_TTL_MS,
+  BET2_CHALLENGE_ROTATION_BUDGET_MS,
+  bet2FailFastEnabled,
+  bet2RotationCanStartAttempt,
+} from "@/lib/collect/bet2-flag";
 
 
 const FALLBACK_TIMEOUT_MS = 8_000;
@@ -987,9 +996,21 @@ export const PLAIN_FETCH_HEADERS = {
 // the existing clearance on its first attempt; KV misses (no binding, down,
 // expired) fall back to the old memory-only handshake. Both tiers stay
 // best-effort: a KV hiccup never fails the hop.
+// REEA-1009 S2 — the Next Store host rides a sticky 30-min variant of this
+// TTL while the bet #2 flag is on (BET2_NEXTSTORE_JAR_TTL_MS in bet2-flag.ts);
+// every other host keeps the shared 10-minute value.
 const CHALLENGE_COOKIE_TTL_MS = 10 * 60_000;
 const CF_JAR_KEY_PREFIX = "cf-clearance:";
 const challengeCookies = new Map<string, { header: string; expiresAt: number }>();
+
+/**
+ * REEA-1009 — test seam for the Gate 2 fixture: the jar Map is module state,
+ * so a "cold recycled instance" pin must be able to empty it between cases.
+ * Not part of the serve path.
+ */
+export function clearChallengeJarCacheForTests(): void {
+  challengeCookies.clear();
+}
 
 export function fetchThroughChallenge(
   fetchImpl: FetchImpl,
@@ -1033,6 +1054,20 @@ async function runAttempts(
   signal: AbortSignal,
 ): Promise<Response> {
   const host = new URL(url).host;
+  // REEA-1009 S1a — flag-gated fail-fast constants. Flag OFF (the default and
+  // the §9 rollback state) leaves every constant below at the pre-bet value.
+  const fastFail = bet2FailFastEnabled();
+  // S2(i): the Next Store jar mirror sticks for 30 min instead of 10 so a
+  // recycled instance replays the clearance instead of re-paying the
+  // handshake (the W38 32.2% failure class). Every other host keeps the
+  // shared 10-min TTL.
+  const ttlMs = fastFail && host === BET2_NEXTSTORE_HOST ? BET2_NEXTSTORE_JAR_TTL_MS : CHALLENGE_COOKIE_TTL_MS;
+  // S1a: the rotation must finish INSIDE one joined window (8 s) with margin,
+  // so a failing handshake lane settles at the budget boundary instead of
+  // pinning the convergence chain at the ceiling. Infinity when the flag is
+  // off = exactly the pre-bet loop.
+  const rotationBudgetMs = fastFail ? BET2_CHALLENGE_ROTATION_BUDGET_MS : Infinity;
+  const rotationStartedAt = Date.now();
   let warm = challengeCookies.get(host);
   if (warm && warm.expiresAt < Date.now()) {
     challengeCookies.delete(host);
@@ -1055,7 +1090,15 @@ async function runAttempts(
   // through without disturbing the identity choice).
   const extraHeaders = init.headers ? Object.fromEntries(new Headers(init.headers)) : {};
   for (let attempt = 0; attempt < 6 && !signal.aborted; attempt++) {
-    if (attempt > 0) await new Promise((r) => setTimeout(r, 250));
+    if (attempt > 0) {
+      // REEA-1009 S1a — do not START an attempt the rotation budget can no
+      // longer carry (250 ms pause + a meaningful answer slice). Starting it
+      // only re-enters a spent window and burns convergence budget — the
+      // loop then falls through to the same `HTTP <lastStatus>` exhaustion
+      // throw, at the budget boundary instead of the ceiling.
+      if (!bet2RotationCanStartAttempt(Date.now() - rotationStartedAt, rotationBudgetMs)) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
     if (signal.aborted) break;
     // REEA-272 identity rotation: verified-crawler identity leads (it is the
     // answer these CF zones give a pass to within the hop window), the
@@ -1080,7 +1123,7 @@ async function runAttempts(
     if (jar.size > 0) {
       challengeCookies.set(host, {
         header: [...jar].map(([k, v]) => `${k}=${v}`).join("; "),
-        expiresAt: Date.now() + CHALLENGE_COOKIE_TTL_MS,
+        expiresAt: Date.now() + ttlMs,
       });
     }
     if (res.ok) {
@@ -1092,7 +1135,7 @@ async function runAttempts(
       try {
         const warm = challengeCookies.get(host);
         const kv = getSharedKv();
-        if (kv && warm) await kv.set(jarKey(host), JSON.stringify(warm), Math.ceil(CHALLENGE_COOKIE_TTL_MS / 1000));
+        if (kv && warm) await kv.set(jarKey(host), JSON.stringify(warm), Math.ceil(ttlMs / 1000));
       } catch {
         // best-effort mirror; next handshake rewrites it
       }

@@ -60,10 +60,37 @@ const LULU_URL = "https://www.luluhypermarket.com/en/search?query=basmati+rice";
 // the deployed runtime again, the collector can be restored from git history
 // (see the retirement note at the COLLECTORS list in live-search.ts).
 const PCK_URL = "https://pckuwait.com/wp-json/wc/store/v1/products?search=dell&per_page=24";
+// REEA-1009 S2(ii) — the Next Store zone joins the tripwire set (read-only,
+// reusing the REEA-901 re-admission pattern — no new counters): this is the
+// exact hop the Next Store collector rides (Magento SSR catalogsearch behind
+// a CF managed challenge, via fetchThroughChallenge). Its answer distinguishes
+// the two failure shapes the REEA-995 diagnosis says the lane admits —
+// `errorKind: "rotation_fail"` (challenge-rotation exhaustion, the HTTP 403
+// class) vs `"window_abort"` (the joined window aborting mid-rotation) — from
+// the deployed egress, which is the AC-7 tripwire. The zone STAYS if the S2
+// flag is rolled back (read-only diagnostic, §9).
+const NEXTSTORE_URL = "https://www.nextstore.com.kw/catalogsearch/result/index/?q=iphone%2017";
 // Mirrors the collector's per-zone curated pairs (live-search.ts): each zone
 // rides its own edge, so the observation table walks each pair separately.
 const LULU_KUWAIT_IPS: readonly string[] = ["104.18.40.47", "172.64.147.209"];
 const PCK_KUWAIT_IPS: readonly string[] = ["172.67.189.78", "104.21.81.113"];
+
+/**
+ * REEA-1009 S2 — classify a zone-probe failure into the two throw shapes the
+ * REEA-995 diagnosis says the CF-fronted lanes admit: the fetchThroughChallenge
+ * exhaustion throw ("HTTP <lastStatus>", the 403 interstitial class) vs the
+ * joined-window abort mid-rotation (TimeoutError / abort message). Pure and
+ * exported for the AC-7 pin; any other message classifies as "other" — an
+ * unknown is surfaced, never squashed.
+ */
+export type EchoErrorKind = "rotation_fail" | "window_abort" | "other" | null;
+
+export function classifyEchoError(error: string | undefined): EchoErrorKind {
+  if (!error) return null;
+  if (/^HTTP \d+$/.test(error.trim())) return "rotation_fail";
+  if (/operation was aborted|abort|timed?\s*out/i.test(error)) return "window_abort";
+  return "other";
+}
 
 interface ZoneProbe {
   status: number | 0;
@@ -72,6 +99,7 @@ interface ZoneProbe {
   items?: number;
   clearedBytes?: number;
   error?: string;
+  errorKind?: EchoErrorKind;
 }
 
 async function probeZone(
@@ -86,7 +114,8 @@ async function probeZone(
     const body = await res.text();
     return { status: res.status, ms: Date.now() - started, bytes: body.length };
   } catch (err) {
-    return { status: 0, ms: Date.now() - started, error: err instanceof Error ? err.message : String(err) };
+    const error = err instanceof Error ? err.message : String(err);
+    return { status: 0, ms: Date.now() - started, error, errorKind: classifyEchoError(error) };
   }
 }
 
@@ -190,7 +219,8 @@ async function probeSultan(fetchImpl: typeof fetch): Promise<ZoneProbe> {
     const parsed = (await res.json()) as { products?: { product_list?: unknown[] } };
     return { status: res.status, ms: Date.now() - started, items: parsed?.products?.product_list?.length ?? 0 };
   } catch (err) {
-    return { status: 0, ms: Date.now() - started, error: err instanceof Error ? err.message : String(err) };
+    const error = err instanceof Error ? err.message : String(err);
+    return { status: 0, ms: Date.now() - started, error, errorKind: classifyEchoError(error) };
   }
 }
 
@@ -229,12 +259,17 @@ export async function GET(req: Request): Promise<Response> {
     .then(async (res) => ((await res.json()) as { ip?: string }).ip ?? "")
     .catch(() => "");
 
-  const [echo, fallbackIp, luluRaw, pckRaw, sultan, luluPinned, pckPinned] = await Promise.all([
+  const [echo, fallbackIp, luluRaw, pckRaw, sultan, nextstore, luluPinned, pckPinned] = await Promise.all([
     hopEcho,
     ipOnly,
     probeZone(fetch, LULU_URL, {}),
     probeZone(fetch, PCK_URL, { accept: "application/json" }),
     probeSultan(fetch),
+    // REEA-1009 S2(ii) — the AC-7 tripwire zone: the collector's own hop
+    // shape, so rotation-fail vs window-abort is readable from the deployed
+    // egress. No jsdom clearance tier here — the Next Store lane rides the
+    // cache-replay + handshake path (challengeHtmlHop), not the JSD tier.
+    probeZone(fetch, NEXTSTORE_URL, {}),
     probePinned(fetch, LULU_URL, LULU_KUWAIT_IPS, {}, (body) => body.includes("application/ld+json")),
     probePinned(fetch, PCK_URL, PCK_KUWAIT_IPS, { accept: "application/json" }, (body) => {
       try {
@@ -260,6 +295,11 @@ export async function GET(req: Request): Promise<Response> {
         "www.luluhypermarket.com": lulu,
         "pckuwait.com": pckuwait,
         "www.sultan-center.com": sultan,
+        // REEA-1009 S2(ii) — AC-7 tripwire (read-only, no new counters).
+        // S2(iii) derotation criterion, pre-agreed on the REEA-901 governance
+        // template: rolling Next Store failure share > 10% rotates the lane
+        // out of round one; a green probe here restores it.
+        "www.nextstore.com.kw": nextstore,
       },
       pinned: {
         "www.luluhypermarket.com": luluPinned,

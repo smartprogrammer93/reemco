@@ -38,9 +38,12 @@ describe("REEA-782 GET /api/echo rate limit", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { zones: Record<string, unknown>; checkedAt: string };
     // Probes ran (offline stub answered each), report shape intact.
+    // REEA-1009 S2(ii) — the Next Store tripwire zone joins the set (I-4:
+    // observable before the S2 flag can roll out; read-only, no counters).
     expect(Object.keys(body.zones).sort()).toEqual([
       "pckuwait.com",
       "www.luluhypermarket.com",
+      "www.nextstore.com.kw",
       "www.sultan-center.com",
     ]);
     expect(body.checkedAt).toBeTruthy();

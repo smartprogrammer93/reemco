@@ -48,11 +48,22 @@
  * re-reads instead of misfiling; a genuinely empty store (KV reachable,
  * key absent) still answers 200 with an empty map. The 200 payload shape,
  * the aggregation and the 1–26 window clamping are untouched.
+ *
+ * REEA-1009 S1b — while the bet #2 flag (REEMCO_BET2_FAIL_FAST) is on, the
+ * 200 payload gains a `methodology` block stating what the latency bands
+ * actually clock (full-convergence recording, 8.5 s structural cap), that
+ * p90 is band-interpolated, and the ratified shopper-visible targets
+ * (first-offer p75 ≤ 2.0 s; follow-up-complete ≤ 8.5 s). Reporting text
+ * only: no counter changes (AC-4).
  */
 import { RETENTION_WEEKS, isoWeekKey, linkSmokeRates, readWeeklyCountersDetailed } from "@/lib/metrics";
 import type { WeeklyCountersRead } from "@/lib/metrics";
 import { readEvents } from "@/lib/event-store";
 import type { FunnelEvent } from "@/lib/events";
+// REEA-1009 S1b — the metric-honesty note rides the payload only while the
+// bet #2 flag is on (a reporting-text change is part of the §9 flag-gated
+// change; flag-off answers the exact pre-bet payload).
+import { bet2FailFastEnabled } from "@/lib/collect/bet2-flag";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -141,6 +152,25 @@ export function weeklyResponse(
       retention_weeks: MAX_WEEKS,
       window_weeks: windowWeeks,
       weeks,
+      // REEA-1009 S1b — metric honesty (bet #2 spec v1.0 §5, AC-6(c)/AC-8):
+      // the latency-band clock is the full-convergence recording, p90 is
+      // band-interpolated with an 8.5 s structural max, and the budget is
+      // stated against the shopper-visible clocks the ratified AC-8 targets
+      // use. Pure reporting text — no counter changes, no new instrumentation
+      // (AC-4/REEA-865 stand), bands themselves untouched (REEA-884).
+      ...(bet2FailFastEnabled()
+        ? {
+            methodology: {
+              latency_band_clock:
+                "fan-out start → converged-chain recording (serveLatencyMs in the results after() tail: allSettled + final + converged + adapterTelemetry), structurally capped at RESULTS_COMPLETION_BUDGET_MS (1800 ms) + STAGE_TAIL_HEADROOM_MS (6200 ms) = 8.5 s",
+              p90:
+                "REEA-884 band-interpolated inside the containing band; the structural max is the 8.5 s tail cap, so the raw within-band p90 never exceeds it — a figure above 8.5 s is interpolation, not a measured tail",
+              shopper_visible_targets:
+                "first-offer p75 ≤ 2.0 s (G3 guard — staged first-offer flush must not get slower); full-offer follow-up-complete ≤ 8.5 s (the recording cap); blocking aggregate gates: latency_band_gt_10s == 0 and cold_serves_pending < 5% weekly (AC-8, ratified on REEA-1002)",
+              source: "REEA-1009 bet #2 spec v1.0 §5 S1b / §10; band definitions unchanged (REEA-871/REEA-884)",
+            },
+          }
+        : {}),
     },
     { headers: { "cache-control": "no-store" } },
   );

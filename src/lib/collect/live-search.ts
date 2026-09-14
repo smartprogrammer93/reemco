@@ -30,6 +30,9 @@ import {
   scanWooCards,
   titleMatchScore,
 } from "@/lib/collect/search-fallback";
+// REEA-1009 — bet #2 server-side flag (S1a reads it at dispatch time; OFF is
+// the pre-bet serve path per spec §9).
+import { bet2FailFastEnabled } from "@/lib/collect/bet2-flag";
 import {
   defaultQueryCache,
   queryCacheKey,
@@ -2996,6 +2999,20 @@ export interface AdapterTelemetry {
 type SettledAdapter = { merchant: string; hits: SearchHit[]; error?: string };
 
 /**
+ * REEA-1009 S1a — does this thrown error identify a joined-window abort
+ * (the hop-ceiling AbortSignal.timeout firing) rather than a retailer blip?
+ * AbortSignal.timeout rejects with a TimeoutError DOMException ("The
+ * operation was aborted due to timeout"), which does not subclass Error in
+ * every runtime, so the `name` is checked before the message.
+ */
+export function isWindowAbortError(err: unknown): boolean {
+  const name = (err as { name?: unknown } | null | undefined)?.name;
+  if (name === "TimeoutError" || name === "AbortError") return true;
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  return /operation was aborted|abort/i.test(message);
+}
+
+/**
  * REEA-290 — every failing adapter gets one bounded retry before render,
  * riding the same polite pause the amazon.eg hop pioneered (REEA-149): a
  * single 403/503 blip or a momentary timeout should not drop a retailer from
@@ -3008,6 +3025,7 @@ type SettledAdapter = { merchant: string; hits: SearchHit[]; error?: string };
  * a plain throw never had. Amazon.eg throws only after BOTH of its attempts
  * failed, so its worst case stays within the budget the signal enforces.
  */
+
 /** REEA-486 AC-2 — one collected-at stamp per retailer answer, applied at the
  *  shared settle point so every adapter carries it symmetrically (hits come
  *  from each parser at its hop's completion, so the stamp is that retailer's
@@ -3017,7 +3035,12 @@ function stampCollected(hits: SearchHit[]): SearchHit[] {
   return hits.map((h) => (h.collectedAt ? h : { ...h, collectedAt: iso }));
 }
 
-async function collectSettled(
+/**
+ * REEA-1009 — exported for the Gate 2 fixture (AC-6a/AC-7 pin the abort-skip
+ * and the doomed-retry revert directly at this settle point); the serve path
+ * is unchanged for callers.
+ */
+export async function collectSettled(
   c: RetailerCollector,
   q: string,
   fetchImpl: FetchImpl,
@@ -3039,6 +3062,17 @@ async function collectSettled(
     return { merchant: c.merchant, hits: stampCollected(await c.collect(dq, fetchImpl)) };
   } catch (err) {
     const firstError = asError(err);
+    // REEA-1009 S1a — fail failing lanes fast: while the bet #2 flag is on, a
+    // lane whose FIRST attempt died on the joined hop-ceiling abort gets no
+    // REEA-290 second attempt. An abort is not a blip: the joined window is
+    // already spent, so the retry re-enters an expired window and can only
+    // add latency (the ~8 s convergence shoulder the diagnosis pinned on the
+    // ~⅓ of serves where Next Store fails). Guardrail (AC-6a / Gate 2): a
+    // ceiling-aborted lane settles AT the window, never after a doomed retry.
+    // Flag OFF keeps the REEA-290 second attempt exactly as shipped.
+    if (bet2FailFastEnabled() && isWindowAbortError(err)) {
+      return { merchant: c.merchant, hits: [], error: firstError };
+    }
     await new Promise((r) => setTimeout(r, AMAZON_RETRY_BACKOFF_MS));
     try {
       return { merchant: c.merchant, hits: stampCollected(await c.collect(dq, fetchImpl)) };
