@@ -1,7 +1,8 @@
 /**
  * REEA-807 — dead-link smoke result ingest.
  *
- * POST /api/metrics/link-smoke  { checked, dead, by_retailer }
+ * POST /api/metrics/link-smoke
+ *   { checked, dead, challenge?, by_retailer, week?, annotation? }
  *
  * The dead-link smoke script (scripts/dead-link-smoke.mjs) checks a bounded
  * sample of LIVE offer URLs (pulled from this site's own converged results
@@ -15,12 +16,19 @@
  *    before it leaves the process);
  *  - no cookies, no identifiers, no per-URL or per-query data stored — the
  *    counters keep integer totals and retailer names only.
+ *
+ * REEA-935 — the payload carries the per-outcome counts (checked splits into
+ * ok + dead + challenge; ok is derived server-side) and, for the one-shot
+ * W37 methodology annotation, an ops-only `week` + `annotation` pair:
+ * annotation-only posts stamp the record without bumping any counter, and a
+ * past week is accepted only in strict ISO-week shape so the write path can
+ * never wander outside the retention window's key format.
  */
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { checkRateLimitShared } from "@/lib/rate-limit-kv";
 import { rateLimitHeaders } from "@/lib/rate-limit";
-import { recordLinkSmoke } from "@/lib/metrics";
+import { annotateLinkSmoke, recordLinkSmoke } from "@/lib/metrics";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,13 +39,26 @@ const SMOKE_RATE_LIMIT = { limit: 10, windowMs: 60_000 };
 
 const merchantCountsSchema = z.record(
   z.string().max(40),
-  z.object({ checked: z.number().int().min(0).max(500), dead: z.number().int().min(0).max(500) }),
+  z.object({
+    checked: z.number().int().min(0).max(500),
+    dead: z.number().int().min(0).max(500),
+    challenge: z.number().int().min(0).max(500).optional(),
+  }),
 );
 
 const bodySchema = z.object({
   checked: z.number().int().min(0).max(500),
   dead: z.number().int().min(0).max(500),
+  challenge: z.number().int().min(0).max(500).optional(),
   by_retailer: merchantCountsSchema,
+  /** Ops-only (REEA-934 Change 4): stamp the annotation on this ISO week. */
+  week: z.string().regex(/^\d{4}-W\d{2}$/).optional(),
+  annotation: z
+    .object({
+      checkerContaminated: z.boolean(),
+      methodologyNote: z.string().min(1).max(500),
+    })
+    .optional(),
 });
 
 function clientKey(req: NextRequest | Request): string {
@@ -74,16 +95,24 @@ export async function POST(req: Request): Promise<Response> {
       { status: 400 },
     );
   }
-  if (parsed.data.dead > parsed.data.checked) {
-    return Response.json({ error: "dead cannot exceed checked" }, { status: 400 });
+  const { checked, dead, challenge, by_retailer, week, annotation } = parsed.data;
+  if (dead > checked || (challenge ?? 0) + dead > checked) {
+    return Response.json({ error: "dead + challenge cannot exceed checked" }, { status: 400 });
   }
 
+  const hasCounts = checked > 0 || Object.keys(by_retailer).length > 0;
   try {
-    await recordLinkSmoke({
-      checked: parsed.data.checked,
-      dead: parsed.data.dead,
-      byRetailer: parsed.data.by_retailer,
-    });
+    // Counter fold and annotation stamp are separate writes by design: an
+    // annotation-only post (the W37 backfill) must not bump runs/checked.
+    if (hasCounts) {
+      await recordLinkSmoke({ checked, dead, challenge, byRetailer: by_retailer });
+    }
+    if (annotation) {
+      await annotateLinkSmoke(annotation, { week });
+    }
+    if (!hasCounts && !annotation) {
+      return Response.json({ error: "empty payload" }, { status: 400 });
+    }
   } catch (err) {
     console.error("metrics store write failed", err);
     return Response.json({ error: "metrics store unavailable" }, { status: 503 });

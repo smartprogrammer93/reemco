@@ -51,9 +51,25 @@ export interface LinkSmokeCounters {
   runs: number;
   /** Offer URLs checked across all runs. */
   checked: number;
-  /** Checked URLs that answered dead (non-2xx/3xx or unreachable). */
+  /** Checked URLs that answered dead (non-2xx/3xx or unreachable).
+   *  REEA-935 — a bot-wall challenge is never recorded here (see challenge). */
   dead: number;
-  by_retailer: Record<string, { checked: number; dead: number }>;
+  /** REEA-935 — checked URLs whose final answer was `ok` (per-outcome
+   *  aggregates per the REEA-934 spec: dead rate = dead / (ok + dead), so a
+   *  challenge outcome never shrinks the denominator's trustworthiness). */
+  ok: number;
+  /** REEA-935 — checked URLs that kept answering a bot-wall challenge (CF
+   *  challenge 403 / 429) after the backoff retry. Surfaced as a visible
+   *  unknown — an unknown is never silently counted dead, never dropped. */
+  challenge: number;
+  by_retailer: Record<string, { checked: number; dead: number; challenge: number }>;
+  /**
+   * REEA-934 Change 4 — methodology annotation stamped by ops (never by the
+   * smoke run itself). The counters keep their original values; the flags
+   * only tell downstream baseline consumers (REEA-930) how to read them.
+   */
+  checkerContaminated?: boolean;
+  methodologyNote?: string;
 }
 
 /**
@@ -121,7 +137,7 @@ export interface MetricsBlob {
 }
 
 function emptyLinkSmoke(): LinkSmokeCounters {
-  return { runs: 0, checked: 0, dead: 0, by_retailer: {} };
+  return { runs: 0, checked: 0, dead: 0, ok: 0, challenge: 0, by_retailer: {} };
 }
 
 export function emptyWeek(): WeekCounters {
@@ -206,7 +222,43 @@ export function normalizeWeek(week: WeekCounters): WeekCounters {
   for (const key of ["retailer_adapter_attempts", "retailer_adapter_failures"] as const) {
     if (!week[key] || typeof week[key] !== "object") week[key] = {};
   }
+  // REEA-935 — per-outcome link-smoke aggregates. Weeks stored before the
+  // extension have no ok/challenge: challenge backfills 0 (the old checker
+  // had no challenge vocabulary) and ok backfills to checked - dead, so the
+  // derived dead rate of a legacy week stays exactly the rate it recorded.
+  // Original checked/dead values are never rewritten (AC-4.1).
+  const ls = week.link_smoke;
+  if (ls && typeof ls === "object") {
+    ls.runs = clampCount(ls.runs);
+    ls.checked = clampCount(ls.checked);
+    ls.dead = clampCount(ls.dead);
+    ls.challenge = clampCount(ls.challenge);
+    ls.ok =
+      typeof ls.ok === "number" && Number.isFinite(ls.ok) && ls.ok >= 0
+        ? Math.floor(ls.ok)
+        : Math.max(0, ls.checked - ls.dead - ls.challenge);
+    if (ls.by_retailer && typeof ls.by_retailer === "object") {
+      for (const r of Object.values(ls.by_retailer)) {
+        r.checked = clampCount(r.checked);
+        r.dead = clampCount(r.dead);
+        r.challenge = clampCount(r.challenge);
+      }
+    }
+  }
   return week;
+}
+
+/** REEA-935 — derived per-outcome rates for the weekly read path.
+ *  dead_rate = dead / (ok + dead): persistent challenges are excluded from
+ *  the denominator but stay visible through challenge_rate =
+ *  challenge / checked (an unknown is surfaced, never dropped). */
+export function linkSmokeRates(ls: LinkSmokeCounters): { dead_rate: number; challenge_rate: number } {
+  const deadDenominator = ls.ok + ls.dead;
+  const checked = ls.checked > 0 ? ls.checked : deadDenominator + ls.challenge;
+  return {
+    dead_rate: deadDenominator > 0 ? ls.dead / deadDenominator : 0,
+    challenge_rate: checked > 0 ? ls.challenge / checked : 0,
+  };
 }
 
 /** The serve-time facts of one converged live search, ready to aggregate. */
@@ -276,27 +328,44 @@ export function applySearchOutcome(
   return weeks;
 }
 
-/** Pure: fold one dead-link smoke run into the weekly buckets. */
+/**
+ * Pure: fold one dead-link smoke run into the weekly buckets.
+ * REEA-935 — the run reports the per-outcome counts (ok is derived: every
+ * checked URL lands in exactly one of ok/dead/challenge, so
+ * ok = checked - dead - challenge by construction, clamped against hostile
+ * payloads rather than trusted).
+ */
 export function applyLinkSmoke(
   weeks: WeekCountersMap,
   week: string,
-  result: { checked: number; dead: number; byRetailer: Record<string, { checked: number; dead: number }> },
+  result: {
+    checked: number;
+    dead: number;
+    challenge?: number;
+    byRetailer: Record<string, { checked: number; dead: number; challenge?: number }>;
+  },
 ): WeekCountersMap {
   const w = ensureWeek(weeks, week);
   const checked = clampCount(result.checked);
   const dead = Math.min(clampCount(result.dead), checked);
+  const challenge = Math.min(clampCount(result.challenge), checked - dead);
+  const ok = Math.max(0, checked - dead - challenge);
   w.link_smoke.runs += 1;
   w.link_smoke.checked += checked;
   w.link_smoke.dead += dead;
+  w.link_smoke.ok += ok;
+  w.link_smoke.challenge += challenge;
   for (const [merchant, c] of Object.entries(result.byRetailer ?? {}).slice(0, MAX_RETAILERS_PER_WEEK)) {
     const rChecked = clampCount(c?.checked);
     const rDead = Math.min(clampCount(c?.dead), rChecked);
+    const rChallenge = Math.min(clampCount(c?.challenge), rChecked - rDead);
     if (rChecked === 0) continue;
     const name = sanitizeMerchant(merchant);
     if (!name) continue;
-    const bucket = w.link_smoke.by_retailer[name] ?? { checked: 0, dead: 0 };
+    const bucket = w.link_smoke.by_retailer[name] ?? { checked: 0, dead: 0, challenge: 0 };
     bucket.checked += rChecked;
     bucket.dead += rDead;
+    bucket.challenge += rChallenge;
     w.link_smoke.by_retailer[name] = bucket;
   }
   return weeks;
@@ -458,8 +527,40 @@ export async function recordSearchOutcome(
 
 /** Record one dead-link smoke run (server-side; call from the ingest route). */
 export async function recordLinkSmoke(
-  result: { checked: number; dead: number; byRetailer: Record<string, { checked: number; dead: number }> },
+  result: {
+    checked: number;
+    dead: number;
+    challenge?: number;
+    byRetailer: Record<string, { checked: number; dead: number; challenge?: number }>;
+  },
   opts: { now?: number; dir?: string; kv?: SharedKv | null } = {},
 ): Promise<void> {
   await updateWeeklyCounters((weeks, week) => applyLinkSmoke(weeks, week, result), opts);
+}
+
+/**
+ * REEA-934 Change 4 — stamp the methodology annotation on a recorded week's
+ * link-smoke aggregate WITHOUT touching its counters (annotate, never
+ * rewrite). `week` targets a past bucket (the W37 annotation); undefined
+ * stamps the current week. A week with no stored record is left alone — an
+ * annotation must not fabricate an empty bucket. Best-effort like every
+ * store write.
+ */
+export async function annotateLinkSmoke(
+  annotation: { checkerContaminated: boolean; methodologyNote: string },
+  opts: { week?: string; now?: number; dir?: string; kv?: SharedKv | null } = {},
+): Promise<void> {
+  await updateWeeklyCounters((weeks, currentWeek) => {
+    const target = opts.week ?? currentWeek;
+    const existing = weeks[target];
+    if (!existing || typeof existing !== "object") return;
+    const w = ensureWeek(weeks, target);
+    w.link_smoke.checkerContaminated = annotation.checkerContaminated === true;
+    // Same string hygiene as every stored string: control chars stripped,
+    // bounded — the note is one sentence, not a document.
+    w.link_smoke.methodologyNote = annotation.methodologyNote
+      .replace(/[\u0000-\u001f\u007f]/g, " ")
+      .trim()
+      .slice(0, 500);
+  }, opts);
 }

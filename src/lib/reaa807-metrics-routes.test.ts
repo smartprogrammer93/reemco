@@ -147,3 +147,97 @@ describe("REEA-807 POST /api/metrics/link-smoke", () => {
     expect((await smokePOST(tooBig)).status).toBe(413);
   });
 });
+
+describe("REEA-935 POST /api/metrics/link-smoke — per-outcome counts + W37 annotation", () => {
+  it("AC-2.3: accepts ok/dead/challenge splits and persists the per-outcome aggregates", async () => {
+    const res = await smokePOST(
+      jsonReq("http://localhost/api/metrics/link-smoke", {
+        checked: 10,
+        dead: 1,
+        challenge: 2,
+        by_retailer: {
+          Wibi: { checked: 4, dead: 0, challenge: 2 },
+          Xcite: { checked: 6, dead: 1 },
+        },
+      }),
+    );
+    expect(res.status).toBe(202);
+    const { readWeeklyCounters } = await import("@/lib/metrics");
+    const weeks = await readWeeklyCounters({});
+    expect(weeks[WEEK_KEY].link_smoke).toMatchObject({
+      runs: 1,
+      checked: 10,
+      dead: 1,
+      challenge: 2,
+      ok: 7,
+    });
+    expect(weeks[WEEK_KEY].link_smoke.by_retailer["Wibi"]).toEqual({
+      checked: 4,
+      dead: 0,
+      challenge: 2,
+    });
+  });
+
+  it("rejects dead + challenge > checked", async () => {
+    const res = await smokePOST(
+      jsonReq("http://localhost/api/metrics/link-smoke", {
+        checked: 3,
+        dead: 2,
+        challenge: 2,
+        by_retailer: {},
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("AC-4.1: an annotation-only post stamps a PAST week's record without bumping any counter", async () => {
+    // Seed the past week with counters, then annotate it.
+    const { updateWeeklyCounters, readWeeklyCounters, emptyWeek } = await import("@/lib/metrics");
+    await updateWeeklyCounters((weeks) => {
+      weeks["2026-W37"] = {
+        ...emptyWeek(),
+        link_smoke: { ...emptyWeek().link_smoke, runs: 1, checked: 339, dead: 114, ok: 225 },
+      };
+    }, { now: Date.parse("2026-09-09T12:00:00Z") });
+    const before = (await readWeeklyCounters({}))["2026-W37"].link_smoke;
+
+    const res = await smokePOST(
+      jsonReq("http://localhost/api/metrics/link-smoke", {
+        checked: 0,
+        dead: 0,
+        by_retailer: {},
+        week: "2026-W37",
+        annotation: {
+          checkerContaminated: true,
+          methodologyNote:
+            "Checker-identity regime changed (daa7333) inside this bucket; C1/C2/C4 checker false-positive classes are ~75-80% of recorded dead (REEA-922).",
+        },
+      }),
+    );
+    expect(res.status).toBe(202);
+    const after = (await readWeeklyCounters({}))["2026-W37"].link_smoke;
+    // Counters untouched; only the annotation fields landed.
+    expect([after.runs, after.checked, after.dead, after.ok]).toEqual([
+      before.runs,
+      before.checked,
+      before.dead,
+      before.ok,
+    ]);
+    expect(after.checkerContaminated).toBe(true);
+    expect(after.methodologyNote).toContain("REEA-922");
+  });
+
+  it("AC-4.3: the weekly read exposes the derived rates and the annotation verbatim", async () => {
+    const { recordLinkSmoke, annotateLinkSmoke } = await import("@/lib/metrics");
+    await recordLinkSmoke({ checked: 50, dead: 3, challenge: 4, byRetailer: {} }, { now: WEEK_MS });
+    await annotateLinkSmoke({ checkerContaminated: true, methodologyNote: "legacy bucket" }, { now: WEEK_MS });
+    const res = await weeklyGET(jsonReq("http://localhost/api/metrics/weekly"));
+    const body = (await res.json()) as { weeks: Record<string, { link_smoke: Record<string, unknown> }> };
+    const ls = body.weeks[WEEK_KEY].link_smoke;
+    // dead rate excludes persistent challenges from the denominator: 3/(43+3)
+    expect(ls.dead_rate).toBeCloseTo(3 / 46, 5);
+    expect(ls.challenge_rate).toBeCloseTo(4 / 50, 5);
+    expect(ls.checkerContaminated).toBe(true);
+    expect(ls.methodologyNote).toBe("legacy bucket");
+  });
+});

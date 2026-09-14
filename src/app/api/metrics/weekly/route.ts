@@ -17,7 +17,10 @@
  *   retailer_adapter_attempts, retailer_adapter_failures,
  *   latency_band_lt_1s, latency_band_1_3s, latency_band_3_10s,
  *   latency_band_gt_10s,
- *   offer_link_clicks, link_smoke: { runs, checked, dead, by_retailer } } } }
+ *   offer_link_clicks,
+ *   link_smoke: { runs, checked, ok, dead, challenge, by_retailer,
+ *                 dead_rate, challenge_rate,
+ *                 checkerContaminated?, methodologyNote? } } } }
  *
  * REEA-871 — the cold-serve outcome split, the per-retailer adapter
  * attempts/failures and the four latency bands ride the same payload with
@@ -25,8 +28,16 @@
  * construction: cold_serves_full + cold_serves_pending == searches, the four
  * bands sum to searches, and retailer_adapter_failures ≤ attempts per
  * retailer. Weeks stored before the extension read back with 0 backfill.
+ *
+ * REEA-935 — link_smoke gains the per-outcome counts (ok/dead/challenge) and
+ * the derived rates: dead_rate = dead / (ok + dead) — persistent challenges
+ * excluded from the denominator — and challenge_rate = challenge / checked
+ * (an unknown is surfaced, never dropped). Legacy weeks backfill ok to
+ * checked - dead, so a pre-fix week's dead rate reads exactly as recorded.
+ * The W37 methodology annotation (checkerContaminated + methodologyNote)
+ * rides the same record verbatim.
  */
-import { RETENTION_WEEKS, isoWeekKey, readWeeklyCounters } from "@/lib/metrics";
+import { RETENTION_WEEKS, isoWeekKey, linkSmokeRates, readWeeklyCounters } from "@/lib/metrics";
 import { readEvents } from "@/lib/event-store";
 import type { FunnelEvent } from "@/lib/events";
 
@@ -77,7 +88,9 @@ export async function GET(req: Request): Promise<Response> {
       latency_band_3_10s: w.latency_band_3_10s,
       latency_band_gt_10s: w.latency_band_gt_10s,
       offer_link_clicks: clicks[week] ?? 0,
-      link_smoke: w.link_smoke,
+      // REEA-935 — per-outcome counts plus the derived dead/challenge rates;
+      // the annotation fields ride verbatim when stamped.
+      link_smoke: { ...w.link_smoke, ...linkSmokeRates(w.link_smoke) },
     };
   }
 

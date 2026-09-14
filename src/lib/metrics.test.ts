@@ -11,13 +11,16 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  annotateLinkSmoke,
   applyLinkSmoke,
   applySearchOutcome,
   emptyWeek,
   isoWeekKey,
   latencyBandOf,
+  linkSmokeRates,
   MAX_RETAILERS_PER_WEEK,
   METRICS_KV_KEY,
+  normalizeWeek,
   pruneWeeks,
   readWeeklyCounters,
   recordLinkSmoke,
@@ -146,8 +149,8 @@ describe("REEA-807 applyLinkSmoke", () => {
     expect(s.runs).toBe(2);
     expect(s.checked).toBe(15);
     expect(s.dead).toBe(1);
-    expect(s.by_retailer["Xcite"]).toEqual({ checked: 11, dead: 1 });
-    expect(s.by_retailer["Jarir"]).toEqual({ checked: 4, dead: 0 });
+    expect(s.by_retailer["Xcite"]).toEqual({ checked: 11, dead: 1, challenge: 0 });
+    expect(s.by_retailer["Jarir"]).toEqual({ checked: 4, dead: 0, challenge: 0 });
   });
 
   it("clamps dead > checked instead of recording impossible math", () => {
@@ -160,6 +163,113 @@ describe("REEA-807 applyLinkSmoke", () => {
     const s = weeks["2026-W37"].link_smoke;
     expect(s.dead).toBe(3);
     expect(s.by_retailer["Xcite"].dead).toBe(2);
+  });
+});
+
+describe("REEA-935 applyLinkSmoke per-outcome fold", () => {
+  it("folds ok/dead/challenge so every checked URL lands in exactly one outcome", () => {
+    const weeks: WeekCountersMap = {};
+    applyLinkSmoke(weeks, "2026-W38", {
+      checked: 54,
+      dead: 2,
+      challenge: 3,
+      byRetailer: {
+        Blink: { checked: 8, dead: 0, challenge: 2 },
+        Astore: { checked: 8, dead: 1 },
+      },
+    });
+    const s = weeks["2026-W38"].link_smoke;
+    expect(s).toMatchObject({ checked: 54, dead: 2, challenge: 3, ok: 49 });
+    expect(s.by_retailer["Blink"]).toEqual({ checked: 8, dead: 0, challenge: 2 });
+    expect(s.by_retailer["Astore"]).toEqual({ checked: 8, dead: 1, challenge: 0 });
+  });
+
+  it("clamps a hostile challenge payload against the ok bucket", () => {
+    const weeks: WeekCountersMap = {};
+    applyLinkSmoke(weeks, "2026-W38", {
+      checked: 5,
+      dead: 1,
+      challenge: 99,
+      byRetailer: {},
+    });
+    const s = weeks["2026-W38"].link_smoke;
+    expect(s.dead).toBe(1);
+    expect(s.challenge).toBe(4);
+    expect(s.ok).toBe(0);
+  });
+
+  it("AC-4.1: a legacy (pre-extension) week backfills ok/challenge and never rewrites checked/dead", () => {
+    const legacy = emptyWeek();
+    legacy.link_smoke = { ...legacy.link_smoke, runs: 2, checked: 339, dead: 114, by_retailer: { "Amazon.eg": { checked: 49, dead: 15, challenge: 0 } } } as typeof legacy.link_smoke;
+    // Simulate the pre-REEA-935 shape: no ok/challenge fields at all.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (legacy.link_smoke as any).ok;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (legacy.link_smoke as any).challenge;
+    const normalized = normalizeWeek(legacy);
+    expect(normalized.link_smoke.checked).toBe(339);
+    expect(normalized.link_smoke.dead).toBe(114);
+    expect(normalized.link_smoke.ok).toBe(225); // checked - dead: the rate it recorded
+    expect(normalized.link_smoke.challenge).toBe(0);
+    expect(normalized.link_smoke.by_retailer["Amazon.eg"]).toEqual({
+      checked: 49,
+      dead: 15,
+      challenge: 0,
+    });
+    // Idempotent: a second pass changes nothing.
+    expect(normalizeWeek(normalized).link_smoke).toEqual(normalized.link_smoke);
+  });
+
+  it("derives the dead rate over ok + dead and the challenge rate over checked", () => {
+    expect(linkSmokeRates({ ...emptyWeek().link_smoke, ok: 43, dead: 3, challenge: 4, checked: 50 })).toEqual({
+      dead_rate: 3 / 46,
+      challenge_rate: 4 / 50,
+    });
+    expect(linkSmokeRates({ ...emptyWeek().link_smoke, ok: 0, dead: 0, challenge: 0, checked: 0 })).toEqual({
+      dead_rate: 0,
+      challenge_rate: 0,
+    });
+  });
+});
+
+describe("REEA-935 annotateLinkSmoke", () => {
+  it("stamps the annotation on an existing week without touching counters", async () => {
+    const dir = tmpDir();
+    try {
+      await recordLinkSmoke(
+        { checked: 339, dead: 114, byRetailer: {} },
+        { dir, now: Date.UTC(2026, 8, 9) },
+      );
+      await annotateLinkSmoke(
+        {
+          checkerContaminated: true,
+          methodologyNote: "Pre/post daa7333 identity regime change; C1/C2/C4 ≈ 75–80% of recorded dead (REEA-922).",
+        },
+        { dir, week: "2026-W37" },
+      );
+      const weeks = await readWeeklyCounters({ dir });
+      const ls = weeks["2026-W37"].link_smoke;
+      expect(ls.checked).toBe(339);
+      expect(ls.dead).toBe(114);
+      expect(ls.checkerContaminated).toBe(true);
+      expect(ls.methodologyNote).toContain("REEA-922");
+    } finally {
+      cleanDir(dir);
+    }
+  });
+
+  it("never fabricates a bucket for a week with no stored record", async () => {
+    const dir = tmpDir();
+    try {
+      await annotateLinkSmoke(
+        { checkerContaminated: true, methodologyNote: "ghost week" },
+        { dir, week: "2020-W01" },
+      );
+      const weeks = await readWeeklyCounters({ dir });
+      expect(weeks["2020-W01"]).toBeUndefined();
+    } finally {
+      cleanDir(dir);
+    }
   });
 });
 
@@ -250,8 +360,10 @@ describe("REEA-807 store round-trip", () => {
     expect(Object.keys(week.retailer_adapter_failures as object)).toEqual([]);
     expect(Object.keys(week.link_smoke as object).sort()).toEqual([
       "by_retailer",
+      "challenge",
       "checked",
       "dead",
+      "ok",
       "runs",
     ]);
     // Retailer names only — no URL, no query, no identifier fields anywhere.
