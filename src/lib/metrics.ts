@@ -438,6 +438,23 @@ function parseBlob(raw: string | null): MetricsBlob {
   }
 }
 
+/**
+ * REEA-996 — parse that REPORTS failure instead of silently returning an
+ * empty map: a stored blob that fails to parse is a corrupted/unreadable
+ * store, which is a different fact from a store with no weeks.
+ */
+function parseBlobChecked(raw: string): WeekCountersMap | null {
+  try {
+    const parsed = JSON.parse(raw) as MetricsBlob;
+    if (!parsed || typeof parsed !== "object" || !parsed.weeks || typeof parsed.weeks !== "object") {
+      return null;
+    }
+    return parsed.weeks;
+  } catch {
+    return null;
+  }
+}
+
 function readLocal(dir: string): MetricsBlob {
   try {
     return parseBlob(readFileSync(metricsFile(dir), "utf8"));
@@ -459,22 +476,90 @@ function sharedKv(opts: { kv?: SharedKv | null } = {}): SharedKv | null {
 export async function readWeeklyCounters(
   opts: { dir?: string; kv?: SharedKv | null } = {},
 ): Promise<WeekCountersMap> {
+  return (await readWeeklyCountersDetailed(opts)).weeks;
+}
+
+/**
+ * REEA-996 — the classified read behind readWeeklyCounters. The intermittent
+ * empty `weeks: {}` the PM loop observed was the two failure modes of the
+ * shared read (KV unreachable / blob unparseable) collapsing into the same
+ * `null` as an honestly missing key, then degrading to the per-instance
+ * local layer — empty on a cold Vercel lambda — and answering 200 with an
+ * empty map that downstream readers file as "no data". This read keeps the
+ * facts apart:
+ *  - source "kv": the shared blob answered and supplied the weeks;
+ *  - source "local": the local layer supplied the weeks (no KV binding, a
+ *    genuinely missing key, or a failed KV read degraded to local);
+ *  - kvReadFailed: a KV store IS bound but the read FAILED (unreachable,
+ *    error envelope, or unparseable blob) — an empty `weeks` under this flag
+ *    is NOT evidence that the store has no data, and the weekly route must
+ *    fail loudly instead of serving a silent empty map.
+ */
+export interface WeeklyCountersRead {
+  weeks: WeekCountersMap;
+  /** Which layer supplied the returned weeks. */
+  source: "kv" | "local";
+  /** True when a KV store is bound but the read failed (REEA-996). */
+  kvReadFailed: boolean;
+}
+
+/** One classified attempt to read the shared blob. */
+type KvBlobRead =
+  | { state: "value"; weeks: WeekCountersMap }
+  | { state: "missing" }
+  | { state: "failed" };
+
+async function readKvBlob(kv: SharedKv): Promise<KvBlobRead> {
+  if (typeof kv.getChecked === "function") {
+    try {
+      const out = await kv.getChecked(METRICS_KV_KEY);
+      if (!out.reachable) return { state: "failed" };
+      if (out.value === null) return { state: "missing" };
+      const weeks = parseBlobChecked(out.value);
+      return weeks ? { state: "value", weeks } : { state: "failed" };
+    } catch {
+      return { state: "failed" };
+    }
+  }
+  // Legacy fakes without getChecked keep the historical semantics: a null
+  // read means "missing" and parseBlob's catch-all means empty weeks.
+  const raw = await kv.get(METRICS_KV_KEY).catch(() => null);
+  if (raw === null) return { state: "missing" };
+  return { state: "value", weeks: parseBlob(raw).weeks };
+}
+
+/** readWeeklyCounters with the storage-fact classification (REEA-996). */
+export async function readWeeklyCountersDetailed(
+  opts: { dir?: string; kv?: SharedKv | null } = {},
+): Promise<WeeklyCountersRead> {
   const kv = sharedKv(opts);
   const normalizeAll = (weeks: WeekCountersMap): WeekCountersMap => {
     for (const week of Object.values(weeks)) normalizeWeek(week);
     return weeks;
   };
+  const readLocalNormalized = (): WeekCountersMap =>
+    pruneWeeks(normalizeAll(readLocal(opts.dir ?? METRICS_DIR).weeks));
   if (kv) {
-    const raw = await kv.get(METRICS_KV_KEY).catch(() => null);
-    if (raw !== null) return pruneWeeks(normalizeAll(parseBlob(raw).weeks));
-    // KV unreachable: fall through to the local layer rather than losing
-    // everything (graceful degradation — the local layer still counts).
+    const blob = await readKvBlob(kv);
+    if (blob.state === "value") {
+      return { weeks: pruneWeeks(normalizeAll(blob.weeks)), source: "kv", kvReadFailed: false };
+    }
+    return {
+      weeks: readLocalNormalized(),
+      source: "local",
+      kvReadFailed: blob.state === "failed",
+    };
   }
-  return pruneWeeks(normalizeAll(readLocal(opts.dir ?? METRICS_DIR).weeks));
+  return { weeks: readLocalNormalized(), source: "local", kvReadFailed: false };
 }
 
 /** Apply `apply` to the buckets and persist (best-effort). KV-bound stores
- *  read-modify-write the shared blob; unbound stores rewrite the local file. */
+ *  read-modify-write the shared blob; unbound stores rewrite the local file.
+ *  REEA-996 — when the shared read FAILED, the shared write is skipped: a
+ *  read-modify-write over an unknown blob state would replace the shared
+ *  26-week history with whatever this instance's local layer happened to
+ *  hold (empty on a cold lambda). The increment degrades to the local layer
+ *  instead — the same posture as a failed shared write. */
 export async function updateWeeklyCounters(
   apply: (weeks: WeekCountersMap, week: string) => void,
   opts: { now?: number; dir?: string; kv?: SharedKv | null } = {},
@@ -483,16 +568,22 @@ export async function updateWeeklyCounters(
   const week = isoWeekKey(now);
   const kv = sharedKv(opts);
   let weeks: WeekCountersMap;
+  let skipSharedWrite = false;
   if (kv) {
-    const raw = await kv.get(METRICS_KV_KEY).catch(() => null);
-    weeks = raw !== null ? parseBlob(raw).weeks : readLocal(opts.dir ?? METRICS_DIR).weeks;
+    const blob = await readKvBlob(kv);
+    if (blob.state === "value") {
+      weeks = blob.weeks;
+    } else {
+      weeks = readLocal(opts.dir ?? METRICS_DIR).weeks;
+      skipSharedWrite = blob.state === "failed";
+    }
   } else {
     weeks = readLocal(opts.dir ?? METRICS_DIR).weeks;
   }
   apply(weeks, week);
   const pruned = pruneWeeks(weeks);
   const body = JSON.stringify({ version: 1, weeks: pruned } satisfies MetricsBlob);
-  if (kv) {
+  if (kv && !skipSharedWrite) {
     const ok = await kv.set(METRICS_KV_KEY, body, METRICS_KV_TTL_S).catch(() => false);
     if (!ok) {
       // Shared write failed — keep the increment on the local layer so the

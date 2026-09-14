@@ -19,9 +19,9 @@ process.env.EVENTS_DIR = mkdtempSync(join(tmpdir(), "reemco-test-events-"));
 process.env.KV_REST_API_URL = "";
 process.env.KV_REST_API_TOKEN = "";
 
-const { GET: weeklyGET } = await import("@/app/api/metrics/weekly/route");
+const { GET: weeklyGET, weeklyResponse } = await import("@/app/api/metrics/weekly/route");
 const { POST: smokePOST } = await import("@/app/api/metrics/link-smoke/route");
-const { recordSearchOutcome, isoWeekKey } = await import("@/lib/metrics");
+const { recordSearchOutcome, isoWeekKey, emptyWeek } = await import("@/lib/metrics");
 const { appendEvents } = await import("@/lib/event-store");
 
 // The route-side writes (smoke ingest, event timestamps) ride the REAL clock
@@ -113,6 +113,38 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
     const res = await weeklyGET(jsonReq("http://localhost/api/metrics/weekly?weeks=999"));
     const body = (await res.json()) as { window_weeks: number };
     expect(body.window_weeks).toBe(26);
+  });
+});
+
+describe("REEA-996 weekly empty-read guard", () => {
+  it("a failed store read with no local data fails loudly (503), never a silent empty map", async () => {
+    const res = weeklyResponse({ weeks: {}, source: "local", kvReadFailed: true }, {}, 8);
+    expect(res.status).toBe(503);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("retry-after")).toBe("5");
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.error).toBe("weekly_metrics_store_unreachable");
+    // Same metadata fields as the 200 shape, nothing new (data minimization).
+    expect(Object.keys(body).sort()).toEqual(["error", "generated_at", "retention_weeks", "window_weeks"]);
+    expect(body.retention_weeks).toBe(26);
+    expect(body.window_weeks).toBe(8);
+  });
+
+  it("a genuinely empty store still answers 200 with an empty map", async () => {
+    const res = weeklyResponse({ weeks: {}, source: "local", kvReadFailed: false }, {}, 8);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const body = (await res.json()) as { weeks: Record<string, unknown>; window_weeks: number };
+    expect(body.weeks).toEqual({});
+    expect(body.window_weeks).toBe(8);
+  });
+
+  it("a failed read that still degraded to local data answers 200 populated", async () => {
+    const res = weeklyResponse({ weeks: { "2026-W37": emptyWeek() }, source: "local", kvReadFailed: true }, { "2026-W37": 3 }, 8);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { weeks: Record<string, { searches: number; offer_link_clicks: number }> };
+    expect(body.weeks["2026-W37"].searches).toBe(0);
+    expect(body.weeks["2026-W37"].offer_link_clicks).toBe(3);
   });
 });
 

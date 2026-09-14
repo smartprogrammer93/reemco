@@ -36,8 +36,21 @@
  * checked - dead, so a pre-fix week's dead rate reads exactly as recorded.
  * The W37 methodology annotation (checkerContaminated + methodologyNote)
  * rides the same record verbatim.
+ *
+ * REEA-996 — the intermittent `weeks: {}` was never an honest "no data": a
+ * failed shared-KV read (unreachable / error envelope / unparseable blob)
+ * collapsed into the same null as a missing key and degraded to the
+ * per-instance local layer, empty on a cold lambda, and answered 200 with
+ * an empty map the PM loop files as no data (a threshold verdict flips on
+ * bad evidence — the REEA-862 rule this endpoint feeds). Now the read is
+ * classified: when a KV store is bound but the read FAILED and no local
+ * data exists, the route answers 503 with a Retry-After so the reader
+ * re-reads instead of misfiling; a genuinely empty store (KV reachable,
+ * key absent) still answers 200 with an empty map. The 200 payload shape,
+ * the aggregation and the 1–26 window clamping are untouched.
  */
-import { RETENTION_WEEKS, isoWeekKey, linkSmokeRates, readWeeklyCounters } from "@/lib/metrics";
+import { RETENTION_WEEKS, isoWeekKey, linkSmokeRates, readWeeklyCountersDetailed } from "@/lib/metrics";
+import type { WeeklyCountersRead } from "@/lib/metrics";
 import { readEvents } from "@/lib/event-store";
 import type { FunnelEvent } from "@/lib/events";
 
@@ -67,13 +80,25 @@ export function clicksByWeek(events: FunnelEvent[]): Record<string, number> {
 
 export async function GET(req: Request): Promise<Response> {
   const windowWeeks = parseWeeksParam(new URL(req.url).searchParams.get("weeks"));
-  const [counters, events] = await Promise.all([readWeeklyCounters(), readEvents()]);
-  const clicks = clicksByWeek(events);
+  const [read, events] = await Promise.all([readWeeklyCountersDetailed(), readEvents()]);
+  return weeklyResponse(read, clicksByWeek(events), windowWeeks);
+}
 
+/**
+ * REEA-996 — pure response builder, exported so the empty-read guard is
+ * pinnable without a KV-bound runtime: a failed store read with no local
+ * fallback data must fail loudly (503 + Retry-After), never silently
+ * answer an empty map.
+ */
+export function weeklyResponse(
+  read: WeeklyCountersRead,
+  clicks: Record<string, number>,
+  windowWeeks: number,
+): Response {
   const weeks: Record<string, unknown> = {};
-  const keys = Object.keys(counters).sort().slice(-windowWeeks);
+  const keys = Object.keys(read.weeks).sort().slice(-windowWeeks);
   for (const week of keys) {
-    const w = counters[week];
+    const w = read.weeks[week];
     weeks[week] = {
       searches: w.searches,
       zero_offer_searches: w.zero_offer_searches,
@@ -94,9 +119,25 @@ export async function GET(req: Request): Promise<Response> {
     };
   }
 
+  const generated_at = new Date().toISOString();
+  if (Object.keys(weeks).length === 0 && read.kvReadFailed) {
+    // The store could not be read and nothing local contradicts an empty
+    // answer — this is "unknown", not "no data". Fail loudly (non-200) so a
+    // threshold verdict is never flipped by bad evidence.
+    return Response.json(
+      {
+        error: "weekly_metrics_store_unreachable",
+        generated_at,
+        retention_weeks: MAX_WEEKS,
+        window_weeks: windowWeeks,
+      },
+      { status: 503, headers: { "cache-control": "no-store", "retry-after": "5" } },
+    );
+  }
+
   return Response.json(
     {
-      generated_at: new Date().toISOString(),
+      generated_at,
       retention_weeks: MAX_WEEKS,
       window_weeks: windowWeeks,
       weeks,

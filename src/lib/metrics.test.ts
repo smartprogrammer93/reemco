@@ -23,6 +23,7 @@ import {
   normalizeWeek,
   pruneWeeks,
   readWeeklyCounters,
+  readWeeklyCountersDetailed,
   recordLinkSmoke,
   recordSearchOutcome,
   searchOutcomeFromSnapshot,
@@ -609,5 +610,114 @@ describe("REEA-921 serveOutcomeOf guardrail", () => {
     // A truncated memo replay (the pre-fix pending class) has no live
     // follow-up of its own — the converged chain IS the served snapshot.
     expect(serveOutcomeOf({ settled: false }, { settled: false })).toBe("pending");
+  });
+});
+
+describe("REEA-996 classified weekly read + failed-read write guard", () => {
+  /** KV fake with a checked read whose reachability the test controls. */
+  function fakeKvChecked(): SharedKv & {
+    writes: { key: string; value: string; ttl: number }[];
+    failReads: boolean;
+    hasKey: boolean;
+  } {
+    const store = new Map<string, string>();
+    const writes: { key: string; value: string; ttl: number }[] = [];
+    return {
+      writes,
+      failReads: true,
+      hasKey: false,
+      async get(key) {
+        return store.get(key) ?? null;
+      },
+      async getChecked(key) {
+        if (this.failReads) return { reachable: false, value: null };
+        return { reachable: true, value: this.hasKey ? (store.get(key) ?? null) : null };
+      },
+      async set(key, value, ttlSeconds) {
+        writes.push({ key, value, ttl: ttlSeconds });
+        store.set(key, value);
+        return true;
+      },
+    };
+  }
+
+  it("a failed KV read is classified kvReadFailed and still degrades to local data", async () => {
+    const kv = fakeKvChecked();
+    const dir = tmpDir();
+    try {
+      // Seed ONLY the local layer (as a KV-less write would).
+      await recordSearchOutcome(
+        { zeroOffers: false, offersByRetailer: { Xcite: 1 }, serveOutcome: "full", serveLatencyMs: 900 },
+        { dir, kv: null, now: Date.UTC(2026, 8, 12) },
+      );
+      const read = await readWeeklyCountersDetailed({ dir, kv });
+      expect(read.kvReadFailed).toBe(true);
+      expect(read.source).toBe("local");
+      expect(read.weeks["2026-W37"].searches).toBe(1);
+      // The plain read is unchanged: same weeks, aggregation untouched.
+      const plain = await readWeeklyCounters({ dir, kv });
+      expect(plain["2026-W37"].searches).toBe(1);
+    } finally {
+      cleanDir(dir);
+    }
+  });
+
+  it("a reachable missing key is honest: kvReadFailed stays false even when local is empty", async () => {
+    const kv = fakeKvChecked();
+    kv.failReads = false;
+    const dir = tmpDir();
+    try {
+      const read = await readWeeklyCountersDetailed({ dir, kv });
+      expect(read.weeks).toEqual({});
+      expect(read.kvReadFailed).toBe(false); // a 200-empty answer is legitimate here
+    } finally {
+      cleanDir(dir);
+    }
+  });
+
+  it("an unparseable stored blob counts as a failed read, not as an empty store", async () => {
+    const kv = fakeKvChecked();
+    kv.failReads = false;
+    kv.hasKey = true;
+    await kv.set(METRICS_KV_KEY, "not-json-at-all", 60);
+    const dir = tmpDir();
+    try {
+      const read = await readWeeklyCountersDetailed({ dir, kv });
+      expect(read.kvReadFailed).toBe(true);
+      expect(read.weeks).toEqual({});
+    } finally {
+      cleanDir(dir);
+    }
+  });
+
+  it("a failed shared read never arms the shared write — the 26-week blob is not clobbered", async () => {
+    const kv = fakeKvChecked();
+    const dir = tmpDir();
+    try {
+      // History exists on the shared layer; this instance can only see its
+      // (seeded) local layer because the shared read keeps failing.
+      await recordSearchOutcome(
+        { zeroOffers: false, offersByRetailer: { Jarir: 4 }, serveOutcome: "full", serveLatencyMs: 900 },
+        { dir, kv: null, now: Date.UTC(2026, 8, 12) }, // 2026-W37
+      );
+      await recordSearchOutcome(
+        { zeroOffers: false, offersByRetailer: { Xcite: 1 }, serveOutcome: "full", serveLatencyMs: 900 },
+        { dir, kv, now: Date.UTC(2026, 8, 14) }, // 2026-W38
+      );
+      expect(kv.writes).toHaveLength(0); // shared SET skipped over an unreadable blob
+      const local = await readWeeklyCounters({ dir });
+      expect(local["2026-W37"].offers_by_retailer).toEqual({ Jarir: 4 });
+      expect(local["2026-W38"].offers_by_retailer).toEqual({ Xcite: 1 });
+      // A healthy read still writes through to the shared blob.
+      kv.failReads = false;
+      kv.hasKey = true;
+      await recordSearchOutcome(
+        { zeroOffers: false, offersByRetailer: { Xcite: 2 }, serveOutcome: "full", serveLatencyMs: 900 },
+        { dir, kv, now: Date.UTC(2026, 8, 14) },
+      );
+      expect(kv.writes).toHaveLength(1);
+    } finally {
+      cleanDir(dir);
+    }
   });
 });
