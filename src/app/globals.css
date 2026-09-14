@@ -197,6 +197,16 @@ a:focus-visible {
   border-color: var(--rc-line-strong);
 }
 
+/* REEA-983 — the empty-state card is a status surface, not a clickable result:
+   suppress the card hover lift so it never advertises an interaction it does
+   not have (its pills and retry form carry the interactivity). */
+.result-card.empty-state:hover,
+.result-card.empty-state:focus-within {
+  transform: none;
+  box-shadow: var(--rc-elev-1);
+  border-color: var(--rc-line);
+}
+
 /* Out-of-stock card: honest, muted, non-buyable */
 .result-card.is-oos {
   opacity: 0.7;
@@ -542,6 +552,23 @@ html[lang="ar"] .coupon-via {
   color: var(--rc-primary);
 }
 
+/* REEA-983 — dark-mode pill contrast (same bug class as the REEA-760 coupon
+   chip fix): the tint token keeps its light value in dark (the brief pins dark
+   overrides to nine roles only), so the pill kept #FFEDD5 behind the flipped
+   #FB923C primary ≈ 1.98:1, under the 4.5:1 floor at 13px. Component-level
+   override, placed AFTER .query-pill:hover so it wins the equal-specificity
+   cascade: #FB923C on #2B2118 ≈ 6.9:1. */
+@media (prefers-color-scheme: dark) {
+  .query-pill-on-light {
+    background: #2b2118;
+    color: var(--rc-dark-primary);
+  }
+
+  .query-pill-on-light:hover {
+    background: #352a1f;
+  }
+}
+
 /* Loading ghosts: card-shaped blocks with a sheen — pre-first-offer never a
    blank area. */
 @keyframes rc-sheen {
@@ -712,7 +739,7 @@ html[lang="ar"] .coupon-via {
   color: var(--rc-muted);
   border: 1px solid var(--rc-line);
   border-radius: var(--rc-radius-pill);
-  padding: 1px 8px;
+  padding: 2px 10px;
 }
 
 .related-band .related-item-link {

@@ -194,8 +194,10 @@ function EmptyState({
           </Link>
         ))}
       </div>
-      {/* FR-1.2 — the failed query pre-filled; retry is one keystroke away. */}
-      <div className="mt-4">
+      {/* FR-1.2 — the failed query pre-filled; retry is one keystroke away.
+          mt-6 (REEA-983): 24px puts the retry form on the space scale as the
+          terminal block of the card, one step past the pills. */}
+      <div className="mt-6">
         <SearchForm defaultValue={query} country={country} locale={locale} />
       </div>
     </div>
