@@ -56,11 +56,19 @@ export function collectedClock(iso: string | undefined): string | null {
 
 /**
  * REEA-930 scope 1 — whole-second age of a collection stamp, for the CTA
- * freshness line. Null for missing/invalid/future stamps (the same honesty
- * rule as relativeAge: callers fall back to the plain label, never fabricate
- * a time). Deliberately unformatted — the bucket copy lives in
- * i18n.localizedAge so the CTA can localize it; the clock stays injectable
- * (baked renderStartMs on the server, Date.now() only in the live ticker).
+ * freshness line. Null for missing/invalid stamps (the same honesty rule as
+ * relativeAge: callers fall back to the plain label, never fabricate a time).
+ * A PARSEABLE stamp is a real collection moment, so the age floors at 0
+ * (REEA-947 AC1): the CTA's baked reference clock (`renderStartMs`) is read
+ * BEFORE the live fan-out kicks off, so offers collected inside the same
+ * render carry stamps a few hundred ms AFTER it — a raw negative delta that
+ * is a render-order artifact, not a bogus stamp. Clamping to 0 is the honest
+ * "checked just now" (the exact Math.max(0,…) discipline FreshnessBadge
+ * already applies to the same race); LiveAge re-ticks against the real clock
+ * after hydration, where the delta is positive again. Deliberately
+ * unformatted — the bucket copy lives in i18n.localizedAge so the CTA can
+ * localize it; the clock stays injectable (baked renderStartMs on the
+ * server, Date.now() only in the live ticker).
  */
 export function ageSeconds(
   iso: string | undefined,
@@ -69,7 +77,5 @@ export function ageSeconds(
   if (!iso) return null;
   const t = new Date(iso).getTime();
   if (Number.isNaN(t)) return null;
-  const ageMs = now - t;
-  if (ageMs < 0) return null;
-  return Math.floor(ageMs / 1000);
+  return Math.max(0, Math.floor((now - t) / 1000));
 }
