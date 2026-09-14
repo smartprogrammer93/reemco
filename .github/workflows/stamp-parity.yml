@@ -1,0 +1,147 @@
+name: Stamp parity tripwire (REEA-991)
+
+# REEA-991 recurrence guard for REEA-985: pickup.yml only verifies stamp parity
+# AT PUSH TIME and alerts when its own run fails. The 2026-09-14 11:43Z TS2322
+# pickup failure left prod serving a 70-minute-stale stamp before anything
+# human-visible fired; the 13:40Z recurrence showed the same lag class. This
+# tripwire is the independent, time-based half: every 15 minutes it compares
+# the served https://reemco.vercel.app/__commit.txt against the real origin/main
+# head and, when they diverge for longer than the 15-minute detection window,
+# opens/appends a deduped `stamp-parity-alert` issue carrying:
+#   - served stamp vs expected head sha and how old the divergence is
+#   - the latest pickup run for that head (id + url + conclusion) — the
+#     "failing deployment" identifier — and, when that run failed, the first
+#     error line lifted from its failed-step logs (the build-gate cause).
+#
+# Scheduling/budget: curl + a handful of `gh api` calls, no checkout, seconds
+# per run on GitHub-hosted runners (same shape as uptime.yml's REEA-314
+# reasoning); */15 keeps worst-case detection at ~15 min + one window.
+# Concurrency drops overlaps; a queued burst can only delay detection, never
+# skip it, because the next cron tick re-measures.
+#
+# Non-goals: this is NOT the uptime probe (uptime.yml owns availability) and
+# does not touch deploy credentials or Vercel config — it is read-only over
+# the public stamp route and the repo's own Actions/deployments records via
+# the workflow `github.token` (Least Privilege: read-only scopes).
+#
+# Blast radius: zero on production — it deploys nothing and changes nothing.
+# Rollback: delete this file and revert the REEA-991 commit; pickup is
+# unaffected either way.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: # REEA-991 evidence: run a deliberate parity check on demand
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: stamp-parity
+  cancel-in-progress: true
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Compare served stamp against origin/main head
+        id: parity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u -o pipefail
+          BASE="https://reemco.vercel.app"
+
+          # Served stamp: retry a few times — REEA-578 showed edge nodes can
+          # answer the stamp route with the Security Checkpoint interstitial;
+          # /api/health carries the same commit in its build field.
+          SERVED=""
+          for i in 1 2 3; do
+            SERVED=$(curl -fsS -m 20 "$BASE/__commit.txt" 2>/dev/null | tr -d '[:space:]' || true)
+            [ -n "$SERVED" ] && break
+            H=$(curl -fsS -m 20 "$BASE/api/health" 2>/dev/null || true)
+            SERVED=$(printf '%s' "$H" | grep -oE '[0-9a-f]{12,40}' | head -1 || true)
+            [ -n "$SERVED" ] && { echo "stamp route challenged/empty; health build field: $H"; break; }
+            sleep 5
+          done
+          if [ -z "${SERVED:-}" ]; then
+            echo "STAMP_UNREACHABLE=1" >> "$GITHUB_ENV"
+            echo "::error::could not read the served stamp from /__commit.txt or /api/health — availability is uptime.yml's lane; if /api/health is also down, this run's evidence still stands."
+          fi
+
+          HEAD_JSON=$(gh api "repos/${{ github.repository }}/commits/main")
+          WANT=$(printf '%s' "$HEAD_JSON" | jq -r '.sha')
+          WANT_DATE=$(printf '%s' "$HEAD_JSON" | jq -r '.commit.committer.date')
+          AGE_MIN=$(( ( $(date -u +%s) - $(date -u -d "$WANT_DATE" +%s) ) / 60 ))
+          SERVED12="${SERVED:0:12}"; WANT12="${WANT:0:12}"
+          echo "served=$SERVED12 want=$WANT12 head_age=${AGE_MIN}min"
+
+          if [ "$SERVED" = "$WANT" ] || [ "$SERVED12" = "$WANT12" ]; then
+            echo "PARITY OK: prod serves $SERVED12 = origin/main head."
+            exit 0
+          fi
+
+          if [ -n "${STAMP_UNREACHABLE:-}" ]; then
+            echo "stamp route unreachable — treating as divergence for the record, but NOT opening a stamp-parity alert (uptime.yml owns availability alerting; a red uptime probe is the availability signal)."
+            exit 0
+          fi
+
+          if [ "$AGE_MIN" -le 15 ]; then
+            echo "Divergence is younger than the 15-minute detection window (head age ${AGE_MIN}min): pickup build (~6-12 min measured) may still be in flight. No alert; the next tick re-measures."
+            exit 0
+          fi
+
+          # Stale beyond the window: identify the failing deployment + cause.
+          PICKUP=$(gh run list --repo "${{ github.repository }}" --workflow pickup.yml \
+                     --commit "$WANT" --limit 1 \
+                     --json databaseId,conclusion,displayTitle,url 2>/dev/null || echo '[]')
+          RUN_ID=$(printf '%s' "$PICKUP" | jq -r '.[0].databaseId // empty')
+          RUN_CONCL=$(printf '%s' "$PICKUP" | jq -r '.[0].conclusion // "no pickup run recorded for this commit"')
+          RUN_URL=$(printf '%s' "$PICKUP" | jq -r '.[0].url // "n/a"')
+          FIRST_ERR=""
+          if [ -n "$RUN_ID" ] && [ "$RUN_CONCL" = "failure" ]; then
+            sleep 10 # run records settle before logs are queryable
+            FIRST_ERR=$(gh run view "$RUN_ID" --repo "${{ github.repository }}" --log-failed 2>/dev/null \
+              | grep -m1 -iE 'error|failed|✕' || true)
+            FIRST_ERR="${FIRST_ERR:0:300}"
+          fi
+          # GitHub deployment records for the head, when the deploy lane wrote them.
+          DEPLOY_IDS=$(gh api "repos/${{ github.repository }}/deployments?sha=$WANT" --jq 'map(.id) | join(", ")' 2>/dev/null || true)
+
+          {
+            echo "STALE=1"
+            echo "SERVED=${SERVED12:-unknown}"
+            echo "WANT=$WANT"
+            echo "AGE_MIN=$AGE_MIN"
+            echo "RUN_ID=${RUN_ID:-none}"
+            echo "RUN_CONCL=$RUN_CONCL"
+            echo "RUN_URL=$RUN_URL"
+            echo "FIRST_ERR=${FIRST_ERR//%/}"
+            echo "DEPLOY_IDS=${DEPLOY_IDS:-$DEPLOY_IDS}"
+          } >> "$GITHUB_ENV"
+          echo "STALE: prod serves ${SERVED12:-nothing}, origin/main is $WANT12 (${AGE_MIN}min old). pickup run: ${RUN_ID:-none} ($RUN_CONCL)."
+
+      - name: Alert on stamp divergence older than 15 minutes
+        if: env.STALE == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create stamp-parity-alert --color D93F0B \
+            --description "Served stamp diverged from origin/main past the 15-min window (REEA-991)" --force || true
+          BODY="Stamp-parity tripwire fired at $(date -u +%FT%TZ) (REEA-991).
+
+          - Served stamp: https://reemco.vercel.app/__commit.txt = \`${SERVED:-unknown}\`
+          - origin/main head: \`${WANT}\` (commit ${AGE_MIN} min old; divergence older than the 15-min window)
+          - Latest pickup run for the head: [\`${RUN_ID:-none}\`](${RUN_URL:-}) — conclusion: ${RUN_CONCL}
+          ${DEPLOY_IDS:++ - GitHub deployment id(s) for the head: ${DEPLOY_IDS}}
+          ${FIRST_ERR:+- First error in the failed pickup logs: \`${FIRST_ERR}\`}
+
+          If the pickup run failed, the likely cause is the Vercel buildCommand gate (lint/tests/next build) — fix on main and pickup redeploys; the previous artifact keeps serving meanwhile. Rollback: rerun Actions > Deploy site with rollback_sha = last known-good commit, or Vercel dashboard > Promote Previous Deployment. Re-check with Actions > 'Stamp parity tripwire (REEA-991)' > Run workflow."
+          if gh issue list --label stamp-parity-alert --state open --json url -q '.[0].url' | grep -q .; then
+            gh issue comment "$(gh issue list --label stamp-parity-alert --state open --json number -q '.[0].number')" --body "$BODY"
+          else
+            gh issue create --title "STAMP PARITY ALERT: prod serves ${SERVED:-unknown}, origin/main is ${WANT:0:12} (${AGE_MIN}min stale)" \
+              --label stamp-parity-alert --body "$BODY"
+          fi

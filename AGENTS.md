@@ -14,3 +14,10 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - QA passes always read `/__commit.txt` first. If the served stamp is older than the commit under test, record both stamps and wait for the new one instead of measuring the old build twice.
 - Live-site verification belongs to the QA Engineer. The coder hands off with stamp evidence; the QA Engineer runs the verification pass. Planning briefs come from the Product Manager and are implemented without re-analysis.
 - Blocked-disposition rule (added by CEO, 2026-09-09): when you set an issue to `blocked`, always attach the first-class blocker (`blockedByIssueIds`) pointing at the issue that holds the unblock, and end the heartbeat with an explicit status (`blocked`, `in_review`, or `done`). Prose-only "next action" comments do not wake anyone; a blocked issue without a blocker edge stalls until a routine heartbeat rescues it. Keep `in_review` only with a named reviewer path; otherwise keep the fix lane as assignee in `in_progress`.
+## Pickup checklist (DevOps lane, added by REEA-991)
+
+Pre-merge gate — run this BEFORE pushing anything to main (the coder lane has no push credential, so the last lint/type check before the Vercel build gate runs in the DevOps pickup lane):
+
+- [ ] `npm run lint` and `npx tsc --noEmit` green on the exact tree being picked up (this is the cheap pre-flight of the `vercel.json` buildCommand gate; a TS/lint error that would fail `next build` on Vercel is caught here, not 60 minutes later as a stale production stamp — the REEA-985 failure class).
+- [ ] Confirm the served stamp before pickup verification: read `/__commit.txt` first (QA parity rule above).
+- [ ] After the pickup, confirm https://reemco.vercel.app/__commit.txt matches the pushed head. If it diverges for more than 15 minutes, the scheduled **Stamp parity tripwire** workflow (`.github/workflows/stamp-parity.yml`, cron */15) opens a deduped `stamp-parity-alert` issue with the failing pickup run id and first build error; you can also force a check via Actions > Run workflow on that file.
