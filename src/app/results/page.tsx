@@ -1,6 +1,6 @@
 import ResultsClient from "@/components/ResultsClient";
 import { collectLiveResultsStaged } from "@/lib/collect/live-search";
-import { recordSearchOutcome, searchOutcomeFromSnapshot } from "@/lib/metrics";
+import { recordSearchOutcome, searchOutcomeFromSnapshot, serveOutcomeOf } from "@/lib/metrics";
 import { MARKET_COOKIE, resolveCountrySelection } from "@/lib/country";
 import { LOCALE_COOKIE, resolveUiLocale } from "@/lib/i18n";
 import { isRefreshSignal, REFRESH_COOKIE } from "@/lib/query-cache";
@@ -153,31 +153,46 @@ export default async function ResultsPage({
   after(async () => {
     await staged.allSettled;    // REEA-807 — aggregate outcome counters, folded in the same after() tail
     // that keeps the run's hops alive: one live fan-out page serve = one
-    // search; zero-offer and per-retailer offer counts read the CONVERGED
-    // answer (not the budget-finalized slice). Aggregate counters only —
+    // search; zero-offer and per-retailer offer counts read the fullest
+    // answer the page ended with (REEA-921: the converged answer, else the
+    // served document's own snapshot). Aggregate counters only —
     // no query content, no identifiers; storage is best-effort and must
     // never surface as a failed render.
     // REEA-871 — the same recording carries the approved aggregate
-    // extension: the cold-serve outcome (full when the converged answer has
-    // no pending/staged retailers left at recording time — a
-    // finalized-at-budget answer or a rejected converged chain counts as
-    // pending), the fan-out wall-clock latency banded into exactly one
-    // bucket, and the round-one adapter attempts/failures read off the run's
-    // own telemetry. Still aggregate-only; a rejected converged chain counts
-    // the search with the honest pending outcome rather than no outcome.
+    // extension: the cold-serve outcome, the fan-out wall-clock latency
+    // banded into exactly one bucket, and the round-one adapter
+    // attempts/failures read off the run's own telemetry. Still
+    // aggregate-only; a rejected converged chain counts the search with the
+    // honest pending outcome rather than no outcome.
+    // REEA-921 guardrail — "full" means the shopper's page reached full
+    // offers: the outcome reads the snapshot the SERVED DOCUMENT carried
+    // (staged.final) plus whether the registered follow-up delivered the
+    // converged answer (staged.converged — the same promise the follow-up
+    // feed folds into the open page), so a truncated serve whose follow-up
+    // delivered and an already-settled document classify identically
+    // instead of the same shopper-visible state splitting pending-at-<1s vs
+    // full-at-3-10s across repeats. Offer counts still read the fullest
+    // answer the page ended with (converged when it exists, else the served
+    // document's own snapshot). Aggregate-only; nothing new is stored
+    // beyond the existing full/pending split.
     if (query) {
-      const [snap, adapterTelemetry] = await Promise.all([
+      const [served, convSnap, adapterTelemetry] = await Promise.all([
+        staged.final.then(
+          (s) => s,
+          () => null,
+        ),
         staged.converged.then(
           (s) => s,
           () => null,
         ),
         staged.adapterTelemetry.catch(() => ({ attempts: {}, failures: {} })),
       ]);
+      const pageSnap = convSnap ?? served;
       await recordSearchOutcome({
-        ...(snap
-          ? searchOutcomeFromSnapshot(snap)
+        ...(pageSnap
+          ? searchOutcomeFromSnapshot(pageSnap)
           : { zeroOffers: false, offersByRetailer: {} }),
-        serveOutcome: snap && snap.settled !== false ? "full" : "pending",
+        serveOutcome: serveOutcomeOf(served, convSnap),
         // eslint-disable-next-line react-hooks/purity -- the recording clock is read in the deferred after() tail, never during render output.
         serveLatencyMs: Math.max(0, Date.now() - fanoutStartMs),
         adapterAttempts: adapterTelemetry.attempts,

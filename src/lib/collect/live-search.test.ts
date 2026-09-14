@@ -18,6 +18,7 @@ import {
   collectLiveResultsStaged,
   coverageLine,
   danubeHomeHits,
+  deepenSilent,
   followUpSnapshot,
   RESULTS_COMPLETION_BUDGET_MS,
   STAGE_TAIL_HEADROOM_MS,
@@ -2953,5 +2954,161 @@ describe("REEA-721 QA follow-up — exact-SKU lead (grade item 2)", () => {
     ]);
     expect(products.length).toBeGreaterThanOrEqual(2);
     expect(products[0]?.title).toContain("Anker");
+  });
+});
+
+/**
+ * REEA-921 — cold-query pending→full gap. Two pins, per the REEA-902 root
+ * cause: (1) a budget-finalized TRUNCATED snapshot (settled:false WITH
+ * products) must not own a FRESH memo entry — the repeat takes the
+ * stale-while-revalidate path (byte-identical cached first paint, live
+ * re-run behind the response, registered follow-up the page converges
+ * through); (2) deepenSilent excludes terminally-errored merchants (the
+ * bounded REEA-290 retry already burned two attempts) so the converged
+ * chain is not pinned to a third round-trip against a dead hop.
+ */
+describe("REEA-921 memo stale-write (pending class killed at the memo)", () => {
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+  }
+
+  function offerCount(snap: { products: { offers: unknown[] }[] }): number {
+    return snap.products.reduce((n, p) => n + p.offers.length, 0);
+  }
+
+  // Xcite + Blink answer instantly; Eureka's algolia hop answers with a
+  // third row SLOWLY — past the injected completion deadline, so the serve
+  // finalizes truncated (settled:false WITH products), the exact REEA-902
+  // shape. Everything else answers empty instantly (silent, no error).
+  function shapedFetch(opts: { slowMs?: number; calls?: string[] } = {}) {
+    return async (url: string): Promise<Response> => {
+      opts.calls?.push(url);
+      if (opts.slowMs && url.includes("algolia.net")) {
+        await new Promise((resolve) => setTimeout(resolve, opts.slowMs));
+      }
+      if (url.includes("eureka.com.kw")) {
+        // Eureka's discovery page: the credentials the query hop needs.
+        return new Response(
+          `<html><body><input id="cky" value="eurekatestapp"><input id="srcapk" value="eurekasearchkey1"></body></html>`,
+          { headers: { "content-type": "text/html" } },
+        );
+      }
+      if (url.includes("xcite.com")) {
+        return jsonResponse({
+          results: [{ hits: [{ name: "Sony WH-1000XM6", slug: "xm6", price: 199, currency: "KWD", inStock: true }] }],
+        });
+      }
+      if (url.includes("blink.com.kw")) {
+        return jsonResponse({
+          resources: { results: { products: [{ title: "Sony WH-1000XM6", handle: "xm6", available: true, price: "189.000" }] } },
+        });
+      }
+      if (url.includes("algolia.net")) {
+        return jsonResponse({ hits: [{ itmn: "Sony WH-1000XM6", objectID: "xm6-s", clprc: 179, avaqt: 2 }] });
+      }
+      return jsonResponse({});
+    };
+  }
+
+  it("a truncated finalize with products is written STALE — the repeat takes the SWR path and converges", async () => {
+    resetDiscoveryCache();
+    const cache = createQueryCache();
+    const calls: string[] = [];
+    const fetchImpl = shapedFetch({ slowMs: 250, calls });
+
+    // SERVE-1 (cold): finalizes truncated at the budget with 2 offer rows.
+    const first = collectLiveResultsStaged("xm6", { fetchImpl, cache, deadlineMs: 60 });
+    const firstFinal = await first.final;
+    expect(firstFinal.settled).toBe(false);
+    expect(offerCount(firstFinal)).toBe(2);
+
+    // The memo entry must NOT be fresh: a fresh entry would send every
+    // 60s-window repeat to the early return with no follow-up — the exact
+    // pending-forever population (77/274 = 28.1% of cold serves).
+    const memo = cache.read<unknown>("xm6");
+    expect(memo).not.toBeNull();
+    expect(memo!.stale).toBe(true);
+
+    // SERVE-2 (repeat, same window): stale path — cached first paint plus a
+    // LIVE re-run behind the response, and the run's converged chain is
+    // registered as this serve's follow-up.
+    const before = calls.length;
+    const repeat = collectLiveResultsStaged("xm6", { fetchImpl, cache, deadlineMs: 60 });
+    expect(repeat.stages.length).toBeGreaterThan(1);
+
+    // First paint byte-identical to what SERVE-1's document served (REEA-674
+    // AC4 restated for the stale path: only the follow-up fold differs).
+    const firstPaint = await repeat.stages[0];
+    expect(firstPaint.products).toEqual(firstFinal.products);
+
+    // The live re-run really ran behind the response (SWR, not a fresh hit).
+    await repeat.final;
+    expect(calls.length).toBeGreaterThan(before);
+
+    // The page reaches full offers: the registered follow-up carries the
+    // converged chain — SERVE-2's late hop folded in (3 offer rows).
+    const followUp = followUpSnapshot("xm6");
+    expect(followUp).not.toBeNull();
+    const converged = await followUp!;
+    expect(converged?.settled === false).toBe(false);
+    expect(offerCount(converged!)).toBe(3);
+  });
+
+  it("the follow-up registry key folds the locale exactly like the memo key (en fast path)", async () => {
+    resetDiscoveryCache();
+    const cache = createQueryCache();
+    const fetchImpl = shapedFetch();
+
+    // The route resolves the ui locale ("en" | "ar") and passes it verbatim;
+    // the staged path normalizes "en" to undefined for its memo key. The
+    // registry read must fold the SAME way or the English fast path never
+    // finds the page's own run (pre-fix: every en serve re-collected).
+    collectLiveResultsStaged("xm6", { fetchImpl, cache, locale: "en" });
+    expect(followUpSnapshot("xm6", "en")).not.toBeNull();
+
+    // "ar" still forks its own entry, exactly like the memo does.
+    collectLiveResultsStaged("xm7", { fetchImpl, cache, locale: "ar" });
+    expect(followUpSnapshot("xm7", "ar")).not.toBeNull();
+    expect(followUpSnapshot("xm7", "en")).toBeNull();
+  });
+});
+
+describe("REEA-921 deepenSilent error exclusion (dead lanes off the convergence tail)", () => {
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+  }
+
+  const answered: SearchHit = {
+    title: "Sony WH-1000XM6",
+    merchant: "Xcite",
+    price: 199,
+    currency: "KWD",
+    url: "https://www.xcite.com/sony-xm6",
+    inStock: true,
+    country: "KW",
+  };
+
+  it("skips terminally-errored merchants (bounded REEA-290 retry already ran), still deepens genuinely-silent ones", async () => {
+    resetDiscoveryCache();
+    const calls: string[] = [];
+    const fetchImpl = (async (url: string): Promise<Response> => {
+      calls.push(String(url));
+      return jsonResponse({});
+    }) as never;
+    const settled = [
+      { merchant: "Xcite", hits: [answered] },
+      { merchant: "Blink", hits: [], error: "503 after both attempts" },
+      { merchant: "Lulu Hypermarket", hits: [], error: undefined },
+    ];
+    await deepenSilent("xm6", settled, fetchImpl);
+
+    // The answered merchant is not re-collected at all.
+    expect(calls.filter((u) => u.includes("xcite.com"))).toHaveLength(0);
+    // The ERRORED merchant gets no third round-trip against the dead hop.
+    expect(calls.filter((u) => u.includes("blink.com.kw"))).toHaveLength(0);
+    // The genuinely-silent merchant still deepens under the enriched form.
+    // (call count is the collector own business — challenge hops etc.; the
+    // pin is that the deepen round REACHED it at all)
+    expect(calls.filter((u) => u.includes("luluhypermarket.com")).length).toBeGreaterThan(0);
   });
 });

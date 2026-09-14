@@ -95,6 +95,36 @@ describe("query cache window (REEA-277 / REEA-291 AC5)", () => {
     expect(cache.read<string>("sony")).toEqual({ value: "new", stale: false });
     expect(cache.size()).toBe(1);
   });
+
+  it("a stale-flagged write is born past the fresh edge but inside the ceiling (REEA-921)", () => {
+    const clock = fakeClock();
+    const cache = createQueryCache(clock.now);
+    // REEA-921 — a truncated budget-finalized snapshot is written with
+    // { stale: true }: the very next repeat must take the SWR path (live
+    // re-run behind the cached first paint), never the fresh early return.
+    cache.write("sony", { products: ["x"] }, { stale: true });
+
+    const hit = cache.read<{ products: string[] }>("sony");
+    expect(hit).not.toBeNull();
+    expect(hit!.stale).toBe(true);
+    expect(hit!.value.products).toEqual(["x"]);
+
+    // It still serves as the cached first paint until the ceiling (the
+    // backdated stamp counts against the ceiling too), then expires.
+    const remaining = QUERY_CACHE_MAX_AGE_MS - QUERY_CACHE_FRESH_MS - 1;
+    clock.advance(remaining);
+    expect(cache.read("sony")).not.toBeNull();
+    clock.advance(2);
+    expect(cache.read("sony")).toBeNull();
+
+    // A plain re-write at the same instant restores the fresh window.
+    cache.write("sony", { products: ["y"] });
+    clock.advance(QUERY_CACHE_FRESH_MS - 1);
+    expect(cache.read<{ products: string[] }>("sony")).toEqual({
+      value: { products: ["y"] },
+      stale: false,
+    });
+  });
 });
 
 describe("query cache keys (REEA-291 AC5)", () => {

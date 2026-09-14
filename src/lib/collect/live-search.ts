@@ -3093,15 +3093,24 @@ function finalizedSnapshot(
  * existing offer never depends on this round, and when every merchant already
  * answered there is nothing to deepen, so it stays a single round. Runs
  * inside the FINAL stage only, so mid-stream flushes stay single-hop.
+ *
+ * REEA-921 — merchants that already TERMINALLY ERRORED after the bounded
+ * REEA-290 retry (both attempts down, the coverage note carries the error)
+ * are excluded: the deepen round fires immediately after the round-one
+ * Promise.all, so a third back-to-back round-trip against a just-failed
+ * endpoint is rate-limit hostile and near-guaranteed to fail again — while
+ * its window pins the converged chain (the follow-up feed and the after()
+ * counter) to the dead hop. Only genuinely-silent merchants (answered empty,
+ * no error) deepen.
  */
-async function deepenSilent(
+export async function deepenSilent(
   q: string,
   settled: SettledAdapter[],
   fetchImpl: FetchImpl,
 ): Promise<void> {
   const firstHits: SearchHit[] = [];
   for (const s of settled) firstHits.push(...s.hits);
-  const missing = settled.filter((s) => s.hits.length === 0);
+  const missing = settled.filter((s) => s.hits.length === 0 && !s.error);
   if (firstHits.length === 0 || missing.length === 0) return;
   const enriched = enrichedQuery(firstHits, q);
   if (!enriched || enriched.toLowerCase() === q.toLowerCase()) return;
@@ -3517,6 +3526,16 @@ export function collectLiveResultsStaged(
   // instead of memoizing a blip. Nothing is bundled: writes are live fetches.
   const writeLiveAnswer = (snap: LiveSearchResult): void => {
     if (snap.products.length === 0 && snap.settled === false) return;
+    // REEA-921 — a budget-finalized TRUNCATED snapshot (settled:false WITH
+    // products) must not own a FRESH memo entry: inside the 60s fresh window
+    // a repeat took the memo-hit early return, registered no follow-up, and
+    // a page finalized at the budget stayed pending forever. Written STALE
+    // instead, the repeat takes the existing stale-while-revalidate path —
+    // the cached first paint is byte-identical (REEA-674 AC4 restated: only
+    // the follow-up fold differs), the live fan-out re-runs behind the
+    // response, and registerFollowUp below hands the open page the run's
+    // converged chain, so the page reaches full offers.
+    const truncated = snap.settled === false;
     // REEA-674 AC4 round 2 — preserveFreshWrite: inside the fresh window the
     // FIRST completed write owns the entry. Two back-to-back rounds of one
     // query can converge differently (whole chain inside the completion
@@ -3532,7 +3551,7 @@ export function collectLiveResultsStaged(
     // live fan-out answer of its own run.
     const current = cache.read<LiveSearchResult>(cacheKey);
     if (current && !current.stale && !opts.refresh) return;
-    cache.write(cacheKey, snap);
+    cache.write(cacheKey, snap, truncated ? { stale: true } : undefined);
     // REEA-602 — mirror the FINAL write-through into the shared layer so the
     // next recycled instance replays instead of re-paying the fan-out. Same
     // single writer per run, behind the response, TTL = memo ceiling.
@@ -3593,9 +3612,15 @@ function registerFollowUp(key: string, snap: Promise<LiveSearchResult>): void {
 
 /** Pending converged snapshot for a query, or null when nothing is in flight.
  *  The follow-up route awaits it with its own bounded wait; a failed chain
- *  resolves to null so the finalized page simply stands on its own. */
+ *  resolves to null so the finalized page simply stands on its own.
+ *  REEA-921 — the locale folds EXACTLY like the staged path's memo key
+ *  (`"en"` → undefined, only `"ar"` forks): the route passes the resolved
+ *  locale verbatim, so a literal `"en"` built a DIFFERENT key (`en|q`) than
+ *  the registry write (`q`) — the same-worker fast path never found the
+ *  page's own run for English queries and every serve fell through to the
+ *  cross-worker re-collection. */
 export function followUpSnapshot(query: string, locale?: "en" | "ar"): Promise<LiveSearchResult | null> | null {
-  const key = queryCacheKey(query, undefined, locale);
+  const key = queryCacheKey(query, undefined, locale === "ar" ? "ar" : undefined);
   const run = followUpRuns.get(key);
   if (!run) return null;
   if (Date.now() - run.startedAt > QUERY_CACHE_MAX_AGE_MS) {

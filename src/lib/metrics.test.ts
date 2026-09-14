@@ -23,6 +23,7 @@ import {
   recordLinkSmoke,
   recordSearchOutcome,
   searchOutcomeFromSnapshot,
+  serveOutcomeOf,
   RETENTION_WEEKS,
   updateWeeklyCounters,
   type WeekCountersMap,
@@ -474,5 +475,27 @@ describe("REEA-871 retailer adapter attempts/failures", () => {
     expect(w.retailer_adapter_failures).toEqual({ Jarir: 1 });
     // The old week rides along untouched, still readable.
     expect(weeks["2026-W36"].searches).toBe(4);
+  });
+});
+
+describe("REEA-921 serveOutcomeOf guardrail", () => {
+  it("a settled served document counts full regardless of the follow-up", () => {
+    expect(serveOutcomeOf({ settled: true }, { settled: false })).toBe("full");
+    expect(serveOutcomeOf({}, null)).toBe("full");
+    expect(serveOutcomeOf({ settled: undefined }, { settled: undefined })).toBe("full");
+  });
+
+  it("a truncated serve with a delivered follow-up counts full — the page reached full offers", () => {
+    expect(serveOutcomeOf({ settled: false }, { settled: undefined })).toBe("full");
+    expect(serveOutcomeOf({ settled: false }, {})).toBe("full");
+  });
+
+  it("a truncated serve with a rejected/absent follow-up stays honest pending", () => {
+    expect(serveOutcomeOf({ settled: false }, { settled: false })).toBe("pending");
+    expect(serveOutcomeOf({ settled: false }, null)).toBe("pending");
+    expect(serveOutcomeOf(null, null)).toBe("pending");
+    // A truncated memo replay (the pre-fix pending class) has no live
+    // follow-up of its own — the converged chain IS the served snapshot.
+    expect(serveOutcomeOf({ settled: false }, { settled: false })).toBe("pending");
   });
 });

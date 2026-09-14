@@ -111,8 +111,13 @@ export interface QueryCacheHit<T> {
 export interface QueryCache {
   /** Entry for the key, or null on miss/expiry. Never throws. */
   read<T>(key: string): QueryCacheHit<T> | null;
-  /** Store a freshly fetched value; evicts the oldest entry when full. */
-  write<T>(key: string, value: T): void;
+  /** Store a freshly fetched value; evicts the oldest entry when full.
+   *  REEA-921 — `opts.stale` stores the entry ALREADY past its fresh window
+   *  (a truncated budget-finalized snapshot must not own a fresh entry), so
+   *  the very next repeat takes the stale-while-revalidate path instead of
+   *  the fresh early return. The entry still serves as the cached first
+   *  paint until the ceiling, unchanged. */
+  write<T>(key: string, value: T, opts?: { stale?: boolean }): void;
   /** Distinct entries currently held (test/diagnostics support). */
   size(): number;
   /** Test support: make cache counts deterministic across test cases. */
@@ -142,7 +147,7 @@ export function createQueryCache(now: () => number = () => Date.now()): QueryCac
       }
       return { value: hit.value as T, stale: age > QUERY_CACHE_FRESH_MS };
     },
-    write<T>(key: string, value: T): void {
+    write<T>(key: string, value: T, opts?: { stale?: boolean }): void {
       // Oldest-first eviction keeps the map bounded without a sweeper; the
       // read path already expires entries past the ceiling.
       if (!map.has(key) && map.size >= QUERY_CACHE_MAX_ENTRIES) {
@@ -156,7 +161,12 @@ export function createQueryCache(now: () => number = () => Date.now()): QueryCac
         }
         if (oldestKey) map.delete(oldestKey);
       }
-      map.set(key, { value, writtenAt: now() });
+      // REEA-921 — a stale-flagged write is stamped just past the fresh edge
+      // so `read` flags it stale immediately (one clock read, no special
+      // field on the entry): the cached snapshot still serves as the first
+      // paint, but repeats re-run the live fan-out behind it.
+      const writtenAt = opts?.stale ? now() - QUERY_CACHE_FRESH_MS - 1 : now();
+      map.set(key, { value, writtenAt });
     },
     size(): number {
       return map.size;

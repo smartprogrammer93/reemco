@@ -319,6 +319,29 @@ export function searchOutcomeFromSnapshot(snap: {
   return { zeroOffers: (snap.products?.length ?? 0) === 0, offersByRetailer };
 }
 
+/**
+ * REEA-921 counter guardrail — "full" means the shopper's page reached full
+ * offers. Two aggregate inputs decide it, both already in memory at the
+ * after() recording:
+ *  - `served`: the snapshot the SERVED DOCUMENT carried (the page's own
+ *    final stage — settled, or a budget-finalized truncated answer),
+ *  - `followUp`: the run's converged chain, which the registered follow-up
+ *    feed folds into the open page when it lands full.
+ * The page reached full offers when EITHER holds: the document itself was
+ * settled, or the registered follow-up delivered the converged answer. A
+ * truncated serve with a rejected/absent follow-up stays honest pending.
+ * Pure; aggregate-only — no query text, no identifiers, nothing new stored
+ * beyond the existing full/pending split.
+ */
+export function serveOutcomeOf(
+  served: { settled?: boolean } | null | undefined,
+  followUp: { settled?: boolean } | null | undefined,
+): ServeOutcome {
+  if (served && served.settled !== false) return "full";
+  if (followUp && followUp.settled !== false) return "full";
+  return "pending";
+}
+
 function defaultMetricsDir(): string {
   if (process.env.METRICS_DIR) return process.env.METRICS_DIR;
   if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
