@@ -10,6 +10,8 @@ import { filterProductsByStock, sanitizeShowOutOfStock } from "@/lib/stock";
 import { appendEvents } from "@/lib/event-store";
 import { isBotUserAgent } from "@/lib/bot-ua";
 import { buildRenderEvents } from "@/lib/metrics-events";
+import { partitionByConfidence } from "@/lib/confidence";
+import { exactSkuKeep } from "@/lib/relevance";
 import { randomUUID } from "node:crypto";
 import type { Metadata } from "next";
 import { after } from "next/server";
@@ -226,8 +228,10 @@ export default async function ResultsPage({
   // the page ended with (converged, else the served snapshot) after the SAME
   // country/stock filters the client applies to the visible set — the total
   // across pages, since resultCount is the query's primary result count, not
-  // one page slice. relatedCount is 0 until the R2 confidence hierarchy
-  // (REEA-964) supplies the classified split.
+  // one page slice. The primary/related split rides the SAME confidence
+  // partition the client renders (REEA-964's stagedSections chain, mirrored
+  // here on the pure lib pieces) — the metrics count what the page counts,
+  // so zero_result_shown fires exactly when the page shows the empty state.
   after(async () => {
     if (!query || isBotUserAgent(hint.userAgent)) return;
     try {
@@ -238,14 +242,21 @@ export default async function ResultsPage({
         (s) => s,
         () => null,
       ));
-      const visible = snap
-        ? filterProductsByStock(filterProductsByCountry(snap.products, country), showOutOfStock)
-        : [];
+      const sections = snap
+        ? partitionByConfidence(
+            query,
+            filterProductsByStock(
+              filterProductsByCountry(snap.products, country),
+              showOutOfStock,
+              exactSkuKeep(query),
+            ),
+          )
+        : { primary: [], related: [] };
       const events = buildRenderEvents({
         queryId,
         query,
-        primaryCount: visible.length,
-        relatedCount: 0,
+        primaryCount: sections.primary.length,
+        relatedCount: sections.related.length,
       });
       if (events.length > 0) await appendEvents(events);
     } catch {
@@ -258,11 +269,9 @@ export default async function ResultsPage({
       className="results-viewport-reserve mx-auto w-full px-6 py-6"
       style={{ maxWidth: "var(--rc-layout-max-w)" }}
     >
-      {/* REEA-965 — the per-query id rides a JSX spread because the receiving
-          props seam lands with the in-flight R2 UI (REEA-964); spread keeps
-          this file type-clean against the committed props today and activates
-          the pass-through the moment the seam lands. Until then the client
-          simply ignores the extra prop. */}
+      {/* REEA-965 — the per-query id rides the committed REEA-964 props seam:
+          click events client-side join the same query execution's server-side
+          search_performed through this value (FR-3.1). */}
       <ResultsClient
         query={query}
         page={page}
@@ -271,7 +280,7 @@ export default async function ResultsPage({
         locale={locale}
         stages={staged.stages}
         renderStartMs={renderStartMs}
-        {...({ queryId } as { queryId?: string })}
+        queryId={queryId}
       />
     </div>
   );

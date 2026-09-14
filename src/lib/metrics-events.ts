@@ -11,14 +11,28 @@
  *
  * Coupon-hit rate per retailer = coupon_hit / offer_rendered per retailer
  * (FR-3.3) — the R4 investment decision input. `priceSanityStatus` reuses
- * R1's flag annotation; until R1 (REEA-963) lands it is emitted as null
- * per the spec's cross-spec dependency note — this spec must not block on
- * R1.
+ * R1's flag annotation (see priceSanityStatusOf — R1 has landed; offers the
+ * cohort pass never reached still emit null per the pre-R1 contract).
  */
 import { V1_SCHEMA_VERSION, type FunnelEvent } from "@/lib/events";
+import type { OfferSanity } from "@/types/product";
 
 /** A v1 event without the store-assigned id/ts. */
 export type V1Event = Omit<FunnelEvent, "id" | "ts">;
+
+/**
+ * REEA-963 R1 interop — map the per-offer sanity annotation onto the
+ * `priceSanityStatus` event property. R1 landed after this schema shipped,
+ * so the pre-R1 contract (null) stays for offers that never ran the cohort
+ * pass (catalog seeds, suggestion rows): `null` = "no sanity verdict exists",
+ * which is a different fact from "verdict: ok". Flagged offers emit their
+ * REASON (`outlier_high`, `currency_mis_map`, …) so the flagged-rate metric
+ * per adapter (R1 §10) is derivable from the event stream alone.
+ */
+export function priceSanityStatusOf(sanity: OfferSanity | undefined): string | null {
+  if (!sanity) return null;
+  return sanity.status === "flagged" && sanity.reason ? sanity.reason : "ok";
+}
 
 /** Minimal card-level facts the rendered results set carries per offer. */
 export interface RenderedOffer {

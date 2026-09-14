@@ -5,6 +5,7 @@ import {
   buildFirstResultClick,
   buildResultClick,
   buildRelatedClick,
+  priceSanityStatusOf,
 } from "@/lib/metrics-events";
 import { validateEvent } from "@/lib/events";
 
@@ -85,5 +86,15 @@ describe("metrics-events builders", () => {
     expect(
       validateEvent(buildFirstResultClick({ queryId, offerId: "p1", retailer: "Xcite" })).ok,
     ).toBe(true);
+  });
+});
+
+// REEA-963 R1 interop — the sanity verdict maps onto priceSanityStatus so the
+// flagged-rate per adapter (R1 §10) is derivable from the event stream alone.
+describe("priceSanityStatusOf (REEA-965 <-> R1)", () => {
+  it("maps ok / flagged-reason / never-ran distinctly", () => {
+    expect(priceSanityStatusOf({ status: "ok" })).toBe("ok");
+    expect(priceSanityStatusOf({ status: "flagged", reason: "currency_mis_map" })).toBe("currency_mis_map");
+    expect(priceSanityStatusOf(undefined)).toBeNull();
   });
 });

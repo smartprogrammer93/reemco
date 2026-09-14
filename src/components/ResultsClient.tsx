@@ -23,11 +23,17 @@ import {
   type CountryCode,
 } from "@/lib/country";
 import { trackEvents } from "@/lib/telemetry";
+import {
+  buildOfferRenderedEvents,
+  buildRelatedClick,
+  priceSanityStatusOf,
+  type RenderedOffer,
+} from "@/lib/metrics-events";
 import { HeadingGhost, SkeletonCard, StampGhost, coverageLhTier } from "@/components/SkeletonSlots";
 import { PRODUCTS } from "@/lib/feed";
 import { exactSkuKeep } from "@/lib/relevance";
 import { partitionByConfidence } from "@/lib/confidence";
-import { formatPrice } from "@/lib/format";
+import { formatPrice, sortOffers } from "@/lib/format";
 import SearchForm from "@/components/SearchForm";
 import { coverageLine, type LiveSearchResult } from "@/lib/collect/coverage";
 import { markLiveRefresh, withRefreshBypass } from "@/lib/query-cache";
@@ -196,12 +202,41 @@ function EmptyState({
   );
 }
 
+/* REEA-965 — map one rendered card to its offer-metrics facts (FR-3.3's
+   offer_rendered/coupon_hit unit). The retailer is the merchant whose offer
+   LEADS the card — the same sortOffers order the rows render in, so the
+   attributed retailer is the one the card's CTA acts on; priceSanityStatus
+   rides R1's per-offer annotation (null when the cohort pass never ran). */
+function offerMetricsFor(products: readonly NormalizedProduct[]): RenderedOffer[] {
+  return products.map((p) => {
+    const lead = sortOffers(p.offers, p.coupons[0] ?? null)[0];
+    return {
+      offerId: p.productId,
+      retailer: lead?.merchant ?? "unknown",
+      hasCoupon: p.coupons.length > 0,
+      priceSanityStatus: priceSanityStatusOf(lead?.sanity),
+    };
+  });
+}
+
 /* REEA-964 FR-2 — the related-accessories band: the SECOND section of the
    results page, always clearly labeled "not an exact match", capped at
    RELATED_CAP (6), visually subordinate (compact rows, muted band styling —
    visual polish belongs to the Graphic Designer). Never renders as peer
-   cards inside primary results. */
-function RelatedBand({ items, locale }: { items: NormalizedProduct[]; locale?: Locale }) {
+   cards inside primary results.
+   REEA-965 — a band-item click fires the spec-table `related_click`
+   (queryId, offerId, retailer) fire-and-forget; the retailer is the item's
+   cheapest-offer merchant and the event simply doesn't fire when the item
+   carries no offer (no invented retailer — data minimization). */
+function RelatedBand({
+  items,
+  locale,
+  queryId,
+}: {
+  items: NormalizedProduct[];
+  locale?: Locale;
+  queryId?: string;
+}) {
   const t = getStrings(locale ?? clientLocale());
   if (items.length === 0) return null;
   return (
@@ -224,6 +259,13 @@ function RelatedBand({ items, locale }: { items: NormalizedProduct[]; locale?: L
                 href={`/product/${encodeURIComponent(p.productId)}`}
                 className="related-item-link focusable"
                 aria-label={`${t.relatedChip}: ${p.title}`}
+                onClick={() => {
+                  // REEA-965 AC-9 — fire-and-forget; navigation is not delayed.
+                  if (!queryId || !priced) return;
+                  trackEvents([
+                    buildRelatedClick({ queryId, offerId: p.productId, retailer: priced.merchant }),
+                  ]);
+                }}
               >
                 <span className="related-item-title">{p.title}</span>
                 {priced ? (
@@ -260,6 +302,7 @@ function ResultsGrid({
   locale,
   kuwaitBatchPending,
   kuwaitPendingStatus,
+  queryId,
 }: {
   products: NormalizedProduct[];
   query: string;
@@ -274,6 +317,8 @@ function ResultsGrid({
    *  batch-pending = settled rules, byte-for-byte. */
   kuwaitBatchPending?: boolean;
   kuwaitPendingStatus?: boolean;
+  /** REEA-965 — per-query metrics id, threaded to the cards' click events. */
+  queryId?: string;
 }) {
   const t = getStrings(locale ?? clientLocale());
   const bestAt = bestBadgeIndex(products);
@@ -295,6 +340,7 @@ function ResultsGrid({
             showOutOfStock={showOutOfStock} locale={locale}
             renderStartMs={renderStartMs}
             cascadeIndex={i}
+            queryId={queryId}
           />
         ))}
       </div>
@@ -454,6 +500,8 @@ function FlushBlock(props: {
   locale?: Locale;
   kuwaitBatchPending?: boolean;
   kuwaitPendingStatus?: boolean;
+  /** REEA-965 — per-query metrics id (threaded via the StageAppend spread). */
+  queryId?: string;
 }) {
   const { products, bestAt, query, page, country, showOutOfStock, renderStartMs, locale, kuwaitBatchPending, kuwaitPendingStatus } = props;
   if (products.length === 0) return null;
@@ -475,6 +523,7 @@ function FlushBlock(props: {
             showOutOfStock={showOutOfStock} locale={locale}
             renderStartMs={renderStartMs}
             cascadeIndex={i}
+            queryId={props.queryId}
           />
         ))}
       </div>
@@ -500,6 +549,8 @@ function StageAppend(props: {
   showOutOfStock: boolean;
   renderStartMs?: number;
   locale?: Locale;
+  /** REEA-965 — per-query metrics id; rides the {...props} spread into FlushBlock. */
+  queryId?: string;
 }) {
   const { stages, index, page, country, showOutOfStock } = props;
   const snap = use(stages[index]);
@@ -701,6 +752,8 @@ function StageEmptyState(props: {
   country: CountryCode | null;
   showOutOfStock: boolean;
   locale?: Locale;
+  /** REEA-965 — per-query metrics id for the band's related_click events. */
+  queryId?: string;
 }) {
   const snap = use(props.stages[props.stages.length - 1]);
   if (props.query.length === 0 || snap.settled === false) return null;
@@ -719,7 +772,7 @@ function StageEmptyState(props: {
         locale={props.locale}
         tries={snap.attemptedQueries}
       />
-      <RelatedBand items={sections.related} locale={props.locale} />
+      <RelatedBand items={sections.related} locale={props.locale} queryId={props.queryId} />
     </>
   );
 }
@@ -825,6 +878,8 @@ function StagedResults(props: {
   onRefresh: () => void;
   renderStartMs?: number;
   locale?: Locale;
+  /** REEA-965 — per-query metrics id from the server render. */
+  queryId?: string;
 }) {
   const { stages, query, page, country, showOutOfStock, onSelectCountry, onToggleStock, onRefresh, locale } = props;
   const finalPromise = stages[stages.length - 1];
@@ -907,8 +962,16 @@ function StagedResults(props: {
         rank: (page - 1) * PAGE_SIZE + i,
         item_id: p.productId,
       })),
+      // REEA-965 — offer_rendered/coupon_hit ride the SAME converged-set pass
+      // (one emission per rendered card, coupon_hit exactly where the card's
+      // coupon module has an offer, so the FR-3.3 ratio can never drift
+      // between two snapshots). Fire-and-forget; the transport chunks to the
+      // endpoint's per-request cap.
+      ...(props.queryId
+        ? buildOfferRenderedEvents({ queryId: props.queryId, offers: offerMetricsFor(products) })
+        : []),
     ]);
-  }, [eventsKey, query, page, products]);
+  }, [eventsKey, query, page, products, props.queryId]);
 
   if (finalSnap && finalSections && products) {
     // Converged view: full count + empty state, identical to the blocking path.
@@ -955,7 +1018,7 @@ function StagedResults(props: {
               locale={locale}
               tries={finalSnap.attemptedQueries}
             />
-            <RelatedBand items={finalSections.related} locale={locale} />
+            <RelatedBand items={finalSections.related} locale={locale} queryId={props.queryId} />
             <CoverageLine notes={finalSnap.notes} products={products} locale={locale} />
           </>
         ) : (
@@ -968,6 +1031,7 @@ function StagedResults(props: {
               country={country}
               showOutOfStock={showOutOfStock} locale={locale}
               renderStartMs={props.renderStartMs}
+              queryId={props.queryId}
               /* REEA-835/847 — batch-pending only while the Kuwait batch may
                   still land: a finalized-at-budget snapshot clears when the
                   follow-up feed has answered (the REEA-437 one-shot grammar);
@@ -977,7 +1041,7 @@ function StagedResults(props: {
               kuwaitBatchPending={finalSnap.settled === false && !feedDone}
               kuwaitPendingStatus={finalSnap.kuwaitPendingStatus === true}
             />
-            <RelatedBand items={finalSections.related} locale={locale} />
+            <RelatedBand items={finalSections.related} locale={locale} queryId={props.queryId} />
           </>
         )}
       </ResultsErrorBoundary>
@@ -1051,6 +1115,7 @@ function StagedResults(props: {
             country={country}
             showOutOfStock={showOutOfStock} locale={locale}
             renderStartMs={props.renderStartMs}
+            queryId={props.queryId}
           />
         </Suspense>
       </div>
@@ -1065,6 +1130,7 @@ function StagedResults(props: {
           country={country}
           showOutOfStock={showOutOfStock}
           locale={locale}
+          queryId={props.queryId}
         />
       </Suspense>
     </ResultsErrorBoundary>
@@ -1212,8 +1278,13 @@ function ResultsInner(props: {
         rank: (page - 1) * PAGE_SIZE + i,
         item_id: p.productId,
       })),
+      // REEA-965 — offer_rendered/coupon_hit on the same converged-set pass
+      // as the plain path's impressions (see the staged-path twin above).
+      ...(props.queryId
+        ? buildOfferRenderedEvents({ queryId: props.queryId, offers: offerMetricsFor(products) })
+        : []),
     ]);
-  }, [staged, eventsKey, query, page, zero, matchCount, products]);
+  }, [staged, eventsKey, query, page, zero, matchCount, products, props.queryId]);
 
   if (staged) {
     return (
@@ -1227,6 +1298,7 @@ function ResultsInner(props: {
         onToggleStock={onToggleStock}
         onRefresh={onRefresh}
         renderStartMs={props.renderStartMs}
+        queryId={props.queryId}
       />
     );
   }
@@ -1239,7 +1311,7 @@ function ResultsInner(props: {
       {zero ? (
         <>
           <EmptyState query={query} country={country} locale={locale} />
-          <RelatedBand items={plainSections.related} locale={locale} />
+          <RelatedBand items={plainSections.related} locale={locale} queryId={props.queryId} />
         </>
       ) : (
         <>
@@ -1250,8 +1322,9 @@ function ResultsInner(props: {
             country={country}
             showOutOfStock={showOutOfStock} locale={locale}
             renderStartMs={props.renderStartMs}
+            queryId={props.queryId}
           />
-          <RelatedBand items={plainSections.related} locale={locale} />
+          <RelatedBand items={plainSections.related} locale={locale} queryId={props.queryId} />
         </>
       )}
     </ResultsErrorBoundary>
