@@ -84,30 +84,44 @@ async function fetchTimeout(url, init) {
   return fetch(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), redirect: "follow" });
 }
 
-/** Live snapshot for one fixture query — the site's own converged fan-out. */
+/** Live snapshot for one fixture query — the site's own converged fan-out.
+ *
+ * REEA-922 fix 2/2 — ONE retry when the feed answers nothing useful. The
+ * route answers `null` while a cold cross-worker run is still converging (its
+ * bounded wait can expire before the chain lands), and an immediate repeat
+ * rides that run's memo/registration and answers in full — observed live
+ * 2026-09-14: a cold follow-up call waited out its 8 s window for "iphone"
+ * and returned null (0 offers sampled for the whole fixture query), while the
+ * immediate repeat answered 50 offers. A single-shot sampling fetch starves
+ * the sample exactly when the feed is slow-but-healthy; the retry keeps the
+ * smoke's pacing polite (one pause, still one bounded fetch pair per query).
+ */
 async function collectOffers(query) {
   const url = `${BASE}/api/results-followup?q=${encodeURIComponent(query)}`;
-  try {
-    const res = await fetchTimeout(url, { headers: { accept: "application/json" } });
-    if (!res.ok) {
-      console.log(`WARN ${res.status} ${url}`);
-      return [];
-    }
-    const snap = await res.json();
-    const products = Array.isArray(snap?.products) ? snap.products : [];
-    const out = [];
-    for (const p of products) {
-      for (const o of Array.isArray(p?.offers) ? p.offers : []) {
-        if (typeof o?.url === "string" && typeof o?.merchant === "string" && /^https?:\/\//.test(o.url)) {
-          out.push({ merchant: o.merchant, url: o.url });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await sleep(1500);
+    try {
+      const res = await fetchTimeout(url, { headers: { accept: "application/json" } });
+      if (!res.ok) {
+        console.log(`WARN ${res.status} ${url}`);
+        continue;
+      }
+      const snap = await res.json();
+      const products = Array.isArray(snap?.products) ? snap.products : [];
+      const out = [];
+      for (const p of products) {
+        for (const o of Array.isArray(p?.offers) ? p.offers : []) {
+          if (typeof o?.url === "string" && typeof o?.merchant === "string" && /^https?:\/\//.test(o.url)) {
+            out.push({ merchant: o.merchant, url: o.url });
+          }
         }
       }
+      if (out.length > 0 || attempt === 1) return out;
+    } catch (e) {
+      console.log(`WARN followup fetch failed for "${query}": ${e?.message ?? e}`);
     }
-    return out;
-  } catch (e) {
-    console.log(`WARN followup fetch failed for "${query}": ${e?.message ?? e}`);
-    return [];
   }
+  return [];
 }
 
 async function checkUrl(url) {
