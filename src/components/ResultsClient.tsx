@@ -6,7 +6,7 @@ import Link from "next/link";
 import CountryFilter from "@/components/CountryFilter";
 import StockToggle from "@/components/StockToggle";
 import ProductResultCard from "@/components/ProductResultCard";
-import { searchProducts, suggestProducts } from "@/lib/search";
+import { searchProducts } from "@/lib/search";
 import { sanitizePage, sanitizeSearchQuery } from "@/lib/search-params";
 import {
   bestBadgeIndex,
@@ -25,7 +25,10 @@ import {
 import { trackEvents } from "@/lib/telemetry";
 import { HeadingGhost, SkeletonCard, StampGhost, coverageLhTier } from "@/components/SkeletonSlots";
 import { PRODUCTS } from "@/lib/feed";
-import { isAccessoryTitle, partitionForQuery, exactSkuKeep } from "@/lib/relevance";
+import { exactSkuKeep } from "@/lib/relevance";
+import { partitionByConfidence } from "@/lib/confidence";
+import { formatPrice } from "@/lib/format";
+import SearchForm from "@/components/SearchForm";
 import { coverageLine, type LiveSearchResult } from "@/lib/collect/coverage";
 import { markLiveRefresh, withRefreshBypass } from "@/lib/query-cache";
 import { clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
@@ -133,27 +136,27 @@ export function LoadingFallback({ locale }: { locale?: Locale }) {
   );
 }
 
-/* Brief v4 empty state: single card echoing the query, suggested-query pills
-   from the relaxed live collection, Retry. The query lives in the URL, so
-   Retry never loses it.
-   REEA-281 AC-3: the zero-result state ALWAYS carries the three CATEGORY
-   links — not one-off product examples — so the shopper has at least THREE
-   clickable ways onward whatever the relaxed live collection returned (a
-   broad category stays useful whatever was being searched). Live suggestion
-   pills ride FIRST when the collection found anything; categories follow,
-   deduped against them. */
-/* REEA-279: the three category pills read their labels from the locale table
-   so the AR shell offers Arabic queries (Arabic queries match Arabic
-   retailer titles exactly like English ones — same live path). */
+/* REEA-964 FR-1 — the honest empty state. Copy is SPEC-PINNED (FR-1.1):
+   heading exactly "No match found" (do not reword without PM sign-off), a
+   sub-line suggesting rephrasing, then the THREE static editorially chosen
+   example queries rendered as pills. The failed query lives in the pre-filled
+   retry input (FR-1.2), not in the heading. REEA-437's tries line stays — a
+   zero answer names what the live run searched. Supersedes the REEA-281
+   live-suggestion pill row: a loosely-related suggestion must never
+   masquerade as an onward result.
+   E6: when the run's notes show the merchants ERRORED (zero offers because
+   the stores didn't answer), the card says so instead of implying a no-match
+   — honesty cuts both ways. */
 function EmptyState({
   query,
-  suggestions,
+  unavailable,
   country,
   locale,
   tries,
 }: {
   query: string;
-  suggestions: NormalizedProduct[];
+  /** E6 — zero offers because the adapters failed, not an empty shelf. */
+  unavailable?: boolean;
   country: CountryCode | null;
   locale?: Locale;
   /** REEA-437 AC-2 — the query forms the live run issued before declaring
@@ -162,41 +165,78 @@ function EmptyState({
   tries?: string[];
 }) {
   const t = getStrings(locale ?? clientLocale());
-  const pills = suggestions.slice(0, 3).map((p) => p.title);
-  // AC-3 floor: the three category links ride in whatever the live
-  // collection returned — deduped so a category that IS the suggestion is
-  // not repeated, but never fewer than the three broad onward paths.
-  for (const c of [t.catPhones, t.catFragrances, t.catKitchen]) {
-    if (!pills.includes(c)) pills.push(c);
-  }
   return (
-    <div className="result-card mx-auto w-full max-w-xl">
-      <h2 style={{ font: "var(--rc-text-h2)", color: "var(--rc-ink)" }}>
-        {fill(t.emptyTitle, { q: query })}
-      </h2>
+    <div className="result-card empty-state mx-auto w-full max-w-xl" data-empty-state="true">
+      <h2 style={{ font: "var(--rc-text-h2)", color: "var(--rc-ink)" }}>{t.emptyTitle}</h2>
       <p className="mt-2" style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
         {t.emptyBody}
       </p>
+      {unavailable ? (
+        <p className="mt-2" style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
+          {t.emptyUnavailable}
+        </p>
+      ) : null}
       {tries && tries.length > 0 ? (
         <p className="mt-2" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
           {fill(t.triedForms, { tries: tries.join('”, “') })}
         </p>
       ) : null}
       <div className="mt-4 flex flex-wrap gap-2">
-        {pills.map((q) => (
+        {[t.emptyExample1, t.emptyExample2, t.emptyExample3].map((q) => (
           <Link key={q} href={buildResultsHref(q, 1, country)} className="query-pill query-pill-on-light">
             {q}
           </Link>
         ))}
       </div>
-      <button
-        type="button"
-        onClick={() => window.location.reload()}
-        className="btn-primary focusable mt-4 h-11 px-5"
-      >
-        {t.retry}
-      </button>
+      {/* FR-1.2 — the failed query pre-filled; retry is one keystroke away. */}
+      <div className="mt-4">
+        <SearchForm defaultValue={query} country={country} locale={locale} />
+      </div>
     </div>
+  );
+}
+
+/* REEA-964 FR-2 — the related-accessories band: the SECOND section of the
+   results page, always clearly labeled "not an exact match", capped at
+   RELATED_CAP (6), visually subordinate (compact rows, muted band styling —
+   visual polish belongs to the Graphic Designer). Never renders as peer
+   cards inside primary results. */
+function RelatedBand({ items, locale }: { items: NormalizedProduct[]; locale?: Locale }) {
+  const t = getStrings(locale ?? clientLocale());
+  if (items.length === 0) return null;
+  return (
+    <section
+      className="related-band"
+      aria-label={t.relatedNotExactLabel}
+      data-related-band="true"
+      style={{ marginTop: "var(--rc-space-8)" }}
+    >
+      <h2 className="related-band-title" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
+        {t.relatedNotExactLabel}
+      </h2>
+      <ul className="related-band-list mt-2">
+        {items.map((p) => {
+          const priced = [...p.offers].sort((a, b) => a.price - b.price)[0];
+          return (
+            <li key={p.productId} className="related-item" data-related-item="true">
+              <span className="related-chip">{t.relatedChip}</span>
+              <Link
+                href={`/product/${encodeURIComponent(p.productId)}`}
+                className="related-item-link focusable"
+                aria-label={`${t.relatedChip}: ${p.title}`}
+              >
+                <span className="related-item-title">{p.title}</span>
+                {priced ? (
+                  <span className="related-item-meta" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
+                    {t.fromWord} {formatPrice(priced.price, priced.currency)}
+                  </span>
+                ) : null}
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 
@@ -204,9 +244,12 @@ function EmptyState({
    minmax(0,1fr) tracks keep long product titles from widening the grid past
    the viewport at 375px (smoke step 5). Shared by the staged and plain paths
    so both converge on identical markup.
-   REEA-189 Rule 2 — device-intent queries render TWO STACKED grids (Devices
-   above Accessories, each keeping the incoming rank order inside it); every
-   other query keeps the plain single grid. */
+   REEA-964 FR-2.1 — the grid renders ONLY confident matches, inside the
+   primary <section> (distinct role/heading in the DOM so the two-section
+   separation is machine-checkable); below-threshold rows ride the labeled
+   RelatedBand instead (the REEA-189 Devices/Accessories stacked grids —
+   which still let an accessory peer with the device at full card size — are
+   superseded by the confidence partition). */
 function ResultsGrid({
   products,
   query,
@@ -233,12 +276,9 @@ function ResultsGrid({
   kuwaitPendingStatus?: boolean;
 }) {
   const t = getStrings(locale ?? clientLocale());
-  const tier = partitionForQuery(products);
-  if (!tier.tiered) {
-    // REEA-213: exactly one Best-price badge, on the first in-stock card of
-    // the final sorted order (first card when nothing is stocked).
-    const bestAt = bestBadgeIndex(products);
-    return (
+  const bestAt = bestBadgeIndex(products);
+  return (
+    <section aria-label={t.primaryResultsAria} data-primary-section="true">
       <div
         className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]"
         style={{ marginTop: "var(--rc-space-8)" }}
@@ -258,56 +298,7 @@ function ResultsGrid({
           />
         ))}
       </div>
-    );
-  }
-  const bestAt = bestBadgeIndex(tier.devices);
-  return (
-    <>
-      <div aria-label={t.devicesLabel}>
-        <div
-          className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]"
-          style={{ marginTop: "var(--rc-space-8)" }}
-        >
-          {tier.devices.map((p, i) => (
-            <ProductResultCard
-              key={p.productId}
-              product={p}
-              isBest={i === bestAt}
-              kuwaitBatchPending={kuwaitBatchPending} kuwaitPendingStatus={kuwaitPendingStatus}
-              query={query}
-              rank={(page - 1) * PAGE_SIZE + i}
-              country={country}
-              showOutOfStock={showOutOfStock} locale={locale}
-              renderStartMs={renderStartMs}
-              cascadeIndex={i}
-            />
-          ))}
-        </div>
-      </div>
-      {tier.accessories.length > 0 && (
-        <div aria-label={t.accessoriesLabel}>
-          <div
-            className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]"
-            style={{ marginTop: "var(--rc-space-4)" }}
-          >
-            {tier.accessories.map((p, i) => (
-              <ProductResultCard
-                key={p.productId}
-                product={p}
-                isBest={false}
-                kuwaitBatchPending={kuwaitBatchPending} kuwaitPendingStatus={kuwaitPendingStatus}
-                query={query}
-                rank={(page - 1) * PAGE_SIZE + tier.devices.length + i}
-                country={country}
-                showOutOfStock={showOutOfStock} locale={locale}
-                renderStartMs={renderStartMs}
-                cascadeIndex={i}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-    </>
+    </section>
   );
 }
 
@@ -330,6 +321,9 @@ export default function ResultsClient(props: {
   renderStartMs?: number;
   /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
   locale?: Locale;
+  /** REEA-965 — per-query-execution id from the server render; consumed by
+   *  the R2 instrumentation (search_performed / zero_result_shown). */
+  queryId?: string;
 }) {
   return (
     <Suspense fallback={<LoadingFallback locale={props.locale} />}>
@@ -383,6 +377,29 @@ function SelectionRow({
    the exact-SKU keep-predicate rides the stock stage so the code-matched card
    survives the default OOS card-level drop (its all-OOS offer set renders
    honestly as out-of-stock instead of erasing the lead into a fake zero). */
+/* Selections apply BEFORE the confidence partition, per snapshot — same chain
+   (country, then stock) the plain path runs, so staged and converged views
+   agree. REEA-964: the partition splits the filtered set into primary
+   (confident) and related (below threshold, capped) — the page slice applies
+   to the PRIMARY list only; the related band is capped by the partition
+   itself, on every page. REEA-822: the exact-SKU keep-predicate rides the
+   stock stage so the code-matched card survives the default OOS card-level
+   drop (its all-OOS offer set renders honestly as out-of-stock instead of
+   erasing the lead into a fake zero). */
+function stagedSections(
+  snap: LiveSearchResult,
+  query: string,
+  country: CountryCode | null,
+  showOutOfStock: boolean,
+): { primary: NormalizedProduct[]; related: NormalizedProduct[] } {
+  const filtered = filterProductsByStock(
+    filterProductsByCountry(snap.products, country),
+    showOutOfStock,
+    exactSkuKeep(query),
+  );
+  return partitionByConfidence(query, filtered);
+}
+
 function stagedView(
   snap: LiveSearchResult,
   query: string,
@@ -390,22 +407,9 @@ function stagedView(
   country: CountryCode | null,
   showOutOfStock: boolean,
 ): NormalizedProduct[] {
-  const filtered = filterProductsByStock(
-    filterProductsByCountry(snap.products, country),
-    showOutOfStock,
-    exactSkuKeep(query),
-  );
-  return filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-}
-
-function stagedSuggestions(
-  snap: LiveSearchResult,
-  country: CountryCode | null,
-  showOutOfStock: boolean,
-): NormalizedProduct[] {
-  return filterProductsByStock(
-    filterProductsByCountry(snap.suggestions ?? snap.products.slice(0, 3), country),
-    showOutOfStock,
+  return stagedSections(snap, query, country, showOutOfStock).primary.slice(
+    (page - 1) * PAGE_SIZE,
+    page * PAGE_SIZE,
   );
 }
 
@@ -440,8 +444,6 @@ function StagedGridGhost() {
 
 
 function FlushBlock(props: {
-  label?: string;
-  order: number;
   products: NormalizedProduct[];
   bestAt: number;
   query: string;
@@ -453,13 +455,13 @@ function FlushBlock(props: {
   kuwaitBatchPending?: boolean;
   kuwaitPendingStatus?: boolean;
 }) {
-  const { label, order, products, bestAt, query, page, country, showOutOfStock, renderStartMs, locale, kuwaitBatchPending, kuwaitPendingStatus } = props;
+  const { products, bestAt, query, page, country, showOutOfStock, renderStartMs, locale, kuwaitBatchPending, kuwaitPendingStatus } = props;
   if (products.length === 0) return null;
   // REEA-213: inside a participating block the badge rides the first
   // in-stock card of the final sorted order, never a later cheaper one.
   const badgeAt = bestAt < 0 ? -1 : bestBadgeIndex(products);
   return (
-    <div aria-label={label} style={{ order }}>
+    <div>
       <div className={GRID_CLASS}>
         {products.map((p, i) => (
           <ProductResultCard
@@ -486,11 +488,9 @@ function FlushBlock(props: {
    All values derive purely from the snapshot pair — no mutable accumulators —
    so flush order, hydration, and re-renders land on identical markup.
 
-   REEA-189 Rule 2: under device intent each flush lands inside the Devices /
-   Accessories stacked containers. `order` (Devices 1, Accessories 2) makes the
-   stacking hold ACROSS flushes too — a device arriving late still stacks above
-   accessories from earlier flushes — while every card keeps its slot inside
-   its own container. Non-device queries keep the plain single block. */
+   REEA-964: flushes render CONFIDENT (primary) cards only; the related band
+   is a separate final-stage boundary (StageEmptyState below), so a
+   below-threshold row can never append into the primary flow mid-stream. */
 function StageAppend(props: {
   stages: Promise<LiveSearchResult>[];
   index: number;
@@ -502,7 +502,6 @@ function StageAppend(props: {
   locale?: Locale;
 }) {
   const { stages, index, page, country, showOutOfStock } = props;
-  const t = getStrings(props.locale ?? clientLocale());
   const snap = use(stages[index]);
   const visible = stagedView(snap, props.query, page, country, showOutOfStock);
   // Snapshots are cumulative, so comparing against the adjacent prior stage is
@@ -515,9 +514,7 @@ function StageAppend(props: {
   // REEA-222: badge ownership follows the first flush that actually RENDERS
   // cards, not index 0 blindly. When the earliest snapshots are empty under
   // the country/stock selections, the whole page used to render without any
-  // Best-price badge (only index 0 could carry one). Same rule inside the
-  // tiered path: the Accessories block owns the badge only when it is the
-  // only rendered block up to here.
+  // Best-price badge (only index 0 could carry one).
   const badgeOwner = index === 0 || prevVisible.length === 0;
   // REEA-835/847 — the Kuwait batch is still pending for THIS render when
   // more answers may still land: any intermediate flush (later stages are
@@ -532,49 +529,20 @@ function StageAppend(props: {
   // interim SAR/EGP lead a Kuwait best price (REEA-847 cold-query repro).
   const kuwaitBatchPending = index < stages.length - 1 || snap.settled === false;
   const kuwaitPendingStatus = snap.kuwaitPendingStatus === true;
-  // The tier gate reads the FULL matched set (cumulative snapshot), so the
-  // decision only ever flips toward tiering as more retailers answer.
-  const tiered = partitionForQuery(visible).tiered;
   const next = index + 1 < stages.length ? (
     <Suspense fallback={null}>
       <StageAppend {...props} index={index + 1} />
     </Suspense>
   ) : null;
 
-  if (!tiered) {
-    return (
-      <>
-        <FlushBlock order={1} products={fresh} bestAt={badgeOwner ? 0 : -1} kuwaitBatchPending={kuwaitBatchPending} kuwaitPendingStatus={kuwaitPendingStatus} {...props} />
-        {next}
-      </>
-    );
-  }
-  const devices = fresh.filter((p) => !isAccessoryTitle(p.title));
-  const accessories = fresh.filter((p) => isAccessoryTitle(p.title));
   return (
     <>
-      <FlushBlock
-        label={t.devicesLabel}
-        order={1}
-        
-        products={devices}
-        bestAt={badgeOwner ? 0 : -1}
-        kuwaitBatchPending={kuwaitBatchPending} kuwaitPendingStatus={kuwaitPendingStatus}
-        {...props}
-      />
-      <FlushBlock label={t.accessoriesLabel} order={2} products={accessories} bestAt={badgeOwner && devices.length === 0 ? 0 : -1} kuwaitBatchPending={kuwaitBatchPending} kuwaitPendingStatus={kuwaitPendingStatus} {...props} />
+      <FlushBlock products={fresh} bestAt={badgeOwner ? 0 : -1} kuwaitBatchPending={kuwaitBatchPending} kuwaitPendingStatus={kuwaitPendingStatus} {...props} />
       {next}
     </>
   );
 }
 
-/* REEA-332 item 2 — the count heading carries one hint line whenever its own
-   count reads zero for a real query: "No matches — try a shorter phrase.",
-   small text in the muted colour. Deriving the hint from the SAME count the
-   heading renders keeps every view (streamed shell, converged staged view,
-   plain fallback) on one rule — the hint appears exactly when the heading
-   says zero, and one shared component keeps the markup identical across the
-   three sites so hydration never forks. */
 function CountHeading({ count, query, locale }: { count: number; query: string; locale?: Locale }) {
   const t = getStrings(locale ?? clientLocale());
   return (
@@ -720,6 +688,42 @@ function StagePendingRow(props: {
   return <DeviceLeadPendingRow locale={props.locale} />;
 }
 
+/* REEA-964 — streamed empty-state + related band. Resolves with the FINAL
+   stage (the only snapshot where every hop has settled), so the honest empty
+   state and the capped related band land in the SERVED document when the run
+   settled at zero confident matches — not only after hydration. A
+   finalized-at-budget zero stays provisional (null here; the REEA-437 heading
+   ghost covers the gap until the follow-up feed answers). */
+function StageEmptyState(props: {
+  stages: readonly Promise<LiveSearchResult>[];
+  query: string;
+  page: number;
+  country: CountryCode | null;
+  showOutOfStock: boolean;
+  locale?: Locale;
+}) {
+  const snap = use(props.stages[props.stages.length - 1]);
+  if (props.query.length === 0 || snap.settled === false) return null;
+  const sections = stagedSections(snap, props.query, props.country, props.showOutOfStock);
+  if (sections.primary.length > 0) return null;
+  // E6 — zero offers because the merchants errored (not a real empty shelf)
+  // says so, instead of implying a no-match. Requires zero related rows too:
+  // with related items the page is "near match", not an outage story.
+  const sawErrors = snap.notes.some((n) => typeof n.error === "string");
+  return (
+    <>
+      <EmptyState
+        query={props.query}
+        unavailable={sections.related.length === 0 && sawErrors}
+        country={props.country}
+        locale={props.locale}
+        tries={snap.attemptedQueries}
+      />
+      <RelatedBand items={sections.related} locale={props.locale} />
+    </>
+  );
+}
+
 /* REEA-601 — the streamed page paints its rows APPEND-ONLY: each flushed
    boundary keeps its slots, so what is actually on screen is the union of the
    per-stage views in paint order (a cheaper late arrival re-ranks the FINAL
@@ -741,10 +745,20 @@ export function renderedAcrossStages(
   return Promise.all(
     stages.map((stage) =>
       stage.then((snap) => {
-        const view = stagedView(snap, query, page, country, showOutOfStock);
-        if (!Array.isArray(view)) {
-          // REEA-822 DEBUG: production SSR reports a non-iterable stage view here.
+        // REEA-964 — the painted set is primary slice + related band (both
+        // derive from the same confidence partition the render uses), so a
+        // merchant visible only through the related band still gets named.
+        let view: NormalizedProduct[];
+        try {
+          const sections = stagedSections(snap, query, country, showOutOfStock);
+          view = [
+            ...sections.primary.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+            ...sections.related,
+          ];
+        } catch {
+          // REEA-822 DEBUG: production SSR reported a non-iterable stage view here.
           console.error("REA822-DEBUG non-array stagedView; snap=", typeof snap, JSON.stringify(snap)?.slice(0, 400), "args:", typeof query, page, country, showOutOfStock);
+          view = [];
         }
         return view;
       }),
@@ -869,8 +883,14 @@ function StagedResults(props: {
 
   // REEA-37 funnel events fire once per CONVERGED result set (identity with
   // the REEA-186 stock selection included), so partial flushes never emit
-  // half-count impression storms.
-  const products = finalSnap ? stagedView(finalSnap, query, page, country, showOutOfStock) : null;
+  // half-count impression storms. REEA-964: the count is the PRIMARY
+  // (confident) set — the related band is not a result.
+  const finalSections = finalSnap
+    ? stagedSections(finalSnap, query, country, showOutOfStock)
+    : null;
+  const products = finalSections
+    ? finalSections.primary.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+    : null;
   const eventsKey = products
     ? `${query}|${page}|${products.length}|${showOutOfStock ? 1 : 0}`
     : "";
@@ -890,7 +910,7 @@ function StagedResults(props: {
     ]);
   }, [eventsKey, query, page, products]);
 
-  if (finalSnap && products) {
+  if (finalSnap && finalSections && products) {
     // Converged view: full count + empty state, identical to the blocking path.
     // REEA-332 item 2: the count heading rides BOTH branches, so the zero case
     // keeps its heading + hint line exactly where the streamed shell put them —
@@ -923,7 +943,19 @@ function StagedResults(props: {
         {finalSnap.deviceLeadPending ? <DeviceLeadPendingRow locale={locale} /> : null}
         {products.length === 0 && query.length > 0 ? (
           <>
-            <EmptyState query={query} suggestions={stagedSuggestions(finalSnap, country, showOutOfStock)} country={country} locale={locale} tries={finalSnap.attemptedQueries} />
+            {/* REEA-964 — the honest empty state rides the primary position;
+                the related band renders BELOW it, clearly not a result. */}
+            <EmptyState
+              query={query}
+              unavailable={
+                finalSections.related.length === 0 &&
+                finalSnap.notes.some((n) => typeof n.error === "string")
+              }
+              country={country}
+              locale={locale}
+              tries={finalSnap.attemptedQueries}
+            />
+            <RelatedBand items={finalSections.related} locale={locale} />
             <CoverageLine notes={finalSnap.notes} products={products} locale={locale} />
           </>
         ) : (
@@ -945,6 +977,7 @@ function StagedResults(props: {
               kuwaitBatchPending={finalSnap.settled === false && !feedDone}
               kuwaitPendingStatus={finalSnap.kuwaitPendingStatus === true}
             />
+            <RelatedBand items={finalSections.related} locale={locale} />
           </>
         )}
       </ResultsErrorBoundary>
@@ -1021,6 +1054,19 @@ function StagedResults(props: {
           />
         </Suspense>
       </div>
+      {/* REEA-964 — streamed honest empty state + capped related band: land in
+          the served document when the final stage settles at zero confident
+          matches; render null on every confident-match pass. */}
+      <Suspense fallback={null}>
+        <StageEmptyState
+          stages={stages}
+          query={query}
+          page={page}
+          country={country}
+          showOutOfStock={showOutOfStock}
+          locale={locale}
+        />
+      </Suspense>
     </ResultsErrorBoundary>
   );
 }
@@ -1035,6 +1081,7 @@ function ResultsInner(props: {
   stages?: Promise<LiveSearchResult>[];
   renderStartMs?: number;
   locale?: Locale;
+  queryId?: string;
 }) {
   const searchParams = useSearchParams();
   // REEA-279: one resolution per view — prop first (server-resolved), then
@@ -1130,22 +1177,20 @@ function ResultsInner(props: {
   // pass is idempotent there and is the whole filter on the static-host
   // catalog fallback. Same for the stock selection (REEA-186); REEA-822 adds
   // the exact-SKU keep so the fallback path matches the staged view's rule.
-  const products = filterProductsByStock(
-    filterProductsByCountry(served, country),
-    showOutOfStock,
-    exactSkuKeep(query),
+  // REEA-964: the confidence partition rides the SAME filtered set on the
+  // fallback path — primary results vs the capped related band — so the
+  // static-host view obeys the two-section contract too.
+  const plainSections = partitionByConfidence(
+    query,
+    filterProductsByStock(
+      filterProductsByCountry(served, country),
+      showOutOfStock,
+      exactSkuKeep(query),
+    ),
   );
+  const products = plainSections.primary;
   const matchCount = products.length;
   const zero = query.length > 0 && matchCount === 0;
-  const suggestions = staged
-    ? [] // the staged path derives suggestions from each snapshot
-    : filterProductsByStock(
-        filterProductsByCountry(
-          props.suggestions ?? suggestProducts(query, PRODUCTS).map((m) => m.product),
-          country,
-        ),
-        showOutOfStock,
-      );
   // REEA-37: funnel instrumentation — search_submitted (+ zero_results) and
   // result_impressed fire once per (query, page, result-set). Dedup key is
   // component-local memory only; nothing is persisted client-side. The stock
@@ -1192,16 +1237,22 @@ function ResultsInner(props: {
       {/* REEA-332 item 2: same heading + hint rule as the staged paths. */}
       <CountHeading count={products.length} query={query} locale={locale} />
       {zero ? (
-        <EmptyState query={query} suggestions={suggestions} country={country} locale={locale} />
+        <>
+          <EmptyState query={query} country={country} locale={locale} />
+          <RelatedBand items={plainSections.related} locale={locale} />
+        </>
       ) : (
-        <ResultsGrid
-          products={products}
-          query={query}
-          page={page}
-          country={country}
-          showOutOfStock={showOutOfStock} locale={locale}
-          renderStartMs={props.renderStartMs}
-        />
+        <>
+          <ResultsGrid
+            products={products}
+            query={query}
+            page={page}
+            country={country}
+            showOutOfStock={showOutOfStock} locale={locale}
+            renderStartMs={props.renderStartMs}
+          />
+          <RelatedBand items={plainSections.related} locale={locale} />
+        </>
       )}
     </ResultsErrorBoundary>
   );

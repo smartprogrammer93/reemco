@@ -771,7 +771,7 @@ describe("relevance tiering + brand hygiene (REEA-189)", () => {
   };
   const ACCESSORY: NormalizedProduct = {
     productId: "ringke-case",
-    title: "RINGKE Onyx Earbuds Case",
+    title: "RINGKE Onyx Case for Samsung Galaxy Buds3",
     brand: "RINGKE",
     offers: [{ merchant: "Xcite", price: 8, currency: "KWD", url: "https://xcite.example/ringke", inStock: true }],
     coupons: [],
@@ -780,7 +780,10 @@ describe("relevance tiering + brand hygiene (REEA-189)", () => {
     scrapedAt: "2026-09-07T00:00:00.000Z",
   };
 
-  it("stacks devices above accessories on device-intent queries", async () => {
+  it("separates devices (primary section) from accessories (related band) on device-intent queries", async () => {
+    // REEA-964 FR-2 supersedes the REEA-189 Devices/Accessories stacked
+    // grids: the accessory is no longer a full peer card — it rides the
+    // labeled, capped related band below the primary section.
     searchParams.set("q", "samsung galaxy buds");
     searchParams.delete("oos");
     searchParams.delete("c");
@@ -790,15 +793,19 @@ describe("relevance tiering + brand hygiene (REEA-189)", () => {
       );
     });
     const html = document.body.innerHTML;
-    expect(html).toContain('aria-label="Devices"');
-    expect(html).toContain('aria-label="Accessories"');
-    // AC-1: every device card sits above the accessory block.
-    expect(html.indexOf("Galaxy Buds FE")).toBeLessThan(html.indexOf("RINGKE Onyx"));
-    const devices = document.querySelector('[aria-label="Devices"]');
-    const accessories = document.querySelector('[aria-label="Accessories"]');
-    expect(devices?.textContent).toContain("Galaxy Buds3 Pro");
-    expect(devices?.textContent).toContain("Galaxy Buds FE");
-    expect(accessories?.textContent).toContain("RINGKE Onyx Earbuds Case");
+    const primary = document.querySelector('[data-primary-section="true"]');
+    const band = document.querySelector('[data-related-band="true"]');
+    expect(primary).not.toBeNull();
+    expect(band).not.toBeNull();
+    // Primary carries ONLY the confident matches — the case is not a peer.
+    expect(primary?.textContent).toContain("Galaxy Buds3 Pro");
+    expect(primary?.textContent).toContain("Galaxy Buds FE");
+    expect(primary?.textContent).not.toContain("RINGKE Onyx");
+    // The band is labeled "not an exact match" and holds the accessory.
+    expect(band?.getAttribute("aria-label")).toBe("Related items — not an exact match");
+    expect(band?.textContent).toContain("RINGKE Onyx");
+    // Structurally subordinate: the band sits AFTER the primary section.
+    expect(html.indexOf("Primary results")).toBeLessThan(html.indexOf("Related items"));
   });
 
   it("keeps the plain single list for non-device queries", async () => {
@@ -816,10 +823,10 @@ describe("relevance tiering + brand hygiene (REEA-189)", () => {
     searchParams.set("q", "sony");
     await act(async () => {
       render(
-        <ResultsClient query="sony" page={1} products={[{ ...DEVICE_A, brand: "" }]} suggestions={[]} />,
+        <ResultsClient query="sony" page={1} products={[{ ...DEVICE_A, productId: "sony-xm6", title: "Sony WH-1000XM6", brand: "" }]} suggestions={[]} />,
       );
     });
-    expect(document.body.innerHTML).toContain("Galaxy Buds3 Pro");
+    expect(document.body.innerHTML).toContain("Sony WH-1000XM6");
     expect((document.body.innerHTML.match(/label-token inline-flex/g) ?? []).length).toBe(0);
   });
 });
@@ -838,7 +845,10 @@ describe("zero-result state category links (REEA-281 AC-3)", () => {
     for (const a of links) expect(a.getAttribute("href")).toMatch(/^\/results\?q=/);
   });
 
-  it("still reaches 3 links when the relaxed collection returns one suggestion", async () => {
+  it("renders the three FR-1.1 example pills whatever the relaxed collection returned", async () => {
+    // REEA-964 FR-1.1 supersedes the REEA-281 category-link floor: the empty
+    // state's pills are the THREE STATIC example product queries — never a
+    // loosely-related live suggestion dressed as an onward path.
     searchParams.set("q", "zzzqqqnothing");
     await act(async () => {
       render(
@@ -846,18 +856,11 @@ describe("zero-result state category links (REEA-281 AC-3)", () => {
       );
     });
     const links = Array.from(document.querySelectorAll<HTMLAnchorElement>("div.result-card a.query-pill"));
-    expect(links.length).toBeGreaterThanOrEqual(3);
-    // The live suggestion leads; categories pad the rest.
-    expect(links[0].textContent).toBe(SAMPLE_PRODUCTS[0].title);
-    for (const c of ["Smartphones", "Fragrances", "Kitchen appliances"]) {
-      expect(links.some((a) => a.textContent === c)).toBe(true);
-    }
+    expect(links.map((a) => a.textContent)).toEqual(["iPhone", "Dyson vacuum", "Kindle"]);
+    for (const a of links) expect(a.getAttribute("href")).toMatch(/^\/results\?q=/);
   });
 
-  it("keeps all 3 category links even when the relaxed collection returns a full pill row", async () => {
-    // AC-3 is a floor on CATEGORY links, not just pills: a query that
-    // zeroed out but still yielded live suggestions must not trade the
-    // broad onward paths away for product-title pills.
+  it("keeps the static pill row even when the relaxed collection returns suggestions", async () => {
     searchParams.set("q", "zzzqqqnothing");
     const many = ["Sony WH-1000XM6", "Anker PowerCore", "JBL Tune 720BT"].map(
       (title, i): NormalizedProduct => ({ ...SAMPLE_PRODUCTS[0], productId: `s${i}`, title }),
@@ -868,13 +871,9 @@ describe("zero-result state category links (REEA-281 AC-3)", () => {
       );
     });
     const links = Array.from(document.querySelectorAll<HTMLAnchorElement>("div.result-card a.query-pill"));
-    // Suggestions ride first, then the three category links — deduped.
-    expect(links[0].textContent).toBe("Sony WH-1000XM6");
-    const texts = links.map((a) => a.textContent);
-    for (const c of ["Smartphones", "Fragrances", "Kitchen appliances"]) {
-      expect(texts.filter((t) => t === c)).toHaveLength(1);
-    }
-    expect(links.length).toBeGreaterThanOrEqual(3);
+    // Static editorial pills only — live suggestions never masquerade as
+    // results or onward paths on the empty state (FR-1.1).
+    expect(links.map((a) => a.textContent)).toEqual(["iPhone", "Dyson vacuum", "Kindle"]);
   });
 });
 
@@ -943,7 +942,7 @@ describe("coverage line (REEA-290)", () => {
     searchParams.delete("c");
     const row = (id: string, merchant: string, price: number): NormalizedProduct => ({
       productId: id,
-      title: `${id} title`,
+      title: `${id} sony title`,
       brand: id,
       offers: [{ merchant, price, currency: "KWD", url: `https://${merchant}.example/p`, inStock: true }],
       coupons: [],
@@ -999,7 +998,7 @@ describe("coverage line (REEA-290)", () => {
     // A merchant answered-but-displaced must not survive into the stamp…
     expect(html).not.toContain("Prices from Jarir, Blink.");
     // …and A's painted row keeps its name beside it.
-    expect(html).toContain("a title");
+    expect(html).toContain("a sony title");
   });
 });
 
@@ -1040,7 +1039,7 @@ describe("empty-state hint line (REEA-332 item 2)", () => {
     expect(headings).toHaveLength(1);
     expect(headings[0].textContent).toContain("zzxwq");
     expect(headings[0].nextElementSibling?.textContent).toBe(HINT);
-    expect(document.body.textContent).toContain("No matches for “zzxwq” yet");
+    expect(document.body.textContent).toContain("No match found");
   });
 
   it("shows no hint once the query matched something", async () => {
@@ -1129,7 +1128,7 @@ describe("cold-start zero handling (REEA-437)", () => {
       );
     });
     // Empty state after BOTH forms answered zero, naming what was tried.
-    expect(document.body.textContent).toContain("No matches for “lg gram mini” yet");
+    expect(document.body.textContent).toContain("No match found");
     expect(document.body.textContent).toContain("We searched “lg gram mini”, “lg gram”.");
   });
 });
@@ -1342,5 +1341,171 @@ describe("first-flush named-slot ghost (REEA-970)", () => {
     // The first flush landed (empty under this snapshot) — the ghost must be
     // gone from the served document, not parked beside the real content.
     expect(html).not.toContain('class="skeleton-card"');
+  });
+});
+
+/* REEA-964 R2 — the honest empty state and the two-section hierarchy, pinned
+   at the served-document level where QA samples them (spec §6 AC-1..AC-4). */
+describe("R2: honest empty state + relevance hierarchy (REEA-964)", () => {
+  const PHONE: NormalizedProduct = {
+    productId: "iphone-17-pro",
+    title: "Apple iPhone 17 Pro 256GB",
+    brand: "Apple",
+    offers: [{ merchant: "Xcite", price: 364.9, currency: "KWD", url: "https://xcite.example/p", inStock: true }],
+    coupons: [],
+    variations: [],
+    alternatives: [],
+    scrapedAt: "2026-09-12T00:00:00.000Z",
+  };
+  const cases = (n: number): NormalizedProduct[] =>
+    Array.from({ length: n }, (_, i) => ({
+      productId: `case-${i}`,
+      title: `Case for iPhone 17 Pro ${i}`,
+      brand: "NILLKIN",
+      offers: [{ merchant: "Jarir", price: 0.46 + i, currency: "KWD", url: "https://jarir.example/p", inStock: true }],
+      coupons: [],
+      variations: [],
+      alternatives: [],
+      scrapedAt: "2026-09-12T00:00:00.000Z",
+    }));
+
+  it("AC-1/FR-1.2: the served zero document carries the pinned heading, 3 pills and the pre-filled retry input", async () => {
+    searchParams.set("q", "zzqqxx nonexistent gadget");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    const zeroSnap: LiveSearchResult = {
+      products: cases(2),
+      notes: [],
+      suggestions: [],
+      settled: true,
+    };
+    const stream = await renderToReadableStream(
+      <ResultsClient query="zzqqxx nonexistent gadget" page={1} country={null} locale="en" stages={[Promise.resolve(zeroSnap), Promise.resolve(zeroSnap)]} />,
+    );
+    let html = "";
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      html += decoder.decode(value, { stream: true });
+    }
+    // Pinned FR-1.1 heading — copy must not be reworded without PM sign-off.
+    expect(html).toContain("No match found");
+    // The three static example pills, as query links.
+    const pills = Array.from(html.matchAll(/href="\/results\?q=[^"]*"/g)).map((m) => m[0]);
+    expect(pills.some((h) => h.includes("iPhone"))).toBe(true);
+    expect(pills.some((h) => h.includes("Dyson+vacuum"))).toBe(true);
+    expect(pills.some((h) => h.includes("Kindle"))).toBe(true);
+    // FR-1.2: the retry input ships pre-filled with the FAILED query.
+    expect(html).toContain('value="zzqqxx nonexistent gadget"');
+    // Zero confident matches: the count heading is an honest zero (the count
+    // digit rides its own tabular span, so match the tail of the heading).
+    expect(html.replace(/<!--.*?-->/g, "")).toContain('results for “zzqqxx nonexistent gadget”');
+    // …and NO loosely-related row renders as a peer result (the fixture cases
+    // share no token with the nonsense query — nothing is related either).
+    expect(html).not.toContain("result-card pulse-cascade");
+  });
+
+  it("AC-4/E3: accessory-only matches render the empty state in the primary position plus the band", async () => {
+    searchParams.set("q", "iphone 17 pro");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    const snap: LiveSearchResult = {
+      products: cases(3),
+      notes: [],
+      suggestions: [],
+      settled: true,
+    };
+    await act(async () => {
+      render(<ResultsClient query="iphone 17 pro" page={1} country={null} locale="en" stages={[Promise.resolve(snap), Promise.resolve(snap)]} />);
+    });
+    const html = document.body.innerHTML;
+    expect(html).toContain("No match found");
+    expect((document.querySelector("h1")?.textContent ?? "").replace(/\s+/g, " ")).toContain("0 results for");
+    const band = document.querySelector('[data-related-band="true"]');
+    expect(band?.getAttribute("aria-label")).toBe("Related items — not an exact match");
+    expect(band?.querySelectorAll("[data-related-item]").length).toBe(3);
+    // The band never occupies the primary position: it follows the section.
+    expect(html.indexOf("No match found")).toBeLessThan(html.indexOf("Related items — not an exact match"));
+  });
+
+  it("AC-3: the related band renders at most 6 items, each labeled related", async () => {
+    searchParams.set("q", "iphone 17 pro");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    const snap: LiveSearchResult = {
+      products: [PHONE, ...cases(9)],
+      notes: [],
+      suggestions: [],
+      settled: true,
+    };
+    await act(async () => {
+      render(<ResultsClient query="iphone 17 pro" page={1} country={null} locale="en" stages={[Promise.resolve(snap), Promise.resolve(snap)]} />);
+    });
+    const primary = document.querySelector('[data-primary-section="true"]');
+    const band = document.querySelector('[data-related-band="true"]');
+    // The phone leads primary; NO case renders as its peer.
+    expect(primary?.textContent).toContain("Apple iPhone 17 Pro 256GB");
+    expect(primary?.textContent).not.toContain("Case for iPhone 17 Pro");
+    expect(band?.querySelectorAll("[data-related-item]").length).toBe(6);
+    // Every band item carries the related chip (labeled, not a match).
+    expect(band?.querySelectorAll(".related-chip").length).toBe(6);
+  });
+
+  it("AC-2: iPhone 17 Pro keeps the phone primary and its cases out of the peer grid (staged path)", async () => {
+    searchParams.set("q", "iphone 17 pro");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    const snap: LiveSearchResult = {
+      products: [...cases(2), PHONE],
+      notes: [{ merchant: "Xcite", hits: 1 }],
+      suggestions: [],
+      settled: true,
+    };
+    await act(async () => {
+      render(<ResultsClient query="iphone 17 pro" page={1} country={null} locale="en" stages={[Promise.resolve(snap), Promise.resolve(snap)]} />);
+    });
+    const primary = document.querySelector('[data-primary-section="true"]');
+    expect(primary?.textContent).toContain("Apple iPhone 17 Pro 256GB");
+    expect(primary?.textContent).not.toContain("Case for iPhone 17 Pro");
+    expect(document.querySelector('[data-related-band="true"]')).not.toBeNull();
+  });
+
+  it("E6: an all-merchants-failed zero says 'temporarily unavailable', not a no-match", async () => {
+    searchParams.set("q", "dyson v15");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    const failedSnap: LiveSearchResult = {
+      products: [],
+      notes: [
+        { merchant: "Xcite", hits: 0, error: "HTTP 503" },
+        { merchant: "Jarir", hits: 0, error: "timeout" },
+      ],
+      suggestions: [],
+      settled: true,
+    };
+    await act(async () => {
+      render(<ResultsClient query="dyson v15" page={1} country={null} locale="en" stages={[Promise.resolve(failedSnap), Promise.resolve(failedSnap)]} />);
+    });
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("No match found");
+    expect(text).toContain("temporarily unavailable");
+  });
+
+  it("E6 boundary: a genuine empty shelf with no errors renders no unavailable line", async () => {
+    searchParams.set("q", "dyson v15");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    const emptySnap: LiveSearchResult = {
+      products: [],
+      notes: [{ merchant: "Xcite", hits: 0 }],
+      suggestions: [],
+      settled: true,
+    };
+    await act(async () => {
+      render(<ResultsClient query="dyson v15" page={1} country={null} locale="en" stages={[Promise.resolve(emptySnap), Promise.resolve(emptySnap)]} />);
+    });
+    expect(document.body.textContent ?? "").not.toContain("temporarily unavailable");
   });
 });

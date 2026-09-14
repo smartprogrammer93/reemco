@@ -170,9 +170,26 @@ const en = {
   notFoundTitle: "Page not found",
   notFoundBody:
     "The page you were looking for doesn't exist. Try one of these searches:",
-  emptyTitle: "No matches for “{q}” yet",
-  emptyBody:
-    "We check live stores — spelling matters. Try a suggested search below; your query stays in the box.",
+  // REEA-964 FR-1.1 — the empty-state copy is SPEC-PINNED: heading exactly
+  // "No match found" (do not reword without PM sign-off), sub-line suggesting
+  // rephrasing, then the three editorially chosen example queries (FR-1.1)
+  // rendered as pills. The failed query itself lives in the pre-filled retry
+  // input (FR-1.2), not in the heading.
+  emptyTitle: "No match found",
+  emptyBody: "Check the spelling or try a broader search term.",
+  // FR-1.1 — the three static example product queries (editorially chosen).
+  emptyExample1: "iPhone",
+  emptyExample2: "Dyson vacuum",
+  emptyExample3: "Kindle",
+  // FR-1.3 / E6 — the related band under the empty state, and the honest
+  // "stores didn't answer" variant (never imply a no-match on an outage).
+  relatedNotExactLabel: "Related items — not an exact match",
+  relatedChip: "Related",
+  // FR-2.1 — the primary section's own DOM landmark, so the two-section
+  // separation is machine-checkable (distinct section role/heading).
+  primaryResultsAria: "Primary results",
+  emptyUnavailable:
+    "The stores didn't answer this time — results are temporarily unavailable. Please try again shortly.",
   // REEA-332: the one hint line under the count heading when the answer is empty.
   emptyHint: "No matches — try a shorter phrase.",
   // REEA-437 AC-2: the empty state names the query forms the live run tried.
@@ -188,9 +205,6 @@ const en = {
     "Prices, coupons and stock, collected live from every retailer the moment you open a product — compared honestly, never from a stale snapshot.",
   heroCaption:
     "Live collection starts as soon as you pick a product — first offers usually land within half a second, and every price shows when it was collected and by whom.",
-  catPhones: "Smartphones",
-  catFragrances: "Fragrances",
-  catKitchen: "Kitchen appliances",
   allOffersLead: "← All offers for this product",
   aboutTitle: "About Reemco",
   aboutWhatLabel: "WHAT WE DO",
@@ -344,9 +358,16 @@ const ar: typeof en = {
   errorBodyShort: "تعذّر تحميل النتائج. تحقق من اتصالك ثم أعد المحاولة.",
   notFoundTitle: "الصفحة غير موجودة",
   notFoundBody: "الصفحة التي تبحث عنها غير موجودة. جرّب إحدى عمليات البحث هذه:",
-  emptyTitle: "لا توجد نتائج مطابقة لـ «{q}» بعد",
-  emptyBody:
-    "نتفقد المتاجر مباشرة — دقة الكتابة مهمة. جرّب إحدى عمليات البحث المقترحة أدناه، وسيبقى نص بحثك في الحقل.",
+  emptyTitle: "لا توجد مطابقة",
+  emptyBody: "تحقق من الإملاء أو جرّب مصطلح بحث أوسع.",
+  emptyExample1: "آيفون",
+  emptyExample2: "مكنسة دايسون",
+  emptyExample3: "كيندل",
+  relatedNotExactLabel: "عناصر ذات صلة — ليست مطابقة تامة",
+  relatedChip: "ذات صلة",
+  primaryResultsAria: "النتائج الأساسية",
+  emptyUnavailable:
+    "لم تستجب المتاجر هذه المرة — النتائج غير متوفرة مؤقتًا. حاول مرة أخرى بعد قليل.",
   emptyHint: "لا توجد نتائج — جرّب عبارة أقصر.",
   // REEA-437 AC-2: empty state lists the search forms tried live.
   triedForms: "بحثنا في: {tries}.",
@@ -361,9 +382,6 @@ const ar: typeof en = {
     "الأسعار والكوبونات وحالة التوافر تُجمع مباشرة من كل متجر لحظة فتح المنتج — مقارنة نزيهة، دون اعتماد على لقطات قديمة.",
   heroCaption:
     "يبدأ الجمع المباشر فور اختيار منتجك — تصل أولى العروض عادة خلال ثانية واحدة، ويعرض كل سعر وقت جمعه والمتجر الذي جمعه.",
-  catPhones: "هواتف ذكية",
-  catFragrances: "عطور",
-  catKitchen: "أجهزة المطبخ",
   allOffersLead: "كل عروض هذا المنتج ←",
   aboutTitle: "عن ريمكو",
   aboutWhatLabel: "ما نفعله",
