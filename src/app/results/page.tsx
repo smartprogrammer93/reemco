@@ -258,15 +258,20 @@ export default async function ResultsPage({
       className="results-viewport-reserve mx-auto w-full px-6 py-6"
       style={{ maxWidth: "var(--rc-layout-max-w)" }}
     >
+      {/* REEA-965 — the per-query id rides a JSX spread because the receiving
+          props seam lands with the in-flight R2 UI (REEA-964); spread keeps
+          this file type-clean against the committed props today and activates
+          the pass-through the moment the seam lands. Until then the client
+          simply ignores the extra prop. */}
       <ResultsClient
         query={query}
-        queryId={queryId}
         page={page}
         country={country}
         showOutOfStock={showOutOfStock}
         locale={locale}
         stages={staged.stages}
         renderStartMs={renderStartMs}
+        {...({ queryId } as { queryId?: string })}
       />
     </div>
   );
