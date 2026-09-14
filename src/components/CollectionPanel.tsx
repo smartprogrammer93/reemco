@@ -15,6 +15,7 @@ import { Suspense, useEffect, useState, use } from "react";
 import { useCollection, type CollectionPhase } from "@/lib/collect/useCollection";
 import type { CollectJob, LiveOffer } from "@/lib/collect/types";
 import { collectedAgoLabel } from "@/lib/collect/types";
+import { absoluteStamp } from "@/lib/relative-time";
 import { filterOffersByCountry, type CountryCode } from "@/lib/country";
 import { effectivePriceKwd, formatPrimaryPrice } from "@/lib/format";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
@@ -53,10 +54,19 @@ function OfferRow({ offer, best, locale }: { offer: LiveOffer; best: boolean; lo
           {offer.inStock ? t.inStock : t.outOfStock}
         </span>
       </div>
-      {/* Provenance line (AC4): retailer + domain, collected-at, live/cache. */}
+      {/* Provenance line (AC4): retailer + domain, collected-at, live/cache.
+          REEA-759: the relative age gains the absolute collection moment —
+          locale-invariant `YYYY-MM-DD HH:mm UTC`, <bdi>-isolated in RTL;
+          absent only when the stamp itself is missing/invalid. */}
       <p style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)", marginTop: 4 }}>
         {offer.merchant} ({offer.domain}) · {t.collectedWord} {ago ?? t.dateUnknown} ·{" "}
         {offer.method === "live" ? t.liveWord : t.cachedWord}
+        {absoluteStamp(offer.collectedAt) && (
+          <>
+            {" · "}
+            <bdi>{absoluteStamp(offer.collectedAt)}</bdi>
+          </>
+        )}
       </p>
       <TrackedOutboundLink
         href={offer.url}

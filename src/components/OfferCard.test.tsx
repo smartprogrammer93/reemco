@@ -36,3 +36,25 @@ describe("OfferCard outbound href (REEA-224 F2)", () => {
     expect(container.querySelector("a")?.getAttribute("href")).toBe("");
   });
 });
+
+describe("OfferCard absolute freshness stamp (REEA-759)", () => {
+  it("pairs the relative chip with the absolute collection moment", () => {
+    const { container } = render(
+      <OfferCard {...baseProps} url="https://www.xcite.com/airpods-pro-2/p" />,
+    );
+    // Relative side: the fresh-chip grammar stays intact.
+    expect(container.querySelector(".fresh-chip")).not.toBeNull();
+    // Absolute side: the meta-stamp line carries the locale-invariant stamp,
+    // <bdi>-isolated for RTL chrome.
+    const stamp = container.querySelector(".meta-stamp");
+    expect(stamp?.textContent).toBe("2026-09-05 21:00 UTC");
+    expect(stamp?.querySelector("bdi")).not.toBeNull();
+  });
+
+  it("renders no absolute line when the stamp is missing or invalid", () => {
+    const { container } = render(
+      <OfferCard {...baseProps} collectedAt="not-a-date" url="https://www.xcite.com/p" />,
+    );
+    expect(container.querySelector(".meta-stamp")).toBeNull();
+  });
+});

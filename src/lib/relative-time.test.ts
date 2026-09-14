@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { relativeAge } from "@/lib/relative-time";
+import { absoluteStamp, relativeAge } from "@/lib/relative-time";
 
 describe("relativeAge (plan AC4: collected Xs ago)", () => {
   const now = Date.parse("2026-09-05T21:00:00Z");
@@ -18,5 +18,25 @@ describe("relativeAge (plan AC4: collected Xs ago)", () => {
     expect(relativeAge(undefined, now)).toBeNull();
     expect(relativeAge("not-a-date", now)).toBeNull();
     expect(relativeAge("2026-09-05T21:00:01Z", now)).toBeNull();
+  });
+});
+
+describe("absoluteStamp (REEA-759: absolute timestamp in the detail view)", () => {
+  it("formats minute-precision UTC with Latin digits, locale-invariant", () => {
+    expect(absoluteStamp("2026-09-12T09:15:00Z")).toBe("2026-09-12 09:15 UTC");
+    // Sub-minute precision is deliberately truncated, not rounded up.
+    expect(absoluteStamp("2026-09-12T09:15:59Z")).toBe("2026-09-12 09:15 UTC");
+    // Zero-padded month/day/hour/minute.
+    expect(absoluteStamp("2026-01-02T03:04:05Z")).toBe("2026-01-02 03:04 UTC");
+  });
+
+  it("is pure — no clock read, so SSR and hydration agree (REEA-283)", () => {
+    expect(absoluteStamp("2026-09-12T09:15:00Z")).toBe(absoluteStamp("2026-09-12T09:15:00Z"));
+  });
+
+  it("returns null for missing or invalid stamps — never fabricates a moment", () => {
+    expect(absoluteStamp(undefined)).toBeNull();
+    expect(absoluteStamp("not-a-date")).toBeNull();
+    expect(absoluteStamp("")).toBeNull();
   });
 });

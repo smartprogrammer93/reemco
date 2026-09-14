@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import OfferCtaLabel from "@/components/OfferCtaLabel";
 import { safeHref } from "@/lib/safe-url";
-import { ageSeconds, isTenMinutesOld, relativeAge } from "@/lib/relative-time";
+import { absoluteStamp, ageSeconds, isTenMinutesOld, relativeAge } from "@/lib/relative-time";
 import { formatPrice } from "@/lib/format";
 import type { Coupon } from "@/types/product";
 import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
@@ -107,6 +107,12 @@ function FreshnessChip({
   // §5.5 wording: fresh arrivals read "updated just now"; older keep the age.
   const freshSeconds = age !== null && /^\d+s ago$/.test(age);
   const timePart = age === null ? null : freshSeconds ? t.justNow : age;
+  // REEA-759 — the detail view pairs the scannable relative age with the
+  // absolute collection moment ("when, exactly?"): same provenance line,
+  // meta-stamp grammar, locale-invariant `YYYY-MM-DD HH:mm UTC` value,
+  // <bdi>-isolated inside RTL chrome. Missing/invalid stamps render nothing
+  // — never a fabricated moment.
+  const abs = absoluteStamp(collectedAt);
   return (
     <p className="mt-2">
       <span className="fresh-chip">
@@ -116,6 +122,11 @@ function FreshnessChip({
           {method === "live" ? t.liveWord : t.cachedWord}
         </span>
       </span>
+      {abs !== null && (
+        <span className="meta-stamp mt-1 block" style={{ color: "var(--rc-muted)" }}>
+          <bdi>{abs}</bdi>
+        </span>
+      )}
     </p>
   );
 }

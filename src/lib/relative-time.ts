@@ -79,3 +79,28 @@ export function ageSeconds(
   if (Number.isNaN(t)) return null;
   return Math.max(0, Math.floor((now - t) / 1000));
 }
+
+/**
+ * REEA-759 — absolute collection stamp for the detail view, alongside the
+ * relative age the offer rows already carry: "just now" scans fast, but only
+ * an absolute moment answers "when, exactly, was this collected?". Format is
+ * the designer-confirmed locale-invariant pair (REEA-759 design confirmation
+ * §3): `YYYY-MM-DD HH:mm UTC`, minute precision, Latin digits, UTC — the same
+ * string in EN and AR chrome, `<bdi>`-wrapped by the caller inside RTL flow.
+ * Pure and deterministic (reads NO clock — only the stamp itself), so SSR and
+ * hydration always agree (REEA-283 clock discipline). Null for missing or
+ * invalid stamps — the same honesty rule as relativeAge: callers render
+ * nothing rather than fabricate a moment.
+ */
+export function absoluteStamp(iso: string | undefined): string | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  const d = new Date(t);
+  const yyyy = d.getUTCFullYear();
+  const mo = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${yyyy}-${mo}-${dd} ${hh}:${mm} UTC`;
+}
