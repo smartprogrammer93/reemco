@@ -1,12 +1,16 @@
 import ResultsClient from "@/components/ResultsClient";
 import { collectLiveResultsStaged } from "@/lib/collect/live-search";
 import { recordSearchOutcome, searchOutcomeFromSnapshot, serveOutcomeOf } from "@/lib/metrics";
-import { MARKET_COOKIE, resolveCountrySelection } from "@/lib/country";
+import { MARKET_COOKIE, resolveCountrySelection, filterProductsByCountry } from "@/lib/country";
 import { LOCALE_COOKIE, resolveUiLocale } from "@/lib/i18n";
 import { isRefreshSignal, REFRESH_COOKIE } from "@/lib/query-cache";
 import { buildResultsMeta } from "@/lib/results-meta";
 import { sanitizeSearchQuery, sanitizePage } from "@/lib/search-params";
-import { sanitizeShowOutOfStock } from "@/lib/stock";
+import { filterProductsByStock, sanitizeShowOutOfStock } from "@/lib/stock";
+import { appendEvents } from "@/lib/event-store";
+import { isBotUserAgent } from "@/lib/bot-ua";
+import { buildRenderEvents } from "@/lib/metrics-events";
+import { randomUUID } from "node:crypto";
 import type { Metadata } from "next";
 import { after } from "next/server";
 import { cookies, headers } from "next/headers";
@@ -78,6 +82,7 @@ async function readPreferenceHint(): Promise<{
   localeCookie: string | undefined;
   acceptLanguage: string | null;
   refresh: boolean;
+  userAgent: string | null;
 }> {
   try {
     const cookieStore = await cookies();
@@ -89,9 +94,12 @@ async function readPreferenceHint(): Promise<{
       // REEA-291 AC4 — the one-shot Refresh signal rides the same request-time
       // cookie read: this render re-collects live instead of taking the memo.
       refresh: isRefreshSignal(cookieStore.get(REFRESH_COOKIE)?.value),
+      // REEA-965 — read for the shared bot-traffic decision only (FR-3.2);
+      // the UA string itself is never stored on any event.
+      userAgent: headersList.get("user-agent"),
     };
   } catch {
-    return { cookie: undefined, localeCookie: undefined, acceptLanguage: null, refresh: false };
+    return { cookie: undefined, localeCookie: undefined, acceptLanguage: null, refresh: false, userAgent: null };
   }
 }
 
@@ -107,6 +115,13 @@ export default async function ResultsPage({
   // eslint-disable-next-line react-hooks/purity -- intentional single clock read per server render (REEA-283); hydration reuses the serialized value.
   const renderStartMs = Date.now();
   const query = sanitizeSearchQuery(params.q) ?? "";
+  // REEA-965 — per-query-execution random id (FR-3.1): generated once per
+  // render, rides the streamed props so client click events join the same
+  // query execution's server-side search_performed. It is the ONLY
+  // identifier any v1 event carries — no user/session/IP/fingerprint field
+  // exists in the schema (AC-8). randomUUID is deterministic-per-call, not a
+  // render-output clock, so no purity directive is needed here.
+  const queryId = randomUUID();
   const page = sanitizePage(params.page);
   // REEA-170 — optional country selection (`?c=`); null keeps today's behavior.
   // REEA-280 — with no explicit param the default is the persisted market
@@ -201,6 +216,43 @@ export default async function ResultsPage({
     }
   });
 
+  // REEA-965 — server-side v1 render events (R2 spec FR-3): one
+  // search_performed per query execution, zero_result_shown when the primary
+  // result set is empty. Emitted in the after() tail — the document is
+  // already sent, so the sink can never delay render (AC-9, and E8: a
+  // failing sink is logged nowhere the shopper can see). Bot/health-check
+  // traffic is excluded by the shared UA definition (FR-3.2) so the
+  // zero-result rate reflects humans. resultCount reads the fullest answer
+  // the page ended with (converged, else the served snapshot) after the SAME
+  // country/stock filters the client applies to the visible set — the total
+  // across pages, since resultCount is the query's primary result count, not
+  // one page slice. relatedCount is 0 until the R2 confidence hierarchy
+  // (REEA-964) supplies the classified split.
+  after(async () => {
+    if (!query || isBotUserAgent(hint.userAgent)) return;
+    try {
+      const snap = (await staged.converged.then(
+        (s) => s,
+        () => null,
+      )) ?? (await staged.final.then(
+        (s) => s,
+        () => null,
+      ));
+      const visible = snap
+        ? filterProductsByStock(filterProductsByCountry(snap.products, country), showOutOfStock)
+        : [];
+      const events = buildRenderEvents({
+        queryId,
+        query,
+        primaryCount: visible.length,
+        relatedCount: 0,
+      });
+      if (events.length > 0) await appendEvents(events);
+    } catch {
+      // Fire-and-forget (E8): a metrics write failure must never surface.
+    }
+  });
+
   return (
     <div
       className="results-viewport-reserve mx-auto w-full px-6 py-6"
@@ -208,6 +260,7 @@ export default async function ResultsPage({
     >
       <ResultsClient
         query={query}
+        queryId={queryId}
         page={page}
         country={country}
         showOutOfStock={showOutOfStock}

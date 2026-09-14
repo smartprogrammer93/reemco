@@ -60,3 +60,39 @@ describe("trackEvents transport", () => {
     expect(setItem).not.toHaveBeenCalled();
   });
 });
+
+// REEA-965 — render batches (offer_rendered per card) can exceed the
+// endpoint's per-request cap; the transport must chunk or the tail is
+// silently rejected at ingestion.
+describe("trackEvents chunking (REEA-965)", () => {
+  it("splits batches larger than MAX_EVENTS_PER_REQUEST across beacons", async () => {
+    const { MAX_EVENTS_PER_REQUEST } = await import("@/lib/events");
+    const beacon = vi.fn(() => true);
+    vi.stubGlobal("navigator", { sendBeacon: beacon });
+    const events = Array.from({ length: MAX_EVENTS_PER_REQUEST + 3 }, (_, i) => ({
+      type: "offer_rendered" as const,
+      schema: 1,
+      queryId: `q${i}`,
+      retailer: "Xcite",
+      hasCoupon: false,
+      priceSanityStatus: null,
+    }));
+    trackEvents(events);
+    expect(beacon).toHaveBeenCalledTimes(2);
+    const first = JSON.parse(
+      await (beacon.mock.calls[0] as unknown as [string, Blob])[1].text(),
+    );
+    const second = JSON.parse(
+      await (beacon.mock.calls[1] as unknown as [string, Blob])[1].text(),
+    );
+    expect(first.events).toHaveLength(MAX_EVENTS_PER_REQUEST);
+    expect(second.events).toHaveLength(3);
+  });
+
+  it("sends a single beacon when the batch fits", () => {
+    const beacon = vi.fn(() => true);
+    vi.stubGlobal("navigator", { sendBeacon: beacon });
+    trackEvents([{ type: "zero_results", query: "q" }]);
+    expect(beacon).toHaveBeenCalledOnce();
+  });
+});

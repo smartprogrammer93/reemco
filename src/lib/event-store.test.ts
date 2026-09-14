@@ -194,3 +194,96 @@ describe("ingestion rate limiter (AC-6)", () => {
     expect(checkRateLimit("ip1", 1500, opts, store).allowed).toBe(true);
   });
 });
+
+// REEA-965 — v1 metrics aggregation (R2 spec AC-6/AC-7): zero-result rate and
+// first-result CTR per day, coupon-hit rate per retailer — all computed from
+// the raw event stream alone (FR-3.3/FR-3.4).
+describe("v1 metrics aggregation (REEA-965 AC-6/AC-7)", () => {
+  const now = Date.parse("2026-09-05T12:00:00Z");
+  const ev = (
+    ts: string,
+    type: string,
+    extra: Record<string, unknown> = {},
+  ): Parameters<typeof aggregateWeekly>[0][number] =>
+    ({ id: "x", ts, type, ...extra }) as never;
+
+  it("computes zero-result rate and first-result CTR over the window", () => {
+    const events = [
+      ev("2026-09-05T01:00:00Z", "search_performed", { queryId: "q1", query: "iphone", resultCount: 5, relatedCount: 2 }),
+      ev("2026-09-05T01:00:10Z", "first_result_click", { queryId: "q1", offerId: "p1", retailer: "Xcite", position: 1 }),
+      ev("2026-09-05T02:00:00Z", "search_performed", { queryId: "q2", query: "zzqqxx", resultCount: 0, relatedCount: 0 }),
+      ev("2026-09-05T02:00:10Z", "zero_result_shown", { queryId: "q2", query: "zzqqxx", relatedCount: 0 }),
+      // A search with zero results does NOT join the first-result CTR denominator.
+      ev("2026-09-04T01:00:00Z", "search_performed", { queryId: "q3", query: "kindle", resultCount: 0, relatedCount: 4 }),
+      ev("2026-09-04T02:00:00Z", "search_performed", { queryId: "q4", query: "dyson", resultCount: 2, relatedCount: 0 }),
+      ev("2026-08-01T00:00:00Z", "search_performed", { queryId: "q0", query: "old", resultCount: 1, relatedCount: 0 }), // outside window
+    ];
+    const report = aggregateWeekly(events, { now, windowDays: 7 });
+    expect(report.v1.searches).toBe(4);
+    expect(report.v1.zero_result_shown).toBe(1);
+    expect(report.v1.first_result_clicks).toBe(1);
+    expect(report.v1.zero_result_rate).toBeCloseTo(1 / 4);
+    // Denominator: searches with resultCount >= 1 only (2 of 4).
+    expect(report.v1.first_result_ctr).toBeCloseTo(1 / 2);
+    expect(report.v1.result_clicks).toBe(0);
+    expect(report.v1.related_clicks).toBe(0);
+  });
+
+  it("breaks the rates down per UTC day (AC-6 queryability)", () => {
+    const events = [
+      ev("2026-09-05T01:00:00Z", "search_performed", { queryId: "a", query: "x", resultCount: 1, relatedCount: 0 }),
+      ev("2026-09-05T02:00:00Z", "zero_result_shown", { queryId: "b", query: "y", relatedCount: 0 }),
+      ev("2026-09-04T23:00:00Z", "search_performed", { queryId: "c", query: "z", resultCount: 1, relatedCount: 0 }),
+      ev("2026-09-04T23:10:00Z", "first_result_click", { queryId: "c", offerId: "p", retailer: "Jarir", position: 1 }),
+    ];
+    const report = aggregateWeekly(events, { now, windowDays: 7 });
+    expect(report.v1.per_day).toEqual([
+      {
+        day: "2026-09-04",
+        searches: 1,
+        zero_result_shown: 0,
+        first_result_clicks: 1,
+        zero_result_rate: 0, // 1 search, no zero renders — a real 0, not null
+        first_result_ctr: 1,
+      },
+      {
+        day: "2026-09-05",
+        searches: 1,
+        zero_result_shown: 1,
+        first_result_clicks: 0,
+        zero_result_rate: 1,
+        first_result_ctr: 0, // 1 search carried results, no first click yet
+      },
+    ]);
+  });
+
+  it("computes coupon-hit rate per retailer from offer_rendered / coupon_hit (AC-7)", () => {
+    const qid = { queryId: "q1" };
+    const events = [
+      ev("2026-09-05T01:00:00Z", "offer_rendered", { ...qid, retailer: "Xcite", hasCoupon: true, priceSanityStatus: null }),
+      ev("2026-09-05T01:00:01Z", "coupon_hit", { ...qid, retailer: "Xcite", offerId: "p1" }),
+      ev("2026-09-05T01:00:02Z", "offer_rendered", { ...qid, retailer: "Xcite", hasCoupon: false, priceSanityStatus: null }),
+      ev("2026-09-05T01:00:03Z", "offer_rendered", { ...qid, retailer: "Jarir", hasCoupon: true, priceSanityStatus: null }),
+      ev("2026-09-05T01:00:04Z", "coupon_hit", { ...qid, retailer: "Jarir", offerId: "p2" }),
+      ev("2026-09-05T01:00:05Z", "coupon_hit", { ...qid, retailer: "Jarir", offerId: "p3" }),
+    ];
+    const report = aggregateWeekly(events, { now, windowDays: 7 });
+    expect(report.v1.coupon_hit_rate_by_retailer).toEqual([
+      // Higher rendered volume first; ties break alphabetically.
+      { retailer: "Xcite", offers_rendered: 2, coupon_hits: 1, coupon_hit_rate: 0.5 },
+      { retailer: "Jarir", offers_rendered: 1, coupon_hits: 2, coupon_hit_rate: 2 },
+    ]);
+  });
+
+  it("returns null rates and empty structures when no v1 events exist", () => {
+    const report = aggregateWeekly(
+      [ev("2026-09-05T01:00:00Z", "search_submitted", { query: "q", result_count: 1 })],
+      { now },
+    );
+    expect(report.v1.searches).toBe(0);
+    expect(report.v1.zero_result_rate).toBeNull();
+    expect(report.v1.first_result_ctr).toBeNull();
+    expect(report.v1.per_day).toEqual([]);
+    expect(report.v1.coupon_hit_rate_by_retailer).toEqual([]);
+  });
+});
