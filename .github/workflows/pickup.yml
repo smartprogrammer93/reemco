@@ -103,3 +103,31 @@ jobs:
           echo "health: $H"
           echo "$H" | grep -q "${WANT:0:12}" || echo "::warning::health build field does not carry the new sha yet: $H"
           echo "PICKUP OK: alias serves $WANT; __commit.txt verified, health build checked." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # REEA-985 process fix: a red pickup run used to be the ONLY signal that
+      # the production alias was still serving a stale commit (the 86ca35b
+      # pickup build failed with TS2322 at 11:43Z on 2026-09-14 and prod kept
+      # serving 1f88461 for ~70 min because nothing posted an alert). Mirror
+      # deploy.yml's deduped deploy-alert issue here so a stale-stamp pickup
+      # surfaces in the notification stream immediately.
+      - name: Alert on pickup failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create deploy-alert --color D93F0B --description "Post-deploy deploy/smoke check failure" --force || true
+          sleep 10 # job records settle before we query them
+          FAILED_STEPS=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" \
+            --jq '[.jobs[].steps[] | select(.conclusion=="failure") | .name] | join("; ")')
+          BODY="Pickup deploy failed at $(date -u +%FT%TZ).
+          Failed step(s): ${FAILED_STEPS:-unknown}.
+          Commit: ${GITHUB_SHA}. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Production may still be serving the previous commit — check https://reemco.vercel.app/__commit.txt against ${GITHUB_SHA}. If the remote build failed (e.g. lint/type error in the Vercel buildCommand gate), fix on main and let pickup re-run; the previous artifact keeps serving meanwhile. Rollback: rerun Actions > Deploy site with rollback_sha = last known-good commit."
+          if gh issue list --label deploy-alert --state open --json url -q '.[0].url' | grep -q .; then
+            gh issue comment "$(gh issue list --label deploy-alert --state open --json number -q '.[0].number')" \
+              --body "$BODY"
+          else
+            gh issue create --title "DEPLOY ALERT: pickup stamp check failed — $FAILED_STEPS" \
+              --label deploy-alert --body "$BODY"
+          fi
