@@ -1293,3 +1293,54 @@ describe("exact-SKU lead under the default stock view (REEA-822)", () => {
     expect(text).not.toContain("Universal Silicone Case");
   });
 });
+
+/* REEA-970 — the streamed FIRST-flush boundary paints the named per-retailer
+   slot ghost while stage 0 is still in flight. Root cause of the QA adverse
+   finding on REEA-759 criterion 3: the index-0 StageAppend boundary carried
+   fallback={null}, so the card region was a blank band during the pending
+   window and the REEA-756 named-slot ghosts (which live only in the
+   unreachable outer LoadingFallback and the route flash) never painted. The
+   smallest proving check: SSR the streamed shell with a never-resolving
+   stage-0 promise and assert the named-slot ghost markup is IN the served
+   HTML — the exact assertion that would have caught the blank region. */
+describe("first-flush named-slot ghost (REEA-970)", () => {
+  const PENDING: Promise<LiveSearchResult> = new Promise(() => {});
+
+  it("inlines .skeleton-card named retailer slots into the streamed shell while stage 0 is pending", () => {
+    const html = renderToStaticMarkup(
+      <ResultsClient query="iPhone 17 Pro" page={1} country={null} stages={[PENDING]} locale="en" />,
+    );
+    // The ghost card geometry itself — previously 0 unescaped occurrences in
+    // any streamed response (QA measurement).
+    expect(html).toContain('class="skeleton-card"');
+    // The pending slots are NAMED: leading retailers on the label-token
+    // grammar the real offer rows use (REEA-756 slot contract).
+    expect(html).toContain(">Xcite</span>");
+    expect(html).toContain(">Blink</span>");
+  });
+
+  it("paints no ghost once the first flush has landed", async () => {
+    // renderToStaticMarkup always shows fallbacks (finalSnap converges via
+    // useEffect, which static render never runs) — the settled assertion
+    // needs the real streaming renderer, same as the REEA-437 pins.
+    const drain = async (stream: ReadableStream<Uint8Array>): Promise<string> => {
+      let html = "";
+      const reader = stream.getReader();
+      const decoder = new TextDecoder();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        html += decoder.decode(value, { stream: true });
+      }
+      return html;
+    };
+    const snap = { products: [], notes: [], suggestions: [], settled: true };
+    const stream = await renderToReadableStream(
+      <ResultsClient query="iPhone 17 Pro" page={1} country={null} stages={[Promise.resolve(snap)]} locale="en" />,
+    );
+    const html = await drain(stream);
+    // The first flush landed (empty under this snapshot) — the ghost must be
+    // gone from the served document, not parked beside the real content.
+    expect(html).not.toContain('class="skeleton-card"');
+  });
+});

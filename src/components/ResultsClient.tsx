@@ -413,6 +413,32 @@ function stagedSuggestions(
 const GRID_CLASS =
   "grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]";
 
+/* REEA-970 — pending-window ghost for the streamed FIRST-flush boundary.
+   Root cause of the QA adverse finding on REEA-759 criterion 3: the REEA-756
+   named per-retailer slot ghosts shipped only inside LoadingFallback (the
+   outer Suspense fallback) and the results/loading.tsx route flash — but on
+   the live streaming path ResultsInner renders synchronously (it never
+   suspends on the stages), so the outer fallback is unreachable, and the
+   index-0 StageAppend boundary carried `fallback={null}`. The card region
+   therefore painted BLANK while the first adapter flush was in flight; the
+   only pending paint was the anonymous heading slot. The ghost composes the
+   SAME shared SkeletonSlots geometry (SkeletonCard's named slots) on the
+   settled grid's own class, so the pending region shows the retailers' named
+   slots instead of a blank band, and the first flush swaps INTO the reserved
+   geometry (REEA-756 swap-in-place rule) instead of appearing over nothing.
+   Two ghosts mirror the xl two-column settled grid; below xl they stack
+   one-per-row exactly like real cards. aria-hidden: presentation chrome,
+   never announced content. */
+function StagedGridGhost() {
+  return (
+    <div className={GRID_CLASS} aria-hidden>
+      <SkeletonCard />
+      <SkeletonCard />
+    </div>
+  );
+}
+
+
 function FlushBlock(props: {
   label?: string;
   order: number;
@@ -978,7 +1004,12 @@ function StagedResults(props: {
         />
       </Suspense>
       <div className="flex min-w-0 flex-col items-stretch gap-4" style={{ marginTop: "var(--rc-space-8)" }}>
-        <Suspense fallback={null}>
+        {/* REEA-970 — the first-flush boundary now carries the named-slot
+            ghost: while stage 0 is in flight the card region paints the
+            retailers' named skeleton slots (StagedGridGhost) instead of the
+            blank band the null fallback left. Later append boundaries keep
+            fallback={null} — they append below already-painted content. */}
+        <Suspense fallback={<StagedGridGhost />}>
           <StageAppend
             stages={stages}
             index={0}
