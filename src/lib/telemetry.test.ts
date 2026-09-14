@@ -68,7 +68,10 @@ describe("trackEvents chunking (REEA-965)", () => {
   it("splits batches larger than MAX_EVENTS_PER_REQUEST across beacons", async () => {
     const { MAX_EVENTS_PER_REQUEST } = await import("@/lib/events");
     const beacon = vi.fn(() => true);
-    vi.stubGlobal("navigator", { sendBeacon: beacon });
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/126.0 Safari/537.36",
+      sendBeacon: beacon,
+    });
     const events = Array.from({ length: MAX_EVENTS_PER_REQUEST + 3 }, (_, i) => ({
       type: "offer_rendered" as const,
       schema: 1,
@@ -94,5 +97,69 @@ describe("trackEvents chunking (REEA-965)", () => {
     vi.stubGlobal("navigator", { sendBeacon: beacon });
     trackEvents([{ type: "zero_results", query: "q" }]);
     expect(beacon).toHaveBeenCalledOnce();
+  });
+});
+
+// REEA-981 (AC-4, R2 spec FR-3.2) — bot/health-check traffic contributes
+// zero events to any rate the FR-4 read uses. The server render tail gates on
+// the shared isBotUserAgent predicate; the client transport is the other half
+// of the same gate, at the single chokepoint every client emitter rides. Only
+// the v1 stream is filtered — the REEA-37 funnel contract is out of the
+// events spec's scope, so funnel beacons pass unchanged.
+describe("trackEvents bot-UA gate (REEA-981 AC-4)", () => {
+  const BROWSER_UA =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+  const HEADLESS_UA =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/126.0 Safari/537.36";
+
+  it("drops v1 events but keeps funnel events under a bot UA (mixed batch)", async () => {
+    const beacon = vi.fn(() => true);
+    vi.stubGlobal("navigator", { userAgent: HEADLESS_UA, sendBeacon: beacon });
+    trackEvents([
+      { type: "offer_rendered", schema: 1, queryId: "q1", retailer: "Xcite", hasCoupon: true, priceSanityStatus: "ok" },
+      { type: "coupon_hit", schema: 1, queryId: "q1", retailer: "Xcite", offerId: "o1" },
+      { type: "search_submitted", query: "kindle", result_count: 3 },
+    ]);
+    expect(beacon).toHaveBeenCalledOnce();
+    const body = JSON.parse(
+      await (beacon.mock.calls[0] as unknown as [string, Blob])[1].text(),
+    );
+    expect(body.events).toEqual([{ type: "search_submitted", query: "kindle", result_count: 3 }]);
+  });
+
+  it("sends nothing when a bot UA batch is all v1 (F-D shape)", () => {
+    const beacon = vi.fn(() => true);
+    const fetchMock = vi.fn(() => Promise.resolve(new Response(null, { status: 202 })));
+    vi.stubGlobal("navigator", { userAgent: HEADLESS_UA, sendBeacon: beacon });
+    vi.stubGlobal("fetch", fetchMock);
+    trackEvents([
+      { type: "offer_rendered", schema: 1, queryId: "q1", retailer: "Jarir", hasCoupon: false, priceSanityStatus: null },
+      { type: "result_click", schema: 1, queryId: "q1", offerId: "o1", retailer: "Jarir", position: 2 },
+    ]);
+    expect(beacon).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("sends v1 events unchanged under a shopper UA", async () => {
+    const beacon = vi.fn(() => true);
+    vi.stubGlobal("navigator", { userAgent: BROWSER_UA, sendBeacon: beacon });
+    trackEvents([
+      { type: "offer_rendered", schema: 1, queryId: "q1", retailer: "Eureka", hasCoupon: true, priceSanityStatus: "ok" },
+    ]);
+    expect(beacon).toHaveBeenCalledOnce();
+    const body = JSON.parse(
+      await (beacon.mock.calls[0] as unknown as [string, Blob])[1].text(),
+    );
+    expect(body.events).toHaveLength(1);
+    expect(body.events[0].type).toBe("offer_rendered");
+  });
+
+  it("treats a missing UA as bot traffic (shared predicate contract)", () => {
+    const beacon = vi.fn(() => true);
+    vi.stubGlobal("navigator", { sendBeacon: beacon });
+    trackEvents([
+      { type: "offer_rendered", schema: 1, queryId: "q1", retailer: "Sultan Center", hasCoupon: false, priceSanityStatus: null },
+    ]);
+    expect(beacon).not.toHaveBeenCalled();
   });
 });

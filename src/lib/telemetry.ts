@@ -6,7 +6,8 @@
  * Failures are silently dropped — instrumentation must never break UX.
  */
 import type { EventType } from "@/lib/events";
-import { MAX_EVENTS_PER_REQUEST } from "@/lib/events";
+import { MAX_EVENTS_PER_REQUEST, V1_EVENT_TYPES } from "@/lib/events";
+import { isBotUserAgent } from "@/lib/bot-ua";
 
 export type ClientEvent = {
   type: EventType;
@@ -44,6 +45,20 @@ function chunkEvents(events: ClientEvent[]): ClientEvent[][] {
 
 export function trackEvents(events: ClientEvent[]): void {
   if (typeof window === "undefined" || events.length === 0) return;
+  // REEA-981 (AC-4, R2 spec FR-3.2) — bot/health-check traffic contributes
+  // zero events to any rate the FR-4 read uses. The server render tail gates
+  // on the SAME shared predicate; this is the client half of the same gate,
+  // placed at the single transport chokepoint so every current and future
+  // client emitter (offer_rendered/coupon_hit, result/first_result/related
+  // clicks) is covered without each surface re-deciding. Only the v1 metrics
+  // stream is filtered: the REEA-37 funnel contract is explicitly out of the
+  // events spec's scope (REEA-973 §3 non-goal), so funnel beacons pass
+  // unchanged and the funnel counters keep their existing semantics.
+  if (isBotUserAgent(typeof navigator === "undefined" ? null : navigator.userAgent)) {
+    const v1Types: readonly string[] = V1_EVENT_TYPES;
+    events = events.filter((e) => !v1Types.includes(e.type));
+    if (events.length === 0) return;
+  }
   for (const chunk of chunkEvents(events)) {
     sendChunk(chunk);
   }

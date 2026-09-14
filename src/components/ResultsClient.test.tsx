@@ -41,6 +41,11 @@ beforeEach(() => {
   searchParams.set("q", "");
   beaconCalls.length = 0;
   vi.stubGlobal("navigator", {
+    // REEA-981 — the client transport gates v1 events on the shared bot
+    // predicate; a browser-like UA keeps these integration pins on the
+    // shopper path (this stub replaces jsdom's own navigator).
+    userAgent:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
     sendBeacon: (url: string, blob: Blob) => {
       void blob.text().then((text) => beaconCalls.push({ url, body: JSON.parse(text) }));
       return true;
