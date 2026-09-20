@@ -18,12 +18,25 @@
  * query-level detail lives in the REEA-37 funnel store under its own
  * 90-day retention and only resurfaces as aggregate top-terms.
  *
- * Storage contract mirrors event-store.ts (REEA-233): when the shared KV
- * binding exists the counters live ONLY in the shared blob (read-modify-write,
- * last-write-wins — a concurrent increment can be lost, acceptable for
- * aggregate counters and documented here); without a binding (local dev,
- * tests) the per-process disk file is the whole store. The two layers are
- * never merged, so a re-mirror cannot double-count. Every call is
+ * Storage contract mirrors event-store.ts (REEA-233). REEA-1035 — the
+ * shared-KV layout is per-field atomic counters: every increment is one
+ * `SharedKv.incr(key, ttl)` under `metrics:weekly:v2:<isoWeek>:<field>`
+ * (per-retailer entries get one key per retailer). An increment then lands
+ * whenever the store accepts ANY write — no read gates the write, and
+ * server-side INCR cannot lose updates to concurrent serves. The two
+ * fragilities of the retired v1 full-blob read-modify-write (REEA-1034:
+ * a failed shared read deliberately skipped the write and shed 100% of
+ * volume to the ephemeral layer; concurrent RMW collapsed to
+ * last-writer-wins) are gone by construction. The read side aggregates the
+ * per-week keys (discovered via `SharedKv.keys`/`mget`) and dual-reads the
+ * frozen v1 blob (`metrics:weekly:v1`) so history recorded before the
+ * layout change still counts — v1 is never written again, so the union of
+ * the frozen blob and the v2 keys is the true total, never a double count.
+ * Without a binding (local dev, tests) the per-process disk file is the
+ * whole store. The two layers are never merged on read while the shared
+ * read is healthy (a v2 increment that degraded to the local layer after a
+ * failed INCR is visible only when the shared read itself fails — the same
+ * posture as v1), so a re-mirror cannot double-count. Every call is
  * best-effort: a storage hiccup degrades to a dropped increment, never to a
  * failed request — instrumentation must not break the shopper path.
  *
@@ -39,6 +52,15 @@ export const RETENTION_WEEKS = 26;
 
 /** Shared-KV key holding the whole weekly counter blob. */
 export const METRICS_KV_KEY = "metrics:weekly:v1";
+
+/**
+ * REEA-1035 — per-field atomic counter layout: every weekly counter is its
+ * own key under this prefix, written with `SharedKv.incr`. Key shape:
+ * `metrics:weekly:v2:<isoWeek>:<field>[:<retailer>]` — scalar counters are
+ * one key, per-retailer map entries one key per retailer, and the link-smoke
+ * methodology annotation rides one string key (`ls_note`) per week.
+ */
+export const METRICS_WEEKLY_V2_PREFIX = "metrics:weekly:v2";
 
 /** Outlive the retention window so TTL alone never drops a live week. */
 export const METRICS_KV_TTL_S = (RETENTION_WEEKS * 7 + 7) * 24 * 60 * 60;
@@ -540,6 +562,27 @@ export async function readWeeklyCountersDetailed(
   const readLocalNormalized = (): WeekCountersMap =>
     pruneWeeks(normalizeAll(readLocal(opts.dir ?? METRICS_DIR).weeks));
   if (kv) {
+    // REEA-1035 — dual-read: the per-field atomic keys (post-change
+    // increments) aggregated on top of the frozen v1 blob (pre-change
+    // history). v1 is never written again, so blob ∪ keys is the true
+    // total, never a double count. A store without the enumeration ops or
+    // with a failed `keys` call falls back to the v1-only classified read
+    // below — a partial keyspace must never pose as honest data.
+    const v2 = await readKvWeeklyV2(kv);
+    if (v2) {
+      const blob = await readKvBlob(kv);
+      const weeks = blob.state === "value" ? blob.weeks : {};
+      for (const [week, w] of Object.entries(v2)) addWeekInto(weeks, week, w);
+      return {
+        weeks: pruneWeeks(normalizeAll(weeks)),
+        source: "kv",
+        // REEA-996 semantics preserved: a failed blob read is never
+        // honest-empty. With v2 data present the weeks answer anyway (the
+        // route only 503s when BOTH the classification says failed AND no
+        // data could be read); with an empty keyspace the loud 503 stands.
+        kvReadFailed: blob.state === "failed",
+      };
+    }
     const blob = await readKvBlob(kv);
     if (blob.state === "value") {
       return { weeks: pruneWeeks(normalizeAll(blob.weeks)), source: "kv", kvReadFailed: false };
@@ -553,14 +596,331 @@ export async function readWeeklyCountersDetailed(
   return { weeks: readLocalNormalized(), source: "local", kvReadFailed: false };
 }
 
+/**
+ * REEA-1035 — one atomic weekly increment: where the count goes, both as a
+ * v2 key (write path) and as a fold into a WeekCountersMap (local
+ * degradation + read-side merge). `by` is always the clamped, sanitized
+ * delta computed from the record's overlay.
+ */
+type WeeklyDeltaTarget =
+  | { t: "scalar"; f: WeeklyScalarField }
+  | { t: "ls"; f: WeeklyLinkSmokeScalar }
+  | {
+      t: "map";
+      m: "offers_by_retailer" | "retailer_adapter_attempts" | "retailer_adapter_failures";
+      name: string;
+    }
+  | { t: "lsbr"; f: "checked" | "dead" | "challenge"; name: string };
+
+type WeeklyDelta = WeeklyDeltaTarget & { week: string; by: number };
+
+/** Scalar counter fields that live directly on the week record. */
+const WEEKLY_SCALAR_FIELDS = [
+  "searches",
+  "zero_offer_searches",
+  "cold_serves_full",
+  "cold_serves_pending",
+  "latency_band_lt_1s",
+  "latency_band_1_3s",
+  "latency_band_3_10s",
+  "latency_band_gt_10s",
+] as const;
+type WeeklyScalarField = (typeof WEEKLY_SCALAR_FIELDS)[number];
+
+/** Scalar counter fields that live on the week's link_smoke record. */
+const WEEKLY_LS_SCALARS = ["runs", "checked", "dead", "ok", "challenge"] as const;
+type WeeklyLinkSmokeScalar = (typeof WEEKLY_LS_SCALARS)[number];
+
+/** The v2 key one increment lands under (atomic SharedKv.incr target). */
+function weeklyV2Key(d: WeeklyDelta): string {
+  const base = `${METRICS_WEEKLY_V2_PREFIX}:${d.week}`;
+  switch (d.t) {
+    case "scalar":
+      return `${base}:${d.f}`;
+    case "ls":
+      return `${base}:ls_${d.f}`;
+    case "map":
+      return `${base}:${d.m === "offers_by_retailer" ? "offer" : d.m === "retailer_adapter_attempts" ? "att" : "fail"}:${d.name}`;
+    case "lsbr":
+      return `${base}:lsbr_${d.f}:${d.name}`;
+  }
+}
+
+/** Fold one increment into a WeekCountersMap (local degradation + merge). */
+function applyWeeklyDelta(weeks: WeekCountersMap, d: WeeklyDelta): void {
+  const w = ensureWeek(weeks, d.week);
+  switch (d.t) {
+    case "scalar":
+      w[d.f] += d.by;
+      break;
+    case "ls":
+      w.link_smoke[d.f] += d.by;
+      break;
+    case "map":
+      w[d.m][d.name] = clampCount(w[d.m][d.name]) + d.by;
+      break;
+    case "lsbr": {
+      const b = w.link_smoke.by_retailer[d.name] ?? { checked: 0, dead: 0, challenge: 0 };
+      b[d.f] += d.by;
+      w.link_smoke.by_retailer[d.name] = b;
+      break;
+    }
+  }
+}
+
+/**
+ * REEA-1035 — diff a freshly-applied overlay against the empty week. The
+ * generic `apply` closures only ever add counters to (or annotate) their
+ * target week, so running one on a pristine overlay yields exactly the
+ * increments the shared store needs — computed WITHOUT reading the store,
+ * which is the whole point of the atomic layout (a read must never gate a
+ * write again). The annotate-only string fields are not counters; they ride
+ * the dedicated annotation path, not this diff.
+ */
+function weeklyDeltasFromOverlay(overlay: WeekCountersMap): WeeklyDelta[] {
+  const incrs: WeeklyDelta[] = [];
+  for (const [week, raw] of Object.entries(overlay)) {
+    if (!raw || typeof raw !== "object") continue;
+    const w = normalizeWeek(raw);
+    for (const f of WEEKLY_SCALAR_FIELDS) {
+      const by = clampCount(w[f]);
+      if (by > 0) incrs.push({ week, t: "scalar", f, by });
+    }
+    for (const f of WEEKLY_LS_SCALARS) {
+      const by = clampCount(w.link_smoke[f]);
+      if (by > 0) incrs.push({ week, t: "ls", f, by });
+    }
+    for (const m of ["offers_by_retailer", "retailer_adapter_attempts", "retailer_adapter_failures"] as const) {
+      for (const [name, by] of Object.entries(w[m])) {
+        const n = clampCount(by);
+        if (n > 0) incrs.push({ week, t: "map", m, name, by: n });
+      }
+    }
+    for (const [name, r] of Object.entries(w.link_smoke.by_retailer)) {
+      for (const f of ["checked", "dead", "challenge"] as const) {
+        const by = clampCount(r?.[f]);
+        if (by > 0) incrs.push({ week, t: "lsbr", f, name, by });
+      }
+    }
+  }
+  return incrs;
+}
+
+/** REEA-1035 — parse one v2 key back into where its value belongs. */
+function parseWeeklyV2Key(
+  key: string,
+): { week: string; target: WeeklyDeltaTarget } | { week: string; note: true } | null {
+  if (!key.startsWith(`${METRICS_WEEKLY_V2_PREFIX}:`)) return null;
+  const parts = key.split(":");
+  // metrics : weekly : v2 : <week> : <kind> [: <retailer> …]
+  if (parts.length < 5) return null;
+  const week = parts[3];
+  const kind = parts[4];
+  const name = parts.slice(5).join(":");
+  if ((WEEKLY_SCALAR_FIELDS as readonly string[]).includes(kind)) {
+    return { week, target: { t: "scalar", f: kind as WeeklyScalarField } };
+  }
+  switch (kind) {
+    case "ls_runs":
+      return { week, target: { t: "ls", f: "runs" } };
+    case "ls_checked":
+      return { week, target: { t: "ls", f: "checked" } };
+    case "ls_dead":
+      return { week, target: { t: "ls", f: "dead" } };
+    case "ls_ok":
+      return { week, target: { t: "ls", f: "ok" } };
+    case "ls_challenge":
+      return { week, target: { t: "ls", f: "challenge" } };
+    case "offer":
+    case "att":
+    case "fail":
+      if (!name) return null;
+      return {
+        week,
+        target: {
+          t: "map",
+          m: kind === "offer" ? "offers_by_retailer" : kind === "att" ? "retailer_adapter_attempts" : "retailer_adapter_failures",
+          name,
+        },
+      };
+    case "lsbr_checked":
+    case "lsbr_dead":
+    case "lsbr_challenge":
+      if (!name) return null;
+      return { week, target: { t: "lsbr", f: kind.slice(5) as "checked" | "dead" | "challenge", name } };
+    case "ls_note":
+      return { week, note: true };
+    default:
+      return null; // unknown shape — ignore, forward compatible
+  }
+}
+
+/** Add one week's counters on top of another map (read-side merge). */
+function addWeekInto(dst: WeekCountersMap, week: string, src: WeekCounters): void {
+  const w = ensureWeek(dst, week);
+  for (const f of WEEKLY_SCALAR_FIELDS) w[f] += clampCount(src[f]);
+  for (const f of WEEKLY_LS_SCALARS) w.link_smoke[f] += clampCount(src.link_smoke[f]);
+  for (const m of ["offers_by_retailer", "retailer_adapter_attempts", "retailer_adapter_failures"] as const) {
+    for (const [name, by] of Object.entries(src[m] ?? {})) {
+      const n = clampCount(by);
+      if (n > 0) w[m][name] = clampCount(w[m][name]) + n;
+    }
+  }
+  for (const [name, r] of Object.entries(src.link_smoke.by_retailer ?? {})) {
+    const b = w.link_smoke.by_retailer[name] ?? { checked: 0, dead: 0, challenge: 0 };
+    b.checked += clampCount(r?.checked);
+    b.dead += clampCount(r?.dead);
+    b.challenge += clampCount(r?.challenge);
+    w.link_smoke.by_retailer[name] = b;
+  }
+  if (src.link_smoke.checkerContaminated !== undefined) w.link_smoke.checkerContaminated = src.link_smoke.checkerContaminated;
+  if (src.link_smoke.methodologyNote !== undefined) w.link_smoke.methodologyNote = src.link_smoke.methodologyNote;
+}
+
+/**
+ * REEA-1035 — read the per-field atomic weekly counters. Enumerates the v2
+ * keyspace (one `keys` call — the keyspace is bounded by the retention TTLs
+ * and the read cadence is the PM loop), then one batched `mget`; a store
+ * without either op (or a failed enumeration) returns null so the caller
+ * falls back to the v1 blob read instead of reading a partial keyspace as
+ * honest data. Missing keys read as 0; per-field values are plain INCR
+ * integers.
+ */
+async function readKvWeeklyV2(kv: SharedKv): Promise<WeekCountersMap | null> {
+  if (typeof kv.keys !== "function" || typeof kv.mget !== "function") return null;
+  let names: string[] | null = null;
+  try {
+    names = await kv.keys(`${METRICS_WEEKLY_V2_PREFIX}:*`);
+  } catch {
+    names = null;
+  }
+  if (!names) return null;
+  const weeks: WeekCountersMap = {};
+  if (names.length === 0) return weeks;
+  let values: (string | null)[] | null = null;
+  try {
+    values = await kv.mget(names);
+  } catch {
+    values = null;
+  }
+  if (!values || values.length !== names.length) {
+    // Older fakes without mget: fall back to per-key reads (bounded by the
+    // enumerated keyspace; the production store answers the batch).
+    values = await Promise.all(names.map((k) => kv.get(k).catch(() => null)));
+  }
+  const notes: Record<string, { checkerContaminated: boolean; methodologyNote: string }> = {};
+  names.forEach((key, i) => {
+    const parsed = parseWeeklyV2Key(key);
+    if (!parsed) return;
+    const raw = values?.[i] ?? null;
+    if ("note" in parsed) {
+      if (raw) {
+        try {
+          const n = JSON.parse(raw) as { checkerContaminated?: unknown; methodologyNote?: unknown };
+          notes[parsed.week] = {
+            checkerContaminated: n.checkerContaminated === true,
+            methodologyNote: typeof n.methodologyNote === "string" ? n.methodologyNote : "",
+          };
+        } catch {
+          // a corrupted note degrades to no annotation, never to a failed read
+        }
+      }
+      return;
+    }
+    const by = clampCount(Number.parseInt(raw ?? "", 10));
+    if (by > 0) applyWeeklyDelta(weeks, { ...parsed.target, week: parsed.week, by });
+  });
+  for (const [week, note] of Object.entries(notes)) {
+    const w = ensureWeek(weeks, week);
+    w.link_smoke.checkerContaminated = note.checkerContaminated;
+    w.link_smoke.methodologyNote = note.methodologyNote;
+  }
+  return weeks;
+}
+
 /** Apply `apply` to the buckets and persist (best-effort). KV-bound stores
- *  read-modify-write the shared blob; unbound stores rewrite the local file.
- *  REEA-996 — when the shared read FAILED, the shared write is skipped: a
+ *  REEA-1035 — write per-field atomic increments (`SharedKv.incr`) computed
+ *  from an overlay, so no read gates the write and concurrent serves cannot
+ *  lose updates; increments whose INCR failed degrade to the local layer.
+ *  Stores without `incr` (legacy test fakes) and unbound stores keep the v1
+ *  read-modify-write over the local file. REEA-996 — on the legacy path,
+ *  when the shared read FAILED the shared write is skipped: a
  *  read-modify-write over an unknown blob state would replace the shared
  *  26-week history with whatever this instance's local layer happened to
  *  hold (empty on a cold lambda). The increment degrades to the local layer
  *  instead — the same posture as a failed shared write. */
 export async function updateWeeklyCounters(
+  apply: (weeks: WeekCountersMap, week: string) => void,
+  opts: { now?: number; dir?: string; kv?: SharedKv | null } = {},
+): Promise<WeekCountersMap> {
+  const kv = sharedKv(opts);
+  if (kv && typeof kv.incr === "function") return updateWeeklyCountersIncr(apply, kv, opts);
+  return updateWeeklyCountersLocal(apply, opts);
+}
+
+/**
+ * REEA-1035 — the atomic write path. Runs the caller's `apply` on a pristine
+ * overlay, diffs it into per-field increments, and fires every INCR
+ * independently (concurrently — bounded by MAX_RETAILERS_PER_WEEK per
+ * record). No store read happens on this path at all: an increment lands
+ * whenever the store accepts ANY write, and server-side INCR makes
+ * concurrent serves additive instead of last-writer-wins. Note: the
+ * MAX_RETAILERS_PER_WEEK fold becomes a per-write cap under this layout —
+ * distinct weekly retailers are not countable without a read, which would
+ * reintroduce the read-modify-write this change removes; the live retailer
+ * universe is the four adapters, so the cap stays a hostile-payload bound.
+ */
+async function updateWeeklyCountersIncr(
+  apply: (weeks: WeekCountersMap, week: string) => void,
+  kv: SharedKv,
+  opts: { now?: number; dir?: string },
+): Promise<WeekCountersMap> {
+  const now = opts.now ?? Date.now();
+  const overlay: WeekCountersMap = {};
+  apply(overlay, isoWeekKey(now));
+  const incrs = weeklyDeltasFromOverlay(overlay);
+  // Fire every increment independently (concurrently, bounded by
+  // MAX_RETAILERS_PER_WEEK per record). One increment = one atomic
+  // server-side op: it lands whenever the store accepts ANY write, no read
+  // gates it, and concurrent serves cannot collapse it. A delta whose
+  // atomic op fails (or, on stores without incrBy, partially lands) folds
+  // only its remainder into the local layer — never re-sent to the shared
+  // store, so a degradation cannot double count.
+  const landed = await Promise.all(
+    incrs.map(async (d) => {
+      const key = weeklyV2Key(d);
+      try {
+        if (typeof kv.incrBy === "function") {
+          return (await kv.incrBy(key, d.by, METRICS_KV_TTL_S)) === null ? d : null;
+        }
+        let done = 0;
+        for (let i = 0; i < d.by; i++) {
+          const r = await kv.incr?.(key, METRICS_KV_TTL_S);
+          if (typeof r !== "number") break;
+          done++;
+        }
+        return done === d.by ? null : { ...d, by: d.by - done };
+      } catch {
+        return d;
+      }
+    }),
+  );
+  const failed = landed.filter((d): d is WeeklyDelta => d !== null);
+  if (failed.length > 0) {
+    // Degraded increments fold into the per-instance local layer — the same
+    // posture as a failed shared write in the v1 design (the window still
+    // counts on this instance; never a failed request).
+    const weeks = readLocal(opts.dir ?? METRICS_DIR).weeks;
+    for (const d of failed) applyWeeklyDelta(weeks, d);
+    writeLocal(pruneWeeks(weeks), opts.dir ?? METRICS_DIR);
+  }
+  const normalized: WeekCountersMap = {};
+  for (const [week, w] of Object.entries(overlay)) normalized[week] = normalizeWeek(w);
+  return pruneWeeks(normalized);
+}
+
+/** The pre-REEA-1035 local/read-modify-write path (legacy fakes + unbound). */
+async function updateWeeklyCountersLocal(
   apply: (weeks: WeekCountersMap, week: string) => void,
   opts: { now?: number; dir?: string; kv?: SharedKv | null } = {},
 ): Promise<WeekCountersMap> {
@@ -636,13 +996,46 @@ export async function recordLinkSmoke(
  * stamps the current week. A week with no stored record is left alone — an
  * annotation must not fabricate an empty bucket. Best-effort like every
  * store write.
+ *
+ * REEA-1035 — under the per-field atomic layout the annotation is one
+ * idempotent SET of the whole note (`metrics:weekly:v2:<week>:ls_note`): a
+ * full-object overwrite with no read-modify-write window, and the counters
+ * ride their own atomic keys untouched. The never-fabricate guard reads the
+ * classified store first — an ops-rate action that can afford a read,
+ * unlike the serve-path writer. Degraded paths keep the v1 semantics.
  */
 export async function annotateLinkSmoke(
   annotation: { checkerContaminated: boolean; methodologyNote: string },
   opts: { week?: string; now?: number; dir?: string; kv?: SharedKv | null } = {},
 ): Promise<void> {
-  await updateWeeklyCounters((weeks, currentWeek) => {
-    const target = opts.week ?? currentWeek;
+  const kv = sharedKv(opts);
+  const now = opts.now ?? Date.now();
+  const target = opts.week ?? isoWeekKey(now);
+  if (kv && typeof kv.incr === "function") {
+    const read = await readWeeklyCountersDetailed(opts);
+    if (!read.weeks[target]) {
+      // Same guard as the legacy closure: the week exists on the layer the
+      // read could actually see, or the annotation does nothing at all.
+      if (read.source === "kv") return;
+    } else if (read.source === "kv") {
+      const note = {
+        checkerContaminated: annotation.checkerContaminated === true,
+        // Same string hygiene as every stored string: control chars
+        // stripped, bounded — the note is one sentence, not a document.
+        methodologyNote: annotation.methodologyNote
+          .replace(/[\u0000-\u001f\u007f]/g, " ")
+          .trim()
+          .slice(0, 500),
+      };
+      const ok = await kv
+        .set(`${METRICS_WEEKLY_V2_PREFIX}:${target}:ls_note`, JSON.stringify(note), METRICS_KV_TTL_S)
+        .catch(() => false);
+      if (ok) return;
+      // shared SET failed → fall through; the local fold stamps whatever
+      // the local layer holds (degraded, never a failed request).
+    }
+  }
+  await updateWeeklyCountersLocal((weeks) => {
     const existing = weeks[target];
     if (!existing || typeof existing !== "object") return;
     const w = ensureWeek(weeks, target);

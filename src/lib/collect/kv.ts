@@ -60,12 +60,44 @@ export interface SharedKv {
    */
   incr?(key: string, ttlSeconds: number): Promise<number | null>;
   /**
+   * REEA-1035 — atomic increment by N (Upstash INCRBY), creating the key
+   * with a TTL when absent. The per-field weekly counters carry deltas > 1
+   * (a serve can deliver several offers for one retailer); looping `incr`
+   * per unit would multiply the request count against the same store that
+   * rate-limits. Arms the expire when the answer equals the requested
+   * increment — the observable signature of a key created by this call
+   * (counter keys only ever hold positive INCR results, so a stored 0 is
+   * not a state they can be found in). Returns the post-increment count,
+   * or null when unsupported/unreachable. Optional so existing test fakes
+   * keep compiling.
+   */
+  incrBy?(key: string, by: number, ttlSeconds: number): Promise<number | null>;
+  /**
    * REEA-996 — a get() that reports reachability separately from the value.
    * Optional so existing test fakes that only need get/set keep compiling;
    * callers that must distinguish "store failed" from "store empty" (the
    * weekly metrics read) use it when present.
    */
   getChecked?(key: string): Promise<KvGetOutcome>;
+  /**
+   * REEA-1035 — key names matching a glob pattern (Upstash `KEYS <pattern>`),
+   * or null when unsupported/unreachable. The per-field weekly counters are
+   * written under enumerable keys, so the read side discovers them instead
+   * of read-modify-writing one blob. The keyspace this serves is bounded by
+   * the metrics retention TTLs and the read cadence is the PM loop (minutes,
+   * not per-serve), so a plain KEYS is proportionate here.
+   * Optional so existing test fakes keep compiling.
+   */
+  keys?(pattern: string): Promise<string[] | null>;
+  /**
+   * REEA-1035 — batch read (Upstash `MGET`), values aligned with the asked
+   * keys (null for a missing key), or null when unsupported/unreachable.
+   * One round trip for the whole weekly read — the per-field layout turns
+   * one blob GET into dozens of counter keys, and per-key GETs would
+   * multiply the request count against the same store that rate-limits.
+   * Optional so existing test fakes keep compiling.
+   */
+  mget?(keys: string[]): Promise<(string | null)[] | null>;
 }
 
 let cached: SharedKv | null | undefined;
@@ -173,6 +205,72 @@ function makeKv(base: string, token: string): SharedKv {
         await request(`expire/${encodeURIComponent(key)}/${Math.max(1, Math.ceil(ttlSeconds))}`);
       }
       return data.result;
+    },
+    // REEA-1035 — atomic INCRBY with TTL arming on create (see the contract
+    // comment). Same failure shape as incr: null degrades the caller to its
+    // local layer, it never fails the request.
+    async incrBy(key, by, ttlSeconds) {
+      const n = Math.max(1, Math.floor(by));
+      const data = await request(`incrby/${encodeURIComponent(key)}/${n}`);
+      if (!data || data.ok === false || typeof data.result !== "number") return null;
+      if (data.result === n) {
+        await request(`expire/${encodeURIComponent(key)}/${Math.max(1, Math.ceil(ttlSeconds))}`);
+      }
+      return data.result;
+    },
+    // REEA-1035 — KEYS over the REST convention `keys/<pattern>`; a null or
+    // error answer is reported as null so the caller falls back instead of
+    // reading an empty keyspace as "no data".
+    async keys(pattern) {
+      const data = await request(`keys/${encodeURIComponent(pattern)}`);
+      if (!data || data.ok === false || !Array.isArray(data.result)) return null;
+      return data.result.filter((k): k is string => typeof k === "string").sort();
+    },
+    // REEA-1035 — one MGET per chunk, all chunks in ONE pipeline request
+    // (`POST /pipeline`, 2D JSON array body per the Upstash REST contract;
+    // a path-segment MGET would blow URL length limits at weekly keyspace
+    // sizes). Pipeline execution is ordered but not atomic — irrelevant for
+    // reads. Any failed chunk collapses the whole answer to null so the
+    // caller falls back rather than reading a partial keyspace as honest
+    // data.
+    async mget(keys) {
+      const values: (string | null)[] = new Array(keys.length).fill(null);
+      const CHUNK = 256;
+      const commands: unknown[][] = [];
+      const chunks: { start: number; keys: string[] }[] = [];
+      for (let i = 0; i < keys.length; i += CHUNK) {
+        const chunkKeys = keys.slice(i, i + CHUNK);
+        chunks.push({ start: i, keys: chunkKeys });
+        commands.push(["MGET", ...chunkKeys]);
+      }
+      if (commands.length === 0) return [];
+      let answers: KvRestResponse[] | null = null;
+      try {
+        const res = await fetch(buildUrl("pipeline"), {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(commands),
+          signal: AbortSignal.timeout(KV_TIMEOUT_MS),
+          cache: "no-store",
+        });
+        if (res.ok) answers = (await res.json()) as KvRestResponse[];
+      } catch {
+        answers = null; // fall through to the null collapse below
+      }
+      if (!answers || answers.length !== commands.length) return null;
+      for (let c = 0; c < chunks.length; c++) {
+        const ans = answers[c];
+        if (!ans || ans.ok === false || ans.error !== undefined) return null;
+        const rows = Array.isArray(ans.result) ? ans.result : null;
+        if (!rows || rows.length !== chunks[c].keys.length) return null;
+        rows.forEach((row, j) => {
+          values[chunks[c].start + j] = typeof row === "string" ? stripTtlEcho(row) : null;
+        });
+      }
+      return values;
     },
   };
 }
