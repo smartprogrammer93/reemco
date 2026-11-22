@@ -47,9 +47,9 @@ does not exist on the host.
 ## Deploy
 
 `Actions → Deploy self-hosted → Run workflow` with `site_address` = the box IP
-or hostname. The workflow builds `ghcr.io/<repo>:<sha>`, syncs `infra/` to the
-host, runs `deploy.sh --tag <sha>`, and verifies stamp + headers + smoke from
-outside the box.
+or hostname. The workflow builds `reemco/app:<sha>` **on the box** from the pushed
+tree, syncs `infra/` to the host, runs `deploy.sh --tag <sha>`, and verifies stamp
++ headers + smoke from outside the box.
 
 Manual equivalent on the host: `sudo /opt/reemco/scripts/deploy.sh --tag <sha>`.
 
@@ -62,6 +62,49 @@ written by every deploy). If the box itself is unreachable, the cutover
 rollback is the DNS A record back to Vercel while that deployment stays live.
 
 **No rollback path, no deploy.**
+
+## Deploy gate — what blocks, what is advisory, who changes it
+
+Owner: **DevOps Engineer**. This section is the single place the gate's split is
+written down; a change to it is a reviewed diff to
+`.github/workflows/deploy-selfhosted.yml` **plus this section in the same commit**.
+Never edit the gate by hand on the box — every deploy overwrites `/opt/reemco`
+from git.
+
+**Blocking — a failure fails the deploy and takes the rollback path:**
+
+1. Production dependency audit gate — `npm audit --omit=dev --audit-level=high` on
+   the committed lockfile (skipped only for an explicit `rollback_sha`, which
+   redeploys an already-verified commit).
+2. Compose hardening invariants — `infra/scripts/assert-compose-hardening.sh`
+   (cap_drop ALL / non-root, digest-pinned infra images, segmented networks).
+3. On-host build of the pinned commit tag.
+4. Deploy of the pinned tag — `deploy.sh` auto-rolls-back if its on-box verify fails.
+5. Public-surface verification — served `/__commit.txt` must equal the intended SHA
+   and all four security headers (CSP, X-Content-Type-Options, Referrer-Policy, HSTS)
+   must be present.
+6. Funnel smoke suite (`npm run smoke`: home → results → click-out, freshness, 375px
+   mobile pass, offer link-health, adapter-registration parity, cache headers).
+   Restored to blocking in REEA-1059 after the two deterministic failures that had made
+   it advisory were fixed: step 5 now proves reachability inside the deliberately
+   scrollable coverage row instead of failing on it (REEA-1056), and step 7 no longer
+   requires the retired PC Kuwait lane (REEA-901).
+
+**Advisory — runs and alerts, but does not fail the deploy:**
+
+- _Nothing, as of REEA-1059._ Every gate above blocks. This is the intended steady
+  state; an advisory exception must be re-added here deliberately, never inherited.
+
+An advisory exception is **not a resting state**: it must carry an open tracking issue
+and a named owner who flips it back, and it is recorded in this section in the same
+commit that adds it. If a flip-back does not happen, the exception has been forgotten —
+treat the gate as wrong, not the check. The one just closed (smoke, advisory under
+REEA-1054 while REEA-1056 was open) is the cautionary example: REEA-1056's fix landed
+inside another commit and the gate would have stayed advisory by silence.
+
+The workflow only invokes the rollback path when a deploy actually reached the box
+(`steps.deploy.outcome == 'success'`), so a CI-only failure (audit gate, hardening
+assertion) no longer reverts production for a failure that never touched it.
 
 ## Container hardening (REEA-1061)
 

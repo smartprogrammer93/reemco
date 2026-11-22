@@ -346,7 +346,15 @@ await step(7, "deployed results notes carry every registered adapter (REEA-238/2
   if (arrays.length === 0) throw new Error("no notes array found in deployed results HTML");
   const finalNotes = arrays.reduce((a, b) => (b.length > a.length ? b : a));
   const merchants = [...finalNotes.matchAll(/merchant\\":\\"([^\\]+)/g)].map((m) => m[1]);
-  const required = ["Xcite", "Blink", "Eureka", "Sultan Center", "Jarir", "Amazon.eg", "Quadra Stores", "Next Store", "PC Kuwait", "Lulu Hypermarket"];
+  // REEA-1059: the list must name lanes that are REGISTERED in
+  // src/lib/collect/live-search.ts. "PC Kuwait" was removed here because the
+  // lane itself was retired in REEA-901 (Cloudflare 403 on every hop shape from
+  // the deployed egress; no `merchant: "PC Kuwait"` entry remains). Keeping a
+  // retired lane in this list makes the step fail deterministically on a
+  // healthy build — the gate would be red for a lane we deliberately stopped
+  // calling. Rule: a lane that is retired or re-admitted must enter/leave this
+  // list in the same commit that changes the registry, or the gate is lying.
+  const required = ["Xcite", "Blink", "Eureka", "Sultan Center", "Jarir", "Amazon.eg", "Quadra Stores", "Next Store", "Lulu Hypermarket"];
   const missing = required.filter((m) => !merchants.includes(m));
   if (missing.length) throw new Error(`deployed notes array misses ${missing.join(", ")} (seen: ${merchants.join(", ")})`);
   const hitLines = finalNotes.replace(/\\/g, "");

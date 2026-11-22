@@ -23,6 +23,19 @@
 		-Server
 	}
 
+	# REEA-1059 — locale Vary on the results addresses. The app declares this
+	# list (src/proxy.ts sharedWindowHeaders + next.config headers()), but on
+	# the self-hosted standalone runtime Next 16's app-router response writes
+	# its own Vary over it, so the served header drops Accept-Language and a
+	# shared cache could hand one locale's results to another. There is no
+	# shared cache in front of Caddy today; a CDN at the DNS cutover would make
+	# this real. Re-assert the app's exact list at the edge, where nothing
+	# overwrites it. scripts/smoke-check.mjs step 8 asserts it on the wire, so
+	# a change here is checked by the deploy gate. If sharedWindowHeaders()
+	# changes, change these two lines in the same commit.
+	header /results* Vary "Accept-Language, rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch, Accept-Encoding"
+	header /search* Vary "Accept-Language, rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch, Accept-Encoding"
+
 	# The deploy verification gate (infra/scripts/verify.sh + CI) expects the
 	# app to answer on these paths through the proxy, unchanged from Vercel.
 	reverse_proxy app:3000 {
