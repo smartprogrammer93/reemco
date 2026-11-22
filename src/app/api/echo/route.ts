@@ -33,8 +33,13 @@
  * cookies, no persisted state, every upstream call best-effort with its own
  * bounded window so the answer always lands inside one request.
  */
-import { fetchThroughChallenge, VERIFIED_BOT_HEADERS } from "@/lib/collect/search-fallback";
-import { jsdClearedHtml } from "@/lib/collect/live-search";
+import {
+  VERIFIED_BOT_HEADERS,
+  discoverJarirIndexKey,
+  extractJarirIndexKey,
+  fetchThroughChallenge,
+} from "@/lib/collect/search-fallback";
+import { jarirHits, jsdClearedHtml } from "@/lib/collect/live-search";
 // REEA-782 — GET /api/echo rides the shared rate limiter (REEA-37 bucket,
 // REEA-827 deployment-wide counter: the namespaced `echo:` budget counts
 // across instances on the shared KV when bound, degrading to the per-process
@@ -182,6 +187,81 @@ async function probePinned(
   return { answered: false, attempts };
 }
 
+// REEA-1051 — Jarir discovery tripwire. Jarir's storefront sits behind a
+// Cloudflare Turnstile challenge, so a datacenter egress can get a 403 with no
+// payload on the documented homepage read. The adapter therefore has a second,
+// live discovery route (a static pass-through path that Cloudflare serves from
+// the origin without the challenge). This cell reports each route's raw shape
+// plus what the shared discoverJarirIndexKey() actually returns and whether
+// the Constructor search then answers — so a "jarir index key missing" note on
+// the results page is diagnosable from the deployed runtime without another
+// deploy.
+const JARIR_HOME_URL = "https://www.jarir.com/";
+const JARIR_PASSTHROUGH_URL = "https://www.jarir.com/ads.txt";
+
+interface JarirHop {
+  status: number | 0;
+  ms: number;
+  bytes?: number;
+  key?: string | null;
+  error?: string;
+}
+
+async function probeJarirHop(
+  fetchImpl: typeof fetch,
+  url: string,
+  headers: Record<string, string>,
+): Promise<JarirHop> {
+  const started = Date.now();
+  try {
+    const res = await fetchImpl(url, { headers, cache: "no-store", signal: AbortSignal.timeout(ZONE_WINDOW_MS) });
+    const body = await res.text();
+    return { status: res.status, ms: Date.now() - started, bytes: body.length, key: extractJarirIndexKey(body) };
+  } catch (err) {
+    return { status: 0, ms: Date.now() - started, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function probeJarirHopViaRotation(
+  fetchImpl: typeof fetch,
+  url: string,
+  headers: Record<string, string>,
+): Promise<JarirHop> {
+  const started = Date.now();
+  try {
+    const res = await fetchThroughChallenge(fetchImpl, url, { headers }, AbortSignal.timeout(ZONE_WINDOW_MS));
+    const body = await res.text();
+    return { status: res.status, ms: Date.now() - started, bytes: body.length, key: extractJarirIndexKey(body) };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    return { status: 0, ms: Date.now() - started, error, errorKind: classifyEchoError(error) } as JarirHop;
+  }
+}
+
+async function probeJarir(fetchImpl: typeof fetch): Promise<Record<string, unknown>> {
+  const [home, passthrough, rotation] = await Promise.all([
+    probeJarirHop(fetchImpl, JARIR_HOME_URL, { accept: "text/html" }),
+    probeJarirHop(fetchImpl, JARIR_PASSTHROUGH_URL, { accept: "text/plain,*/*" }),
+    probeJarirHopViaRotation(fetchImpl, JARIR_PASSTHROUGH_URL, { accept: "text/plain,*/*" }),
+  ]);
+  const discovered = await discoverJarirIndexKey(fetchImpl, "en", AbortSignal.timeout(ZONE_WINDOW_MS));
+  let constructor: Record<string, unknown> | null = null;
+  if (discovered) {
+    const started = Date.now();
+    try {
+      const res = await fetchImpl(
+        `https://ac.cnstrc.com/search/iphone%2015?key=${discovered}&num_results_per_page=5`,
+        { headers: { accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(ZONE_WINDOW_MS) },
+      );
+      const payload = await res.json();
+      constructor = { status: res.status, ms: Date.now() - started, hits: jarirHits(payload, "iphone 15").length };
+    } catch (err) {
+      constructor = { status: 0, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+  return { home, passthrough, rotation, discovered, constructor };
+}
+
 async function probeSultan(fetchImpl: typeof fetch): Promise<ZoneProbe> {
   // Exactly the collector hop shape (POST, store-scoped payload, JSON-in /
   // JSON-out) with the Arabic fixed-set query — the cell where this zone
@@ -259,7 +339,7 @@ export async function GET(req: Request): Promise<Response> {
     .then(async (res) => ((await res.json()) as { ip?: string }).ip ?? "")
     .catch(() => "");
 
-  const [echo, fallbackIp, luluRaw, pckRaw, sultan, nextstore, luluPinned, pckPinned] = await Promise.all([
+  const [echo, fallbackIp, luluRaw, pckRaw, sultan, nextstore, luluPinned, pckPinned, jarir] = await Promise.all([
     hopEcho,
     ipOnly,
     probeZone(fetch, LULU_URL, {}),
@@ -278,6 +358,8 @@ export async function GET(req: Request): Promise<Response> {
         return false;
       }
     }),
+    // REEA-1051 — Jarir discovery tripwire (see probeJarir above).
+    probeJarir(fetch),
   ]);
   const [lulu, pckuwait] = await Promise.all([
     withClearanceTier(fetch, luluRaw, LULU_URL),
@@ -301,6 +383,8 @@ export async function GET(req: Request): Promise<Response> {
         // out of round one; a green probe here restores it.
         "www.nextstore.com.kw": nextstore,
       },
+      // REEA-1051 — per-route Jarir discovery shape from this egress.
+      jarir,
       pinned: {
         "www.luluhypermarket.com": luluPinned,
         "pckuwait.com": pckPinned,

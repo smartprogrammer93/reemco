@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import robots from "@/app/robots";
 import sitemap from "@/app/sitemap";
+import * as robotsModule from "@/app/robots";
+import * as sitemapModule from "@/app/sitemap";
 
 /**
  * REEA-278 — guardrails for the metadata route handlers. These prove the
@@ -55,5 +57,14 @@ describe("crawler routes follow the serving host (REEA-1051)", () => {
       expect(urls.every((u) => u.startsWith("https://ns539626.ip-144-217-72.net"))).toBe(true);
       expect(urls.some((u) => u.includes("reemco.vercel.app"))).toBe(false);
     });
+  });
+
+  it("both handlers opt out of build-time caching so the runtime origin wins", () => {
+    // Metadata routes are prerendered at build by default. Without the
+    // force-dynamic segment config the origin is baked into the artifact from
+    // build-time env (the regression measured on the box: sitemap still named
+    // the Vercel alias after the runtime env was set).
+    expect(sitemapModule.dynamic).toBe("force-dynamic");
+    expect(robotsModule.dynamic).toBe("force-dynamic");
   });
 });

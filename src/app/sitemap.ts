@@ -1,6 +1,13 @@
 import type { MetadataRoute } from "next";
 import { siteOrigin } from "@/lib/site-origin";
 
+// REEA-1051 — sitemap handlers are cached/prerendered at build by default, so
+// a build-time-only env would bake the origin into the artifact. The serving
+// origin is runtime config (REEMCO_SITE_ORIGIN): render per request so the
+// deployed box advertises itself and the DNS cutover flips it without a
+// rebuild.
+export const dynamic = "force-dynamic";
+
 /**
  * Top-query result pages: the preset query pills the homepage itself serves
  * (design v4 hero band), so the long-tail inventory in the sitemap matches
