@@ -19,6 +19,7 @@ import { OVERALL_BUDGET_MS, isStaleCollectingJob, normalizedListingUrlOf } from 
 import { effectivePriceKwd } from "@/lib/format";
 import type { NormalizedProduct } from "@/types/product";
 import { scrapeOffer, subtaskFor, type FetchImpl } from "@/lib/collect/scraper";
+import { acquireCollectionSlot, releaseCollectionSlot } from "@/lib/collect/inflight";
 import {
   createJob,
   findLastCompleted,
@@ -236,8 +237,29 @@ export async function startProductCollectionStaged(
  * Execute the fan-out for a job. Fire-and-forget from the POST route via
  * `after()`; mutates the shared job object in place so GET polling sees
  * partial progress and partial offers.
+ *
+ * REEA-1063 — admission control: the per-caller rate limits bound how OFTEN a
+ * client can start work, not how many distinct products are scraped at once.
+ * This wrapper holds the process-wide in-flight cap (lib/collect/inflight.ts)
+ * around the run body so N product ids cannot fan out unbounded retailer
+ * scrapes; queued runs wait (bounded, fail-open) and the slot is released in
+ * the finally even when the body throws.
  */
 export async function runCollection(
+  job: CollectJob,
+  product: NormalizedProduct,
+  opts: { fetchImpl?: FetchImpl; overallBudgetMs?: number; now?: number; onStage?: (job: CollectJob) => void } = {},
+): Promise<CollectJob> {
+  await acquireCollectionSlot();
+  try {
+    return await runCollectionAdmitted(job, product, opts);
+  } finally {
+    releaseCollectionSlot();
+  }
+}
+
+/** The actual fan-out body; callers must hold an admission slot. */
+async function runCollectionAdmitted(
   job: CollectJob,
   product: NormalizedProduct,
   opts: { fetchImpl?: FetchImpl; overallBudgetMs?: number; now?: number; onStage?: (job: CollectJob) => void } = {},
