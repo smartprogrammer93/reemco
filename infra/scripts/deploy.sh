@@ -144,6 +144,16 @@ if ! docker compose -f "$COMPOSE" "${PROFILE_ARGS[@]}" \
   exit 1
 fi
 
+# REEA-1059 — `compose up` does NOT recreate a service when only a bind-mounted
+# FILE changed (the Caddyfile is mounted at /etc/caddy/Caddyfile), so a shipped
+# proxy config change would silently never take effect. Reload Caddy from the
+# versioned file on every deploy: Caddy validates before switching and keeps the
+# running config on error, so this is idempotent and cannot take the proxy down.
+# The external verify + smoke gate below still proves the served surface.
+log "reloading proxy config"
+docker exec reemco-proxy-1 caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile \
+  >>"$LOG" 2>&1 || log "warning: caddy reload failed — proxy keeps its previous config"
+
 if /opt/reemco/scripts/verify.sh --tag "$TAG"; then
   log "deploy verified: $TAG"
   exit 0
