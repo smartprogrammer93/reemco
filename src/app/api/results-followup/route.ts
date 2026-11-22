@@ -26,6 +26,14 @@
  *  - `null` when nothing useful converged in time — the page simply keeps
  *    what it rendered. Adapter status itself stays on the per-query coverage
  *    line (REEA-290); this feed only moves the late offers themselves.
+ *
+ * REEA-1063 — the cross-worker path runs its OWN bounded live collection
+ * (up to LIVE_SEARCH_BUDGET_MS) for the same query, which made this the
+ * second-most expensive unauthenticated route with no gate (OWASP API4:2023).
+ * It now rides the shared per-caller limiter exactly like csp-report/health:
+ * 120/min per caller (the existing shared budget; the page issues one
+ * follow-up per view), denied calls answer 429 with the REEA-837 wire headers
+ * and perform ZERO collection work.
  */
 import type { LiveSearchResult } from "@/lib/collect/live-search";
 import {
@@ -35,6 +43,8 @@ import {
 } from "@/lib/collect/live-search";
 import { sanitizeSearchQuery } from "@/lib/search-params";
 import { LOCALE_COOKIE, resolveUiLocale } from "@/lib/i18n";
+import { checkRateLimitShared } from "@/lib/rate-limit-kv";
+import { rateLimitHeaders } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,6 +52,15 @@ export const dynamic = "force-dynamic";
 // below is what this handler spends before answering, the segment ceiling
 // keeps the whole request inside one short window.
 export const maxDuration = 20;
+
+/** REEA-1063 — per-caller budget for the follow-up feed (120/min). */
+export const FOLLOWUP_RATE_LIMIT = { limit: 120, windowMs: 60_000 };
+
+// Same caller key as the sibling gated routes (first X-Forwarded-For hop).
+function clientKey(req: Request): string {
+  const fwd = req.headers.get("x-forwarded-for");
+  return (fwd ? fwd.split(",")[0].trim() : "") || req.headers.get("x-real-ip") || "unknown";
+}
 
 /** Bounded wait for the pending run to converge.
  *
@@ -52,6 +71,18 @@ export const maxDuration = 20;
  * request — the late Kuwait offers never folded into the open page. */
 
 export async function GET(req: Request): Promise<Response> {
+  // REEA-1063 — gate ahead of the cross-worker fan-out below: a spent caller
+  // answers 429 without re-collecting the query.
+  const gate = await checkRateLimitShared(
+    `results-followup:${clientKey(req)}`,
+    Date.now(),
+    FOLLOWUP_RATE_LIMIT,
+  );
+  if (!gate.allowed) {
+    return Response.json({ error: "rate limit exceeded" }, { status: 429, headers: rateLimitHeaders(gate) });
+  }
+  const gateHeaders = rateLimitHeaders(gate);
+
   const url = new URL(req.url);
   const query = sanitizeSearchQuery(url.searchParams.get("q")) ?? "";
   // REEA-468 G5 — same resolution chain as the page (rc_locale cookie → coarse
@@ -76,7 +107,7 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const waited = pending ?? fallbackFinal;
-  if (!waited) return Response.json(null);
+  if (!waited) return Response.json(null, { headers: gateHeaders });
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   const settled = await Promise.race([
@@ -86,5 +117,5 @@ export async function GET(req: Request): Promise<Response> {
     }),
   ]);
   clearTimeout(timer);
-  return Response.json(settled ?? null);
+  return Response.json(settled ?? null, { headers: gateHeaders });
 }
