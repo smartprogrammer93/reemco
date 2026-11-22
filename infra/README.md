@@ -15,7 +15,7 @@ does not exist on the host.
 | `cloud-init.yaml` | First boot: users, SSH posture, UFW, chrony, fail2ban, unattended upgrades, 26.04 delta checks |
 | `ansible/playbook.yml` | Idempotent host convergence: pinned Docker, `/opt/reemco` config, timers, firewall |
 | `ansible/inventory.example.yml` | Copy to `inventory.yml`, set `ansible_host` |
-| `compose.prod.yml` | app + Valkey + optional on-box Upstash-REST gateway + Caddy |
+| `compose.prod.yml` | app + local Valkey (native RESP KV) + Caddy |
 | `Caddyfile` | TLS + HSTS; app owns CSP/CTO/Referrer-Policy (do not duplicate them) |
 | `Dockerfile` | Production image, tag = commit sha, standalone Next output |
 | `scripts/deploy.sh` | Deploy a pinned tag, auto-rollback on failed verify |
@@ -100,14 +100,20 @@ because the GHCR package is private and the host has no registry credentials.
 accepts a failed `pull` only when that exact tag already exists locally, and
 `rollback.sh` redeploys the recorded previous tag.
 
-KV: `hiett/serverless-redis-http` is running (profile `local-kv`) but its
-`latest` image answers 404 for the Upstash path-style commands the app uses
-(`/get/<key>`, `/incrby/<key>/<n>`, `/keys/<pattern>`), so `app.env` leaves
-`KV_REST_API_URL`/`KV_REST_API_TOKEN` empty and the app uses its durable
-on-box store under `/data/*` (single instance, so no cross-instance blindness).
-Follow-up: inject hosted Upstash credentials, or pin a gateway build that
-implements the path contract, then set the two vars back.
+KV: the app now speaks RESP directly to the local Valkey container
+(`REDIS_URL=redis://redis:6379/0`, set by `compose.prod.yml`; code in
+`src/lib/collect/kv-redis.ts`). No Upstash, no REST gateway, no hosted store,
+no extra npm dependency. Valkey is on the private compose network only, AOF on
+a named volume, memory capped at 384 MB with `allkeys-lru`. The old
+`hiett/serverless-redis-http` gateway was removed: its `latest` image answered
+404 for the Upstash path-style commands the app issues, so every KV call
+degraded to the per-container `/data` store. `KV_REST_API_URL`/`KV_REST_API_TOKEN`
+remain supported for a Vercel deployment that binds a hosted store; with
+`REDIS_URL` present it wins (kv.ts selection order).
 
 `/api/health` is pinned to `REEMCO_HEALTH_ORIGIN=http://127.0.0.1:3000`: the
 public-surface hops (DNS/TLS/proxy) are asserted by `verify.sh` and the smoke
-suite, so the scheduled probe does not need NAT hairpin to reach itself.
+suite, so the scheduled probe does not need NAT hairpin to reach itself. The
+pre-fix image (tag `bcbcb53`) derived the origin from the request URL, which on
+this box means the public hostname and produced intermittent `fetch failed`
+verdicts; the deployed tag from this change fixes that.

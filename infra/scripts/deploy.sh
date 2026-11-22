@@ -39,9 +39,10 @@ printf '%s' "$TAG" | grep -Eq '^[0-9a-f]{40}$' || die "tag '$TAG' is not a 40-ch
 [ -f "$RELEASE_ENV" ] || die "missing $RELEASE_ENV (site address is unset)"
 [ -f "$APP_ENV" ] || die "missing $APP_ENV (runtime secrets are unset)"
 
-# Image repo and optional compose profiles (e.g. local-kv for the on-box
-# Upstash gateway). Both are non-secret and live in release.env; profiles empty
-# means app + Valkey only.
+# Image repo and optional compose profiles. Both are non-secret and live in
+# release.env; profiles empty means the default stack (app + Valkey + Caddy).
+# REEA-1044: the local-kv gateway profile is gone — the app talks to Valkey
+# over RESP via REDIS_URL, which compose.prod.yml sets.
 REPO=$(sed -n 's/^REEMCO_IMAGE_REPO=//p' "$RELEASE_ENV" | tail -1)
 REPO=${REPO:-ghcr.io/smartprogrammer93/reemco}
 PROFILES=$(sed -n 's/^REEMCO_COMPOSE_PROFILES=//p' "$RELEASE_ENV" | tail -1)

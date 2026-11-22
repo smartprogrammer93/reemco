@@ -30,10 +30,23 @@ services:
       # so the probe does not depend on public DNS, TLS or NAT hairpin: those
       # hops are asserted by verify.sh and the external smoke suite instead.
       REEMCO_HEALTH_ORIGIN: http://127.0.0.1:3000
+      # REEA-1044 — shared store for collect jobs, metrics and rate limits.
+      # The app speaks RESP directly to the local Valkey container (kv-redis.ts);
+      # there is no Upstash, no REST gateway and no hosted service in the path.
+      # Non-secret, so it lives here rather than in app.env.
+      REDIS_URL: redis://redis:6379/0
     volumes:
       - events:/data/events
       - metrics:/data/metrics
       - collect:/data/collect
+    depends_on:
+      redis:
+        condition: service_healthy
+    # Loopback only, never public: the scheduled health probe
+    # (reemco-health.timer) runs as a host unit against 127.0.0.1:3000, and
+    # MTTR diagnostics can curl the app directly without going through Caddy.
+    ports:
+      - "127.0.0.1:3000:3000"
     # 32 GB box: leave ~4 GB headroom for page cache, Caddy, Valkey and the
     # OS. Chromium is not in this container (it is a CI-only smoke dependency).
     mem_limit: 6g
@@ -61,8 +74,10 @@ services:
         max-file: "5"
 
   redis:
-    # Local Valkey backs the optional on-box Upstash-compatible REST gateway
-    # (kv-rest below) and is not exposed to the host.
+    # Local Valkey is the app's shared KV store (REDIS_URL above). It is on the
+    # private compose network only — never published to the host, never exposed
+    # by Caddy. AOF persistence on a named volume; memory is capped so a runaway
+    # keyspace degrades to eviction instead of taking the box down.
     image: valkey/valkey:8-alpine
     command:
       [
@@ -83,28 +98,6 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  kv-rest:
-    # Optional: serves the SAME Upstash REST contract the app already speaks
-    # (KV_REST_API_URL / KV_REST_API_TOKEN), so no code changes are needed.
-    # Enable with `--profile local-kv` and point app.env at http://kv-rest:80.
-    # Without it, keep a hosted Upstash store injected through app.env.
-    profiles: ["local-kv"]
-    image: hiett/serverless-redis-http:latest
-    environment:
-      SRH_MODE: env
-      SRH_TOKEN: ${REEMCO_KV_TOKEN:-change-me-local-kv-token}
-      SRH_CONNECTION_STRING: redis://redis:6379
-    depends_on:
-      redis:
-        condition: service_healthy
-    mem_limit: 128m
-    restart: unless-stopped
     logging:
       driver: json-file
       options:

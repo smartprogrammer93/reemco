@@ -7,13 +7,20 @@
  * a shared KV store so a follow-up request on ANY instance continues the same
  * job instead of falling back to the client-side restart path.
  *
- * Backend is the Vercel KV / Upstash REST interface (`KV_REST_API_URL` +
- * `KV_REST_API_TOKEN`, injected automatically when a KV store is bound to the
- * project). When no binding is configured (local dev, tests) callers fall back
- * to the per-process disk cache — see store.ts. Every call is best-effort with
- * a short timeout: a KV hiccup degrades to the local cache, never to a failed
+ * Backend selection:
+ *  - `REDIS_URL` (REEA-1044, self-hosted box): native RESP against the local
+ *    Redis/Valkey container — see kv-redis.ts. This is the production path on
+ *    the single server; no gateway and no hosted service sits in between.
+ *  - `KV_REST_API_URL` + `KV_REST_API_TOKEN`: the Vercel KV / Upstash REST
+ *    interface, kept for deployments that still bind a hosted store (Vercel).
+ *
+ * When neither is configured (local dev, tests) callers fall back to the
+ * per-process disk cache — see store.ts. Every call is best-effort with a
+ * short timeout: a KV hiccup degrades to the local cache, never to a failed
  * request. Tokens are never logged.
  */
+
+import { makeRedisKv } from "@/lib/collect/kv-redis";
 
 const KV_TIMEOUT_MS = 2500;
 
@@ -102,9 +109,18 @@ export interface SharedKv {
 
 let cached: SharedKv | null | undefined;
 
-/** Resolve the KV binding from env; null when no shared store is configured. */
+/**
+ * Resolve the KV binding from env; null when no shared store is configured.
+ * REDIS_URL wins when present (the self-hosted box), then the hosted REST
+ * contract (Vercel), then null (callers degrade to their local store).
+ */
 export function getSharedKv(): SharedKv | null {
   if (cached !== undefined) return cached;
+  const redisUrl = process.env.REDIS_URL ?? "";
+  if (redisUrl) {
+    cached = makeRedisKv(redisUrl);
+    return cached;
+  }
   const base = (process.env.KV_REST_API_URL ?? "").replace(/\/+$/, "");
   const token = process.env.KV_REST_API_TOKEN ?? "";
   cached = base && token ? makeKv(base, token) : null;

@@ -47,3 +47,6 @@ next-env.d.ts
 .events/
 .events-test-*/
 .collect-cache/
+
+# REEA-1044 metrics test scratch dir
+.metrics-tests/
