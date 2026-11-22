@@ -60,8 +60,20 @@ done
 echo "security headers OK (4/4)"
 
 # 3. Health through the proxy — proves Caddy→app routing, not just loopback.
-CODE=$(curl -s -o /tmp/reemco-health.json -w '%{http_code}' -m 20 "$BASE/api/health" || echo 000)
-[ "$CODE" = "200" ] || fail "/api/health returned $CODE"
+# REEA-1044: this endpoint walks the live shopper funnel (home → results →
+# product against real retailer adapters), so a single sample is not a stable
+# gate: a cold walk legitimately takes ~20-26 s and one transient adapter
+# error returns 503. Retry with a generous per-attempt timeout instead of
+# failing the deploy on the first flake; a genuinely dead origin still fails
+# every attempt. The gate is "eventually healthy", not "healthy on one sample".
+HEALTH_OK=0
+for attempt in 1 2 3 4 5; do
+  CODE=$(curl -s -o /tmp/reemco-health.json -w '%{http_code}' -m 45 "$BASE/api/health" || echo 000)
+  if [ "$CODE" = "200" ]; then HEALTH_OK=1; break; fi
+  echo "health attempt $attempt/5 returned $CODE — retrying in 15s"
+  sleep 15
+done
+[ "$HEALTH_OK" = "1" ] || fail "/api/health never returned 200 (last: $CODE)"
 echo "health OK: 200"
 
 echo "VERIFY PASSED for ${TAG:-$BASE}"
