@@ -43,6 +43,7 @@ import type { NextRequest } from "next/server";
 import { checkRateLimitShared } from "@/lib/rate-limit-kv";
 import { invalidateTrendingChips } from "@/lib/trending-chips";
 import { MAX_RESPONSE_BODY_BYTES, readBodyCapped } from "@/lib/collect/read-body";
+import { resolveBuildStamp } from "@/lib/build-stamp";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -134,8 +135,10 @@ function hasChip(html: string): boolean {
 
 // REEA-377 build stamp: Vercel injects VERCEL_GIT_COMMIT_SHA at build time
 // (same value the build command writes to public/__commit.txt). Not a secret;
-// a short SHA is what rollback instructions reference.
-const BUILD_SHA = (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 12);
+// a short SHA is what rollback instructions reference. REEA-1051: on the
+// self-hosted image that variable exists only at BUILD time, so the runtime
+// falls back to the shipped public/__commit.txt — see lib/build-stamp.ts.
+const BUILD_SHA = resolveBuildStamp();
 
 // Last funnel verdict, memory-only — same lifecycle as the rate-limit buckets
 // in lib/rate-limit.ts; a new instance simply re-runs the funnel once.
