@@ -5,10 +5,12 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  SEARCH_KEY_ALLOW,
   brandAwareCoverage,
   discoverJarirIndexKey,
   extractJarirIndexKey,
   fetchThroughChallenge,
+  jarirFallbackKey,
   jarirIndexLang,
   parseAmazonEgSearch,
   parseEurekaSearch,
@@ -253,6 +255,19 @@ describe("discoverJarirIndexKey (REEA-1051)", () => {
   });
 });
 
+describe("jarirFallbackKey (REEA-1051)", () => {
+  it("pins the published per-language index keys and validates them", () => {
+    // Deliberate last-resort constants (public index selectors, never offer
+    // data): a change here must be a deliberate update, and every value must
+    // still pass the shared interpolation allowlist.
+    expect(jarirFallbackKey("en")).toBe("key_KcSYfmQTEwRpBnd9");
+    expect(jarirFallbackKey("ar")).toBe("key_g0Gi7pKaE5cyqDGl");
+    for (const lang of ["en", "ar"] as const) {
+      expect(SEARCH_KEY_ALLOW.test(jarirFallbackKey(lang))).toBe(true);
+    }
+  });
+});
+
 describe("brandAwareCoverage (REEA-195)", () => {
   it("bridges the Arabic brand spelling to the curated Latin form", () => {
     // أبل ⇄ Apple answers one of the two query tokens on a Latin title:
@@ -391,6 +406,32 @@ describe("searchRetailerFallback dispatch", () => {
     const found = await searchRetailerFallback("jarir.com", "ASUS ROG Strix Scope II", fetchImpl);
     expect(found.price).toBe(499);
     expect(found.currency).toBe("SAR");
+  });
+
+  it("resolves jarir.com via the validated last-resort key when every discovery route is challenged (REEA-1051)", async () => {
+    // Measured box-egress shape: homepage and the static pass-through both
+    // answer the Cloudflare interstitial (403, no payload). The Constructor
+    // search zone is not challenged, so the fallback key keeps the lane live.
+    const seen: string[] = [];
+    const fetchImpl = async (url: string): Promise<Response> => {
+      seen.push(url);
+      if (url.includes("ac.cnstrc.com")) {
+        return new Response(
+          JSON.stringify({
+            response: {
+              results: [
+                { data: { url: "a.html", price: 499, metadata: { name: "Asus ROG Strix Scope II RX" } } },
+              ],
+            },
+          }),
+        );
+      }
+      return new Response("<title>Just a moment...</title>", { status: 403 });
+    };
+    const found = await searchRetailerFallback("jarir.com", "ASUS ROG Strix Scope II", fetchImpl);
+    expect(found.price).toBe(499);
+    expect(found.currency).toBe("SAR");
+    expect(seen.some((u) => u.includes(`key=${jarirFallbackKey("en")}`))).toBe(true);
   });
 
   it("resolves sultan-center.com via the store-scoped mobile search API", async () => {

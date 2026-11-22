@@ -7,6 +7,7 @@ import "./test-cache-dir";
 import { describe, expect, it } from "vitest";
 import { PER_RETAILER_TIMEOUT_MS } from "@/lib/collect/types";
 import { COVERAGE_ORDER } from "@/lib/collect/coverage";
+import { jarirFallbackKey } from "@/lib/collect/search-fallback";
 import type { NormalizedProduct } from "@/types/product";
 import {
   asterHits,
@@ -1098,6 +1099,32 @@ describe("collectLiveResults", () => {
     // same live path as the incumbents.
     expect(merchants.has("Eureka")).toBe(true);
     expect(merchants.has("Sultan Center")).toBe(true);
+  });
+
+  it("Jarir keeps serving through the validated last-resort key when every discovery route is challenged (REEA-1051)", async () => {
+    resetDiscoveryCache();
+    // Measured box-egress shape: homepage, pass-through and the whole
+    // identity rotation answer the Cloudflare interstitial. The Constructor
+    // search zone is not challenged, so the lane must still produce live hits.
+    const seen: string[] = [];
+    const fetchImpl = async (url: string): Promise<Response> => {
+      seen.push(url);
+      if (url.includes("ac.cnstrc.com")) {
+        return jsonResponse({
+          response: {
+            results: [
+              { data: { url: "p/s26", price: 1499, metadata: { name: "Samsung Galaxy S26 Ultra" } } },
+            ],
+          },
+        });
+      }
+      if (url.includes("jarir.com")) return new Response("<title>Just a moment...</title>", { status: 403 });
+      return jsonResponse({});
+    };
+    const { notes } = await collectLiveResults("samsung", { fetchImpl });
+    const jarir = notes.find((n) => n.merchant === "Jarir");
+    expect(jarir?.hits ?? 0).toBeGreaterThan(0);
+    expect(seen.some((u) => u.includes(`key=${jarirFallbackKey("en")}`))).toBe(true);
   });
 
   it("caches only the hop; offer queries re-run on every call (REEA-141)", async () => {

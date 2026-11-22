@@ -38,6 +38,7 @@ import {
   discoverJarirIndexKey,
   extractJarirIndexKey,
   fetchThroughChallenge,
+  jarirFallbackKey,
 } from "@/lib/collect/search-fallback";
 import { jarirHits, jsdClearedHtml } from "@/lib/collect/live-search";
 // REEA-782 — GET /api/echo rides the shared rate limiter (REEA-37 bucket,
@@ -245,12 +246,17 @@ async function probeJarir(fetchImpl: typeof fetch): Promise<Record<string, unkno
     probeJarirHopViaRotation(fetchImpl, JARIR_PASSTHROUGH_URL, { accept: "text/plain,*/*" }),
   ]);
   const discovered = await discoverJarirIndexKey(fetchImpl, "en", AbortSignal.timeout(ZONE_WINDOW_MS));
+  // REEA-1051 — report the key the adapter would actually use: live discovery
+  // when it answered, else the validated last-resort key. The constructor
+  // cell then proves whether the search zone itself answers from this egress.
+  const fallback = discovered ? null : jarirFallbackKey("en");
+  const keyUsed = discovered ?? fallback;
   let constructor: Record<string, unknown> | null = null;
-  if (discovered) {
+  if (keyUsed) {
     const started = Date.now();
     try {
       const res = await fetchImpl(
-        `https://ac.cnstrc.com/search/iphone%2015?key=${discovered}&num_results_per_page=5`,
+        `https://ac.cnstrc.com/search/iphone%2015?key=${keyUsed}&num_results_per_page=5`,
         { headers: { accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(ZONE_WINDOW_MS) },
       );
       const payload = await res.json();
@@ -259,7 +265,7 @@ async function probeJarir(fetchImpl: typeof fetch): Promise<Record<string, unkno
       constructor = { status: 0, error: err instanceof Error ? err.message : String(err) };
     }
   }
-  return { home, passthrough, rotation, discovered, constructor };
+  return { home, passthrough, rotation, discovered, fallback, constructor };
 }
 
 async function probeSultan(fetchImpl: typeof fetch): Promise<ZoneProbe> {

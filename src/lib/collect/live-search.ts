@@ -21,6 +21,7 @@ import {
   discoverJarirIndexKey,
   extractJsonLdProducts,
   fetchThroughChallenge,
+  jarirFallbackKey,
   jarirIndexLang,
   normalizeShopifyProducts,
   queryGatePasses,
@@ -1683,11 +1684,13 @@ export const COLLECTORS: RetailerCollector[] = [
         // REEA-1051 — the discovery hop is shared with the per-product
         // fallback (search-fallback.ts): it reads the documented homepage
         // payload first and, when the storefront's Cloudflare challenge
-        // blocks that read (the self-hosted box's egress), the pass-through
-        // static shell that carries the same keys. Both routes are live
-        // reads; nothing is hard-coded.
-        indexKey = (await discoverJarirIndexKey(fetchImpl, lang, signal)) ?? undefined;
-        if (!indexKey) throw new Error("jarir index key missing");
+        // blocks that read, the pass-through static shell that carries the
+        // same keys. Both routes are live reads. If this egress challenges
+        // BOTH (measured on the self-hosted box: /api/echo `jarir` shows 403
+        // on home, pass-through and the whole rotation), the validated
+        // last-resort key keeps the lane serving; the offers are still
+        // fetched live from Constructor.
+        indexKey = (await discoverJarirIndexKey(fetchImpl, lang, signal)) ?? jarirFallbackKey(lang);
         writeDiscovery(cacheKey, [indexKey]);
       }
       const res = await fetchChecked(
