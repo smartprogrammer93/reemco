@@ -75,3 +75,39 @@ rollback is the DNS A record back to Vercel while that deployment stays live.
 - Off-box backup target + credentials (`RESTIC_REPOSITORY`, password file).
 - Who can flip the DNS A record.
 - Confirm the provider means mdadm soft RAID, not fake RAID.
+
+## Standup record — 2026-11-22 (REEA-1044)
+
+Host: `ns539626.ip-144-217-72.net` (`144.217.72.236`), Ubuntu 26.04.1 LTS,
+mdadm RAID1 across both NVMe disks (`md1`/`md2`/`md3` all `[UU]`, ~467 GB on
+`/`). Converged with `ansible-playbook -i localhost, -c local` (ok=23,
+failed=0): Docker CE `29.10.0` + Compose `5.8.0` from Docker's apt repo,
+fail2ban, UFW deny-inbound with 22/80/443 only, chrony synced, unattended
+upgrades active, `deploy` user in the docker group, health/backup timers
+installed. Caddy obtained a Let's Encrypt certificate for the hostname and
+serves the app over HTTPS.
+
+The 26.04 delta checks passed on real hardware: `sudo` is sudo-rs 0.2.13 and
+`sudo -n` works for our script forms; coreutils is the uutils build and the
+deploy/verify/rollback scripts ran under it unchanged; `chronyc tracking`
+reports a synced source; `sshd -T` shows key-only auth (`passwordauthentication
+no`, `permitrootlogin prohibit-password`).
+
+Deploy path during standup: the image is built **on the host** from the
+committed tree (`docker build -f infra/Dockerfile --build-arg REEMCO_COMMIT=<sha>`)
+because the GHCR package is private and the host has no registry credentials.
+`release.env` therefore sets `REEMCO_IMAGE_REPO=reemco/app`; `deploy.sh`
+accepts a failed `pull` only when that exact tag already exists locally, and
+`rollback.sh` redeploys the recorded previous tag.
+
+KV: `hiett/serverless-redis-http` is running (profile `local-kv`) but its
+`latest` image answers 404 for the Upstash path-style commands the app uses
+(`/get/<key>`, `/incrby/<key>/<n>`, `/keys/<pattern>`), so `app.env` leaves
+`KV_REST_API_URL`/`KV_REST_API_TOKEN` empty and the app uses its durable
+on-box store under `/data/*` (single instance, so no cross-instance blindness).
+Follow-up: inject hosted Upstash credentials, or pin a gateway build that
+implements the path contract, then set the two vars back.
+
+`/api/health` is pinned to `REEMCO_HEALTH_ORIGIN=http://127.0.0.1:3000`: the
+public-surface hops (DNS/TLS/proxy) are asserted by `verify.sh` and the smoke
+suite, so the scheduled probe does not need NAT hairpin to reach itself.

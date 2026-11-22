@@ -163,7 +163,13 @@ export async function GET(req: NextRequest): Promise<Response> {
   const gate = await checkRateLimitShared(clientKey(req), Date.now());
   if (!gate.allowed && lastVerdict) return verdictResponse(lastVerdict.ok);
 
-  const origin = new URL(req.url).origin;
+  // REEA-1044: the scheduled probe runs on the self-hosted box behind Caddy.
+  // Deriving the origin from req.url makes the probe depend on the public
+  // hostname resolving and on NAT hairpin (container -> public IP -> Caddy),
+  // which is exactly the hop a probe should NOT need in order to prove the
+  // app is alive. REEMCO_HEALTH_ORIGIN pins it to the container's own
+  // loopback; unset (Vercel) keeps the previous behaviour.
+  const origin = process.env.REEMCO_HEALTH_ORIGIN || new URL(req.url).origin;
   const failed: string[] = [];
   const checks: Record<string, string | number> = {};
 
@@ -224,7 +230,10 @@ export async function GET(req: NextRequest): Promise<Response> {
   const checkedAt = new Date().toISOString();
   // Internals to console logs only (REEA-377): Vercel function logs keep the
   // full step detail, the served body stays the minimal {ok, build} shape.
-  const detail = `fixture=${FIXTURE_QUERY} checks=${JSON.stringify(checks)} failedAt=${JSON.stringify(failed)} checkedAt=${checkedAt}`;
+  // REEA-1044: the origin is logged so a failed hop names the URL it tried —
+  // on a self-hosted box the difference between loopback and the public
+  // hostname is the whole diagnosis.
+  const detail = `origin=${origin} fixture=${FIXTURE_QUERY} checks=${JSON.stringify(checks)} failedAt=${JSON.stringify(failed)} checkedAt=${checkedAt}`;
   if (ok) console.log(`health pass ${detail}`);
   else console.error(`health FAIL ${detail}`);
   lastVerdict = { ok };

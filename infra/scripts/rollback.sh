@@ -43,8 +43,15 @@ fi
 docker compose -f "$COMPOSE" --env-file "$RELEASE_ENV" --env-file "$TAG_FILE" pull app >>"$LOG" 2>&1 \
   || log "warning: pull failed, trying the locally cached $TAG image"
 
+# Same profile set as deploy.sh: a rollback must reproduce the exact stack
+# shape, not a subset of it.
+PROFILES=$(sed -n 's/^REEMCO_COMPOSE_PROFILES=//p' "$RELEASE_ENV" | tail -1)
+PROFILE_ARGS=()
+for p in $PROFILES; do PROFILE_ARGS+=(--profile "$p"); done
+
 printf 'REEMCO_IMAGE_TAG=%s\n' "$TAG" > "$TAG_FILE"
-docker compose -f "$COMPOSE" --env-file "$RELEASE_ENV" --env-file "$TAG_FILE" up -d --remove-orphans >>"$LOG" 2>&1 \
+docker compose -f "$COMPOSE" "${PROFILE_ARGS[@]}" \
+  --env-file "$RELEASE_ENV" --env-file "$TAG_FILE" up -d --remove-orphans >>"$LOG" 2>&1 \
   || { log "FAILED: compose up for rollback tag $TAG"; exit 1; }
 
 if /opt/reemco/scripts/verify.sh --tag "$TAG"; then

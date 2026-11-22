@@ -21,6 +21,12 @@
     reemco_root: /opt/reemco
     reemco_etc: /etc/reemco
     reemco_user: deploy
+    # Pinned Docker Engine + Compose plugin (26.04 delta #5: Docker's apt repo,
+    # not Ubuntu's docker.io). Bump deliberately, record the new version in the
+    # deploy note, and keep the pins here — not only in a per-host inventory —
+    # so a rebuild of the box converges to the same versions.
+    docker_version: "5:29.10.0-1~ubuntu.26.04~resolute"
+    compose_version: "5.8.0-1~ubuntu.26.04~resolute"
 
   tasks:
     - name: Refuse to provision on the wrong OS

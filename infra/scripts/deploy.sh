@@ -39,6 +39,15 @@ printf '%s' "$TAG" | grep -Eq '^[0-9a-f]{40}$' || die "tag '$TAG' is not a 40-ch
 [ -f "$RELEASE_ENV" ] || die "missing $RELEASE_ENV (site address is unset)"
 [ -f "$APP_ENV" ] || die "missing $APP_ENV (runtime secrets are unset)"
 
+# Image repo and optional compose profiles (e.g. local-kv for the on-box
+# Upstash gateway). Both are non-secret and live in release.env; profiles empty
+# means app + Valkey only.
+REPO=$(sed -n 's/^REEMCO_IMAGE_REPO=//p' "$RELEASE_ENV" | tail -1)
+REPO=${REPO:-ghcr.io/smartprogrammer93/reemco}
+PROFILES=$(sed -n 's/^REEMCO_COMPOSE_PROFILES=//p' "$RELEASE_ENV" | tail -1)
+PROFILE_ARGS=()
+for p in $PROFILES; do PROFILE_ARGS+=(--profile "$p"); done
+
 CURRENT=""
 if [ -f "$TAG_FILE" ]; then
   CURRENT=$(sed -n 's/^REEMCO_IMAGE_TAG=//p' "$TAG_FILE" | tail -1)
@@ -47,7 +56,13 @@ fi
 log "deploy requested: tag=$TAG current=${CURRENT:-none} dry_run=$DRY_RUN"
 
 if [ "$CURRENT" = "$TAG" ]; then
-  log "tag already live — re-verifying instead of redeploying"
+  # Idempotent re-check: the image tag is unchanged, but the stack shape may
+  # not be (e.g. a service was added). Converge it, then run the same gate.
+  log "tag already live — reconciling stack shape, then re-verifying"
+  docker compose -f "$COMPOSE" "${PROFILE_ARGS[@]}" \
+    --env-file "$RELEASE_ENV" --env-file "$TAG_FILE" \
+    up -d --remove-orphans >>"$LOG" 2>&1 \
+    || log "warning: compose reconcile failed; verifying the running stack as-is"
   exec /opt/reemco/scripts/verify.sh --tag "$TAG"
 fi
 
@@ -70,17 +85,26 @@ fi
 # Pull first so the window where the old container is down is as short as
 # possible, and so a bad tag fails before we stop serving.
 log "pulling ${TAG}"
-docker compose -f "$COMPOSE" --env-file "$RELEASE_ENV" --env-file "$TAG_FILE" \
+docker compose -f "$COMPOSE" "${PROFILE_ARGS[@]}" \
+  --env-file "$RELEASE_ENV" --env-file "$TAG_FILE" \
   pull app >>"$LOG" 2>&1 || {
-    # image-tag.env still names the old tag, so nothing has changed yet.
-    die "pull failed for $TAG — service untouched (still on ${CURRENT:-nothing})"
+    # Standup path: the image is built on this host (no registry credentials),
+    # so `pull` has nothing to fetch. Accept the tag only when that exact
+    # artifact is already present locally; otherwise fail without touching the
+    # running service (image-tag.env still names the old tag).
+    if docker image inspect "${REPO}:${TAG}" >/dev/null 2>&1; then
+      log "pull failed for $TAG, but ${REPO}:${TAG} exists locally — continuing with the on-host build"
+    else
+      die "pull failed for $TAG and no local image — service untouched (still on ${CURRENT:-nothing})"
+    fi
   }
 
 printf 'REEMCO_IMAGE_TAG=%s\n' "$TAG" > "$TAG_FILE"
 log "image-tag.env updated to $TAG"
 
 log "starting stack"
-if ! docker compose -f "$COMPOSE" --env-file "$RELEASE_ENV" --env-file "$TAG_FILE" \
+if ! docker compose -f "$COMPOSE" "${PROFILE_ARGS[@]}" \
+  --env-file "$RELEASE_ENV" --env-file "$TAG_FILE" \
   up -d --remove-orphans >>"$LOG" 2>&1; then
   log "compose up failed — rolling back"
   /opt/reemco/scripts/rollback.sh || log "ROLLBACK ALSO FAILED — page the on-call"

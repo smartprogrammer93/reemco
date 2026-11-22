@@ -26,6 +26,10 @@ services:
       EVENTS_DIR: /data/events
       METRICS_DIR: /data/metrics
       COLLECT_CACHE_DIR: /data/collect
+      # /api/health walks the funnel against its own origin. Pin it to loopback
+      # so the probe does not depend on public DNS, TLS or NAT hairpin: those
+      # hops are asserted by verify.sh and the external smoke suite instead.
+      REEMCO_HEALTH_ORIGIN: http://127.0.0.1:3000
     volumes:
       - events:/data/events
       - metrics:/data/metrics
