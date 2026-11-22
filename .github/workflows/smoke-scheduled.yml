@@ -82,9 +82,10 @@ jobs:
         if: steps.guard.outputs.due != 'false'
 
       # REEA-337 deploy parity self-heal: compare the served artifact stamp with
-      # this run's main HEAD. On mismatch, dispatch the Deploy site workflow
-      # (its own concurrency + post-deploy stamp check make repeated dispatches
-      # safe/idempotent), then poll the stamp briefly and report before/after.
+      # this run's main HEAD. On mismatch, dispatch the PRIMARY self-hosted
+      # deploy workflow (REEA-1054; its own concurrency + post-deploy stamp check
+      # make repeated dispatches safe/idempotent), then poll the stamp briefly
+      # and report before/after. The Vercel alias is no longer the primary path.
       # Runs inside the existing hourly tick — zero extra scheduled jobs, so the
       # ~2,000 min/month REEA-314 budget is unaffected. curl+gh only: no node.
       - name: Deploy parity self-heal (REEA-337)
@@ -93,27 +94,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -u
-          SERVED=$(curl -fsS --max-time 15 "https://reemco.vercel.app/__commit.txt?parity=$RANDOM$RANDOM" | tr -d '[:space:]' || echo empty)
+          BASE="${{ vars.PROD_BASE_URL || 'https://ns539626.ip-144-217-72.net' }}"
+          SERVED=$(curl -fsS --max-time 15 "$BASE/__commit.txt?parity=$RANDOM$RANDOM" | tr -d '[:space:]' || echo empty)
           HEAD="${{ github.sha }}"
           echo "parity before: served=$SERVED intended=$HEAD"
           if [ "$SERVED" = "$HEAD" ]; then
             echo "parity green - no dispatch needed"
             exit 0
           fi
-          echo "parity lag detected - dispatching Deploy site for $HEAD"
+          echo "parity lag detected - dispatching Deploy self-hosted for $HEAD"
           echo '{"ref":"${{ github.ref_name }}"}' > /tmp/dispatch.json
           gh api --method POST \
-            "repos/${{ github.repository }}/actions/workflows/deploy.yml/dispatches" \
+            "repos/${{ github.repository }}/actions/workflows/deploy-selfhosted.yml/dispatches" \
             --input /tmp/dispatch.json && echo "dispatch accepted" || echo "dispatch call failed"
           AFTER=""
           for i in $(seq 1 12); do
             sleep 15
-            AFTER=$(curl -fsS --max-time 15 "https://reemco.vercel.app/__commit.txt?after=$i$RANDOM" | tr -d '[:space:]' || echo empty)
+            AFTER=$(curl -fsS --max-time 15 "$BASE/__commit.txt?after=$i$RANDOM" | tr -d '[:space:]' || echo empty)
             echo "poll $i: served=$AFTER"
             [ "$AFTER" = "$HEAD" ] && break
           done
           echo "parity after: served=$AFTER intended=$HEAD $([ "$AFTER" = "$HEAD" ] && echo MATCH || echo MISMATCH)"
-          [ "$AFTER" = "$HEAD" ] || echo "::warning::parity still lagging after self-heal dispatch - check the Deploy site run"
+          [ "$AFTER" = "$HEAD" ] || echo "::warning::parity still lagging after self-heal dispatch - check the Deploy self-hosted run"
 
       - uses: actions/setup-node@v4
         if: steps.guard.outputs.due != 'false'
@@ -128,7 +130,7 @@ jobs:
         id: smoke
         if: steps.guard.outputs.due != 'false'
         env:
-          SMOKE_BASE_URL: https://reemco.vercel.app
+          SMOKE_BASE_URL: ${{ vars.PROD_BASE_URL || 'https://ns539626.ip-144-217-72.net' }}
         run: npm run smoke
 
       # One retry to absorb transient network blips (false-positive alerting
@@ -137,7 +139,7 @@ jobs:
         id: retry
         if: failure()
         env:
-          SMOKE_BASE_URL: https://reemco.vercel.app
+          SMOKE_BASE_URL: ${{ vars.PROD_BASE_URL || 'https://ns539626.ip-144-217-72.net' }}
         run: |
           echo "first attempt failed - retrying once to rule out a transient blip"
           sleep 30
@@ -153,10 +155,10 @@ jobs:
             --jq '[.jobs[].steps[] | select(.conclusion=="failure") | .name] | join("; ")')
           BODY="Scheduled smoke check of the live site failed at $(date -u +%FT%TZ) (failed twice, not a transient blip).
           Failed step(s): ${FAILED_STEPS:-unknown}.
-          Site: https://reemco.vercel.app
+          Site: ${{ vars.PROD_BASE_URL || 'https://ns539626.ip-144-217-72.net' }}
           Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-          A regression is live that no deploy introduced (site serves artifact $(curl -fsS https://reemco.vercel.app/__commit.txt || echo unknown)). Investigate recent deploys first (rollback: Actions > Deploy site > Run workflow with rollback_sha = last green commit), then the live host itself."
+          A regression is live that no deploy introduced (site serves artifact $(curl -fsS ${{ vars.PROD_BASE_URL || 'https://ns539626.ip-144-217-72.net' }}/__commit.txt || echo unknown)). Investigate recent deploys first (rollback: Actions > Deploy self-hosted > Run workflow with rollback_sha = last green commit), then the live host itself."
           if gh issue list --label smoke-alert --state open --json url -q '.[0].url' | grep -q .; then
             gh issue comment "$(gh issue list --label smoke-alert --state open --json number -q '.[0].number')" \
               --body "$BODY"

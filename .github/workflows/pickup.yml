@@ -33,11 +33,17 @@ name: Pickup production stamp
 # Rollback: rerun Actions > Deploy site with rollback_sha = last known-good
 # commit (verified heavy path), or revert on main — the next push is picked up
 # by this workflow. Equivalently Vercel dashboard > Promote Previous Deployment.
+#
+# REEA-1054: the push trigger is REMOVED. The self-hosted deploy
+# (deploy-selfhosted.yml) is now the primary path for every push to main;
+# Vercel is kept alive only as the rollback target until the DNS-cutover
+# decommission decision (board-owned). Running this on push as well would put
+# two production deploys behind every commit — the exact double-deploy the
+# REEA-813 note warns about. This workflow is now manual-only: dispatch it to
+# move the Vercel rollback target forward to a known-good commit.
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch: # REEA-578 drain: rerun the pickup for the current head without needing a filler push
+  workflow_dispatch: # manual only (REEA-1054); Vercel is the rollback path, not the primary deploy
 
 permissions:
   contents: read

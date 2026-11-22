@@ -1,24 +1,42 @@
-name: Deploy self-hosted (single server)
+name: Deploy self-hosted (primary)
 
-# REEA-1044 — deploy path for the dedicated Ubuntu host that replaces Vercel.
+# REEA-1054 — PRIMARY production deploy path for the self-hosted box.
 #
-# Manual dispatch only while the cutover is in progress (no push trigger yet:
-# Vercel stays the production path until DNS flips, per the phased cutover).
-# Once the box carries production traffic, this is the only deploy path.
+# Every push to main deploys to the box at /opt/reemco. Vercel is kept alive
+# ONLY as the rollback path until the board decides the DNS cutover and the
+# decommission (REEA-1054 scope: do not decommission Vercel here).
 #
-# Rollback: run this workflow again with `rollback_sha` set to the previous
-# known-good commit. It skips the build, deploys that exact tag, and runs the
-# same verification gate — a rollback is verified exactly like a deploy.
+# Artifact decision (REE-1054): the box builds from /opt/reemco/src; GHCR gets
+# NO credentials on the box. Rationale and tradeoff are recorded in the
+# REEA-1054 report document and README > Deploy. In short: the deploy user has
+# no standing registry credential (Least Privilege), the build context is the
+# exact pushed tree, and rollback is a local image swap that does not depend on
+# a registry being reachable. Blast radius: a build consumes box CPU and the
+# npm registry, but it happens BEFORE the running container is touched and a
+# failed build leaves the old tag serving.
+#
+# Rollback: Actions > Deploy self-hosted > Run workflow with `rollback_sha` set
+# to the previous known-good commit. If that image is still cached on the box
+# it is redeployed without a rebuild (fast, reproducible); if the cache was
+# pruned it is rebuilt from that exact commit. Either way it passes the same
+# verification gate a deploy runs. On-box rollback.sh is also wired into the
+# failure path below.
 #
 # Required repo secrets (Settings > Secrets > Actions, env injection only):
-#   DEPLOY_SSH_KEY   private key for the non-root deploy user (no passphrase)
-#   DEPLOY_HOST      hostname or IP of the box
-#   DEPLOY_USER      deploy user (default deploy)
+#   DEPLOY_SSH_KEY      private key for the scoped `deploy` user (no passphrase)
+#   DEPLOY_HOST         hostname or IP of the box
+#   DEPLOY_USER         deploy user (default deploy; scoped sudo, no root shell)
 #   DEPLOY_KNOWN_HOSTS  ssh-keyscan output for the host (pins the host key)
+#
+# Repo variable PROD_BASE_URL is the single place the public address is set;
+# flipping it to the production domain is the DNS-cutover action. The default
+# below is the box's current hostname.
 #
 # The host key is pinned rather than trust-on-first-use: an unpinned key means
 # a MITM can receive the deploy.
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       rollback_sha:
@@ -26,13 +44,12 @@ on:
         required: false
         default: ""
       site_address:
-        description: "Public address to verify (hostname, or IP during standup)."
-        required: true
+        description: "Override the public address to verify (defaults to vars.PROD_BASE_URL)."
+        required: false
         default: ""
 
 permissions:
   contents: read
-  packages: write # push the image to GHCR
   issues: write # failure alert
 
 concurrency:
@@ -40,13 +57,13 @@ concurrency:
   cancel-in-progress: false # never cancel mid-rollout; a half-applied deploy is worse than a queued one
 
 env:
-  IMAGE_REPO: ghcr.io/${{ github.repository }}
-  SITE_ADDRESS: ${{ inputs.site_address }}
+  SITE_ADDRESS: ${{ inputs.site_address || vars.PROD_BASE_URL || 'https://ns539626.ip-144-217-72.net' }}
+  IMAGE_REPO: reemco/app
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,37 +79,6 @@ jobs:
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           if [ -n "${{ inputs.rollback_sha }}" ]; then echo "Deploying $SHA as a ROLLBACK"; else echo "Deploying $SHA as a fresh build"; fi
 
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Build only when not rolling back: a rollback redeploys an existing
-      # artifact, it does not rebuild it. Reproducibility depends on that.
-      - name: Build and push image (tag = commit sha)
-        if: ${{ inputs.rollback_sha == '' }}
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: infra/Dockerfile
-          push: true
-          tags: ${{ env.IMAGE_REPO }}:${{ steps.tag.outputs.sha }}
-          build-args: |
-            REEMCO_COMMIT=${{ steps.tag.outputs.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: true
-          sbom: true
-
-      - name: Assert the image exists (rollback path has no build)
-        run: |
-          set -euo pipefail
-          docker buildx imagetools inspect "$IMAGE_REPO:${{ steps.tag.outputs.sha }}" \
-            || { echo "::error::image $IMAGE_REPO:${{ steps.tag.outputs.sha }} is not in the registry — cannot deploy or roll back to it"; exit 1; }
-
       - name: Prepare SSH
         run: |
           set -euo pipefail
@@ -103,30 +89,51 @@ jobs:
           chmod 644 ~/.ssh/known_hosts
 
       # Ship the versioned config and scripts, then deploy. The host never
-      # accumulates hand edits: /opt/reemco is overwritten from git each run.
+      # accumulates hand edits: /opt/reemco config+scripts are overwritten from
+      # git each run, and /opt/reemco/src is replaced by the exact checkout.
       - name: Sync infra to host
         run: |
           set -euo pipefail
           TARGET="${{ secrets.DEPLOY_USER || 'deploy' }}@${{ secrets.DEPLOY_HOST }}"
-          SSH="ssh -o BatchMode=yes -o ConnectTimeout=15 -i ~/.ssh/id_ed25519"
-          $SSH "$TARGET" 'sudo mkdir -p /opt/reemco/scripts && sudo chown -R $(id -u):$(id -g) /opt/reemco'
-          scp -o BatchMode=yes -o ConnectTimeout=15 -i ~/.ssh/id_ed25519 \
+          SSH="ssh -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -i ~/.ssh/id_ed25519"
+          $SSH "$TARGET" 'sudo mkdir -p /opt/reemco/scripts /opt/reemco/src && sudo chown -R $(id -u):$(id -g) /opt/reemco'
+          scp -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -i ~/.ssh/id_ed25519 \
             infra/compose.prod.yml infra/Caddyfile "$TARGET:/opt/reemco/"
-          scp -o BatchMode=yes -o ConnectTimeout=15 -i ~/.ssh/id_ed25519 \
+          scp -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -i ~/.ssh/id_ed25519 \
             infra/scripts/deploy.sh infra/scripts/rollback.sh infra/scripts/verify.sh infra/scripts/backup.sh \
             "$TARGET:/opt/reemco/scripts/"
           $SSH "$TARGET" 'chmod +x /opt/reemco/scripts/*.sh'
+
+      # Build the artifact ON THE BOX from the exact pushed tree (no registry
+      # credentials there). A rollback whose image is still cached skips the
+      # rebuild: rollback = redeploy of the prior artifact, not a new build.
+      - name: Build image on host (skip only for a cached rollback artifact)
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.sha }}"
+          TARGET="${{ secrets.DEPLOY_USER || 'deploy' }}@${{ secrets.DEPLOY_HOST }}"
+          SSH="ssh -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -i ~/.ssh/id_ed25519"
+          if [ -n "${{ inputs.rollback_sha }}" ] && $SSH "$TARGET" "docker image inspect $IMAGE_REPO:$TAG >/dev/null 2>&1"; then
+            echo "rollback artifact $IMAGE_REPO:$TAG is cached on the host — no rebuild"
+            exit 0
+          fi
+          echo "building $IMAGE_REPO:$TAG from the checked-out tree"
+          rsync -az --delete \
+            --exclude '.git' --exclude 'node_modules' --exclude '.next' --exclude '.events' --exclude '.events-tests' \
+            -e "ssh -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -i $HOME/.ssh/id_ed25519" \
+            ./ "$TARGET:/opt/reemco/src/"
+          $SSH "$TARGET" "cd /opt/reemco/src && docker build -f infra/Dockerfile --build-arg REEMCO_COMMIT=$TAG -t $IMAGE_REPO:$TAG . 2>&1 | tail -60"
 
       - name: Deploy pinned tag
         run: |
           set -euo pipefail
           TARGET="${{ secrets.DEPLOY_USER || 'deploy' }}@${{ secrets.DEPLOY_HOST }}"
-          ssh -o BatchMode=yes -o ConnectTimeout=15 -i ~/.ssh/id_ed25519 "$TARGET" \
+          ssh -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -i ~/.ssh/id_ed25519 "$TARGET" \
             "sudo /opt/reemco/scripts/deploy.sh --tag ${{ steps.tag.outputs.sha }}"
 
       # Verification from OUTSIDE the box: the gate must prove the public
-      # surface, not loopback. Same checks as the Vercel pipeline (stamp,
-      # four security headers, health) plus the funnel smoke suite.
+      # surface, not loopback. Same checks as the retired Vercel pipeline
+      # (stamp, four security headers, health) plus the funnel smoke suite.
       - name: Verify public surface (stamp + headers)
         run: |
           set -euo pipefail
@@ -165,7 +172,7 @@ jobs:
           set -uo pipefail
           TARGET="${{ secrets.DEPLOY_USER || 'deploy' }}@${{ secrets.DEPLOY_HOST }}"
           echo "external verification failed — invoking on-host rollback"
-          ssh -o BatchMode=yes -o ConnectTimeout=15 -i ~/.ssh/id_ed25519 "$TARGET" \
+          ssh -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -i ~/.ssh/id_ed25519 "$TARGET" \
             'sudo /opt/reemco/scripts/rollback.sh' || echo "::warning::rollback did not complete — page the on-call"
 
       - name: Alert on failure

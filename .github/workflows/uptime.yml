@@ -32,7 +32,10 @@ jobs:
       - name: Probe public URL
         id: probe
         run: |
-          BASE="https://reemco.vercel.app"
+          # REEA-1054: probe the self-hosted production box, not the Vercel
+          # rollback alias. PROD_BASE_URL is the single switch flipped at the
+          # DNS cutover; the default is the box's current hostname.
+          BASE="${{ vars.PROD_BASE_URL || 'https://ns539626.ip-144-217-72.net' }}"
           FAIL=""
           # REEA-371: budget must sit above the measured funnel walk, not below
           # it. Cold-ish arrivals walk home + staged results + product hops in

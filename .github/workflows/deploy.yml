@@ -1,5 +1,13 @@
 name: Deploy site
 
+# REEA-1054 — VERCEL ROLLBACK PATH ONLY. The primary production deploy is
+# `.github/workflows/deploy-selfhosted.yml` (push to main -> the box). This
+# workflow stays alive until the board decides the DNS-cutover decommission:
+# it is the manual, verified way to move the Vercel rollback target, re-attach
+# the KV binding, or redeploy a known-good commit to reemco.vercel.app. It no
+# longer runs on push (pickup.yml's push trigger was removed too), so a merge
+# no longer produces two production deploys.
+#
 # REEA-132: consolidated deploy path. One merge to main = one deploy to the
 # canonical production host https://reemco.vercel.app (Next.js server build on
 # Vercel, so the /api/events funnel endpoints are served). No preview host:

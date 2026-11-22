@@ -122,6 +122,32 @@
         groups: docker
         append: true
 
+    # REEA-1054 — the CI deploy path SSHes as `deploy` (repo secret
+    # DEPLOY_SSH_KEY) and needs exactly the scripts below, never a root shell.
+    # The key itself is injected out-of-band; the playbook guarantees the
+    # directory and the sudo allow-list, so a rebuilt box converges.
+    - name: Deploy user ssh directory
+      ansible.builtin.file:
+        path: "/home/{{ reemco_user }}/.ssh"
+        state: directory
+        owner: "{{ reemco_user }}"
+        group: "{{ reemco_user }}"
+        mode: "0700"
+
+    - name: Scoped sudo for the deploy scripts (no root shell)
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/reemco-deploy
+        owner: root
+        group: root
+        mode: "0440"
+        validate: "visudo -cf %s"
+        content: |
+          # REEA-1054 — scoped sudo for the CI deploy path. deploy has no root
+          # shell; only these binaries run as root. Everything else is
+          # docker-group only.
+          Cmnd_Alias REEMCO_OPS = /usr/bin/mkdir, /usr/bin/chown, /usr/bin/chmod, /usr/bin/install, /opt/reemco/scripts/deploy.sh, /opt/reemco/scripts/rollback.sh, /opt/reemco/scripts/verify.sh, /opt/reemco/scripts/backup.sh, /opt/reemco/scripts/restore-drill.sh
+          deploy ALL=(root) NOPASSWD: REEMCO_OPS
+
     - name: Config directories
       ansible.builtin.file:
         path: "{{ item.path }}"
