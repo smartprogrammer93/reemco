@@ -36,7 +36,20 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 2
 fi
 
-if ! CFG=$(docker compose -f "$COMPOSE" config --format json 2>&1); then
+# The production file references host-absolute paths that only exist on the box
+# (/etc/reemco/app.env, /opt/reemco/Caddyfile). `compose config` refuses to
+# render if an env_file is missing, which is exactly the case on a CI runner.
+# Render a copy with those paths redirected to empty local placeholders: the
+# invariants below are about service shape, not the contents of the files.
+RENDER_DIR=$(mktemp -d)
+trap 'rm -rf "$RENDER_DIR"' EXIT
+: > "$RENDER_DIR/app.env"
+: > "$RENDER_DIR/Caddyfile"
+sed -e "s|/etc/reemco/app.env|$RENDER_DIR/app.env|g" \
+    -e "s|/opt/reemco/Caddyfile|$RENDER_DIR/Caddyfile|g" \
+    "$COMPOSE" > "$RENDER_DIR/compose.prod.yml"
+
+if ! CFG=$(docker compose -f "$RENDER_DIR/compose.prod.yml" config --format json 2>&1); then
   echo "FAIL: docker compose config rejected $COMPOSE:" >&2
   printf '%s\n' "$CFG" >&2
   exit 2
