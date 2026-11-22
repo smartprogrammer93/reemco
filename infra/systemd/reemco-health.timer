@@ -1,0 +1,15 @@
+[Unit]
+# REEA-1044 — mirrors the two Vercel cron slots (08:17 and 14:57 UTC) that
+# vercel.json used to drive. UTC is the host timezone by cloud-init.
+Description=Reemco health probe schedule (08:17 and 14:57 UTC)
+
+[Timer]
+OnCalendar=*-*-* 08:17:00 UTC
+OnCalendar=*-*-* 14:57:00 UTC
+# Do not stampede the origin at boot if the box just came back from a reboot.
+RandomizedDelaySec=30
+Persistent=false
+Unit=reemco-health.service
+
+[Install]
+WantedBy=timers.target

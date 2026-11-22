@@ -1,0 +1,20 @@
+[Unit]
+# REEA-1044 — off-box backup. RAID is redundancy, not backup: 2×512 GB RAID1
+# gives ~512 GB usable on a single host, so the only real protection is a copy
+# that is not on this machine. Backup target comes from /etc/reemco/backup.env
+# (RESTIC_REPOSITORY / RESTIC_PASSWORD_FILE), injected as a secret — never
+# committed. If backup.env is absent the unit no-ops instead of failing red.
+Description=Reemco off-box backup (restic)
+After=network-online.target docker.service
+Wants=network-online.target
+ConditionPathExists=/etc/reemco/backup.env
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/reemco/backup.env
+ExecStart=/opt/reemco/scripts/backup.sh
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

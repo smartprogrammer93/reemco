@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# REEA-1044 — post-deploy verification gate. A deploy is only "done" when this
+# passes. A rollback is verified by the exact same checks (no special path).
+#
+#   /opt/reemco/scripts/verify.sh --tag <sha> [--base https://host]
+#
+# Checks, in order:
+#   1. /__commit.txt equals the tag that was deployed (artifact identity)
+#   2. the four security headers the Vercel pipeline asserts are present
+#   3. /api/health answers 200 through the proxy
+# Exit 0 = verified; non-zero = treat the deploy as failed.
+set -uo pipefail
+
+TAG=""
+BASE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --tag) TAG="${2:-}"; shift 2 ;;
+    --base) BASE="${2:-}"; shift 2 ;;
+    *) echo "verify.sh: unknown argument $1" >&2; exit 2 ;;
+  esac
+done
+
+if [ -z "$BASE" ] && [ -f /etc/reemco/release.env ]; then
+  BASE=$(sed -n 's/^REEMCO_SITE_ADDRESS=//p' /etc/reemco/release.env | tail -1)
+fi
+[ -n "$BASE" ] || { echo "verify.sh: no --base and no REEMCO_SITE_ADDRESS" >&2; exit 2; }
+# A bare IP has no TLS; a hostname does.
+case "$BASE" in
+  http://*|https://*) : ;;
+  *) BASE="https://$BASE" ;;
+esac
+BASE="${BASE%/}"
+
+fail() { echo "VERIFY FAILED: $*" >&2; exit 1; }
+echo "verifying $BASE"
+
+# 1. Artifact identity. Retry briefly: Caddy may still be warming the upstream.
+SERVED=""
+for _ in $(seq 1 20); do
+  SERVED=$(curl -fsS -m 10 "$BASE/__commit.txt" 2>/dev/null | tr -d '[:space:]' || true)
+  [ "$SERVED" = "$TAG" ] && break
+  sleep 3
+done
+if [ -z "$TAG" ]; then
+  echo "commit stamp: $SERVED (no --tag given, not compared)"
+elif [ "$SERVED" != "$TAG" ]; then
+  fail "commit stamp mismatch: served '$SERVED' != deployed '$TAG'"
+else
+  echo "commit stamp OK: $SERVED"
+fi
+
+# 2. Security headers. The app's middleware owns CSP/CTO/Referrer-Policy;
+# Caddy adds HSTS. Missing any of them means the proxy or app is misconfigured.
+HEADERS=$(curl -fsSI -m 15 "$BASE/" 2>/dev/null || true)
+[ -n "$HEADERS" ] || fail "GET / returned no headers"
+for H in content-security-policy x-content-type-options referrer-policy strict-transport-security; do
+  printf '%s\n' "$HEADERS" | grep -iq "^$H:" || fail "missing security header: $H"
+done
+echo "security headers OK (4/4)"
+
+# 3. Health through the proxy — proves Caddy→app routing, not just loopback.
+CODE=$(curl -s -o /tmp/reemco-health.json -w '%{http_code}' -m 20 "$BASE/api/health" || echo 000)
+[ "$CODE" = "200" ] || fail "/api/health returned $CODE"
+echo "health OK: 200"
+
+echo "VERIFY PASSED for ${TAG:-$BASE}"

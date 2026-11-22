@@ -1,0 +1,128 @@
+#cloud-config
+# REEA-1044 — Ubuntu 26.04 LTS (Resolute Raccoon) first boot, bare metal.
+#
+# Scope: this file does ONLY the things that must happen before Ansible can
+# connect (identity, SSH posture, firewall, time sync, unattended security
+# upgrades). Docker, RAID/LVM layout, the compose stack and systemd timers are
+# handled by infra/ansible/playbook.yml so that a rebuild is one re-runnable
+# command, not a second copy of the same logic.
+#
+# Reproducibility: pass the same file to the installer (autoinstall `user-data`)
+# or drop it in /var/lib/cloud/seed/nocloud-net/ on a netboot image.
+# Rollback path: reinstall from the same cloud-init + playbook. There is no
+# hand-edited state on this host — anything not in git does not exist.
+
+hostname: reemco-prod
+timezone: UTC
+locale: en_US.UTF-8
+manage_etc_hosts: true
+package_update: true
+package_upgrade: false # no surprise reboots on first boot; upgrades run via the timer
+
+users:
+  - name: deploy
+    gecos: Reemco deploy
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"] # key-only SSH, no password to type
+    lock_passwd: true
+    ssh_authorized_keys:
+      # Replace with the real admin/deploy public key(s) before first boot.
+      # Never commit a private key here.
+      - ssh-ed25519 AAAA...REPLACE_ME deploy@reemco
+
+ssh_pwauth: false
+disable_root: true
+
+write_files:
+  # 26.04 delta #3: systemd-timesyncd is gone; chrony is the default daemon.
+  # Without this drop-in, NTP is silently absent and TLS/log correlation breaks.
+  - path: /etc/chrony/conf.d/reea1044.sources
+    permissions: "0644"
+    content: |
+      # Kuwait pool; override with your provider's NTP if it blocks UDP/123.
+      pool ntp.ubuntu.com iburst maxsources 4
+      makestep 1.0 3
+
+  - path: /etc/ssh/sshd_config.d/99-reea1044.conf
+    permissions: "0644"
+    content: |
+      # 26.04 delta #4: OpenSSH 10.2 defaults — re-verify `sshd -t` and that
+      # key-only auth works before closing the provider console.
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PubkeyAuthentication yes
+      X11Forwarding no
+      MaxAuthTries 4
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    permissions: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+
+  - path: /etc/fail2ban/jail.d/sshd.local
+    permissions: "0644"
+    content: |
+      [sshd]
+      enabled = true
+      maxretry = 4
+      bantime = 1h
+      findtime = 10m
+
+  # Docker lives on its own filesystem so a runaway image history cannot fill
+  # the OS volume. The volume itself is created by the Ansible playbook.
+  - path: /etc/docker/daemon.json
+    permissions: "0644"
+    content: |
+      {
+        "data-root": "/var/lib/docker",
+        "log-driver": "json-file",
+        "log-opts": { "max-size": "20m", "max-file": "5" },
+        "live-restore": true,
+        "no-new-privileges": true
+      }
+
+packages:
+  - ufw
+  - fail2ban
+  - unattended-upgrades
+  - chrony
+  - curl
+  - ca-certificates
+  - gnupg
+  - mdadm
+  - lvm2
+  - restic
+
+runcmd:
+  # UFW default-deny inbound. SSH stays reachable from anywhere until the
+  # admin-IP list is known; tighten it in the playbook once known.
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp comment 'ssh'
+  - ufw allow 80/tcp comment 'http'
+  - ufw allow 443/tcp comment 'https'
+  - ufw --force enable
+
+  # 26.04 delta #2: Rust coreutils may be the default. Prove the flags our
+  # deploy/backup scripts use before trusting them, and record the answer in
+  # the build log (dpkg -S /usr/bin/cp names the provider).
+  - bash -c 'echo "coreutils provider: $(dpkg -S /usr/bin/cp 2>/dev/null || echo unknown)"; cp --version | head -1'
+
+  # 26.04 delta #1: sudo-rs is the default sudo. Verify the forms our scripts use.
+  - bash -c 'sudo -V | head -1; sudo -u deploy true; sudo -E true'
+
+  - sshd -t && systemctl reload ssh
+  - chronyc tracking || true
+  - systemctl enable --now fail2ban
+  - systemctl enable --now chrony
+
+final_message: |
+  REEA-1044 cloud-init complete in $UPTIME seconds.
+  Next: run infra/ansible/playbook.yml against this host (see infra/README.md).
+  Before wiping disks confirm mdadm (not firmware fake RAID): `cat /proc/mdstat`.

@@ -1,0 +1,35 @@
+# infra/Caddyfile — REEA-1044 reverse proxy + automatic TLS.
+#
+# The site address comes from /etc/reemco/release.env (REEMCO_SITE_ADDRESS):
+#   * during standup: the box's public IP -> plain HTTP, no DNS needed yet
+#   * at cutover:     the real hostname -> Caddy provisions Let's Encrypt TLS
+# That is the same file, so promoting to production is a one-line env change
+# plus `docker compose up -d proxy` — reversible by putting the IP back.
+#
+# Header ownership (important): the app's middleware (src/proxy.ts) sets the
+# per-request nonce CSP, X-Content-Type-Options and Referrer-Policy. Caddy must
+# NOT set those again or it would overwrite the nonce policy, so this file only
+# adds the one header the app cannot emit: HSTS.
+{$REEMCO_SITE_ADDRESS} {
+	encode zstd gzip
+
+	header {
+		# 2 years, subdomains included. Only meaningful over HTTPS; ignored on
+		# the plain-HTTP standup address, so the same config works for both.
+		Strict-Transport-Security "max-age=63072000; includeSubDomains"
+		-Server
+	}
+
+	# The deploy verification gate (infra/scripts/verify.sh + CI) expects the
+	# app to answer on these paths through the proxy, unchanged from Vercel.
+	reverse_proxy app:3000 {
+		health_uri /__commit.txt
+		health_interval 30s
+		health_timeout 5s
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

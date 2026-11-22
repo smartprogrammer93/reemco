@@ -51,6 +51,11 @@ const nextConfig: NextConfig = {
   // is the production server build (reemco.vercel.app on Vercel, or
   // `next start`) so the REEA-37 funnel endpoints under /api/events are served.
   ...(process.env.STATIC_EXPORT === "1" ? { output: "export" } : {}),
+  // REEA-1044 — the self-hosted image (infra/Dockerfile) builds with
+  // NEXT_OUTPUT=standalone so `node server.js` runs from a traced bundle
+  // instead of shipping the whole node_modules tree. Unset on Vercel, so the
+  // existing deployment output mode is unchanged.
+  ...(process.env.NEXT_OUTPUT === "standalone" ? { output: "standalone" } : {}),
 };
 
 export default nextConfig;

@@ -1,0 +1,232 @@
+---
+# REEA-1044 — host provisioning for the single-server Reemco deployment.
+#
+# Idempotent: re-running this on a provisioned host converges it back to git,
+# which is the whole point (no snowflake server). It does NOT touch the app
+# image tag — deploys go through infra/scripts/deploy.sh / the workflow, so a
+# playbook run can never silently roll the app forward or back.
+#
+# Usage:
+#   ansible-playbook -i infra/ansible/inventory.yml infra/ansible/playbook.yml \
+#     --check   # dry run first, per §3a delta #2
+#
+# Blast radius: package set, docker daemon config, UFW, /opt/reemco config,
+# systemd timers. It does not stop the app; `docker compose up -d` is only run
+# when a compose/Caddy file actually changed (handler).
+- name: Provision Reemco production host
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    reemco_root: /opt/reemco
+    reemco_etc: /etc/reemco
+    reemco_user: deploy
+
+  tasks:
+    - name: Refuse to provision on the wrong OS
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Ubuntu"
+          - ansible_distribution_version is version("24.04", ">=")
+        fail_msg: >-
+          Expected Ubuntu 24.04 or newer (target: 26.04 LTS). Got
+          {{ ansible_distribution }} {{ ansible_distribution_version }}.
+        quiet: true
+
+    # §3a delta #2 — the deploy/backup scripts use cp/mv/find/stat/du. If the
+    # Rust coreutils replacement misbehaves, install the classic package.
+    - name: Install classic GNU coreutils (26.04 delta #2 fallback)
+      ansible.builtin.apt:
+        name: coreutils
+        state: present
+
+    - name: Base packages
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - jq
+          - ufw
+          - fail2ban
+          - unattended-upgrades
+          - chrony
+          - restic
+          - rsync
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Docker apt keyring directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Docker apt key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+        force: false
+
+    - name: Docker apt repository (26.04 delta #5 — Docker's repo, pinned)
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/docker.list
+        mode: "0644"
+        content: |
+          deb [arch={{ ansible_architecture | replace('x86_64', 'amd64') }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+
+    - name: Install pinned Docker Engine + Compose plugin
+      ansible.builtin.apt:
+        name:
+          - "docker-ce={{ docker_version }}"
+          - "docker-ce-cli={{ docker_version }}"
+          - containerd.io
+          - docker-buildx-plugin
+          - "docker-compose-plugin={{ compose_version }}"
+        state: present
+        update_cache: true
+        allow_downgrade: true
+
+    - name: Docker daemon config (log rotation, live-restore, no-new-privileges)
+      ansible.builtin.copy:
+        dest: /etc/docker/daemon.json
+        mode: "0644"
+        content: |
+          {
+            "data-root": "/var/lib/docker",
+            "log-driver": "json-file",
+            "log-opts": { "max-size": "20m", "max-file": "5" },
+            "live-restore": true,
+            "no-new-privileges": true
+          }
+      notify: restart docker
+
+    - name: Ensure docker is running
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    # Least privilege: the deploy user can drive docker, not the whole host.
+    - name: Deploy user in docker group
+      ansible.builtin.user:
+        name: "{{ reemco_user }}"
+        groups: docker
+        append: true
+
+    - name: Config directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ reemco_root }}", mode: "0755" }
+        - { path: "{{ reemco_etc }}", mode: "0750" }
+        - { path: "/opt/reemco/scripts", mode: "0755" }
+        - { path: "/var/log/reemco", mode: "0755" }
+
+    - name: Install compose stack, proxy config and scripts from the repo
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - { src: "compose.prod.yml", dest: "/opt/reemco/compose.prod.yml", mode: "0644" }
+        - { src: "Caddyfile", dest: "/opt/reemco/Caddyfile", mode: "0644" }
+        - { src: "scripts/deploy.sh", dest: "/opt/reemco/scripts/deploy.sh", mode: "0755" }
+        - { src: "scripts/rollback.sh", dest: "/opt/reemco/scripts/rollback.sh", mode: "0755" }
+        - { src: "scripts/verify.sh", dest: "/opt/reemco/scripts/verify.sh", mode: "0755" }
+        - { src: "scripts/backup.sh", dest: "/opt/reemco/scripts/backup.sh", mode: "0755" }
+      notify: reconcile stack
+
+    # Secrets are injected by the operator (or a secrets manager) into
+    # /etc/reemco/app.env — never committed, never baked into the image.
+    - name: Seed env files from examples only when absent
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: root
+        group: "{{ reemco_user }}"
+        mode: "{{ item.mode }}"
+        force: false
+      loop:
+        - { src: "app.env.example", dest: "/etc/reemco/app.env", mode: "0640" }
+        - { src: "release.env.example", dest: "/etc/reemco/release.env", mode: "0640" }
+
+    - name: Image tag file must exist before the first deploy
+      ansible.builtin.copy:
+        dest: /etc/reemco/image-tag.env
+        owner: root
+        group: "{{ reemco_user }}"
+        mode: "0640"
+        force: false
+        content: |
+          # Written by deploy.sh. Do not hand-edit.
+          REEMCO_IMAGE_TAG=0000000000000000000000000000000000000000
+
+    - name: Health-check + backup timers (Observability-before-Launch)
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../systemd/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: "0644"
+      loop:
+        - reemco-health.service
+        - reemco-health.timer
+        - reemco-backup.service
+        - reemco-backup.timer
+      notify: reload systemd
+
+    - name: Enable timers
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+      loop:
+        - reemco-health.timer
+        - reemco-backup.timer
+
+    - name: UFW default deny inbound, allow only 22/80/443
+      ansible.builtin.command:
+        cmd: "ufw {{ item }}"
+      loop:
+        - default deny incoming
+        - default allow outgoing
+        - allow 22/tcp comment ssh
+        - allow 80/tcp comment http
+        - allow 443/tcp comment https
+        - --force enable
+      changed_when: false
+
+    - name: Chrony is syncing (26.04 delta #3 — NTP must exist)
+      ansible.builtin.command: chronyc tracking
+      register: chrony_status
+      changed_when: false
+      failed_when: false
+
+    - name: Report time sync state
+      ansible.builtin.debug:
+        msg: "{{ chrony_status.stdout_lines | default(['chronyc unavailable']) }}"
+
+  handlers:
+    - name: restart docker
+      ansible.builtin.systemd:
+        name: docker
+        state: restarted
+
+    - name: reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    # Only fires when compose/Caddy changed, and only if a tag is already
+    # deployed — it re-reads the existing tag, never a new one.
+    - name: reconcile stack
+      ansible.builtin.command:
+        cmd: docker compose -f /opt/reemco/compose.prod.yml --env-file /etc/reemco/release.env --env-file /etc/reemco/image-tag.env up -d --remove-orphans
+        chdir: /opt/reemco

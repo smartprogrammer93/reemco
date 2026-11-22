@@ -1,0 +1,11 @@
+[Unit]
+Description=Reemco off-box backup schedule (daily 03:23 UTC)
+
+[Timer]
+OnCalendar=*-*-* 03:23:00 UTC
+RandomizedDelaySec=300
+Persistent=true
+Unit=reemco-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,24 @@
+# REEA-1044 — build context for infra/Dockerfile. Keep the context small and
+# deterministic: no VCS metadata, no host-installed deps, no probe leftovers.
+.git
+.gitignore
+.github
+.next
+node_modules
+out
+coverage
+*.log
+*.tmp
+*.tmp.mjs
+sultan.js.tmp
+ui.js.tmp
+audit-reea245.json
+lint.log
+test.log
+smoke-local.log
+.events
+.events-test-*
+.collect-cache
+.env*
+# The commit stamp is written by the Dockerfile from REEMCO_COMMIT.
+public/__commit.txt

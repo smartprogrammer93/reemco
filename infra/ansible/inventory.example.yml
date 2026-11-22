@@ -1,0 +1,18 @@
+# REEA-1044 — example inventory. Copy to inventory.yml (gitignored if you
+# prefer per-environment hosts) and point ansible-playbook at it.
+#
+# Least privilege: ansible connects as the non-root `deploy` user with a key;
+# privilege escalation is scoped to the playbook tasks that need root.
+all:
+  hosts:
+    reemco-prod:
+      ansible_host: 203.0.113.10 # replace with the real host/IP once SSH is shared
+      ansible_user: deploy
+      ansible_ssh_private_key_file: ~/.ssh/reemco_deploy_ed25519
+      ansible_python_interpreter: /usr/bin/python3
+  vars:
+    # Pinned Docker Engine (26.04 delta #5: Docker's apt repo, not Ubuntu's
+    # docker.io). Bump deliberately and record the new version in the deploy note.
+    docker_version: "5:28.5.2-1~ubuntu.26.04~resolute"
+    compose_version: "v2.40.3"
+    reemco_image_repo: ghcr.io/smartprogrammer93/reemco

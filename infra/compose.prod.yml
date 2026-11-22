@@ -1,0 +1,141 @@
+# infra/compose.prod.yml — REEA-1044 single-server production stack.
+#
+# Deployed by infra/scripts/deploy.sh (which is driven by
+# .github/workflows/deploy-selfhosted.yml). The image tag is the only thing
+# that changes between deploys; it is read from /etc/reemco/image-tag.env.
+#
+#   docker compose -f /opt/reemco/compose.prod.yml \
+#     --env-file /etc/reemco/release.env --env-file /etc/reemco/image-tag.env up -d
+#
+# Secrets live in /etc/reemco/app.env (0600, deploy-owned, env injection only)
+# and are never baked into the image. Non-secret site config lives in
+# /etc/reemco/release.env (0640). Both are provisioned by infra/ansible.
+name: reemco
+
+services:
+  app:
+    image: ${REEMCO_IMAGE_REPO:-ghcr.io/smartprogrammer93/reemco}:${REEMCO_IMAGE_TAG:?set REEMCO_IMAGE_TAG to a pinned 40-char commit sha}
+    env_file:
+      - /etc/reemco/app.env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+      # Durable in-container paths. VERCEL/AWS_LAMBDA must stay unset so
+      # event-store/metrics/collect-store do not fall back to /tmp.
+      EVENTS_DIR: /data/events
+      METRICS_DIR: /data/metrics
+      COLLECT_CACHE_DIR: /data/collect
+    volumes:
+      - events:/data/events
+      - metrics:/data/metrics
+      - collect:/data/collect
+    # 32 GB box: leave ~4 GB headroom for page cache, Caddy, Valkey and the
+    # OS. Chromium is not in this container (it is a CI-only smoke dependency).
+    mem_limit: 6g
+    cpus: 6.0
+    pids_limit: 512
+    restart: unless-stopped
+    healthcheck:
+      # Cheap liveness probe: the commit stamp is a static file, so this does
+      # not re-run the /api/health funnel walk every 30 s.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/__commit.txt').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  redis:
+    # Local Valkey backs the optional on-box Upstash-compatible REST gateway
+    # (kv-rest below) and is not exposed to the host.
+    image: valkey/valkey:8-alpine
+    command:
+      [
+        "valkey-server",
+        "--appendonly",
+        "yes",
+        "--maxmemory",
+        "384mb",
+        "--maxmemory-policy",
+        "allkeys-lru",
+      ]
+    volumes:
+      - redis:/data
+    mem_limit: 512m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  kv-rest:
+    # Optional: serves the SAME Upstash REST contract the app already speaks
+    # (KV_REST_API_URL / KV_REST_API_TOKEN), so no code changes are needed.
+    # Enable with `--profile local-kv` and point app.env at http://kv-rest:80.
+    # Without it, keep a hosted Upstash store injected through app.env.
+    profiles: ["local-kv"]
+    image: hiett/serverless-redis-http:latest
+    environment:
+      SRH_MODE: env
+      SRH_TOKEN: ${REEMCO_KV_TOKEN:-change-me-local-kv-token}
+      SRH_CONNECTION_STRING: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    mem_limit: 128m
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  proxy:
+    image: caddy:2-alpine
+    environment:
+      # Set in /etc/reemco/release.env. During standup use the box's public IP
+      # (plain HTTP); at cutover switch to the real hostname (automatic TLS).
+      REEMCO_SITE_ADDRESS: ${REEMCO_SITE_ADDRESS:?set REEMCO_SITE_ADDRESS in /etc/reemco/release.env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - /opt/reemco/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    mem_limit: 256m
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+volumes:
+  events:
+  metrics:
+  collect:
+  redis:
+  caddy-data:
+  caddy-config:

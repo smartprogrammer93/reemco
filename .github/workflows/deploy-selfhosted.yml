@@ -1,0 +1,186 @@
+name: Deploy self-hosted (single server)
+
+# REEA-1044 — deploy path for the dedicated Ubuntu host that replaces Vercel.
+#
+# Manual dispatch only while the cutover is in progress (no push trigger yet:
+# Vercel stays the production path until DNS flips, per the phased cutover).
+# Once the box carries production traffic, this is the only deploy path.
+#
+# Rollback: run this workflow again with `rollback_sha` set to the previous
+# known-good commit. It skips the build, deploys that exact tag, and runs the
+# same verification gate — a rollback is verified exactly like a deploy.
+#
+# Required repo secrets (Settings > Secrets > Actions, env injection only):
+#   DEPLOY_SSH_KEY   private key for the non-root deploy user (no passphrase)
+#   DEPLOY_HOST      hostname or IP of the box
+#   DEPLOY_USER      deploy user (default deploy)
+#   DEPLOY_KNOWN_HOSTS  ssh-keyscan output for the host (pins the host key)
+#
+# The host key is pinned rather than trust-on-first-use: an unpinned key means
+# a MITM can receive the deploy.
+on:
+  workflow_dispatch:
+    inputs:
+      rollback_sha:
+        description: "Commit SHA to redeploy (rollback). Empty = build current head."
+        required: false
+        default: ""
+      site_address:
+        description: "Public address to verify (hostname, or IP during standup)."
+        required: true
+        default: ""
+
+permissions:
+  contents: read
+  packages: write # push the image to GHCR
+  issues: write # failure alert
+
+concurrency:
+  group: deploy-selfhosted
+  cancel-in-progress: false # never cancel mid-rollout; a half-applied deploy is worse than a queued one
+
+env:
+  IMAGE_REPO: ghcr.io/${{ github.repository }}
+  SITE_ADDRESS: ${{ inputs.site_address }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.rollback_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve the tag to deploy
+        id: tag
+        run: |
+          set -euo pipefail
+          SHA="${{ inputs.rollback_sha || github.sha }}"
+          printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::not a commit sha: $SHA"; exit 1; }
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          if [ -n "${{ inputs.rollback_sha }}" ]; then echo "Deploying $SHA as a ROLLBACK"; else echo "Deploying $SHA as a fresh build"; fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build only when not rolling back: a rollback redeploys an existing
+      # artifact, it does not rebuild it. Reproducibility depends on that.
+      - name: Build and push image (tag = commit sha)
+        if: ${{ inputs.rollback_sha == '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_REPO }}:${{ steps.tag.outputs.sha }}
+          build-args: |
+            REEMCO_COMMIT=${{ steps.tag.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Assert the image exists (rollback path has no build)
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "$IMAGE_REPO:${{ steps.tag.outputs.sha }}" \
+            || { echo "::error::image $IMAGE_REPO:${{ steps.tag.outputs.sha }} is not in the registry — cannot deploy or roll back to it"; exit 1; }
+
+      - name: Prepare SSH
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      # Ship the versioned config and scripts, then deploy. The host never
+      # accumulates hand edits: /opt/reemco is overwritten from git each run.
+      - name: Sync infra to host
+        run: |
+          set -euo pipefail
+          TARGET="${{ secrets.DEPLOY_USER || 'deploy' }}@${{ secrets.DEPLOY_HOST }}"
+          SSH="ssh -o BatchMode=yes -o ConnectTimeout=15 -i ~/.ssh/id_ed25519"
+          $SSH "$TARGET" 'sudo mkdir -p /opt/reemco/scripts && sudo chown -R $(id -u):$(id -g) /opt/reemco'
+          scp -o BatchMode=yes -o ConnectTimeout=15 -i ~/.ssh/id_ed25519 \
+            infra/compose.prod.yml infra/Caddyfile "$TARGET:/opt/reemco/"
+          scp -o BatchMode=yes -o ConnectTimeout=15 -i ~/.ssh/id_ed25519 \
+            infra/scripts/deploy.sh infra/scripts/rollback.sh infra/scripts/verify.sh infra/scripts/backup.sh \
+            "$TARGET:/opt/reemco/scripts/"
+          $SSH "$TARGET" 'chmod +x /opt/reemco/scripts/*.sh'
+
+      - name: Deploy pinned tag
+        run: |
+          set -euo pipefail
+          TARGET="${{ secrets.DEPLOY_USER || 'deploy' }}@${{ secrets.DEPLOY_HOST }}"
+          ssh -o BatchMode=yes -o ConnectTimeout=15 -i ~/.ssh/id_ed25519 "$TARGET" \
+            "sudo /opt/reemco/scripts/deploy.sh --tag ${{ steps.tag.outputs.sha }}"
+
+      # Verification from OUTSIDE the box: the gate must prove the public
+      # surface, not loopback. Same checks as the Vercel pipeline (stamp,
+      # four security headers, health) plus the funnel smoke suite.
+      - name: Verify public surface (stamp + headers)
+        run: |
+          set -euo pipefail
+          BASE="$SITE_ADDRESS"
+          case "$BASE" in http://*|https://*) : ;; *) BASE="https://$BASE" ;; esac
+          BASE="${BASE%/}"
+          echo "verifying $BASE"
+          SERVED=$(curl -fsS -m 20 "$BASE/__commit.txt" | tr -d '[:space:]')
+          echo "served stamp: $SERVED"
+          [ "$SERVED" = "${{ steps.tag.outputs.sha }}" ] || {
+            echo "::error::$BASE serves '$SERVED', expected '${{ steps.tag.outputs.sha }}' — deploy failed. Rollback: rerun with rollback_sha = previous tag."
+            exit 1; }
+          HEADERS=$(curl -fsSI -m 20 "$BASE/" || true)
+          for H in content-security-policy x-content-type-options referrer-policy strict-transport-security; do
+            printf '%s\n' "$HEADERS" | grep -iq "^$H:" || { echo "::error::missing header $H on $BASE"; exit 1; }
+          done
+          echo "stamp + 4/4 security headers verified"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Funnel smoke check against the new host
+        env:
+          SMOKE_BASE_URL: ${{ env.SITE_ADDRESS }}
+        run: npm run smoke
+
+      # Rollback path when verification fails: the host's deploy.sh already
+      # rolls back automatically on a failed on-box verify; this covers the
+      # external checks (headers/smoke) that only the runner can see.
+      - name: Roll back on external verification failure
+        if: failure()
+        run: |
+          set -uo pipefail
+          TARGET="${{ secrets.DEPLOY_USER || 'deploy' }}@${{ secrets.DEPLOY_HOST }}"
+          echo "external verification failed — invoking on-host rollback"
+          ssh -o BatchMode=yes -o ConnectTimeout=15 -i ~/.ssh/id_ed25519 "$TARGET" \
+            'sudo /opt/reemco/scripts/rollback.sh' || echo "::warning::rollback did not complete — page the on-call"
+
+      - name: Alert on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create deploy-alert --color D93F0B --description "Deploy/verification failure" --force || true
+          BODY="Self-hosted deploy failed at $(date -u +%FT%TZ).
+          Commit: ${{ steps.tag.outputs.sha }}. Target: ${SITE_ADDRESS}.
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Rollback: rerun this workflow with rollback_sha = the previous known-good commit."
+          if gh issue list --label deploy-alert --state open --json url -q '.[0].url' | grep -q .; then
+            gh issue comment "$(gh issue list --label deploy-alert --state open --json number -q '.[0].number')" --body "$BODY"
+          else
+            gh issue create --title "DEPLOY ALERT: self-hosted deploy failed" --label deploy-alert --body "$BODY"
+          fi

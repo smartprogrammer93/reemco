@@ -1,0 +1,15 @@
+[Unit]
+# REEA-1044 — replaces vercel.json's cron entry for /api/health (08:17 UTC).
+# Observability-before-Launch: the funnel's own health endpoint must be hit on
+# a schedule so a dead origin surfaces as a failed unit, not silence.
+Description=Reemco health probe (scheduled)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=deploy
+# Local loopback: no TLS/DNS dependency, so the probe cannot fail because of
+# Caddy or the certificate. A non-2xx exits non-zero and lands in the journal.
+ExecStart=/usr/bin/curl -fsS -m 20 -o /dev/null -w 'health %{http_code} in %{time_total}s\n' http://127.0.0.1:3000/api/health
+TimeoutStartSec=30

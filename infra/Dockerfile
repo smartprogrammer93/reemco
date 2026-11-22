@@ -1,0 +1,56 @@
+# syntax=docker/dockerfile:1
+# infra/Dockerfile — REEA-1044 self-hosted production image.
+#
+# Built by .github/workflows/deploy-selfhosted.yml from the repo root:
+#   docker build -f infra/Dockerfile --build-arg REEMCO_COMMIT=<sha> .
+# and run by infra/compose.prod.yml. The image tag IS the commit sha, so a
+# rollback is "redeploy the previous tag" — nothing is edited on the host.
+#
+# Reproducibility: base image is pinned by digest, npm ci is lockfile-exact.
+# Bump the digest deliberately (record the new one in the deploy comment).
+FROM node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+FROM node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS build
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+ARG REEMCO_COMMIT
+RUN test -n "$REEMCO_COMMIT" || { echo "REEMCO_COMMIT build arg is required (the deployed sha)" >&2; exit 1; }
+
+# REEA-729 stamp parity: next.config.ts generateBuildId() reads
+# VERCEL_GIT_COMMIT_SHA first, so setting it here makes the RSC build id and
+# public/__commit.txt name the same artifact — the same chain the Vercel
+# buildCommand uses. NEXT_OUTPUT=standalone asks Next for the traced bundle
+# that `node server.js` runs (next.config.ts honours it; Vercel ignores it).
+ENV VERCEL_GIT_COMMIT_SHA=$REEMCO_COMMIT \
+    NEXT_OUTPUT=standalone \
+    NEXT_TELEMETRY_DISABLED=1
+RUN printf '%s\n' "$REEMCO_COMMIT" > public/__commit.txt \
+ && npm run build
+
+FROM node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS runtime
+# The runtime env deliberately does NOT set VERCEL: event-store.ts,
+# metrics.ts and collect/store.ts treat VERCEL/AWS_LAMBDA as "use /tmp",
+# while compose injects the durable EVENTS_DIR/METRICS_DIR/COLLECT_CACHE_DIR.
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0 \
+    NEXT_TELEMETRY_DISABLED=1
+
+RUN groupadd --system --gid 1001 reemco \
+ && useradd --system --uid 1001 --gid reemco --home-dir /app --shell /usr/sbin/nologin reemco \
+ && mkdir -p /data/events /data/metrics /data/collect \
+ && chown -R reemco:reemco /data
+
+WORKDIR /app
+COPY --from=build --chown=reemco:reemco /app/.next/standalone ./
+COPY --from=build --chown=reemco:reemco /app/.next/static ./.next/static
+COPY --from=build --chown=reemco:reemco /app/public ./public
+
+USER reemco
+EXPOSE 3000
+CMD ["node", "server.js"]
