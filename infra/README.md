@@ -117,3 +117,19 @@ suite, so the scheduled probe does not need NAT hairpin to reach itself. The
 pre-fix image (tag `bcbcb53`) derived the origin from the request URL, which on
 this box means the public hostname and produced intermittent `fetch failed`
 verdicts; the deployed tag from this change fixes that.
+
+### Verified deploy — 2026-11-22 (REEA-1044)
+
+- Deployed tag `f79fe45` (main head, built on the host). `verify.sh`: commit
+  stamp OK, 4/4 security headers, `/api/health` 200 through the public proxy.
+- Rollback drill: `rollback.sh` moved `f79fe45 → ec96082`, passed the identical
+  gate, then `f79fe45` was redeployed and re-verified. The recorded rollback
+  target is `/etc/reemco/image-tag.prev.env` (`ec96082`).
+- Local Redis is live: `dbsize` grew 69 → 91 → 118 under real shopper traffic;
+  keys `metrics:weekly:v2:*`, `seen:*`, `collect:*`, `pc:*`, `ratelimit`,
+  `events`. No `kv-rest` container remains.
+- Scheduled probe: a manual `reemco-health.service` run returned `health 200 in
+  18.2s`; the timer stays at 08:17/14:57 UTC.
+- The health walk legitimately returns 503 on a cold/first sample (live retailer
+  adapters, `cards=0`); `verify.sh` now retries 5×45 s instead of false-failing
+  a healthy artifact, which is what happened on the first standup attempt.
