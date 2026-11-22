@@ -1495,6 +1495,12 @@ describe("collectLiveResults page width (REEA-156)", () => {
 
     it("Lulu falls through to the Static-IPs hop when both identity paths land on the interstitial (REEA-416)", async () => {
       resetDiscoveryCache();
+      // REEA-1051 — this case starts the real jsdom clearance tier (dynamic
+      // import + JSDOM construction + the clearance poll) alongside the two
+      // identity hops. Measured 9.1 s in a loaded local run, so the vitest 5 s
+      // default timeout false-failed on slower hardware while the assertion
+      // itself passed. 20 s covers the tier's own 4 s poll bound plus jsdom
+      // startup; the test never touches the network (fake fetch).
       // Measured shape 2026-09-10: from cloud egress every rotating identity
       // on the hostname hop returns the CF interstitial, while the per-IP
       // passes (fresh challenge decision per connection) can answer the real
@@ -1531,7 +1537,7 @@ describe("collectLiveResults page width (REEA-156)", () => {
       const lulu = notes.find((n) => n.merchant === "Lulu Hypermarket");
       expect(lulu?.hits ?? 0).toBeGreaterThanOrEqual(1);
       expect(seen.some((u) => /^http:\/\/\d/.test(u))).toBe(true);
-    });
+    }, 20_000);
 
     it("Lulu keeps hopping past a JSON-LD-less CF shell without an error marker (REEA-526)", async () => {
       resetDiscoveryCache();
