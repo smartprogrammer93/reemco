@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import {
   brandAwareCoverage,
+  discoverJarirIndexKey,
   extractJarirIndexKey,
   fetchThroughChallenge,
   jarirIndexLang,
@@ -178,6 +179,77 @@ describe("extractJarirIndexKey", () => {
     expect(extractJarirIndexKey(html, "ar")).toBe("key_g0Gi7pKaE5cyqDGl");
     expect(jarirIndexLang("سماعة أبل")).toBe("ar");
     expect(jarirIndexLang("fold7")).toBe("en");
+  });
+});
+
+describe("discoverJarirIndexKey (REEA-1051)", () => {
+  const SHELL =
+    '<script type="application/json" id="__NUXT_DATA__">[{"siteConfig":{"searchProviderKeys":{"ar":2,"en":3}},"key_g0Gi7pKaE5cyqDGl","key_KcSYfmQTEwRpBnd9"]</script>';
+
+  function fakeFetch(routes: Record<string, () => Response | Promise<Response>>) {
+    const calls: string[] = [];
+    const impl = async (url: string): Promise<Response> => {
+      calls.push(url);
+      const route = Object.entries(routes).find(([prefix]) => url.startsWith(prefix));
+      if (!route) throw new Error(`unexpected hop ${url}`);
+      return route[1]();
+    };
+    return { impl, calls };
+  }
+
+  it("reads the documented homepage payload when it answers", async () => {
+    const { impl, calls } = fakeFetch({
+      "https://www.jarir.com/": () => new Response(SHELL, { status: 200 }),
+    });
+    await expect(discoverJarirIndexKey(impl, "en", AbortSignal.timeout(5_000))).resolves.toBe(
+      "key_KcSYfmQTEwRpBnd9",
+    );
+    await expect(discoverJarirIndexKey(impl, "ar", AbortSignal.timeout(5_000))).resolves.toBe(
+      "key_g0Gi7pKaE5cyqDGl",
+    );
+    expect(calls.every((u) => u === "https://www.jarir.com/")).toBe(true);
+  });
+
+  it("falls back to the pass-through shell when the homepage is challenged", async () => {
+    // The self-hosted egress shape: the storefront's Cloudflare challenge
+    // answers 403 on the homepage, while the static pass-through path serves
+    // the same Nuxt payload with a 404.
+    const { impl, calls } = fakeFetch({
+      "https://www.jarir.com/ads.txt": () => new Response(SHELL, { status: 404 }),
+      "https://www.jarir.com/": () =>
+        new Response("<title>Down for Maintenance</title>", { status: 403 }),
+    });
+    await expect(discoverJarirIndexKey(impl, "en", AbortSignal.timeout(5_000))).resolves.toBe(
+      "key_KcSYfmQTEwRpBnd9",
+    );
+    expect(calls).toContain("https://www.jarir.com/ads.txt");
+  });
+
+  it("returns null when the pass-through body carries no validated key", async () => {
+    const { impl } = fakeFetch({
+      "https://www.jarir.com/ads.txt": () => new Response("plain ads.txt", { status: 200 }),
+      "https://www.jarir.com/": () => new Response("", { status: 403 }),
+    });
+    await expect(discoverJarirIndexKey(impl, "en", AbortSignal.timeout(5_000))).resolves.toBeNull();
+  });
+
+  it("ignores a malformed key literal and keeps the honest null", async () => {
+    // Shorter than the extractor's 6-char floor: the body carries a
+    // `key_`-looking token but no usable index key.
+    const { impl } = fakeFetch({
+      "https://www.jarir.com/ads.txt": () =>
+        new Response('searchProviderKeys "key_abc"', { status: 404 }),
+      "https://www.jarir.com/": () => new Response("", { status: 403 }),
+    });
+    await expect(discoverJarirIndexKey(impl, "en", AbortSignal.timeout(5_000))).resolves.toBeNull();
+  });
+
+  it("survives both hops failing (network error) with a null", async () => {
+    const impl = async (url: string): Promise<Response> => {
+      if (url === "https://www.jarir.com/") throw new Error("ECONNRESET");
+      throw new Error("ECONNRESET");
+    };
+    await expect(discoverJarirIndexKey(impl, "en", AbortSignal.timeout(5_000))).resolves.toBeNull();
   });
 });
 

@@ -18,7 +18,7 @@ import {
   APP_ID_ALLOW,
   SEARCH_KEY_ALLOW,
   VERIFIED_BOT_HEADERS,
-  extractJarirIndexKey,
+  discoverJarirIndexKey,
   extractJsonLdProducts,
   fetchThroughChallenge,
   jarirIndexLang,
@@ -1680,19 +1680,14 @@ export const COLLECTORS: RetailerCollector[] = [
       const cacheKey = `jarir:${lang}`;
       let indexKey = readDiscovery(cacheKey)?.[0];
       if (!indexKey) {
-        const page = await fetchChecked(
-          fetchImpl,
-          "https://www.jarir.com/",
-          { headers: { accept: "text/html" } },
-          signal,
-        );
-        indexKey = extractJarirIndexKey(await page.text(), lang) ?? undefined;
+        // REEA-1051 — the discovery hop is shared with the per-product
+        // fallback (search-fallback.ts): it reads the documented homepage
+        // payload first and, when the storefront's Cloudflare challenge
+        // blocks that read (the self-hosted box's egress), the pass-through
+        // static shell that carries the same keys. Both routes are live
+        // reads; nothing is hard-coded.
+        indexKey = (await discoverJarirIndexKey(fetchImpl, lang, signal)) ?? undefined;
         if (!indexKey) throw new Error("jarir index key missing");
-        if (!SEARCH_KEY_ALLOW.test(indexKey)) {
-          // Same discovery-failure semantics as the eureka hop: throw before
-          // writeDiscovery so a crafted value never reaches cache or URL.
-          throw new Error("jarir index key failed validation");
-        }
         writeDiscovery(cacheKey, [indexKey]);
       }
       const res = await fetchChecked(

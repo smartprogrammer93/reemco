@@ -316,6 +316,81 @@ export function jarirIndexLang(query: string): "ar" | "en" {
   return /[\u0600-\u06FF]/.test(query) ? "ar" : "en";
 }
 
+/**
+ * REEA-1051 — the pass-through route the Jarir discovery hop falls back to.
+ *
+ * Jarir's storefront sits behind a Cloudflare managed challenge (Turnstile).
+ * The homepage hop is a plain fetch (no JS), and from a datacenter egress that
+ * challenge is not solvable: measured live 2026-11-22 from the self-hosted
+ * box's egress and from the coder container, the verified-crawler identity is
+ * let through to the origin but the origin answers its own "Down for
+ * Maintenance" page (HTTP 403, no payload), while the browser-shaped and
+ * plain identities land on the "Just a moment..." interstitial. Every query
+ * therefore recorded the bare "HTTP 403" note and Jarir served zero offers,
+ * even though the Constructor search API the key feeds is not challenged.
+ *
+ * Cloudflare does pass requests for static-file paths straight through, and
+ * Jarir's SPA answers its shell for a path that has no file. `/ads.txt` is one
+ * such path: the origin answers the shell (HTTP 404) carrying the same
+ * `__NUXT_DATA__` payload the homepage carries, `searchProviderKeys` included.
+ * Measured live: HTTP 404, ~1.6 MB, both index keys in reference order. The
+ * route is only a *fallback* for the documented homepage source — both are
+ * live reads, and the first body carrying a validated key wins.
+ */
+const JARIR_PASSTHROUGH_URL = "https://www.jarir.com/ads.txt";
+
+/**
+ * REEA-1051 — discover jarir's Constructor index key from a live storefront
+ * read, without hard-coding it.
+ *
+ * Tries the documented homepage first (unchanged behaviour: the SSR payload
+ * carries `searchProviderKeys`), then the pass-through route above when the
+ * homepage is challenged/blocked or carries no key. Every value is checked
+ * against SEARCH_KEY_ALLOW before it can reach the follow-up URL, exactly
+ * like the eureka hop. Returns null when neither route answered a validated
+ * key, so the caller keeps its own honest per-retailer note.
+ */
+export async function discoverJarirIndexKey(
+  fetchImpl: FetchImpl,
+  lang: "ar" | "en",
+  signal: AbortSignal,
+): Promise<string | null> {
+  const validated = (body: string): string | null => {
+    const key = extractJarirIndexKey(body, lang);
+    return key !== null && SEARCH_KEY_ALLOW.test(key) ? key : null;
+  };
+  // 1. The documented homepage source. A challenged answer is non-OK and
+  //    carries no payload, so it costs one bounded request and falls through.
+  try {
+    const res = await fetchImpl("https://www.jarir.com/", {
+      headers: { accept: "text/html" },
+      cache: "no-store",
+      signal,
+    });
+    if (res.ok) {
+      const key = validated(await res.text());
+      if (key) return key;
+    }
+  } catch {
+    // Network error / aborted window — the pass-through route still gets a
+    // chance only while the caller's window is open.
+  }
+  if (signal.aborted) return null;
+  // 2. The pass-through static path. Any status is acceptable here: the 404
+  //    IS the shell. The body read rides the shared bounded reader so a
+  //    broken multi-megabyte edge shell cannot balloon the hop.
+  try {
+    const res = await fetchImpl(JARIR_PASSTHROUGH_URL, {
+      headers: { accept: "text/plain,*/*" },
+      cache: "no-store",
+      signal,
+    });
+    return validated(await (await readCappedResponse(res)).text());
+  } catch {
+    return null;
+  }
+}
+
 interface ConstructorHit {
   data?: {
     url?: string;
@@ -1299,19 +1374,18 @@ export async function searchRetailerFallback(
     return found;
   }
   if (host.endsWith("jarir.com")) {
-    // Two-step like eureka: read the Constructor index key from any SSR page,
-    // then query the storefront's own search API. Arabic-script titles ride
-    // the ar index, Latin titles the en one (see jarirIndexLang).
-    const page = await fetchResponse(fetchImpl, "https://www.jarir.com/", {
-      headers: { accept: "text/html" },
-    });
-    if (!page.ok) throw new Error(`jarir homepage HTTP ${page.status}`);
-    const indexKey = extractJarirIndexKey(await page.text(), jarirIndexLang(productTitle));
-    if (!indexKey) throw new Error("jarir: constructor index key not found on page");
-    if (!SEARCH_KEY_ALLOW.test(indexKey)) {
-      // REEA-224 F3 — same shared allowlist as the eureka hop and live-search.
-      throw new Error("jarir: constructor index key failed validation");
-    }
+    // Two-step like eureka: read the Constructor index key from a live
+    // storefront read, then query the storefront's own search API.
+    // Arabic-script titles ride the ar index, Latin titles the en one (see
+    // jarirIndexLang). REEA-1051: discovery now also covers the storefront's
+    // Cloudflare-challenged homepage with a pass-through shell read, so a
+    // datacenter egress (the self-hosted box) still resolves the key live.
+    const indexKey = await discoverJarirIndexKey(
+      fetchImpl,
+      jarirIndexLang(productTitle),
+      AbortSignal.timeout(FALLBACK_TIMEOUT_MS),
+    );
+    if (!indexKey) throw new Error("jarir: constructor index key not found");
     const payload = await fetchResponse(
       fetchImpl,
       `https://ac.cnstrc.com/search/${encodeURIComponent(productTitle)}` +
