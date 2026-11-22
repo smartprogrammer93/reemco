@@ -148,6 +148,49 @@
           Cmnd_Alias REEMCO_OPS = /usr/bin/mkdir, /usr/bin/chown, /usr/bin/chmod, /usr/bin/install, /opt/reemco/scripts/deploy.sh, /opt/reemco/scripts/rollback.sh, /opt/reemco/scripts/verify.sh, /opt/reemco/scripts/backup.sh, /opt/reemco/scripts/restore-drill.sh
           deploy ALL=(root) NOPASSWD: REEMCO_OPS
 
+    # REEA-1062 — SSH/fail2ban hardening was declared ONLY in cloud-init.yaml,
+    # which runs once at first boot. Nothing re-applied it on an already-built
+    # box, so the effective config silently fell back to the cloud image
+    # defaults (root login prohibit-password, X11 on, maxauthtries 6,
+    # fail2ban 5/600/600). Keep the same content here so a rebuild converges and
+    # drift is corrected on the next playbook run. Content is byte-for-byte the
+    # cloud-init declaration; change both together.
+    #
+    # Safety: the handler runs `sshd -t` BEFORE reloading, so a bad drop-in
+    # fails the play and leaves the running sshd untouched — never lock out.
+    - name: SSH hardening drop-in (mirrors infra/cloud-init.yaml)
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/99-reea1044.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # 26.04 delta #4: OpenSSH 10.2 defaults — re-verify `sshd -t` and that
+          # key-only auth works before closing the provider console.
+          PermitRootLogin no
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PubkeyAuthentication yes
+          X11Forwarding no
+          MaxAuthTries 4
+          ClientAliveInterval 300
+          ClientAliveCountMax 2
+      notify: validate and reload sshd
+
+    - name: fail2ban sshd jail (mirrors infra/cloud-init.yaml)
+      ansible.builtin.copy:
+        dest: /etc/fail2ban/jail.d/sshd.local
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [sshd]
+          enabled = true
+          maxretry = 4
+          bantime = 1h
+          findtime = 10m
+      notify: validate and reload fail2ban
+
     - name: Config directories
       ansible.builtin.file:
         path: "{{ item.path }}"
@@ -157,7 +200,10 @@
         mode: "{{ item.mode }}"
       loop:
         - { path: "{{ reemco_root }}", mode: "0755" }
-        - { path: "{{ reemco_etc }}", mode: "0750" }
+        # REEA-1062 — 0750 made /etc/reemco/NOTES.md unreadable to the `ubuntu`
+        # automation user (the server-ssh skill's `cat` failed). 0755 exposes
+        # filenames only: app.env stays 0640 root:deploy, restic.pass 0600.
+        - { path: "{{ reemco_etc }}", mode: "0755" }
         - { path: "/opt/reemco/scripts", mode: "0755" }
         - { path: "/var/log/reemco", mode: "0755" }
 
@@ -248,6 +294,23 @@
         msg: "{{ chrony_status.stdout_lines | default(['chronyc unavailable']) }}"
 
   handlers:
+    # REEA-1062 — validate before reload. `sshd -t` is a syntax/semantic check
+    # of the on-disk config; `set -e` stops the handler before the reload if it
+    # fails, so the running sshd keeps the last good config (Rollback Path).
+    - name: validate and reload sshd
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sshd -t
+        systemctl reload ssh
+      changed_when: false
+
+    - name: validate and reload fail2ban
+      ansible.builtin.shell: |
+        set -euo pipefail
+        fail2ban-client -t
+        fail2ban-client reload
+      changed_when: false
+
     - name: restart docker
       ansible.builtin.systemd:
         name: docker
@@ -263,3 +326,79 @@
       ansible.builtin.command:
         cmd: docker compose -f /opt/reemco/compose.prod.yml --env-file /etc/reemco/release.env --env-file /etc/reemco/image-tag.env up -d --remove-orphans
         chdir: /opt/reemco
+
+# REEA-1062 — regression test. This play runs AFTER the provisioning play, so
+# that play's handlers have already validated and reloaded sshd/fail2ban. It
+# fails the run if the effective config drifts from the declared drop-in, which
+# is the whole point: a green playbook run is evidence, not just "files copied".
+#
+# Skipped under --check: handlers do not reload services in check mode, so the
+# running sshd/fail2ban would still report the pre-change state. Use --check for
+# the change plan, then a real apply for the runtime assertions.
+- name: Assert SSH/fail2ban hardening is effective
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify effective hardening (real apply only)
+      when: not ansible_check_mode
+      block:
+        - name: Read effective sshd configuration
+          ansible.builtin.command: sshd -T
+          register: reemco_sshd_effective
+          changed_when: false
+          check_mode: false
+
+        - name: Effective sshd matches the declared drop-in
+          ansible.builtin.assert:
+            that:
+              - "'permitrootlogin no' in reemco_sshd_effective.stdout_lines"
+              - "'x11forwarding no' in reemco_sshd_effective.stdout_lines"
+              - "'maxauthtries 4' in reemco_sshd_effective.stdout_lines"
+              - "'passwordauthentication no' in reemco_sshd_effective.stdout_lines"
+              - "'pubkeyauthentication yes' in reemco_sshd_effective.stdout_lines"
+            fail_msg: >-
+              Effective sshd does not match
+              /etc/ssh/sshd_config.d/99-reea1044.conf. Got:
+              {{ reemco_sshd_effective.stdout_lines
+                 | select('match', '^(permitrootlogin|x11forwarding|maxauthtries|passwordauthentication|pubkeyauthentication) ')
+                 | list }}
+
+        - name: sshd jail is running
+          ansible.builtin.command: fail2ban-client status sshd
+          changed_when: false
+          check_mode: false
+
+        - name: Read effective fail2ban sshd jail settings
+          ansible.builtin.command: "fail2ban-client get sshd {{ item }}"
+          loop:
+            - bantime
+            - maxretry
+            - findtime
+          register: reemco_f2b
+          changed_when: false
+          check_mode: false
+
+        - name: Jail matches declared 4 retries / 1h ban / 10m window
+          ansible.builtin.assert:
+            that:
+              - reemco_f2b.results[0].stdout | trim == '3600'
+              - reemco_f2b.results[1].stdout | trim == '4'
+              - reemco_f2b.results[2].stdout | trim == '600'
+            fail_msg: >-
+              fail2ban sshd jail does not match
+              /etc/fail2ban/jail.d/sshd.local. Got bantime/maxretry/findtime =
+              {{ reemco_f2b.results | map(attribute='stdout') | map('trim') | list }}.
+
+        - name: /etc/reemco is traversable by the ubuntu automation user
+          ansible.builtin.stat:
+            path: /etc/reemco
+          register: reemco_etc_stat
+
+        - name: /etc/reemco mode allows reading NOTES.md
+          ansible.builtin.assert:
+            that:
+              - reemco_etc_stat.stat.mode == '0755'
+            fail_msg: >-
+              /etc/reemco is {{ reemco_etc_stat.stat.mode }}, expected 0755;
+              /etc/reemco/NOTES.md is unreadable to the ubuntu automation user.
