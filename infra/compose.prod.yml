@@ -30,6 +30,11 @@ services:
       # so the probe does not depend on public DNS, TLS or NAT hairpin: those
       # hops are asserted by verify.sh and the external smoke suite instead.
       REEMCO_HEALTH_ORIGIN: http://127.0.0.1:3000
+      # REEA-1051 — crawler-facing canonical origin (/sitemap.xml,
+      # /robots.txt). Derived from the one address line in release.env so the
+      # live box advertises itself, never the Vercel rollback alias; flipping
+      # REEMCO_SITE_ADDRESS at DNS cutover flips this with it.
+      REEMCO_SITE_ORIGIN: https://${REEMCO_SITE_ADDRESS:-ns539626.ip-144-217-72.net}
       # REEA-1044 — shared store for collect jobs, metrics and rate limits.
       # The app speaks RESP directly to the local Valkey container (kv-redis.ts);
       # there is no Upstash, no REST gateway and no hosted service in the path.

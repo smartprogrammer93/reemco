@@ -1,7 +1,5 @@
 import type { MetadataRoute } from "next";
-
-/** Canonical origin of the live site (Vercel project domain). */
-const SITE_ORIGIN = "https://reemco.vercel.app";
+import { siteOrigin } from "@/lib/site-origin";
 
 /**
  * Top-query result pages: the preset query pills the homepage itself serves
@@ -18,14 +16,17 @@ const TOP_QUERIES = ["iPhone 17 Pro", "WH-1000XM6", "Scope II keyboard"];
 export default function sitemap(): MetadataRoute.Sitemap {
   // Cached route handler (default), so the stamp refreshes with the cache.
   const now = new Date();
+  // REEA-1051 — the origin follows REEMCO_SITE_ORIGIN (the host actually
+  // serving), never a hard-coded rollback alias. See lib/site-origin.ts.
+  const origin = siteOrigin();
   const corePages: MetadataRoute.Sitemap = [
-    { url: SITE_ORIGIN, lastModified: now, changeFrequency: "weekly", priority: 1 },
-    { url: `${SITE_ORIGIN}/about`, lastModified: now, changeFrequency: "monthly", priority: 0.6 },
-    { url: `${SITE_ORIGIN}/privacy`, lastModified: now, changeFrequency: "monthly", priority: 0.5 },
-    { url: `${SITE_ORIGIN}/contact`, lastModified: now, changeFrequency: "monthly", priority: 0.5 },
+    { url: origin, lastModified: now, changeFrequency: "weekly", priority: 1 },
+    { url: `${origin}/about`, lastModified: now, changeFrequency: "monthly", priority: 0.6 },
+    { url: `${origin}/privacy`, lastModified: now, changeFrequency: "monthly", priority: 0.5 },
+    { url: `${origin}/contact`, lastModified: now, changeFrequency: "monthly", priority: 0.5 },
   ];
   const queryPages: MetadataRoute.Sitemap = TOP_QUERIES.map((query) => ({
-    url: `${SITE_ORIGIN}/results?q=${encodeURIComponent(query)}`,
+    url: `${origin}/results?q=${encodeURIComponent(query)}`,
     lastModified: now,
     changeFrequency: "daily",
     priority: 0.9,

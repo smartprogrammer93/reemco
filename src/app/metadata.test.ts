@@ -30,3 +30,30 @@ describe("sitemap route handler (/sitemap.xml)", () => {
     expect(urls.every((u) => /^https:\/\//.test(u))).toBe(true);
   });
 });
+
+describe("crawler routes follow the serving host (REEA-1051)", () => {
+  const previous = process.env.REEMCO_SITE_ORIGIN;
+  function withOrigin<T>(origin: string, run: () => T): T {
+    process.env.REEMCO_SITE_ORIGIN = origin;
+    try {
+      return run();
+    } finally {
+      if (previous === undefined) delete process.env.REEMCO_SITE_ORIGIN;
+      else process.env.REEMCO_SITE_ORIGIN = previous;
+    }
+  }
+
+  it("robots names the sitemap on the self-hosted box, not the Vercel alias", () => {
+    withOrigin("https://ns539626.ip-144-217-72.net", () => {
+      expect(robots().sitemap).toBe("https://ns539626.ip-144-217-72.net/sitemap.xml");
+    });
+  });
+
+  it("sitemap URLs all ride the configured origin", () => {
+    withOrigin("https://ns539626.ip-144-217-72.net", () => {
+      const urls = sitemap().map((entry) => entry.url);
+      expect(urls.every((u) => u.startsWith("https://ns539626.ip-144-217-72.net"))).toBe(true);
+      expect(urls.some((u) => u.includes("reemco.vercel.app"))).toBe(false);
+    });
+  });
+});

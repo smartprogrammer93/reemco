@@ -13,6 +13,7 @@
 import type { LiveOffer, RetailerSubtask } from "@/lib/collect/types";
 import { PER_RETAILER_TIMEOUT_MS } from "@/lib/collect/types";
 import { searchRetailerFallback } from "@/lib/collect/search-fallback";
+import { siteOrigin } from "@/lib/site-origin";
 import { readBodyCapped } from "@/lib/collect/read-body";
 
 export function domainOf(url: string): string {
@@ -166,7 +167,9 @@ export async function fetchWithTimeout(
       signal: controller.signal,
       redirect: "follow",
       headers: {
-        "User-Agent": "ReemcoBot/1.0 (+https://reemco.vercel.app; price comparison)",
+        // REEA-1051 — the courtesy URL in the bot identity follows the
+        // serving host (REEMCO_SITE_ORIGIN), not the Vercel rollback alias.
+        "User-Agent": `ReemcoBot/1.0 (+${siteOrigin()}; price comparison)`,
         Accept: "text/html,application/xhtml+xml",
       },
     });
