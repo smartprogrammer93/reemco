@@ -19,8 +19,12 @@ import { execSync } from "node:child_process";
 import { chromium as pw } from "playwright-core";
 import chromium from "@sparticuz/chromium";
 import { measureResultsTimings } from "./smoke-timings.mjs";
+import { classifyAttempt } from "./dead-link-smoke.mjs";
 
-const BASE = (process.env.SMOKE_BASE_URL || "https://reemco.vercel.app").replace(/\/$/, "");
+// REEA-1051 — default to the self-hosted production box (the Vercel alias is
+// the rollback path only and is currently deployment-disabled). Workflows
+// still pass SMOKE_BASE_URL explicitly from vars.PROD_BASE_URL.
+const BASE = (process.env.SMOKE_BASE_URL || "https://ns539626.ip-144-217-72.net").replace(/\/$/, "");
 // Stable fixture: "sony" matches seeded catalog products deterministically.
 const FIXTURE_QUERY = process.env.SMOKE_FIXTURE_QUERY || "sony";
 
@@ -30,11 +34,14 @@ const FIXTURE_QUERY = process.env.SMOKE_FIXTURE_QUERY || "sony";
 // step later fails; measureResultsTimings itself never throws.
 for (const line of await measureResultsTimings(BASE)) console.log(line);
 
-const results = [];
+// REEA-1056: print each PASS as it lands. The old buffered join only printed
+// on a fully green run, so a later failing step (e.g. link-health) discarded
+// the evidence of the steps that did pass — exactly what made the 375px
+// follow-up hard to report against the box.
 function step(n, name, fn) {
   return fn().then(
     (detail) => {
-      results.push(`  PASS step ${n}: ${name}${detail ? ` — ${detail}` : ""}`);
+      console.log(`  PASS step ${n}: ${name}${detail ? ` — ${detail}` : ""}`);
     },
     (err) => {
       console.error(`SMOKE FAILED at step ${n} (${name}): ${err.message}`);
@@ -167,6 +174,24 @@ await step(4, "results surface last-verified freshness (REEA-65)", async () => {
 // REEA-75: mobile (375px) viewport pass. Guard against horizontal-overflow
 // regressions on every funnel page and assert the primary CTAs (header Search
 // button, offer 'Go to store' links) sit fully inside the viewport.
+//
+// REEA-1056: a control that is off-viewport but sits inside a deliberately
+// scrollable ancestor (overflow-x auto/scroll, content wider than the box,
+// container itself in-viewport) is REACHABLE by swiping that container into
+// place — not clipped. The ≤375px results coverage toolbar is exactly that
+// by design: REEA-945 measured that wrapping the country/stock/Refresh row
+// to 3-4 lines (~124px EN / 168px AR) pushed the lead primary CTA below the
+// fold, so the row ships as a single horizontally scrollable line and the
+// page itself gains no overflow. Treating every off-viewport control as
+// clipped made step 5 fail deterministically on the healthy layout.
+//
+// So this check now distinguishes the two cases instead of relaxing either:
+//   - a control inside a scrollable container is PASSED only after scrolling
+//     that container actually brings it fully into the viewport (so a control
+//     clipped by overflow:hidden or a too-narrow scroller still fails), and
+//     the scrolled ones are named in the step detail;
+//   - a control outside any scrollable container must still be in-viewport,
+//     and documentElement.scrollWidth must stay <=375 on every page.
 await step(5, "375px mobile pass: no horizontal overflow, CTAs in viewport (REEA-75)", async () => {
   const mobile = await browser.newPage({ viewport: { width: 375, height: 667 } });
   mobile.setDefaultTimeout(30000);
@@ -181,26 +206,60 @@ await step(5, "375px mobile pass: no horizontal overflow, CTAs in viewport (REEA
   } catch {
     // detail page optional for this guard; steps 2-3 already cover it on desktop
   }
+  const scrolled = [];
   for (const path of pages) {
     await mobile.goto(`${BASE}${path}`, { waitUntil: "load" });
     await mobile.waitForTimeout(500); // allow hydration to settle before measuring
-    const { scrollWidth, clipped } = await mobile.evaluate(() => {
+    const { scrollWidth, clipped, reachable } = await mobile.evaluate(() => {
       const vw = document.documentElement.clientWidth;
       const clipped = [];
+      const reachable = [];
+      // A deliberate horizontal scroller: the author chose overflow-x
+      // auto/scroll AND the content genuinely overflows, and the scroller's
+      // own box is inside the viewport (so it can be swiped).
+      const scrollableAncestor = (el) => {
+        for (let p = el.parentElement; p && p !== document.documentElement; p = p.parentElement) {
+          const cs = getComputedStyle(p);
+          if ((cs.overflowX === "auto" || cs.overflowX === "scroll") && p.scrollWidth > p.clientWidth + 1) {
+            const pr = p.getBoundingClientRect();
+            if (pr.width > 0 && pr.left >= -1 && pr.right <= vw + 1) return p;
+          }
+        }
+        return null;
+      };
       for (const el of document.querySelectorAll("button, a")) {
         const r = el.getBoundingClientRect();
-        if (r.width > 0 && (r.right > vw + 1 || r.left < -1)) {
-          clipped.push(`<${el.tagName.toLowerCase()}> "${(el.textContent || "").trim().slice(0, 30)}" right=${Math.round(r.right)}`);
+        if (r.width <= 0 || (r.right <= vw + 1 && r.left >= -1)) continue;
+        const scroller = scrollableAncestor(el);
+        if (scroller) {
+          // Prove reachability: scroll the container to the control's
+          // position and re-measure. Restore the scroll offset afterwards so
+          // each control is evaluated independently.
+          const before = scroller.scrollLeft;
+          const delta = r.left - scroller.getBoundingClientRect().left;
+          const max = scroller.scrollWidth - scroller.clientWidth;
+          scroller.scrollLeft = Math.min(max, Math.max(0, before + delta - 8));
+          const after = el.getBoundingClientRect();
+          const nowVisible = after.width > 0 && after.left >= -1 && after.right <= vw + 1;
+          scroller.scrollLeft = before;
+          if (nowVisible) {
+            const owner = scroller.className ? `.${String(scroller.className).trim().split(/\s+/)[0]}` : scroller.tagName.toLowerCase();
+            reachable.push(`<${el.tagName.toLowerCase()}> "${(el.textContent || "").trim().slice(0, 30)}" in ${owner}`);
+            continue;
+          }
         }
+        clipped.push(`<${el.tagName.toLowerCase()}> "${(el.textContent || "").trim().slice(0, 30)}" right=${Math.round(r.right)}`);
       }
-      return { scrollWidth: document.documentElement.scrollWidth, clipped };
+      return { scrollWidth: document.documentElement.scrollWidth, clipped, reachable };
     });
     if (scrollWidth > 375) violations.push(`${path}: scrollWidth ${scrollWidth} > 375`);
     if (clipped.length) violations.push(`${path}: offscreen CTAs — ${clipped.join("; ")}`);
+    if (reachable.length) scrolled.push(`${path}: ${reachable.join("; ")}`);
   }
   await mobile.close();
   if (violations.length) throw new Error(violations.join(" | "));
-  return `${pages.length} page(s) clean at 375px (scrollWidth<=375, all CTAs visible)`;
+  const scrollNote = scrolled.length ? ` — reachable by scrolling a deliberate scroll container: ${scrolled.join(" | ")}` : "";
+  return `${pages.length} page(s) clean at 375px (scrollWidth<=375, all CTAs visible${scrollNote})`;
 });
 
 await browser.close();
@@ -232,6 +291,18 @@ await step(6, "catalog offer URLs resolve (link-health)", async () => {
         const html = await res.text();
         const title = html.match(/<title[^>]*>([^<]+?)\s*<\/title>/i)?.[1]?.trim() ?? "";
         ok = res.status < 400 && !/^(?:404\b|page not found\b)/i.test(title);
+        // REEA-1056: reuse the REEA-935 challenge classifier (scripts/
+        // dead-link-smoke.mjs) instead of treating every non-2xx as dead. A
+        // Cloudflare bot-wall (403 + `cf-mitigated: challenge` or the "Just a
+        // moment..." interstitial) means the host answered and a real browser
+        // gets the page — a shopper-reachable link, not a dead one. Jarir's
+        // search URLs are exactly that shape from datacenter egress; the old
+        // plain `status < 400` test failed the deploy gate on healthy links.
+        const verdict = classifyAttempt(res.status, res.headers, html.slice(0, 4000));
+        if (!ok && verdict === "challenge") {
+          ok = true;
+          detail = `HTTP ${res.status} bot-wall challenge${title ? ` title="${title}"` : ""} — live for a real browser`;
+        }
         // REEA-132: amazon.eg answers some datacenter egress IPs with an Arabic
         // apology interstitial (HTTP 503, title "عذرًا" = Sorry) instead of the
         // results page. The host is answering and real browsers get results, so
@@ -239,7 +310,7 @@ await step(6, "catalog offer URLs resolve (link-health)", async () => {
         // and still fail above. Retries alone do not help — the interstitial is
         // IP-reputation based, identical on every attempt from those runners.
         if (!ok && res.status === 503 && /^(?:عذرًا|sorry)/i.test(title)) ok = true;
-        detail = `HTTP ${res.status}` + (title && !ok ? ` title="${title}"` : "");
+        if (!ok) detail = `HTTP ${res.status}` + (title ? ` title="${title}"` : "");
       } catch (e) {
         ok = false;
         detail = `ERR ${e?.cause?.code ?? e?.message ?? "unreachable"}`;
@@ -312,5 +383,4 @@ await step(8, "served cache-window headers on repeated /results (REEA-447 R5)", 
   return `window served (s-maxage + Accept-Language vary, no-store absent) — repeat x-vercel-cache=${cacheState} age=${age}s`;
 });
 
-console.log(results.join("\n"));
 console.log(`SMOKE PASSED — ${BASE} funnel (home → search → click-out → freshness → link-health → adapter parity → served cache window) is healthy.`);
