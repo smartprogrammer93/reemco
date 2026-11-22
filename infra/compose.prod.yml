@@ -10,6 +10,23 @@
 # Secrets live in /etc/reemco/app.env (0600, deploy-owned, env injection only)
 # and are never baked into the image. Non-secret site config lives in
 # /etc/reemco/release.env (0640). Both are provisioned by infra/ansible.
+#
+# REEA-1061 — container hardening. Every service is capability-minimal, and the
+# two infrastructure images are digest-pinned so a moved tag cannot silently
+# change what runs on the next `up -d`:
+#   * app:    uid 1001 from infra/Dockerfile, cap_drop ALL, no-new-privileges.
+#   * redis:  runs as the image's unprivileged `valkey` user, cap_drop ALL,
+#             read-only rootfs, /data volume is the only writable path.
+#   * proxy:  runs as uid 1000 (the official caddy:2-alpine image ships no
+#             non-root user; /usr/bin/caddy carries cap_net_bind_service, so a
+#             plain numeric uid plus cap_add NET_BIND_SERVICE can bind 80/443).
+#             cap_drop ALL, read-only rootfs, /data and /config volumes are the
+#             only writable paths (chowned by deploy.sh before `up`).
+# Networks are segmented: proxy <-> app on `edge`, app <-> redis on `data`.
+# Proxy cannot reach Valkey; Valkey cannot reach anything outside `data`.
+#
+# The invariants above are asserted by infra/scripts/assert-compose-hardening.sh
+# in CI and by infra/scripts/assert-containers.sh after every deploy/rollback.
 name: reemco
 
 services:
@@ -39,6 +56,7 @@ services:
       # The app speaks RESP directly to the local Valkey container (kv-redis.ts);
       # there is no Upstash, no REST gateway and no hosted service in the path.
       # Non-secret, so it lives here rather than in app.env.
+      # REEA-1061: resolves on the `data` network only; the proxy is not on it.
       REDIS_URL: redis://redis:6379/0
     volumes:
       - events:/data/events
@@ -57,6 +75,12 @@ services:
     mem_limit: 6g
     cpus: 6.0
     pids_limit: 512
+    # REEA-1061 — the app binds 3000 (>1024) and is already uid 1001 from the
+    # image; it needs no capabilities at all.
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
     restart: unless-stopped
     healthcheck:
       # Cheap liveness probe: the commit stamp is a static file, so this does
@@ -77,13 +101,19 @@ services:
       options:
         max-size: "20m"
         max-file: "5"
+    networks:
+      - edge
+      - data
 
   redis:
     # Local Valkey is the app's shared KV store (REDIS_URL above). It is on the
-    # private compose network only — never published to the host, never exposed
-    # by Caddy. AOF persistence on a named volume; memory is capped so a runaway
-    # keyspace degrades to eviction instead of taking the box down.
-    image: valkey/valkey:8-alpine
+    # private `data` compose network only — never published to the host, never
+    # exposed by Caddy, and the proxy cannot reach it.
+    # REEA-1061: digest-pinned. Current digest at the time of the change:
+    # valkey/valkey@sha256:9971099af41c36e887aabdfe22b80c0fe45df949163dfc9cb434febc57cfc3fc
+    # (valkey 8-alpine). Bump deliberately, record the new digest in the deploy
+    # comment, and re-run the hardening assertions.
+    image: valkey/valkey@sha256:9971099af41c36e887aabdfe22b80c0fe45df949163dfc9cb434febc57cfc3fc
     command:
       [
         "valkey-server",
@@ -94,6 +124,21 @@ services:
         "--maxmemory-policy",
         "allkeys-lru",
       ]
+    # Run as the image's unprivileged user instead of PID 1 as root. The
+    # entrypoint's root-only `chown /data` + `setpriv` path is skipped when
+    # uid != 0, so deploy.sh chowns the named volume before `up` (idempotent,
+    # uses the same pinned image; see ensure_volume_ownership there).
+    user: valkey
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    read_only: true
+    # Valkey writes AOF/RDB to /data only; /tmp is a scratch tmpfs in case a
+    # future config needs it.
+    tmpfs:
+      - /tmp
+    pids_limit: 256
     volumes:
       - redis:/data
     mem_limit: 512m
@@ -108,13 +153,36 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    networks:
+      - data
 
   proxy:
-    image: caddy:2-alpine
+    # REEA-1061: digest-pinned. Current digest at the time of the change:
+    # caddy@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
+    # (caddy 2-alpine). Bump deliberately and record the new digest.
+    image: caddy@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
     environment:
       # Set in /etc/reemco/release.env. During standup use the box's public IP
       # (plain HTTP); at cutover switch to the real hostname (automatic TLS).
       REEMCO_SITE_ADDRESS: ${REEMCO_SITE_ADDRESS:?set REEMCO_SITE_ADDRESS in /etc/reemco/release.env}
+    # The official caddy:2-alpine image has no non-root user, but /usr/bin/caddy
+    # carries cap_net_bind_service and a plain numeric uid works with
+    # cap_add NET_BIND_SERVICE (verified on the host, REEA-1061). deploy.sh
+    # chowns caddy-data/caddy-config to 1000:1000 before `up`.
+    user: "1000:1000"
+    cap_drop:
+      - ALL
+    cap_add:
+      # The only capability any service is allowed to add: binding 80/443 and
+      # 443/udp below the privileged-port boundary as a non-root user.
+      - NET_BIND_SERVICE
+    security_opt:
+      - "no-new-privileges:true"
+    read_only: true
+    # /tmp is the only path Caddy needs outside its data/config volumes.
+    tmpfs:
+      - /tmp
+    pids_limit: 128
     ports:
       - "80:80"
       - "443:443"
@@ -133,6 +201,8 @@ services:
       options:
         max-size: "20m"
         max-file: "5"
+    networks:
+      - edge
 
 volumes:
   events:
@@ -141,3 +211,10 @@ volumes:
   redis:
   caddy-data:
   caddy-config:
+
+networks:
+  # Public edge: proxy -> app only. Caddy needs egress here for ACME/OCSP.
+  edge:
+  # Private data plane: app <-> redis only, no gateway to the outside world.
+  data:
+    internal: true

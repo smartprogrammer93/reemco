@@ -50,6 +50,34 @@ PROFILE_ARGS=()
 for p in $PROFILES; do PROFILE_ARGS+=(--profile "$p"); done
 
 printf 'REEMCO_IMAGE_TAG=%s\n' "$TAG" > "$TAG_FILE"
+
+# REEA-1061 — same volume-ownership convergence as deploy.sh: redis and the
+# proxy run non-root, and a fresh named volume is root-owned. Idempotent.
+ensure_volume_ownership() {
+  local cfg redis_img proxy_img redis_vol caddy_data caddy_config
+  cfg=$(docker compose -f "$COMPOSE" "${PROFILE_ARGS[@]}" \
+    --env-file "$RELEASE_ENV" --env-file "$TAG_FILE" config --format json 2>/dev/null) || {
+    log "warning: compose config failed; skipping volume ownership fix"
+    return 0
+  }
+  redis_img=$(jq -r '.services.redis.image // empty' <<<"$cfg")
+  proxy_img=$(jq -r '.services.proxy.image // empty' <<<"$cfg")
+  redis_vol=$(jq -r '.volumes.redis.name // "reemco_redis"' <<<"$cfg")
+  caddy_data=$(jq -r '.volumes["caddy-data"].name // "reemco_caddy-data"' <<<"$cfg")
+  caddy_config=$(jq -r '.volumes["caddy-config"].name // "reemco_caddy-config"' <<<"$cfg")
+  if [ -n "$redis_img" ] && docker volume inspect "$redis_vol" >/dev/null 2>&1; then
+    docker run --rm -v "$redis_vol:/data" --entrypoint sh "$redis_img" \
+      -c 'chown -R valkey:valkey /data' >/dev/null 2>&1 \
+      || log "warning: could not chown $redis_vol to valkey"
+  fi
+  if [ -n "$proxy_img" ] && docker volume inspect "$caddy_data" >/dev/null 2>&1; then
+    docker run --rm -v "$caddy_data:/data" -v "$caddy_config:/config" --entrypoint sh "$proxy_img" \
+      -c 'chown -R 1000:1000 /data /config' >/dev/null 2>&1 \
+      || log "warning: could not chown $caddy_data/$caddy_config to 1000:1000"
+  fi
+}
+
+ensure_volume_ownership
 docker compose -f "$COMPOSE" "${PROFILE_ARGS[@]}" \
   --env-file "$RELEASE_ENV" --env-file "$TAG_FILE" up -d --remove-orphans >>"$LOG" 2>&1 \
   || { log "FAILED: compose up for rollback tag $TAG"; exit 1; }

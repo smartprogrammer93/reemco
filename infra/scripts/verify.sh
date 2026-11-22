@@ -8,6 +8,9 @@
 #   1. /__commit.txt equals the tag that was deployed (artifact identity)
 #   2. the four security headers the Vercel pipeline asserts are present
 #   3. /api/health answers 200 through the proxy
+#   4. container hardening on the running stack (REEA-1061): non-root redis and
+#      proxy, cap_drop ALL, read-only rootfs, pinned image digests, segmented
+#      networks. Runs only when docker is available (i.e. on the host).
 # Exit 0 = verified; non-zero = treat the deploy as failed.
 set -uo pipefail
 
@@ -75,5 +78,17 @@ for attempt in 1 2 3 4 5; do
 done
 [ "$HEALTH_OK" = "1" ] || fail "/api/health never returned 200 (last: $CODE)"
 echo "health OK: 200"
+
+# 4. Container hardening (REEA-1061). The compose file is only a declaration;
+# this proves the RUNNING containers actually carry it. It needs the docker CLI
+# and daemon, so it is skipped when verify.sh is run from outside the host (the
+# external CI step still covers stamp/headers over the public surface).
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  ASSERT=/opt/reemco/scripts/assert-containers.sh
+  [ -x "$ASSERT" ] || fail "missing $ASSERT (infra/scripts/assert-containers.sh was not synced)"
+  "$ASSERT" || fail "container hardening assertions failed (see FAIL lines above)"
+else
+  echo "container hardening: skipped (docker unavailable in this shell)"
+fi
 
 echo "VERIFY PASSED for ${TAG:-$BASE}"

@@ -79,6 +79,12 @@ jobs:
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           if [ -n "${{ inputs.rollback_sha }}" ]; then echo "Deploying $SHA as a ROLLBACK"; else echo "Deploying $SHA as a fresh build"; fi
 
+      # REEA-1061 — refuse to ship a stack whose hardening invariants regressed:
+      # every service cap_drop ALL / non-root, infra images digest-pinned,
+      # proxy and redis on separate networks. Cheap, runs before SSH.
+      - name: Assert compose hardening invariants
+        run: bash infra/scripts/assert-compose-hardening.sh infra/compose.prod.yml
+
       - name: Prepare SSH
         run: |
           set -euo pipefail
@@ -101,6 +107,7 @@ jobs:
             infra/compose.prod.yml infra/Caddyfile "$TARGET:/opt/reemco/"
           scp -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -i ~/.ssh/id_ed25519 \
             infra/scripts/deploy.sh infra/scripts/rollback.sh infra/scripts/verify.sh infra/scripts/backup.sh \
+            infra/scripts/assert-containers.sh \
             "$TARGET:/opt/reemco/scripts/"
           $SSH "$TARGET" 'chmod +x /opt/reemco/scripts/*.sh'
 

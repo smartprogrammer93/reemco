@@ -54,12 +54,43 @@ if [ -f "$TAG_FILE" ]; then
   CURRENT=$(sed -n 's/^REEMCO_IMAGE_TAG=//p' "$TAG_FILE" | tail -1)
 fi
 
+# REEA-1061 — redis and the proxy now run as non-root users, but a named volume
+# is created root-owned on first use. Chown the volumes idempotently before
+# `up` using the same digest-pinned images (no extra image, no mutable tag).
+# Idempotent: re-running it is a no-op on an already-correct volume, and it is
+# safe while the containers are running (chown does not touch live files).
+ensure_volume_ownership() {
+  local cfg redis_img proxy_img redis_vol caddy_data caddy_config
+  cfg=$(docker compose -f "$COMPOSE" "${PROFILE_ARGS[@]}" \
+    --env-file "$RELEASE_ENV" --env-file "$TAG_FILE" config --format json 2>/dev/null) || {
+    log "warning: compose config failed; skipping volume ownership fix"
+    return 0
+  }
+  redis_img=$(jq -r '.services.redis.image // empty' <<<"$cfg")
+  proxy_img=$(jq -r '.services.proxy.image // empty' <<<"$cfg")
+  redis_vol=$(jq -r '.volumes.redis.name // "reemco_redis"' <<<"$cfg")
+  caddy_data=$(jq -r '.volumes["caddy-data"].name // "reemco_caddy-data"' <<<"$cfg")
+  caddy_config=$(jq -r '.volumes["caddy-config"].name // "reemco_caddy-config"' <<<"$cfg")
+
+  if [ -n "$redis_img" ] && docker volume inspect "$redis_vol" >/dev/null 2>&1; then
+    docker run --rm -v "$redis_vol:/data" --entrypoint sh "$redis_img" \
+      -c 'chown -R valkey:valkey /data' >/dev/null 2>&1 \
+      || log "warning: could not chown $redis_vol to valkey"
+  fi
+  if [ -n "$proxy_img" ] && docker volume inspect "$caddy_data" >/dev/null 2>&1; then
+    docker run --rm -v "$caddy_data:/data" -v "$caddy_config:/config" --entrypoint sh "$proxy_img" \
+      -c 'chown -R 1000:1000 /data /config' >/dev/null 2>&1 \
+      || log "warning: could not chown $caddy_data/$caddy_config to 1000:1000"
+  fi
+}
+
 log "deploy requested: tag=$TAG current=${CURRENT:-none} dry_run=$DRY_RUN"
 
 if [ "$CURRENT" = "$TAG" ]; then
   # Idempotent re-check: the image tag is unchanged, but the stack shape may
   # not be (e.g. a service was added). Converge it, then run the same gate.
   log "tag already live — reconciling stack shape, then re-verifying"
+  ensure_volume_ownership
   docker compose -f "$COMPOSE" "${PROFILE_ARGS[@]}" \
     --env-file "$RELEASE_ENV" --env-file "$TAG_FILE" \
     up -d --remove-orphans >>"$LOG" 2>&1 \
@@ -104,6 +135,7 @@ printf 'REEMCO_IMAGE_TAG=%s\n' "$TAG" > "$TAG_FILE"
 log "image-tag.env updated to $TAG"
 
 log "starting stack"
+ensure_volume_ownership
 if ! docker compose -f "$COMPOSE" "${PROFILE_ARGS[@]}" \
   --env-file "$RELEASE_ENV" --env-file "$TAG_FILE" \
   up -d --remove-orphans >>"$LOG" 2>&1; then

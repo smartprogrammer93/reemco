@@ -145,7 +145,7 @@
           # REEA-1054 — scoped sudo for the CI deploy path. deploy has no root
           # shell; only these binaries run as root. Everything else is
           # docker-group only.
-          Cmnd_Alias REEMCO_OPS = /usr/bin/mkdir, /usr/bin/chown, /usr/bin/chmod, /usr/bin/install, /opt/reemco/scripts/deploy.sh, /opt/reemco/scripts/rollback.sh, /opt/reemco/scripts/verify.sh, /opt/reemco/scripts/backup.sh, /opt/reemco/scripts/restore-drill.sh
+          Cmnd_Alias REEMCO_OPS = /usr/bin/mkdir, /usr/bin/chown, /usr/bin/chmod, /usr/bin/install, /opt/reemco/scripts/deploy.sh, /opt/reemco/scripts/rollback.sh, /opt/reemco/scripts/verify.sh, /opt/reemco/scripts/backup.sh, /opt/reemco/scripts/restore-drill.sh, /opt/reemco/scripts/assert-containers.sh
           deploy ALL=(root) NOPASSWD: REEMCO_OPS
 
     # REEA-1062 — SSH/fail2ban hardening was declared ONLY in cloud-init.yaml,
@@ -222,6 +222,7 @@
         - { src: "scripts/verify.sh", dest: "/opt/reemco/scripts/verify.sh", mode: "0755" }
         - { src: "scripts/backup.sh", dest: "/opt/reemco/scripts/backup.sh", mode: "0755" }
         - { src: "scripts/restore-drill.sh", dest: "/opt/reemco/scripts/restore-drill.sh", mode: "0755" }
+        - { src: "scripts/assert-containers.sh", dest: "/opt/reemco/scripts/assert-containers.sh", mode: "0755" }
       notify: reconcile stack
 
     # Secrets are injected by the operator (or a secrets manager) into

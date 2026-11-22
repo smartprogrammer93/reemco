@@ -14,9 +14,12 @@
 	encode zstd gzip
 
 	header {
-		# 2 years, subdomains included. Only meaningful over HTTPS; ignored on
-		# the plain-HTTP standup address, so the same config works for both.
-		Strict-Transport-Security "max-age=63072000; includeSubDomains"
+		# 2 years, subdomains included, preload-eligible (REEA-1061). Only
+		# meaningful over HTTPS; ignored on a plain-HTTP standup address, so the
+		# same config works for both. Preload is safe once the served hostname
+		# has a valid certificate — the cutover hostname must be submitted to
+		# hstspreload.org separately; this only sets the required header.
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
 		-Server
 	}
 
@@ -32,4 +35,19 @@
 		output stdout
 		format json
 	}
+}
+
+# REEA-1061 — the HTTP->HTTPS redirect Caddy generates automatically is not
+# covered by the site block's header directive, so `Server: Caddy` leaked on
+# the 308. Declaring the HTTP site explicitly disables that automatic redirect
+# for this host and lets us emit the redirect ourselves with -Server, keeping
+# the same 308 status the automatic path used.
+#
+# Caveat: this block is only valid while REEMCO_SITE_ADDRESS is a DNS name. If
+# the box ever falls back to a bare IP (plain-HTTP standup), Caddy sees
+# `http://<ip>` twice (the `{$REEMCO_SITE_ADDRESS}` block above is also HTTP for
+# an IP) and refuses to start — comment this block out in that case.
+http://{$REEMCO_SITE_ADDRESS} {
+	header -Server
+	redir https://{host}{uri} 308
 }
