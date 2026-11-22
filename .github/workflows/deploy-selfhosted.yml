@@ -70,6 +70,19 @@ jobs:
           ref: ${{ inputs.rollback_sha || github.sha }}
           fetch-depth: 0
 
+      # REEA-1060 — production dependency audit gate. The committed lockfile is
+      # what the box builds from, so a high/critical production advisory must
+      # fail the deploy BEFORE the host builds anything. `npm audit` reads
+      # package-lock.json directly (no node_modules needed) and its
+      # --audit-level=high exit code is the gate; the step is a no-op only for
+      # an explicit rollback, which deliberately redeploys a previously verified
+      # commit and must not be blocked by an advisory published since.
+      - name: Production dependency audit gate (0 high/critical)
+        if: github.event_name == 'push' || inputs.rollback_sha == ''
+        run: |
+          set -euo pipefail
+          npm audit --omit=dev --audit-level=high
+
       - name: Resolve the tag to deploy
         id: tag
         run: |
