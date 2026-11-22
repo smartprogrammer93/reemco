@@ -20,7 +20,9 @@ does not exist on the host.
 | `Dockerfile` | Production image, tag = commit sha, standalone Next output |
 | `scripts/deploy.sh` | Deploy a pinned tag, auto-rollback on failed verify |
 | `scripts/rollback.sh` | Redeploy the recorded previous tag, same verify gate |
-| `scripts/verify.sh` | Commit stamp + 4 security headers + health |
+| `scripts/verify.sh` | Commit stamp + 4 security headers + health + container hardening assertions |
+| `scripts/assert-compose-hardening.sh` | CI gate: renders the compose file and asserts the hardening invariants |
+| `scripts/assert-containers.sh` | Post-deploy `docker inspect` assertions on the running stack (called by `verify.sh`) |
 | `scripts/backup.sh` | Restic backup of the durable state (docker volumes + `/opt/reemco` + `/etc/reemco`) |
 | `scripts/restore-drill.sh` | Restore latest snapshot to a scratch dir and verify the sample against live volumes |
 | `systemd/` | `/api/health` probe timers (replaces `vercel.json` crons) + daily backup |
@@ -60,6 +62,55 @@ written by every deploy). If the box itself is unreachable, the cutover
 rollback is the DNS A record back to Vercel while that deployment stays live.
 
 **No rollback path, no deploy.**
+
+## Container hardening (REEA-1061)
+
+The stack is capability-minimal and its infrastructure images are immutable:
+
+| Service | Identity | Caps | Rootfs | Limits | Networks |
+|---|---|---|---|---|---|
+| app | uid 1001 (image user) | `cap_drop: ALL` | writable (volumes + `/tmp`) | 6g / 6 CPU / 512 pids | `edge`, `data` |
+| redis | image user `valkey` (uid 999) | `cap_drop: ALL` | read-only, `/data` volume only | 512m / 256 pids | `data` only |
+| proxy | uid 1000 | `cap_drop: ALL` + `NET_BIND_SERVICE` | read-only, `/data`+`/config` volumes + `/tmp` tmpfs | 256m / 128 pids | `edge` only |
+
+`edge` is proxy↔app; `data` is app↔redis and is `internal: true` (no gateway).
+The proxy cannot resolve `redis`, and Valkey is not reachable from the edge.
+
+Two invariants are enforced automatically, so a regression cannot ship silently:
+
+- CI: `infra/scripts/assert-compose-hardening.sh` renders
+  `docker compose -f infra/compose.prod.yml config` and fails the deploy
+  workflow before SSH if any invariant is broken. It rewrites the two
+  host-absolute paths (`/etc/reemco/app.env`, `/opt/reemco/Caddyfile`) to empty
+  local placeholders so it also runs on a GitHub runner.
+- Post-deploy/rollback: `verify.sh` calls `infra/scripts/assert-containers.sh`,
+  which `docker inspect`s the running containers and fails the gate if redis or
+  proxy is root, `CapDrop` lacks `ALL`, the rootfs is writable, the networks are
+  not segmented, or the running image digest differs from the pinned digest.
+
+**Volume ownership.** A named volume is created root-owned, and redis/proxy now
+run non-root. `deploy.sh` and `rollback.sh` converge ownership before `up`
+(`chown -R valkey:valkey /data`, `chown -R 1000:1000 /data /config` for Caddy)
+using the same digest-pinned images. It is idempotent; a fresh volume is handled
+on the next deploy. Do not create these volumes outside that path.
+
+**Digest bumps.** The caddy and valkey images are pinned to
+`caddy@sha256:003a9780…` and `valkey/valkey@sha256:9971099a…`. To bump one:
+record the new digest in the deploy comment, update the `image:` line, run
+`bash infra/scripts/assert-compose-hardening.sh`, deploy, and confirm
+`assert-containers.sh` reports the running digest matches.
+
+**Caddyfile caveat.** The explicit `http://{$REEMCO_SITE_ADDRESS}` block is what
+suppresses `Server: Caddy` on the HTTP→HTTPS 308. It is only valid while the
+site address is a DNS name; a bare-IP standup address would define the site
+twice and Caddy would refuse to start — comment the block out in that case.
+
+**Rolling back this change.** Compose/Caddy changes are versioned: redeploy the
+previous commit through the deploy workflow with `rollback_sha` (it re-syncs
+`/opt/reemco` from that ref, so the old stack shape comes back), then run
+`sudo /opt/reemco/scripts/verify.sh --tag <sha>`. The pre-change files were
+copied to `/opt/reemco/backup/reea1061-20261122T222355Z/` on the box as a
+belt-and-braces restore path.
 
 ## Backup and restore
 
