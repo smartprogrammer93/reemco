@@ -77,6 +77,16 @@ backing up less than it claims.
 escrowed in Paperclip Secrets (`reemco/restic-password`) because losing it means
 losing the repository. `reemco-backup.timer` runs nightly at 03:23 UTC.
 
+**Target status: on-box, accepted.** The repository currently lives at
+`/var/backups/reemco-restic` on the same RAID1 array. The board accepted this
+explicitly on 2026-11-22 ([REEA-1048](/REEA/issues/REEA-1048)), which satisfies
+the "explicit no off-box backup yet, accept the risk" branch of that issue. It
+protects against bad writes, container/volume removal, accidental deletion and
+corruption — **not** against losing the host. Revisit when the dataset grows or
+before any provider-side migration; moving to a bucket is a one-line
+`RESTIC_REPOSITORY` swap plus `restic init` and one green run, and the drill
+re-runs unchanged.
+
 Backup, on demand (the timer does this nightly):
 
 ```sh
@@ -118,8 +128,10 @@ sudo docker compose -f /opt/reemco/compose.prod.yml --env-file /etc/reemco/relea
 ## Still owned by the CEO (blocking cutover, not this commit)
 
 - Off-box backup **target** (S3/B2/R2 bucket or rsync host) + its credentials.
-  An interim on-box restic repository is live and verified, but it does not
-  survive losing the box. Swapping it in is one line in `/etc/reemco/backup.env`.
+  **Decided 2026-11-22:** accept the on-box repository for now. No longer
+  blocking; the backup itself is live and drill-verified. Revisit when the data
+  grows or before a provider-side migration — the swap is one line in
+  `/etc/reemco/backup.env`.
 - Who can flip the DNS A record.
 - Confirm the provider means mdadm soft RAID, not fake RAID.
 
@@ -192,7 +204,11 @@ verdicts; the deployed tag from this change fixes that.
   repository `/var/backups/reemco-restic`; `restic.pass` is 0600 root:root and
   escrowed in Paperclip Secrets. `systemctl start reemco-backup.service` exited
   0 and wrote snapshot `fff60062` (334 files, 13.6 MiB processed, `restic check`
-  clean). This is **not yet off-box** — the bucket swap is the open CEO decision.
+  clean).
+- Board decision recorded: keep the on-box repository for now
+  ([REEA-1048](/REEA/issues/REEA-1048), 2026-11-22). That is an explicit,
+  documented acceptance of the residual risk, not a silent gap; the swap to an
+  off-box bucket stays a one-line change whenever it is revisited.
 - Restore drill: `restore-drill.sh` restored `fff60062` to
   `/var/tmp/reemco-restore-drill` and verified the sample — `metrics.json`,
   `last-seen.json`, `completed-jobs.json`, `job-snapshots.json` byte-identical to
