@@ -21,10 +21,12 @@ does not exist on the host.
 | `scripts/deploy.sh` | Deploy a pinned tag, auto-rollback on failed verify |
 | `scripts/rollback.sh` | Redeploy the recorded previous tag, same verify gate |
 | `scripts/verify.sh` | Commit stamp + 4 security headers + health |
-| `scripts/backup.sh` | Off-box restic backup of durable state |
+| `scripts/backup.sh` | Restic backup of the durable state (docker volumes + `/opt/reemco` + `/etc/reemco`) |
+| `scripts/restore-drill.sh` | Restore latest snapshot to a scratch dir and verify the sample against live volumes |
 | `systemd/` | `/api/health` probe timers (replaces `vercel.json` crons) + daily backup |
 | `app.env.example` | Runtime **secrets** → `/etc/reemco/app.env` (0640) |
 | `release.env.example` | Non-secret site config → `/etc/reemco/release.env` (0640) |
+| `backup.env.example` | Backup target config → `/etc/reemco/backup.env` (0640); password file 0600, never committed |
 
 ## Provision (once SSH exists)
 
@@ -59,12 +61,55 @@ rollback is the DNS A record back to Vercel while that deployment stays live.
 
 **No rollback path, no deploy.**
 
+## Backup and restore
+
+The durable state is the docker named volumes (`reemco_metrics`,
+`reemco_events`, `reemco_collect`, `reemco_redis`) plus `/opt/reemco` and
+`/etc/reemco`. There is **no `/data` on the host** — the compose file mounts
+those volumes at `/data/*` *inside* the app container; the host-side paths are
+`/var/lib/docker/volumes/<volume>/_data`. `backup.sh` therefore targets the
+volume mountpoints, takes a Valkey `BGSAVE` first so the KV snapshot is
+self-consistent, and fails fast if any path is missing instead of silently
+backing up less than it claims.
+
+`/etc/reemco/backup.env` (0640, host-only) supplies `RESTIC_REPOSITORY` and
+`RESTIC_PASSWORD_FILE`; the password file is `0600 root:root` and its value is
+escrowed in Paperclip Secrets (`reemco/restic-password`) because losing it means
+losing the repository. `reemco-backup.timer` runs nightly at 03:23 UTC.
+
+Backup, on demand (the timer does this nightly):
+
+```sh
+sudo systemctl start reemco-backup.service
+sudo tail -40 /var/log/reemco/backup.log      # "backup done snapshot=<id>"
+sudo bash -c 'set -a; . /etc/reemco/backup.env; set +a; restic snapshots'
+```
+
+Restore drill — restores the latest snapshot into a scratch dir and verifies a
+sample of metrics/events/collect against the live volumes. Writes only to the
+scratch dir, safe against production:
+
+```sh
+sudo bash -c 'set -a; . /etc/reemco/backup.env; set +a; /opt/reemco/scripts/restore-drill.sh'
+# optional scratch dir: ... /opt/reemco/scripts/restore-drill.sh /var/tmp/my-scratch
+```
+
+Restore into place (disaster recovery, app stopped):
+
+```sh
+sudo docker compose -f /opt/reemco/compose.prod.yml stop app
+sudo bash -c 'set -a; . /etc/reemco/backup.env; set +a; restic restore latest --target /'
+sudo docker compose -f /opt/reemco/compose.prod.yml --env-file /etc/reemco/release.env \
+  --env-file /etc/reemco/image-tag.env up -d
+```
+
 ## Observability
 
 - `reemco-health.timer` hits `/api/health` at 08:17 and 14:57 UTC (the two
   `vercel.json` cron slots) via loopback.
 - `reemco-backup.timer` runs nightly at 03:23 UTC when `/etc/reemco/backup.env`
-  exists; without it the unit no-ops rather than failing red.
+  exists; without it the unit no-ops rather than failing red. The run is green
+  and logged to `/var/log/reemco/backup.log` (snapshot id included).
 - Deploy/rollback output appends to `/var/log/reemco/deploy.log`; container logs
   are rotated by the daemon config (`20m × 5`).
 - External uptime probe (`uptime.yml`) is repointed at the new host during the
@@ -72,7 +117,9 @@ rollback is the DNS A record back to Vercel while that deployment stays live.
 
 ## Still owned by the CEO (blocking cutover, not this commit)
 
-- Off-box backup target + credentials (`RESTIC_REPOSITORY`, password file).
+- Off-box backup **target** (S3/B2/R2 bucket or rsync host) + its credentials.
+  An interim on-box restic repository is live and verified, but it does not
+  survive losing the box. Swapping it in is one line in `/etc/reemco/backup.env`.
 - Who can flip the DNS A record.
 - Confirm the provider means mdadm soft RAID, not fake RAID.
 
@@ -133,3 +180,22 @@ verdicts; the deployed tag from this change fixes that.
 - The health walk legitimately returns 503 on a cold/first sample (live retailer
   adapters, `cards=0`); `verify.sh` now retries 5×45 s instead of false-failing
   a healthy artifact, which is what happened on the first standup attempt.
+
+### Backup + restore drill — 2026-11-22 (REEA-1048)
+
+- Found and fixed a real defect before the first backup ever ran: `backup.sh`
+  defaulted to `/data/events /data/metrics /data/collect`, but the host has no
+  `/data` — those are in-container paths. Pointed it at the docker volume
+  mountpoints and added a fail-fast path check, so a path typo cannot silently
+  shrink the backup.
+- `/etc/reemco/backup.env` created (0640 root:root) with an interim on-box
+  repository `/var/backups/reemco-restic`; `restic.pass` is 0600 root:root and
+  escrowed in Paperclip Secrets. `systemctl start reemco-backup.service` exited
+  0 and wrote snapshot `fff60062` (334 files, 13.6 MiB processed, `restic check`
+  clean). This is **not yet off-box** — the bucket swap is the open CEO decision.
+- Restore drill: `restore-drill.sh` restored `fff60062` to
+  `/var/tmp/reemco-restore-drill` and verified the sample — `metrics.json`,
+  `last-seen.json`, `completed-jobs.json`, `job-snapshots.json` byte-identical to
+  live; all 59 restored `events.jsonl` lines present in the live volume.
+- Rollback/blast radius: backup only reads the volumes; the drill writes only to
+  the scratch dir. Nothing in the app path changed.

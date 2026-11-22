@@ -149,6 +149,7 @@
         - { src: "scripts/rollback.sh", dest: "/opt/reemco/scripts/rollback.sh", mode: "0755" }
         - { src: "scripts/verify.sh", dest: "/opt/reemco/scripts/verify.sh", mode: "0755" }
         - { src: "scripts/backup.sh", dest: "/opt/reemco/scripts/backup.sh", mode: "0755" }
+        - { src: "scripts/restore-drill.sh", dest: "/opt/reemco/scripts/restore-drill.sh", mode: "0755" }
       notify: reconcile stack
 
     # Secrets are injected by the operator (or a secrets manager) into
