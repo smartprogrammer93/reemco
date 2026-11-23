@@ -35,7 +35,13 @@
  * Search endpoints only — small page sizes, one call per retailer per run.
  */
 
-import { arabicBrandIntent, compactQueryTokens, matchesCompactQueryToken } from "@/lib/relevance";
+import {
+  arabicBrandIntent,
+  compactQueryTokens,
+  matchesCompactQueryToken,
+  matchesModelIdentity,
+  modelIdentityTokens,
+} from "@/lib/relevance";
 import type { FetchImpl } from "@/lib/collect/scraper";
 import { getSharedKv } from "@/lib/collect/kv";
 import { readCappedResponse } from "@/lib/collect/read-body";
@@ -530,6 +536,17 @@ export function brandAwareCoverage(hitTitle: string, query: string): number {
  * script titles. Latin-script queries keep the exact scoring path unchanged.
  */
 export function queryGatePasses(hitTitle: string, query: string, minScore: number): boolean {
+  // REEA-1068 — a query carrying a model-identity token ("iphone17", "fold7",
+  // "xm6") is about THAT item: a candidate that does not answer the identity
+  // is a different product, however many of the loose words it shares. This is
+  // the category guard that keeps a RAZER "V3 Pro" mouse out of "iPhone 17
+  // Pro" (it only answers "Pro"), independent of how many phones the run
+  // happened to collect.
+  const identity = modelIdentityTokens(query);
+  if (identity.length > 0) {
+    const hitLower = hitTitle.toLowerCase();
+    if (!identity.some((t) => matchesModelIdentity(hitLower, t))) return false;
+  }
   const score = brandAwareCoverage(hitTitle, query);
   if (score >= minScore) return true;
   if (score !== 0) return false;

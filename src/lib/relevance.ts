@@ -137,6 +137,24 @@ const ARABIC_QUERY_ALIASES: ReadonlyMap<string, readonly string[]> = new Map([
   ["شاشة", ["monitor", "screen"]],
 ]);
 
+/** REEA-1068 — Arabic-script spellings of MODEL words Kuwait shoppers type
+ *  ("فولد 7", "آيفون 17"). Distinct from the brand aliases above: a brand
+ *  alias answers "which brand", these answer "which model", and the Latin
+ *  form is what the retailer titles carry. Folding the Latin stem with the
+ *  adjacent digit produces the same compact identity token as the Latin query
+ *  ("فولد 7" → "fold7"), so the Arabic spelling ranks exactly like "fold 7"
+ *  instead of matching a loose word. Keys are compared after
+ *  normalizeArabicText(), same convention as the other alias maps. */
+const ARABIC_MODEL_ALIASES: ReadonlyMap<string, string> = new Map([
+  ["فولد", "fold"],
+  ["ايفون", "iphone"],
+  ["جالاكسي", "galaxy"],
+  ["برو", "pro"],
+  ["ايباد", "ipad"],
+  ["بنادول", "panadol"],
+  ["نوت", "note"],
+]);
+
 /** Fold the alef family + case so alias keys and storefront spellings meet in
  *  one form ("أبل"/"ابل"/"آبل" all normalize to the same shape). REEA-213:
  *  tashkeel and tatweel are stripped first so a vowelled spelling ("غسّالة")
@@ -198,9 +216,16 @@ export function compactQueryTokens(query: string): string[] {
     .split(/\s+/)
     .map((t) => t.replace(/^[^a-z0-9\u0600-\u06FF]+|[^a-z0-9\u0600-\u06FF]+$/g, ""))
     .filter(Boolean);
+  // REEA-1068 — Arabic model words ride their curated Latin stem BEFORE the
+  // digit adjacency folds, so "فولد 7" and "fold 7" produce the same
+  // "fold7" identity token. Unknown Arabic words keep the plain path.
+  const latinized = chunks.map((t) => {
+    const folded = normalizeArabicText(t);
+    return ARABIC_MODEL_ALIASES.get(folded) ?? t;
+  });
   return Array.from(
     new Set(
-      compactAdjacent(chunks)
+      compactAdjacent(latinized)
         .map((t) => normalizeArabicText(t))
         .filter((t) => t.length >= 2),
     ),
@@ -257,6 +282,36 @@ export function matchesCompactQueryToken(titleLower: string, token: string): boo
     words.some((w) => /\d/.test(w) && foldModelToken(w).endsWith(target))
   );
 }
+
+/** REEA-1068 — the model-identity tokens in a query: letter-led tokens that
+ *  carry a digit ("fold7", "iphone17", "s25", "xm6"). These name WHICH item
+ *  the shopper wants, unlike spec quantities ("256gb", "5000mah", "65w" —
+ *  digit-led) or bare numbers. When a query has one, a candidate that does not
+ *  answer it is a different product, whatever else it shares: this is the
+ *  category guard that stops "iPhone 17 Pro" admitting a RAZER mouse that only
+ *  answers the loose "Pro" word. */
+export function modelIdentityTokens(query: string): string[] {
+  return compactQueryTokens(query).filter(
+    (t) => /^[a-z][a-z0-9]*$/i.test(t) && /\d/.test(t),
+  );
+}
+
+/** Gate-side model-identity match: the compact token meets a title word
+ *  exactly (or as a model suffix, "xm6" in "WH-1000XM6"), or — for titles
+ *  that spell the model apart ("AirPods Pro (2nd generation)" for "pro 2") —
+ *  the letter stem appears as a whole word and the digit run appears in the
+ *  title. The stem must be a whole word so "fold" never fires inside
+ *  "Foldable". */
+export function matchesModelIdentity(titleLower: string, token: string): boolean {
+  if (matchesCompactQueryToken(titleLower, token)) return true;
+  const target = foldModelToken(token);
+  const parts = /^([a-z]+)(\d+)$/.exec(target);
+  if (!parts) return false;
+  const [, stem, digits] = parts;
+  const words = compactTitleWords(titleLower).map((w) => normalizeArabicText(w));
+  return words.includes(stem) && titleLower.includes(digits);
+}
+
 
 /** REEA-721 follow-up — SKU-shaped query intent. Tokens that mix letters and
  *  digits at real length (`ps931cbegww`, `1000xm6`) are the exact part-number
@@ -340,6 +395,11 @@ export function latinBridgeDispatch(query: string): string {
     .map((t) => {
       if (!/[ء-ي]/.test(t)) return t;
       const folded = normalizeArabicText(t);
+      // REEA-1068 — model words bridge to their model spelling ("فولد" →
+      // "fold", "آيفون" → "iphone") before the brand alias claims them, so
+      // the dispatch can fold the adjacent digit the way the Latin query does.
+      const model = ARABIC_MODEL_ALIASES.get(folded);
+      if (model !== undefined) return model;
       const brand = ARABIC_BRAND_ALIASES.get(folded);
       if (brand !== undefined) return brand.toLowerCase();
       const cats = ARABIC_QUERY_ALIASES.get(folded);

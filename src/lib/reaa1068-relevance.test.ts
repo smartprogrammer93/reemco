@@ -18,7 +18,10 @@ import {
   compactQueryTokens,
   isAccessoryTitle,
   isModelExtended,
+  latinBridgeDispatch,
   matchesCompactQueryToken,
+  matchesModelIdentity,
+  modelIdentityTokens,
   relevanceTier,
 } from "@/lib/relevance";
 import { queryGatePasses } from "@/lib/collect/search-fallback";
@@ -183,5 +186,49 @@ describe("REEA-1068 — compact model spelling", () => {
     const titles = compact.map((p) => p.title);
     expect(titles).not.toContain(FOLDABLE_TABLE);
     expect(titles).not.toContain(FOLDABLE_WASHER);
+  });
+});
+
+describe("REEA-1068 — model-identity guard and Arabic model spellings", () => {
+  it("Arabic model words fold to the same identity token as their Latin form", () => {
+    // "فولد 7" (the Arabic transliteration of Fold 7) must dispatch and match
+    // like "fold 7" instead of collapsing to the loose Arabic word.
+    expect(compactQueryTokens("فولد 7")).toEqual(["fold7"]);
+    expect(compactDispatchQuery(latinBridgeDispatch("فولد 7"))).toBe("fold7");
+    expect(compactQueryTokens("آيفون 17")).toEqual(["iphone17"]);
+    expect(compactDispatchQuery(latinBridgeDispatch("آيفون 17"))).toBe("iphone17");
+    // Arabic pharmacy word answers Latin-titled Panadol rows.
+    expect(compactQueryTokens("بنادول")).toEqual(["panadol"]);
+    expect(queryGatePasses("Panadol Extra Pain Relief Tablets 24tablets", "بنادول", MIN_SCORE)).toBe(true);
+    expect(queryGatePasses(FOLD7_PHONE, "فولد 7", MIN_SCORE)).toBe(true);
+    expect(queryGatePasses(FOLDABLE_TABLE, "فولد 7", MIN_SCORE)).toBe(false);
+  });
+
+  it("a model-identity query rejects rows that only answer a loose word", () => {
+    // Live defect: "iPhone 17 Pro" admitted RAZER gaming mice on the "Pro"
+    // token. The identity token (iphone17) is the category guard.
+    expect(modelIdentityTokens("iPhone 17 Pro")).toEqual(["iphone17"]);
+    expect(matchesModelIdentity("razer deathadder v3 pro gaming mouse", "iphone17")).toBe(false);
+    expect(queryGatePasses("RAZER DeathAdder V3 Pro Gaming Mouse", "iPhone 17 Pro", MIN_SCORE)).toBe(false);
+    expect(queryGatePasses("Apple iPhone 17 Pro 256Gb Silver", "iPhone 17 Pro", MIN_SCORE)).toBe(true);
+    expect(queryGatePasses("Apple iPhone 17 Pro Max 1TB", "iPhone 17 Pro", MIN_SCORE)).toBe(true);
+    expect(queryGatePasses("Apple iPhone 17 Pro Clear Case with MagSafe", "iPhone 17 Pro", MIN_SCORE)).toBe(true);
+    // Spec quantities are not identities: "256gb" / "5000mah" never gate.
+    expect(modelIdentityTokens("Pro 256 GB")).toEqual([]);
+    expect(modelIdentityTokens("powerbank 5000mah")).toEqual([]);
+    expect(queryGatePasses("Anker Powerbank 5000mAh", "powerbank 5000mah", MIN_SCORE)).toBe(true);
+  });
+
+  it("the identity guard leaves the no-over-correction queries alone", () => {
+    // "iphone case" carries no digit identity: every case stays admissible.
+    expect(modelIdentityTokens("iphone case")).toEqual([]);
+    expect(queryGatePasses("Apple iPhone 16 Pro Clear Case with MagSafe", "iphone case", MIN_SCORE)).toBe(true);
+    expect(modelIdentityTokens("laptop")).toEqual([]);
+    expect(queryGatePasses("HP Laptop, AMD Ryzen 5, 8GB RAM", "laptop", MIN_SCORE)).toBe(true);
+    expect(modelIdentityTokens("foldable table")).toEqual([]);
+    expect(queryGatePasses(NATUREHIKE, "foldable table", MIN_SCORE)).toBe(true);
+    // Titles that spell a model apart still answer it (generation numbers).
+    expect(matchesModelIdentity("apple airpods pro (2nd generation)", "pro2")).toBe(true);
+    expect(matchesModelIdentity("apple airpods pro", "pro2")).toBe(false);
   });
 });
