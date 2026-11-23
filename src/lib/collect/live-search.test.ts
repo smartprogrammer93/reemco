@@ -1989,14 +1989,17 @@ describe("completion-budget finalize (REEA-398)", () => {
     expect(lateMerchants.has("Sultan Center")).toBe(true);
     expect(late!.products[0].offers.map((o) => o.price)).toEqual([379, 385, 390, 399]);
 
-    // REEA-674 fix 4 — the memo stores WHAT THE COMPLETED DOCUMENT SERVED:
-    // the finalized-stage snapshot, so a repeated identical GET inside the
-    // memo window renders byte-identically to the first one. The late
-    // coverage above still lands on the open page through this run's own
-    // follow-up feed (asserted just above), not through the memo.
+    // REEA-1068 D4 — once this run's converged chain lands, the memo is
+    // upgraded from the truncated finalize to the COMPLETE live answer, FRESH
+    // (REEA-674 fix 4's truncated-write rule stays for the pre-convergence
+    // window). A repeat — including a different spelling of the same
+    // dispatched query — is then served the same set the open page reaches
+    // through this follow-up, instead of a new partial fan-out. The first
+    // document still served the truncated 2-offer shape (asserted above).
     const memo = cache.read<{ products: { offers: unknown[] }[] }>("samsung");
     expect(memo).not.toBeNull();
-    expect(memo!.value.products[0].offers).toHaveLength(2);
+    expect(memo!.stale).toBe(false);
+    expect(memo!.value.products[0].offers).toHaveLength(4);
   });
 });
 
@@ -3235,6 +3238,35 @@ describe("REEA-921 memo stale-write (pending class killed at the memo)", () => {
     const converged = await followUp!;
     expect(converged?.settled === false).toBe(false);
     expect(offerCount(converged!)).toBe(3);
+  });
+
+  it("REEA-1068 D4 — a converged run upgrades the truncated memo to the full live answer", async () => {
+    resetDiscoveryCache();
+    const cache = createQueryCache();
+    const calls: string[] = [];
+    const fetchImpl = shapedFetch({ slowMs: 120, calls });
+
+    // SERVE-1 finalizes truncated at the budget (2 offers), then converges
+    // (3 offers). The converged tail must upgrade the memo to the complete
+    // snapshot FRESH, so a repeat is served the same answer — not a new
+    // partial fan-out.
+    const first = collectLiveResultsStaged("xm6", { fetchImpl, cache, deadlineMs: 40 });
+    await first.final;
+    const converged = await first.converged;
+    expect(offerCount(converged)).toBe(3);
+    const memo = cache.read<{ products: { offers: unknown[] }[] }>("xm6");
+    expect(memo).not.toBeNull();
+    expect(memo!.stale).toBe(false);
+    expect(offerCount(memo!.value)).toBe(3);
+
+    // A second spelling of the same dispatched query hits the SAME fresh
+    // entry: one stage, the converged set, and no new retailer call.
+    const before = calls.length;
+    const repeat = collectLiveResultsStaged("XM6", { fetchImpl, cache, deadlineMs: 40 });
+    expect(repeat.stages.length).toBe(1);
+    const served = await repeat.stages[0];
+    expect(offerCount(served)).toBe(3);
+    expect(calls.length).toBe(before);
   });
 
   it("the follow-up registry key folds the locale exactly like the memo key (en fast path)", async () => {

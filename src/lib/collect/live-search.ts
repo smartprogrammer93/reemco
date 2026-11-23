@@ -3871,6 +3871,28 @@ export function collectLiveResultsStaged(
     .then(async () =>
       finalSnapshot(q, country, settled, fetchImpl, opts.widenedRetry === true, snapshotsEnabled, locale, await seenRowsP, opts.retiredLanes));
 
+  // REEA-1068 D4 — the memo should end up holding the COMPLETED answer, not
+  // only the budget-finalized one. writeLiveAnswer below stores a truncated
+  // snapshot STALE (REEA-921) so an open page can still deepen; that is right
+  // for that page, but it also meant every spelling of one dispatched query
+  // could serve a different partial snapshot (QA measured 5/7/3 results for
+  // one product). Once this run's converged chain lands, upgrade the stale
+  // entry to the complete snapshot FRESH: a repeat inside the 60 s window then
+  // gets the SAME live answer without a second fan-out — equivalence across
+  // spellings and one fewer fan-out (rate-limit citizenship). A fresh entry
+  // already owns the window (REEA-674 AC4 preserveFreshWrite), and a
+  // provisional zero is never memoized fresh (REEA-466).
+  void converged.then(
+    (snap) => {
+      if (snap.products.length === 0 && snap.settled === false) return;
+      const current = cache.read<LiveSearchResult>(cacheKey);
+      if (current && !current.stale && !opts.refresh) return;
+      cache.write(cacheKey, snap);
+      if (snapshotsEnabled) void mirrorSharedQuerySnapshot(cacheKey, snap);
+    },
+    () => {},
+  );
+
   // The shared-layer warm leads ONLY the first flush (k === 0): a replayed
   // snapshot must not mute this round's own deepening stages, so from the
   // second arrival threshold on the hop race answers alone. With a single
