@@ -159,6 +159,25 @@ export function localizedAgeFor(
 }
 
 /**
+ * REEA-1095 AC10/AC11 — humanised age for a provenance line that carries an
+ * ISO collection stamp. Delegates to localizedAgePair via localizedAgeFor, so
+ * a sub-minute stamp reads "just now"/`الآن` and Arabic never inherits the
+ * English "s ago"/"m ago" suffix. Null for missing/invalid stamps so the
+ * caller renders its own localized "unknown" copy instead of fabricating a
+ * moment (the same honesty rule as relativeAge/ageSeconds).
+ */
+export function localizedAgeFromStamp(
+  locale: AgeLocale,
+  iso: string | undefined,
+  nowMs: number = Date.now(),
+): string | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return null;
+  return localizedAgeFor(locale, ms, nowMs);
+}
+
+/**
  * The "updated/checked" sentence the design uses around the collection
  * timestamp: EN "updated just now / updated 4 min ago", AR `حُدِّث قبل
  * دقيقتين`. Prefix composition lives here so the UI never has to splice an

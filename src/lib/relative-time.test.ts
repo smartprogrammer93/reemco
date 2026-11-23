@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   absoluteStamp,
   localizedAgeFor,
+  localizedAgeFromStamp,
   localizedAgePair,
   localizedUpdatedFor,
   relativeAge,
@@ -82,6 +83,26 @@ describe("localizedAgePair (REEA-1070 AC10: locale-ready collection timestamps)"
       en: "unknown",
       ar: "وقت غير معروف",
     });
+  });
+});
+
+describe("localizedAgeFromStamp (REEA-1095 AC10/AC11: provenance note)", () => {
+  const now = Date.parse("2026-11-23T12:00:00Z");
+
+  it("humanises a sub-minute ISO stamp as just now / الآن, never 0s ago", () => {
+    expect(localizedAgeFromStamp("en", "2026-11-23T11:59:52Z", now)).toBe("just now");
+    expect(localizedAgeFromStamp("ar", "2026-11-23T11:59:52Z", now)).toBe("الآن");
+  });
+
+  it("localises minute ages without splicing an English suffix onto Arabic", () => {
+    expect(localizedAgeFromStamp("en", "2026-11-23T11:56:00Z", now)).toBe("4 min ago");
+    expect(localizedAgeFromStamp("ar", "2026-11-23T11:56:00Z", now)).toBe("قبل 4 دقائق");
+    expect(localizedAgeFromStamp("ar", "2026-11-23T11:58:00Z", now)).toBe("قبل دقيقتين");
+  });
+
+  it("returns null for missing or invalid stamps so the caller can say unknown", () => {
+    expect(localizedAgeFromStamp("en", undefined, now)).toBeNull();
+    expect(localizedAgeFromStamp("en", "not-a-date", now)).toBeNull();
   });
 });
 

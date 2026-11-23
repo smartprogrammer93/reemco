@@ -18,7 +18,6 @@ import { Suspense, useEffect, useState, use } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useCollection, type CollectionPhase } from "@/lib/collect/useCollection";
-import { collectedAgoLabel } from "@/lib/collect/types";
 import type { CollectJob, LiveOffer } from "@/lib/collect/types";
 import { filterOffersByCountry, type CountryCode } from "@/lib/country";
 import { effectivePriceKwd, formatCountryPrice, formatPrimaryPrice } from "@/lib/format";
@@ -29,7 +28,7 @@ import ShareSummaryButton from "@/components/ShareSummaryButton";
 import { buildResultsHref } from "@/lib/country";
 import { cleanDisplayTitle, displayTitleChanged } from "@/lib/display-title";
 import { foldAlternativeRows } from "@/components/ProductResultCard";
-import { ageSeconds, localizedAgeFor } from "@/lib/relative-time";
+import { ageSeconds, localizedAgeFor, localizedAgeFromStamp } from "@/lib/relative-time";
 import { checkedAgeLabel, clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
 import { offerStatusForLiveOffer } from "@/lib/offer-status";
 import type { NormalizedProduct } from "@/types/product";
@@ -381,7 +380,8 @@ function ProductHeroBody({
         <div className="rc-offers-table">
           <p className="rc-results-meta">
             {t.showingCachedLead}{" "}
-            {collectedAgoLabel(staleFallback.finishedAt ?? staleFallback.startedAt, now) ?? t.dateUnknown}{" "}
+            {localizedAgeFromStamp(locale ?? "en", staleFallback.finishedAt ?? staleFallback.startedAt, now) ??
+              t.dateUnknown}{" "}
             {t.staleNote}
           </p>
           <OfferTable offers={filterOffersByCountry(sortLiveOffers(staleFallback.offers), country)} locale={locale} nowMs={now} />
@@ -391,7 +391,7 @@ function ProductHeroBody({
       {job && job.status === "complete" && !cachedNoticeAt && (
         <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)", marginBlockStart: 8 }}>
           {t.liveResultsLead}{" "}
-          {collectedAgoLabel(job.finishedAt ?? job.startedAt, now) ?? t.justNow} ·{" "}
+          {localizedAgeFromStamp(locale ?? "en", job.finishedAt ?? job.startedAt, now) ?? t.dateUnknown} ·{" "}
           <button type="button" onClick={() => void start({ force: true })} className="rc-inline-action hover:underline" style={{ color: "var(--rc-primary)" }}>
             {t.collectAgain}
           </button>

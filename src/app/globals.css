@@ -147,6 +147,15 @@
   --rc-dark-status-verified: #4ADE80;
   --rc-dark-status-unverified: #FBBF24;
   --rc-dark-status-stale: #A79783;
+
+  /* REEA-1095 AC12 — filled-action surfaces. The dark map's --rc-dark-primary
+     (#FB923C) is a text/icon accent on dark surfaces; white on it is only
+     2.26:1. Filled actions therefore keep the burnt-orange surface
+     (#C2410C, #FFFFFF 5.18:1) and the deep hover (#9A3412, #FFFFFF 7.31:1),
+     both AA for normal text. Proposed token-diff addition for the design
+     pack (Graphic Designer sign-off requested on REEA-1095). */
+  --rc-dark-action: #C2410C;
+  --rc-dark-action-hover: #9A3412;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -304,6 +313,16 @@ a:focus-visible {
   border-radius: var(--rc-radius-pill);
   padding: 2px 10px;
   font: var(--rc-text-small);
+}
+
+/* REEA-1095 AC12 — the REEA-760 dark remedy above sits BEFORE this base rule,
+   so the base's --rc-fresh-bg won the cascade and the live dark page still
+   measured #FBBF24 on #FEF3C7 ≈ 1.5:1 on results/product coupon pills. Same
+   remedy, placed after the base: #FBBF24 on #3A3128 ≈ 7.6:1. */
+@media (prefers-color-scheme: dark) {
+  .coupon-badge {
+    background: var(--rc-dark-line);
+  }
 }
 
 /* REEA-760 coupon honesty line — one row per issuing retailer: chip →
@@ -1081,6 +1100,15 @@ html[lang="ar"] .coupon-via {
   font: var(--rc-text-small);
 }
 
+/* REEA-1095 AC12 — same bug class as the coupon chip: --rc-fresh-bg is not
+   swapped in dark, so #FBBF24 text sat on the cream #FEF3C7 fill (≈1.5:1).
+   Follow the REEA-760 remedy: dark line surface → 7.6:1. */
+@media (prefers-color-scheme: dark) {
+  .cached-chip {
+    background: var(--rc-dark-line);
+  }
+}
+
 /* Live dot for freshly collected offers (< 10 min → green pulse). */
 .live-dot {
   width: 8px;
@@ -1124,6 +1152,30 @@ html[lang="ar"] .coupon-via {
 .r2-btn:focus-visible {
   outline: none;
   box-shadow: var(--rc-focus-ring);
+}
+
+/* REEA-1095 AC12 — OS-dark contrast for filled actions. --rc-primary flips to
+   the bright #FB923C in dark for text/icons on dark surfaces, so a white
+   label on the old #FB923C fill measured 2.26:1 (Search/Go/Best effective
+   price/Retry). The dark action surface keeps #FFFFFF at 5.18:1 (hover
+   7.31:1). The retailer rail's landed chip rides the same fill. */
+@media (prefers-color-scheme: dark) {
+  .btn-primary,
+  .r2-btn,
+  .rc-chip.is-done {
+    background: var(--rc-dark-action);
+    color: var(--rc-on-primary);
+  }
+
+  .btn-primary:hover,
+  .r2-btn:hover {
+    background: var(--rc-dark-action-hover);
+  }
+
+  /* Outline hover: the light tint kept #FB923C text at ≈2.0:1 in dark. */
+  .btn-outline:hover {
+    background: var(--rc-dark-surface-sunken);
+  }
 }
 
 /* REEA-930 — lead-card primary CTA: a two-line button (decision line +
@@ -1430,6 +1482,25 @@ html[lang="ar"] .coupon-via {
 .rc-chip.is-action {
   color: var(--rc-primary);
   border-color: var(--rc-line);
+}
+
+/* REEA-1095 AC12 — the selected filter chip kept the light #FFEDD5 tint in
+   dark while --rc-ink flipped to #F5EFE6: ≈1.0:1, label invisible (only the
+   check mark read). Dark selected state follows the shipped REEA-983/760
+   remedy — dark sunken surface + bright primary text/border/check:
+   #FB923C on #2A231C ≈ 6.84:1. */
+@media (prefers-color-scheme: dark) {
+  .rc-chip[aria-pressed="true"],
+  .rc-chip.is-selected {
+    background: var(--rc-dark-surface-sunken);
+    border-color: var(--rc-dark-primary);
+    color: var(--rc-dark-primary);
+  }
+
+  .rc-chip[aria-pressed="true"] .check,
+  .rc-chip.is-selected .check {
+    color: var(--rc-dark-primary);
+  }
 }
 
 @media (max-width: 640px) {

@@ -14,8 +14,7 @@
 import { Suspense, useEffect, useState, use } from "react";
 import { useCollection, type CollectionPhase } from "@/lib/collect/useCollection";
 import type { CollectJob, LiveOffer } from "@/lib/collect/types";
-import { collectedAgoLabel } from "@/lib/collect/types";
-import { absoluteStamp } from "@/lib/relative-time";
+import { absoluteStamp, localizedAgeFromStamp } from "@/lib/relative-time";
 import { filterOffersByCountry, type CountryCode } from "@/lib/country";
 import { effectivePriceKwd, formatPrimaryPrice } from "@/lib/format";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
@@ -23,8 +22,10 @@ import CollectionPulse, { PulseOfferCascade } from "@/components/CollectionPulse
 import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
 
 function OfferRow({ offer, best, locale }: { offer: LiveOffer; best: boolean; locale?: Locale }) {
-  const t = getStrings(locale ?? clientLocale());
-  const ago = collectedAgoLabel(offer.collectedAt);
+  const l = locale ?? clientLocale();
+  const t = getStrings(l);
+  // REEA-1095 AC10/AC11 — humanised/localised, never a raw "0s ago".
+  const ago = localizedAgeFromStamp(l, offer.collectedAt);
   return (
     <li
       style={{
@@ -261,11 +262,9 @@ function CollectionPanelBody({
           <button
             type="button"
             onClick={() => void start({ force: true })}
-            className="rounded px-3 py-1.5"
+            className="btn-primary rounded px-3 py-1.5"
             style={{
               font: "var(--rc-text-body)",
-              background: "var(--rc-primary)",
-              color: "#fff",
               marginTop: 8,
             }}
           >
@@ -275,7 +274,7 @@ function CollectionPanelBody({
             <div style={{ marginTop: 12 }}>
               <p style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)" }}>
                 {t.showingCachedLead}{" "}
-                {collectedAgoLabel(staleFallback.finishedAt ?? staleFallback.startedAt, now) ??
+                {localizedAgeFromStamp(locale ?? "en", staleFallback.finishedAt ?? staleFallback.startedAt, now) ??
                   t.dateUnknown}{" "}
                 {t.staleNote}
               </p>
@@ -311,7 +310,7 @@ function CollectionPanelBody({
       {job && job.status === "complete" && !cachedNoticeAt && (
         <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)", marginTop: 8 }}>
           {t.liveResultsLead}{" "}
-          {collectedAgoLabel(job.finishedAt ?? job.startedAt, now) ?? t.justNow} ·{" "}
+          {localizedAgeFromStamp(locale ?? "en", job.finishedAt ?? job.startedAt, now) ?? t.dateUnknown} ·{" "}
           <button
             type="button"
             onClick={() => void start({ force: true })}
