@@ -39,6 +39,13 @@ const nextConfig: NextConfig = {
       return "";
     }
   },
+  // REEA-1084 (F7a) — framework fingerprinting. Next defaults to
+  // `X-Powered-By: Next.js` on every response; it tells an attacker which
+  // framework to probe and buys the shopper nothing. Suppress it at the source
+  // rather than stripping it in Caddy, so loopback and the public surface agree
+  // and infra/scripts/verify.sh can gate both (`Server` is already suppressed at
+  // the edge). Pinned by src/next-config.test.ts.
+  poweredByHeader: false,
   serverExternalPackages: ["jsdom"],
   headers: async () => {
     const windowHeaders = sharedWindowHeaders();

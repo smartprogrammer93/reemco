@@ -20,7 +20,7 @@ does not exist on the host.
 | `Dockerfile` | Production image, tag = commit sha, standalone Next output |
 | `scripts/deploy.sh` | Deploy a pinned tag, auto-rollback on failed verify |
 | `scripts/rollback.sh` | Redeploy the recorded previous tag, same verify gate |
-| `scripts/verify.sh` | Commit stamp + 4 security headers + no `Via` leak + health + container hardening assertions |
+| `scripts/verify.sh` | Commit stamp + 4 security headers + no `Via` leak + absent `X-Powered-By` + health + container hardening assertions |
 | `scripts/assert-compose-hardening.sh` | CI gate: renders the compose file and asserts the hardening invariants |
 | `scripts/assert-containers.sh` | Post-deploy `docker inspect` assertions on the running stack (called by `verify.sh`) |
 | `scripts/backup.sh` | Restic backup of the durable state (docker volumes + `/opt/reemco` + `/etc/reemco`) |
@@ -87,9 +87,10 @@ from git.
    (cap_drop ALL / non-root, digest-pinned infra images, segmented networks).
 4. On-host build of the pinned commit tag.
 5. Deploy of the pinned tag — `deploy.sh` auto-rolls-back if its on-box verify fails.
-6. Public-surface verification — served `/__commit.txt` must equal the intended SHA
-   and all four security headers (CSP, X-Content-Type-Options, Referrer-Policy, HSTS)
-   must be present.
+6. Public-surface verification — served `/__commit.txt` must equal the intended SHA,
+   all four security headers (CSP, X-Content-Type-Options, Referrer-Policy, HSTS)
+   must be present, and `X-Powered-By` must be absent (REE-1084 F7a: suppressed at
+   the source via `poweredByHeader: false`, asserted on the wire by both gates).
 7. Funnel smoke suite (`npm run smoke`: home → results → click-out, freshness, 375px
    mobile pass, offer link-health, adapter-registration parity, cache headers).
    Restored to blocking in REEA-1059 after the two deterministic failures that had made

@@ -208,7 +208,13 @@ jobs:
           for H in content-security-policy x-content-type-options referrer-policy strict-transport-security; do
             printf '%s\n' "$HEADERS" | grep -iq "^$H:" || { echo "::error::missing header $H on $BASE"; exit 1; }
           done
-          echo "stamp + 4/4 security headers verified"
+          # REEA-1084 (F7a) — same assertion the on-box verify.sh makes: the
+          # app must not fingerprint its framework. Mirrored here because the
+          # external gate is what grades the public surface on a push deploy.
+          if printf '%s\n' "$HEADERS" | grep -iq "^x-powered-by:"; then
+            echo "::error::X-Powered-By leaked on $BASE"; exit 1
+          fi
+          echo "stamp + 4/4 security headers verified, X-Powered-By absent"
 
       # node_modules was installed by the build gate above (unconditionally,
       # so a rollback run that skips lint/tests still has it for the smoke).
