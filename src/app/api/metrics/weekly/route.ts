@@ -88,11 +88,22 @@
  *    the same lane the results page already names unreachable (REEA-1078 AC9).
  *    The plan's failure-share formula stays failures / attempts — no new
  *    bucket, still aggregate-only.
+ *
+ * REEA-1134 F5 — rate-limit uniformity: this was the last API route with no
+ * caller budget. It now takes the REEA-827 shared fixed window (30/min per
+ * caller; the REEA-1063 gate placement — before the store reads) and exposes
+ * the REEA-837 budget headers on every answer. A denied caller gets the
+ * standard 429 body and performs no counter or funnel read; the 200/503
+ * payloads are otherwise byte-identical to the pre-gate response.
  */
 import { RETENTION_WEEKS, isoWeekKey, linkSmokeRates, readWeeklyCountersDetailed } from "@/lib/metrics";
 import type { WeeklyCountersRead } from "@/lib/metrics";
 import { readEvents } from "@/lib/event-store";
 import type { FunnelEvent } from "@/lib/events";
+// REEA-1134 F5 — this read is the last API route without a rate-limit gate;
+// it now rides the same REEA-827 shared fixed-window gate as its siblings.
+import { checkRateLimitShared } from "@/lib/rate-limit-kv";
+import { rateLimitHeaders } from "@/lib/rate-limit";
 // REEA-1009 S1b — the metric-honesty note rides the payload only while the
 // bet #2 flag is on (a reporting-text change is part of the §9 flag-gated
 // change; flag-off answers the exact pre-bet payload).
@@ -102,6 +113,23 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_WEEKS = RETENTION_WEEKS;
+
+/**
+ * REEA-1134 F5 — per-caller budget for the PM snapshot read (30/min).
+ *
+ * This endpoint is read by the reporting loop, not by shoppers, so the
+ * shopper routes' 120/min would be pure headroom; 30/min still covers a
+ * dashboard refreshing every few seconds while bounding a runaway poller.
+ * Denials answer before any store read, so a spent caller costs zero KV
+ * round trips (REEA-1063's "zero expensive work" gate placement).
+ */
+export const WEEKLY_METRICS_RATE_LIMIT = { limit: 30, windowMs: 60_000 };
+
+// Same caller key as the sibling gated routes (first X-Forwarded-For hop).
+function clientKey(req: Request): string {
+  const fwd = req.headers.get("x-forwarded-for");
+  return (fwd ? fwd.split(",")[0].trim() : "") || req.headers.get("x-real-ip") || "unknown";
+}
 
 function parseWeeksParam(raw: string | null): number {
   const n = Number.parseInt(raw ?? "", 10);
@@ -123,9 +151,24 @@ export function clicksByWeek(events: FunnelEvent[]): Record<string, number> {
 }
 
 export async function GET(req: Request): Promise<Response> {
+  // REEA-1134 F5 — gate ahead of the store reads: a spent caller answers 429
+  // without touching the weekly counters or the funnel store.
+  const gate = await checkRateLimitShared(
+    `metrics-weekly:${clientKey(req)}`,
+    Date.now(),
+    WEEKLY_METRICS_RATE_LIMIT,
+  );
+  if (!gate.allowed) {
+    return Response.json({ error: "rate limit exceeded" }, { status: 429, headers: rateLimitHeaders(gate) });
+  }
+  // REEA-837 wire shape: the budget stays observable on the 200/503 answers.
+  const gateHeaders = rateLimitHeaders(gate);
+
   const windowWeeks = parseWeeksParam(new URL(req.url).searchParams.get("weeks"));
   const [read, events] = await Promise.all([readWeeklyCountersDetailed(), readEvents()]);
-  return weeklyResponse(read, clicksByWeek(events), windowWeeks);
+  const res = weeklyResponse(read, clicksByWeek(events), windowWeeks);
+  for (const [name, value] of Object.entries(gateHeaders)) res.headers.set(name, value);
+  return res;
 }
 
 /**
