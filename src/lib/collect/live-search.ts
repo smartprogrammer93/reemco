@@ -1870,6 +1870,29 @@ export const COLLECTORS: RetailerCollector[] = [
       // decisions. Whatever answers rides the same luluHits gate; a miss
       // here keeps the old degraded-note shape unchanged.
       const viaIp = await viaIpP;
+      // REEA-1099 — the lane was dispatched and NOT ONE hop produced a usable
+      // payload: a Cloudflare block/challenge shell (measured 2026-11-23 from
+      // the deployed egress: HTTP 403, 5.6 KB, zero application/ld+json) or a
+      // body-less hop. That is a coverage loss, not an "answered empty" zero —
+      // settle it as a failure so the plan's failure share stops reading Lulu
+      // at 0% while the shopper's page calls it unreachable. A genuine Akinon
+      // search page always ships the ld+json contract; a real page that merely
+      // has no matching products still answers with its ld+json blocks and
+      // keeps the honest empty note below.
+      const usable = [html, cleared, viaIp].find(answersWithLdJson);
+      if (!usable) {
+        const lastBody = viaIp !== "" ? viaIp : cleared !== "" ? cleared : html;
+        const challengeShell =
+          lastBody === "" ||
+          /cf-error-details|Just a moment|Attention Required|cf-challenge|Enable JavaScript and cookies/i.test(
+            lastBody,
+          );
+        if (challengeShell) {
+          throw new BlockedLaneError(
+            "blocked: no usable payload from any Lulu hop (Cloudflare 403/challenge)",
+          );
+        }
+      }
       return luluHits(viaIp !== "" ? viaIp : cleared !== "" ? cleared : html, query);
     },
   },
@@ -3061,6 +3084,35 @@ export interface AdapterTelemetry {
 type SettledAdapter = { merchant: string; hits: SearchHit[]; error?: string };
 
 /**
+ * REEA-1099 — a lane that was DISPATCHED but answered with no usable payload
+ * (Cloudflare 403 / managed challenge / zone block) is a coverage loss, not a
+ * quiet zero. Adapters throw this to settle as a failure, so
+ * `retailer_adapter_failures` counts the blocked serve the shopper's page
+ * already names as unreachable (REEA-1078 AC9) instead of leaving the lane at
+ * a 0% failure share while it delivered nothing (Lulu Hypermarket measured
+ * 2,096 attempts / 0 failures in W48). Aggregate-only: the settle point turns
+ * it into the same `error` string every failing lane already records, so the
+ * plan's failure-share formula (`failures / attempts`) needs no new bucket.
+ *
+ * A blocked answer is not a blip — `collectSettled` settles it WITHOUT the
+ * REEA-290 second attempt, so a zone-blocked lane cannot spend the completion
+ * budget re-paying a challenge handshake that will answer the same way.
+ */
+export class BlockedLaneError extends Error {
+  constructor(message = "blocked: no usable payload (Cloudflare 403/challenge)") {
+    super(message);
+    this.name = "BlockedLaneError";
+  }
+}
+
+export function isBlockedLaneError(err: unknown): boolean {
+  return (
+    err instanceof BlockedLaneError ||
+    (err as { name?: unknown } | null | undefined)?.name === "BlockedLaneError"
+  );
+}
+
+/**
  * REEA-1009 S1a — does this thrown error identify a joined-window abort
  * (the hop-ceiling AbortSignal.timeout firing) rather than a retailer blip?
  * AbortSignal.timeout rejects with a TimeoutError DOMException ("The
@@ -3124,6 +3176,13 @@ export async function collectSettled(
     return { merchant: c.merchant, hits: stampCollected(await c.collect(dq, fetchImpl)) };
   } catch (err) {
     const firstError = asError(err);
+    // REEA-1099 — a zone-blocked lane (no usable payload from any hop) is a
+    // terminal outcome, not a blip: settle it as a failure at once. Retrying
+    // only re-pays the challenge handshake and adds latency for an answer
+    // that cannot change.
+    if (isBlockedLaneError(err)) {
+      return { merchant: c.merchant, hits: [], error: firstError };
+    }
     // REEA-1009 S1a — fail failing lanes fast: while the bet #2 flag is on, a
     // lane whose FIRST attempt died on the joined hop-ceiling abort gets no
     // REEA-290 second attempt. An abort is not a blip: the joined window is
