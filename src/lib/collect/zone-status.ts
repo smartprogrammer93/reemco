@@ -196,9 +196,13 @@ export async function probeLaneZones(
 
 /**
  * Persist the zone cells `/api/echo` just observed. The echo route reports
- * `status` (0 on a failed hop) and `clearedBytes`; both are mapped onto the
- * same boolean the results page reads, so the two writers can never disagree
- * about what "answered" means.
+ * `status` (0 on a failed hop) and `clearedBytes`; only the status is a
+ * reachability claim here, because `clearedBytes` counts the bytes the jsdom
+ * clearance tier read — and a Cloudflare interstitial has bytes too (measured
+ * 4.5 KB from this egress, with no `application/ld+json` block, which is
+ * exactly the shape the Lulu collector rejects). The daily probe applies the
+ * zone's real answered rule to the cleared body; this mapper must not promote
+ * a block page to "answered".
  */
 export function zoneEntriesFromEcho(
   zones: Record<string, { status?: number; clearedBytes?: number } | undefined>,
@@ -209,7 +213,7 @@ export function zoneEntriesFromEcho(
   for (const zone of LANE_ZONES) {
     const cell = zones[zone.host];
     if (!cell) continue;
-    const reachable = (cell.status ?? 0) === 200 || (cell.clearedBytes ?? 0) > 0;
+    const reachable = (cell.status ?? 0) === 200;
     entries.push({ host: zone.host, merchant: zone.merchant, reachable, checkedAt });
   }
   return entries;

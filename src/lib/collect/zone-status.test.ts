@@ -112,12 +112,16 @@ describe("zoneEntriesFromEcho — one source with /api/echo", () => {
     ]);
   });
 
-  it("treats a clearance-tier answer as reachable (the collector's own path)", () => {
+  it("does not promote a block page with bytes to an answer", () => {
+    // Measured on the live box 2026-11-23: Lulu's CF interstitial is ~4.5 KB
+    // of cleared bytes but carries no application/ld+json block — the exact
+    // shape the collector rejects. Only a 200 status is an echo-cell answer;
+    // the daily probe applies the zone's real cleared-body rule.
     const [lulu] = zoneEntriesFromEcho(
-      { "www.luluhypermarket.com": { status: 0, clearedBytes: 48_000 } },
+      { "www.luluhypermarket.com": { status: 0, clearedBytes: 4555 } },
       now,
     );
-    expect(lulu.reachable).toBe(true);
+    expect(lulu.reachable).toBe(false);
   });
 
   it("records the echo observation into the shared record", async () => {
