@@ -55,6 +55,15 @@ const BRANDS = new Set([
 const COLORS = new Set([
   "silver", "black", "white", "blue", "green", "gray", "grey", "gold", "red",
   "violet", "beige", "orange", "purple", "pink", "plum",
+  // REEA-1109 — the same role for appliance/gaming official colour names the
+  // live W48 panel carries: a Dyson HD16 "Apricot Topaz"/"Amber Silk" and a
+  // PS5 DualSense "Chroma Teal"/"Chroma Pearl" are one model in another
+  // colour. An unrecognized colour word used to ride in the MODEL LINE and
+  // fork one SKU into a separate single-retailer card per colour (live
+  // 9c66a12: four Dyson HD16 cards and zero comparison depth). Colour is not
+  // identity (REEA-254 merges on model+storage), so recognizing it here is
+  // what lets the merge pass fold the colours inside one card.
+  "teal", "amber", "apricot", "pearl",
 ]);
 
 /** Modifier words that open a two-word official colour name (§1 step 2):
@@ -72,6 +81,12 @@ const COLOR_PREFIXES = new Set([
   // REEA-486: Apple-style "Deep Blue"/"Deep Purple" — same modifier + base
   // pair; the modifier must not fork the short spelling into a second card.
   "deep",
+  // REEA-1109 — appliance/gaming official names arrive as modifier + base
+  // exactly like the entries above ("Chroma Teal" → teal, "Galactic Purple"
+  // → purple, "Ceramic Pink" → pink). Without the modifier entry the pair
+  // stays in the model line and the same DualSense/Dyson SKU forks per colour
+  // (live 9c66a12: three PS5 controller cards, none comparison-ready).
+  "chroma", "galactic", "ceramic",
 ]);
 
 const GRADE_WORDS = new Set(["new", "renewed", "refurbished", "opened"]);
@@ -140,6 +155,16 @@ const NOISE = new Set([
   "edition", "intl",
   "نسخة", "اصدار", "ياباني", "يابانية", "امريكي", "امريكية", "صيني",
   "صينية", "كوري", "كورية",
+  // REEA-1109 — appliance descriptors and connector spec restatements. The
+  // live W48 panel carried "Dyson Supersonic Nural Hair Dryer HD16" beside
+  // "Dyson Supersonic Nural HD16" (same SKU, four colour cards) and "JBL
+  // Tune 500 On-Ear Headphones, … 3.5 mm Connector, In-line Microphone"
+  // beside "JBL Tune 500 On Ear Headphones" (same SKU at Jarir + Danube).
+  // The words below restate the device class / the plug, never the identity,
+  // exactly like the device-type nouns and connectivity suffixes above; the
+  // model code before them still discriminates (V8 Absolute ≠ V8 Origin).
+  "hair", "dryer", "vacuum", "cleaner", "cordless",
+  "mm", "connector", "line", "on", "ear",
 ]);
 
 /** Qualifier words that fold out of the identity tuple yet stay visible as
@@ -380,6 +405,22 @@ function computeCanonicalFields(title: string): CanonicalFields {
     }
 
     if (RAM_QUANTITY_RE.test(t)) continue; // RAM restatement, ignored.
+
+    // REEA-1109 — Xcite spells the capacity glued to the device word
+    // ("Samsung Galaxy Z Fold7 5G 512Phone - Black" = the 512 GB phone). The
+    // tokenizer leaves it as `512phone`, which is neither a storage token nor
+    // noise, so it rode in the model line and forked the 512 GB tier into a
+    // separate single-retailer card beside the merged 512 GB card. Normalise
+    // the glued form onto the storage slot it names.
+    const gluedStorage = /^(\d{2,4})phone$/.exec(t);
+    if (gluedStorage) {
+      if (!storage) {
+        storage = `${gluedStorage[1]}gb`;
+        stopped = true;
+        stoppedAfterStorage = true;
+      }
+      continue;
+    }
 
     const m = STORAGE_RE.exec(t);
     if (m) {
