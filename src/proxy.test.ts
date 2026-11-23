@@ -1,6 +1,8 @@
 /**
  * REEA-74 — CSP report sink regression tests (REEA-70 Stage 1).
- * (a) enforce policy script-src has no `https:`/`http:` token
+ * REEA-1088 — nonce + 'strict-dynamic' policy and its propagation to the
+ * render (the lane Next reads the nonce from).
+ * (a) enforce policy script-src is nonce-only, with no host-source wildcard
  * (b) POST /api/csp-report with a well-formed report → 2xx
  * (c) malformed / oversized / GET → 4xx
  */
@@ -18,18 +20,21 @@ import { resetRateLimiter } from "./lib/rate-limit";
 // eslint-disable-next-line import/no-relative-packages
 import { POST as cspReportPost } from "./app/api/csp-report/route";
 
+/** Extract the script-src directive tokens from a policy. */
+function scriptSrcOf(csp: string): string {
+  return csp.split(";").map((d) => d.trim()).find((d) => d.startsWith("script-src")) ?? "";
+}
+
+function nonceOf(csp: string): string | undefined {
+  return /'nonce-([A-Za-z0-9+/_-]+={0,2})'/.exec(csp)?.[1];
+}
+
 describe("REEA-74 Stage-1 enforce CSP policy", () => {
   it("script-src contains no https:/http: host-source wildcard", () => {
     const csp = buildCsp("abc123", "enforce");
-    const scriptSrc = csp.split(";").find((d) => d.trim().startsWith("script-src"));
-    expect(scriptSrc).toBeDefined();
+    const scriptSrc = scriptSrcOf(csp);
+    expect(scriptSrc).not.toBe("");
     expect(scriptSrc).toContain("'self'");
-    // REEA-82: pages are statically prerendered, so a nonce/'strict-dynamic'
-    // policy blocked every script and hydration never ran. The shipped policy
-    // must allow the build-time scripts ('self' + inline bootstrap).
-    expect(scriptSrc).toContain("'unsafe-inline'");
-    expect(scriptSrc).not.toContain("'strict-dynamic'");
-    expect(scriptSrc).not.toContain("'nonce-");
     expect(scriptSrc).not.toMatch(/(^|\s)https:(\s|$)/);
     expect(scriptSrc).not.toMatch(/(^|\s)http:(\s|$)/);
   });
@@ -39,6 +44,53 @@ describe("REEA-74 Stage-1 enforce CSP policy", () => {
     expect(csp).toContain("report-uri /api/csp-report");
     expect(csp).toContain("default-src 'self'");
     expect(csp).toContain("object-src 'none'");
+  });
+});
+
+/**
+ * REEA-1088 — F10: the REEA-82 static-page premise is gone (layout reads
+ * cookies/headers; /results, /search and /product are force-dynamic), so the
+ * header policy must be a real nonce policy again. These assertions fail on
+ * 682f3db, where buildCsp shipped `script-src 'self' 'unsafe-inline'` and the
+ * forwarded request never carried a nonce for Next to stamp onto its scripts.
+ */
+describe("REEA-1088 nonce + strict-dynamic CSP", () => {
+  it("buildCsp('abc') carries nonce-abc and 'strict-dynamic' and no script 'unsafe-inline'", () => {
+    const csp = buildCsp("abc", "enforce");
+    const scriptSrc = scriptSrcOf(csp);
+    expect(scriptSrc).toContain("'nonce-abc'");
+    expect(scriptSrc).toContain("'strict-dynamic'");
+    expect(scriptSrc).not.toContain("'unsafe-inline'");
+    // Styles stay inline-allowed: the theme renders style attributes.
+    const styleSrc = csp.split(";").map((d) => d.trim()).find((d) => d.startsWith("style-src")) ?? "";
+    expect(styleSrc).toContain("'unsafe-inline'");
+    // Production/test builds must not need eval.
+    expect(scriptSrc).not.toContain("'unsafe-eval'");
+  });
+
+  it("forwards the same nonce-bearing CSP on the REQUEST headers Next parses", () => {
+    const res = proxy(new NextRequest("https://ns539626.ip-144-217-72.net/"));
+    const servedCsp = res.headers.get("Content-Security-Policy") ?? "";
+    const nonce = nonceOf(servedCsp);
+    expect(nonce).toBeTruthy();
+    // Next's app-render path (getScriptNonceFromHeaders) reads the REQUEST's
+    // CSP header, not x-nonce, and stamps the framework/bootstrap scripts with
+    // that nonce. Without this forwarded header every script is blocked under
+    // 'strict-dynamic' and hydration never runs (the REEA-82 failure mode).
+    const forwarded = res.headers.get("x-middleware-request-content-security-policy");
+    expect(forwarded).toBe(servedCsp);
+    expect(nonceOf(forwarded ?? "")).toBe(nonce);
+    expect(res.headers.get("x-middleware-override-headers")).toContain("content-security-policy");
+    // App-side channel for manual <Script nonce={...}> tags stays intact.
+    expect(res.headers.get("x-middleware-request-x-nonce")).toBe(nonce);
+  });
+
+  it("issues a fresh nonce per request", () => {
+    const a = nonceOf(proxy(new NextRequest("https://ns539626.ip-144-217-72.net/")).headers.get("Content-Security-Policy") ?? "");
+    const b = nonceOf(proxy(new NextRequest("https://ns539626.ip-144-217-72.net/")).headers.get("Content-Security-Policy") ?? "");
+    expect(a).toBeTruthy();
+    expect(b).toBeTruthy();
+    expect(a).not.toBe(b);
   });
 });
 

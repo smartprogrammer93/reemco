@@ -1,10 +1,10 @@
 /**
  * F2 remediation — CSP + hardening headers (REEA-13).
  *
- * Place at repo root as `middleware.ts` (or `src/middleware.ts`).
- * Rollout: default CSP_MODE=report-only; flip env to "enforce" after
- * report monitoring shows no violations. CSP is defense-in-depth for F1,
- * not a substitute for URL validation.
+ * Next 16 file convention: `src/proxy.ts` (the renamed middleware entrypoint;
+ * the exported function is `proxy`). Rollout: default CSP_MODE=enforce;
+ * "report-only" is available for staged monitoring. CSP is defense-in-depth
+ * for F1, not a substitute for URL validation.
  *
  * Security lenses: Secure Defaults, Fail Securely, Minimize Attack Surface.
  */
@@ -13,17 +13,22 @@ import { NextResponse, type NextRequest } from "next/server";
 const CSP_MODE = (process.env.CSP_MODE ?? "enforce").toLowerCase(); // "enforce" | "report-only"
 
 export function buildCsp(nonce: string, mode: string = CSP_MODE): string {
+  // REEA-1088: the REEA-82 "every page is prerendered" premise no longer holds
+  // — the root layout reads cookies/headers (resolveRequestLocale) and
+  // /results, /search and /product/[productId] are force-dynamic, so Next
+  // renders per request and injects the per-request nonce into its bootstrap
+  // and inline scripts (docs: content-security-policy guide). `'strict-dynamic'`
+  // is needed for the chunks those trusted scripts load themselves; browsers
+  // then ignore the `'self'` host-source for scripts, so every script must be
+  // nonce-trusted. `style-src` stays on `'unsafe-inline'` because the theme
+  // renders inline style attributes, which cannot carry a nonce. No inline
+  // event handlers or `javascript:` URLs remain in the app: React attaches
+  // listeners through JS and outbound URLs go through safe-url/offer-schema.
+  // Dev only: React's enhanced debug stack reconstruction uses eval.
+  const devEval = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
   const directives = [
     `default-src 'self'`,
-    // REEA-82: every page is statically prerendered, so Next.js cannot inject
-    // per-request nonces into its bootstrap scripts (nonces only work on
-    // dynamically rendered pages), and `'strict-dynamic'` makes browsers
-    // ignore the `'self'` host source. The previous nonce policy therefore
-    // blocked every script and hydration never ran — /results stayed on the
-    // loading skeletons forever. Ship the policy the static bundles actually
-    // satisfy (same as the layout's static-host meta fallback) until pages
-    // move to dynamic rendering with full nonce propagation.
-    `script-src 'self' 'unsafe-inline'`,
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${devEval}`,
     `style-src 'self' 'unsafe-inline'`,
     `img-src 'self' data: https:`,
     `font-src 'self' data:`,
@@ -66,9 +71,19 @@ export function proxy(request: NextRequest) {
   const nonce = crypto.randomUUID().replace(/-/g, "");
   const csp = buildCsp(nonce);
   const enforce = CSP_MODE === "enforce";
+  const cspHeader = enforce ? "Content-Security-Policy" : "Content-Security-Policy-Report-Only";
 
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);
+  // REEA-1088 — nonce propagation. Next extracts the nonce from the REQUEST's
+  // CSP header (getScriptNonceFromHeaders in the app-render path, matching the
+  // documented proxy pattern) and then stamps its bootstrap/inline scripts
+  // with it. `x-nonce` alone is not read by the framework — it is the channel
+  // for app code that renders its own <Script> tags (there are none today).
+  // Without this request-header copy the response policy would carry a nonce
+  // that no script tag has, and `'strict-dynamic'` would block every script:
+  // exactly the REEA-82 blank-results failure mode.
+  requestHeaders.set(cspHeader, csp);
   // REEA-447 R2 — forward the segment query text to the render so the shell
   // locale chain (cookie → Accept-Language hint → Arabic-script query) can
   // run in the layout on the INITIAL document GET, where Next's own
@@ -81,7 +96,7 @@ export function proxy(request: NextRequest) {
   }
 
   const response = NextResponse.next({ request: { headers: requestHeaders } });
-  response.headers.set(enforce ? "Content-Security-Policy" : "Content-Security-Policy-Report-Only", csp);
+  response.headers.set(cspHeader, csp);
   response.headers.set("X-Content-Type-Options", "nosniff");
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   response.headers.set("X-Frame-Options", "DENY"); // legacy complement to frame-ancestors
