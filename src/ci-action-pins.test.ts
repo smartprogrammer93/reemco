@@ -122,11 +122,25 @@ describe("REEA-1135 (F6) — push-main.sh keeps the PAT out of git argv", () => 
     // Behavioural check: git runs a `!`-prefixed helper in a child shell with
     // the credential request on stdin (it strips the `!` first). The token must
     // come from the environment, not from the helper's arguments.
-    const output = execFileSync("sh", ["-c", helper.replace(/^!/, "")], {
-      input: "protocol=https\nhost=github.com\n\n",
-      env: { ...process.env, DEV_GITHUB_PAT: "s3cret-test-value" },
-      encoding: "utf8",
-    });
+    //
+    // REEA-1122 — this helper answers from the environment and exits without
+    // draining git's stdin. Under CI's 110 parallel workers the child can exit
+    // before Node finishes writing the request, and that write then raises
+    // EPIPE even though the helper already printed the right answer (the
+    // deploy gate failed once on exactly this race). Accept the EPIPE when the
+    // captured stdout is intact; every other error still fails the test.
+    let output: string;
+    try {
+      output = execFileSync("sh", ["-c", helper.replace(/^!/, "")], {
+        input: "protocol=https\nhost=github.com\n\n",
+        env: { ...process.env, DEV_GITHUB_PAT: "s3cret-test-value" },
+        encoding: "utf8",
+      });
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException & { stdout?: string };
+      if (err.code !== "EPIPE" || typeof err.stdout !== "string") throw error;
+      output = err.stdout;
+    }
     expect(output).toContain("username=x-access-token");
     expect(output).toContain("password=s3cret-test-value");
     // The printed helper source cannot leak the token: it is only in the env.
