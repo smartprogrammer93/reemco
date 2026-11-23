@@ -91,4 +91,23 @@ else
   echo "container hardening: skipped (docker unavailable in this shell)"
 fi
 
+# 5. Secrets hygiene (REEA-1086 F8). The KV REST surface is dead: the app talks
+# to Valkey over RESP via REDIS_URL set by compose.prod.yml, and both
+# KV_REST_API_* values in app.env are intentionally empty. So a REEMCO_KV_TOKEN
+# line in release.env is dead credential material, and hand-made *.bak-* copies
+# of the env files keep the old KV URL/token alive on disk. Neither has a
+# consumer — deploy.sh and rollback.sh read release.env + image-tag*.env only —
+# so both are removable without touching the running stack.
+SUDO=""
+[ "$(id -u)" -eq 0 ] || SUDO="sudo -n"
+if $SUDO test -r /etc/reemco/release.env; then
+  $SUDO grep -q '^REEMCO_KV_TOKEN=' /etc/reemco/release.env 2>/dev/null \
+    && fail "dead REEMCO_KV_TOKEN present in /etc/reemco/release.env"
+  STALE_BAKS=$($SUDO ls -d /etc/reemco/*.bak-* 2>/dev/null || true)
+  [ -z "$STALE_BAKS" ] || fail "stale env backups present in /etc/reemco: $STALE_BAKS"
+  echo "secrets hygiene OK (no dead REEMCO_KV_TOKEN, no stale *.bak-*)"
+else
+  echo "secrets hygiene: skipped (cannot read /etc/reemco/release.env)"
+fi
+
 echo "VERIFY PASSED for ${TAG:-$BASE}"

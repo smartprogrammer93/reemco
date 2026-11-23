@@ -96,6 +96,10 @@ from git.
    it advisory were fixed: step 5 now proves reachability inside the deliberately
    scrollable coverage row instead of failing on it (REEA-1056), and step 7 no longer
    requires the retired PC Kuwait lane (REEA-901).
+8. Secrets hygiene — `verify.sh` fails when `/etc/reemco/release.env` still carries a
+   `REEMCO_KV_TOKEN=` line (dead: no consumer, the KV REST surface was replaced by
+   RESP to Valkey) or when any hand-made `/etc/reemco/*.bak-*` env copy remains
+   (REEA-1086 F8). Both are host-side checks; the deploy gate runs them on the box.
 
 The build gate is CI-side rather than in `infra/Dockerfile`: the box's CPU is
 production capacity, and `.dockerignore` excludes `.github` while
