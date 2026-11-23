@@ -142,8 +142,11 @@ describe("ProductResultCard rendered guards", () => {
     const html = renderToString(
       <ProductResultCard product={card(danube, [])} query="iPhone 17 Pro" rank={0} />,
     );
-    expect(html.match(/class="offer-row/g)?.length).toBe(4);
+    // REEA-1096 D6 caps the visible rows at 3; the folded set is still 4 and
+    // the card links to the full offer set on the product page.
+    expect(html.match(/class="offer-row/g)?.length).toBe(3);
     expect(html).toContain("Danube Home");
+    expect(html).toContain("View all 4 offers");
     // The count line reads the SAME folded set the rows render (JSX text
     // seams serialize as comment pairs — match through them).
     expect(/tabular">4<\/span>\s*(?:<!-- -->)?retailers/.test(html)).toBe(true);

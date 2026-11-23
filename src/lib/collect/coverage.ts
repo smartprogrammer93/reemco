@@ -199,7 +199,18 @@ export function summarizeResponders(
  * lane gets one statement, and it is the one sentence that still renders on a
  * zero-row page — because that is exactly where a silent zero lies loudest.
  */
-export function coverageLine(
+/**
+ * REEA-1096 D7 — the coverage sentence as STRUCTURED parts, so the renderer
+ * can isolate every Latin retailer name in `<bdi class="lat">` (the signed
+ * RTL checklist's rule 5) instead of emitting one flat string that bidi glues
+ * into "XciteوBlinkوEureka". The plain-text `coverageLine` below is the same
+ * sentence for diagnostics/tests; both derive from this one function.
+ */
+export type CoveragePart =
+  | { kind: "text"; value: string }
+  | { kind: "names"; names: string[]; ar: boolean };
+
+export function coverageParts(
   notes: LiveSearchResult["notes"],
   locale?: "en" | "ar",
   rendered?: readonly NormalizedProduct[],
@@ -209,7 +220,7 @@ export function coverageLine(
    * byte for byte.
    */
   unreachable?: readonly string[],
-): string {
+): CoveragePart[] {
   const ordered = [...notes].sort(
     (a, b) => coverageRank(a.merchant) - coverageRank(b.merchant),
   );
@@ -233,19 +244,25 @@ export function coverageLine(
     if (!rendered && n.hits > 0 && !n.error) continue;
     blocked.push(n.merchant);
   }
+  const parts: CoveragePart[] = [];
+  const sentence = (next: CoveragePart[]) => {
+    if (parts.length > 0) parts.push({ kind: "text", value: " " });
+    parts.push(...next);
+  };
   // AC9 — shopper copy only: no status code, no adapter internals.
-  const blockedText =
-    blocked.length > 0
-      ? ar
-        ? `تعذّر الوصول إلى ${joinNames(blocked, ar)}.`
-        : `Unreachable: ${joinNames(blocked)}.`
-      : "";
+  if (blocked.length > 0) {
+    sentence([
+      { kind: "text", value: ar ? "تعذّر الوصول إلى " : "Unreachable: " },
+      { kind: "names", names: blocked, ar },
+      { kind: "text", value: "." },
+    ]);
+  }
   if (rendered) {
     // REEA-574 rev 1 (R1): zero rendered rows → nothing to vouch for, and the
     // error half would still phantom a merchant above an empty page — hide
     // the whole sentence, not just the contributor half. AC9 exception: a
     // blocked lane is named, because it explains the empty shelf.
-    if (rendered.length === 0) return blockedText;
+    if (rendered.length === 0) return parts;
     // Contributor set from the rows actually on screen, in fixed adapter order.
     answered.push(
       ...[...seen].sort((a, b) => coverageRank(a) - coverageRank(b)),
@@ -268,24 +285,52 @@ export function coverageLine(
   }
   // REEA-279: the sentence shapes live in the static table so the stamp
   // matches the shell language; EN keeps the exact figures it had before.
-  const parts: string[] = [];
-  if (blockedText) parts.push(blockedText);
   if (ar) {
     // REEA-1069 — the signed AR/RTL checklist names this sentence verbatim:
     // "الأسعار من … . لم تستجب … هذه المرة." Responders first, then the
     // non-responders, both with isolated Latin retailer names.
-    if (answered.length > 0) parts.push(`الأسعار من ${summarizeNames(answered, ar)}.`);
-    if (failed.length > 0) parts.push(`لم تستجب ${summarizeNames(failed, ar)} هذه المرة.`);
-    return parts.join(" ");
+    if (answered.length > 0)
+      sentence([
+        { kind: "text", value: "الأسعار من " },
+        { kind: "names", names: answered, ar },
+        { kind: "text", value: "." },
+      ]);
+    if (failed.length > 0)
+      sentence([
+        { kind: "text", value: "لم تستجب " },
+        { kind: "names", names: failed, ar },
+        { kind: "text", value: " هذه المرة." },
+      ]);
+    return parts;
   }
   if (failed.length > 0)
     // REEA-468 G3 (PM copy decision): short-form scans faster at the grid
     // slot — "No response from X" pairs with the coupon badge as its
     // counterpart, instead of the longer sentence.
-    parts.push(`No response from ${summarizeNames(failed)}.`);
+    sentence([
+      { kind: "text", value: "No response from " },
+      { kind: "names", names: failed, ar },
+      { kind: "text", value: "." },
+    ]);
   if (answered.length > 0)
-    parts.push(`Prices from ${summarizeNames(answered)}.`);
-  return parts.join(" ");
+    sentence([
+      { kind: "text", value: "Prices from " },
+      { kind: "names", names: answered, ar },
+      { kind: "text", value: "." },
+    ]);
+  return parts;
+}
+
+/** Plain-text form of the same sentence (diagnostics/tests). */
+export function coverageLine(
+  notes: LiveSearchResult["notes"],
+  locale?: "en" | "ar",
+  rendered?: readonly NormalizedProduct[],
+  unreachable?: readonly string[],
+): string {
+  return coverageParts(notes, locale, rendered, unreachable)
+    .map((p) => (p.kind === "text" ? p.value : summarizeNames(p.names, p.ar)))
+    .join("");
 }
 
 /** Plain-text name list: "Xcite" / "Xcite and Blink" / "Xcite, Blink and Eureka". */

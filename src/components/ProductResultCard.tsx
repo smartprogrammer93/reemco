@@ -28,6 +28,14 @@ function offerFlagged(o: PriceOffer): boolean {
   return o.sanity?.status === "flagged";
 }
 
+/**
+ * REEA-1096 D6 — the accepted shelf card anatomy caps the visible offer rows
+ * at three (the pack's card height target assumes a bounded row set; the PM
+ * brief for this ticket fixes the cap at 3). The rest stay reachable through
+ * the product page's full offers table via the "view all N offers" link.
+ */
+const MAX_SHELF_OFFERS = 3;
+
 /** The native title-attribute sentence for a flagged offer's reason. */
 function verifyTitleFor(reason: string | undefined, t: ReturnType<typeof getStrings>): string {
   switch (reason) {
@@ -290,8 +298,6 @@ export function foldAlternativeRows(rows: ProductAlternative[]): ProductAlternat
 function ShelfOfferRow({
   offer,
   product,
-  index,
-  showLeadCta,
   query,
   rank,
   country,
@@ -301,8 +307,6 @@ function ShelfOfferRow({
 }: {
   offer: PriceOffer;
   product: NormalizedProduct;
-  index: number;
-  showLeadCta: boolean;
   query: string;
   rank: number;
   country: CountryCode | null;
@@ -395,7 +399,7 @@ function ShelfOfferRow({
           <button type="button" className="btn-secondary rc-offer-cta" disabled>
             {t.offerGo}
           </button>
-        ) : showLeadCta && index === 0 ? null : (
+        ) : (
           <TrackedOutboundLink
             href={href}
             query={query}
@@ -472,6 +476,17 @@ export default function ProductResultCard({
   })();
   const oos = best != null && !best.inStock;
   const couponRows = buildCouponRows(product.coupons, offers, country);
+  // REEA-1096 D6 — the disclosure only renders when there is something behind
+  // it (a card with zero offers and no extras must not show an empty drawer).
+  const altRows = foldAlternativeRows(product.alternatives);
+  const pairRows = foldAlternativeRows(product.pairsWith ?? []);
+  const hasMore =
+    couponRows.length > 0 ||
+    (!primaryCoupon && offers.length > 0) ||
+    best != null ||
+    product.seenRange != null ||
+    altRows.length > 0 ||
+    pairRows.length > 0;
 
   const bestHref = best != null ? resolveOfferUrl(best, product.title) : null;
   const showLeadCta =
@@ -528,7 +543,7 @@ export default function ProductResultCard({
           </div>
         </div>
         {titleChanged && (
-          <details className="mt-1">
+          <details className="rc-card-title-disclosure mt-1">
             <summary
               className="label-token cursor-pointer list-none inline-flex items-center rounded px-2 py-0.5"
               style={{ color: "var(--rc-muted)", border: "1px solid var(--rc-line)" }}
@@ -626,7 +641,7 @@ export default function ProductResultCard({
       </h2>
 
       {titleChanged && (
-        <details>
+        <details className="rc-card-title-disclosure">
           <summary
             className="label-token cursor-pointer list-none inline-flex items-center rounded px-2 py-0.5"
             style={{ color: "var(--rc-muted)", border: "1px solid var(--rc-line)" }}
@@ -649,10 +664,11 @@ export default function ProductResultCard({
             ) : (
               <span
                 className="price-cur rc-price-card tabular"
-                style={{
-                  font: "var(--rc-text-price-card)",
-                  color: isBest ? "var(--rc-savings)" : "var(--rc-ink)",
-                }}
+                /* REEA-1096 D1 — the price is ink (#1F1A14), not the savings
+                   green: the inline colour override is gone, so the stylesheet's
+                   .rc-price-card{color:var(--rc-ink)} token applies in both
+                   themes. */
+                style={{ font: "var(--rc-text-price-card)" }}
               >
                 {(locale ?? "en") === "ar" ? <span className="price-from">{t.fromWord} </span> : null}
                 <bdi>{heroPrice.primary}</bdi>
@@ -690,45 +706,30 @@ export default function ProductResultCard({
         </>
       )}
 
-      {showLeadCta && bestHref && leadEffLabel != null && (
-        <LeadOfferCta
-          merchant={best.merchant}
-          href={bestHref}
-          effectiveLabel={leadEffLabel}
-          couponed={leadCouponed}
-          pending={kuwaitChecking}
-          collectedAt={best.collectedAt}
-          initialSeconds={leadAgeSecs}
-          query={query}
-          rank={rank}
-          itemId={product.productId}
-          queryId={queryId}
-          locale={locale}
-        />
-      )}
-
-      {couponRows.map((row) => (
-        <CouponLine key={`${row.merchant}-${row.coupon.code ?? ""}-${row.coupon.discount}`} row={row} locale={locale} />
-      ))}
-
-      {!primaryCoupon && offers.length > 0 && (
-        <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>{t.couponNoneLabel}</p>
-      )}
-
       {product.variations.length > 0 && (
         <section aria-label={t.colourOptionsAria} className="rc-variants">
           {product.variations.map((v, i) => (
-            <span key={v.id} className={`rc-variant${i === 0 ? " is-selected" : ""}`}>
+            <span
+              key={v.id}
+              className={`rc-variant${i === 0 ? " is-selected" : ""}`}
+              /* REEA-1096 D2 — the pack's selected state is keyed on
+                 aria-pressed=true (2px primary border, 600 weight, check
+                 glyph). The old is-selected class matched no rule. */
+              aria-pressed={i === 0 ? "true" : "false"}
+            >
+              {i === 0 ? (
+                <svg className="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="m4 12.5 5 5L20 6.5" />
+                </svg>
+              ) : null}
               {v.label}
-              {v.needsVerification ? (
-                <span className="price-warn" title={t.verifyOutlier}>
-                  <bdi>{t.priceVerifyBadge}</bdi>
-                </span>
-              ) : (
+              {/* REEA-1096 D3 — spec §3(6): a variant chip is name + price, no
+                  verification status token. */}
+              {cheapestListed != null ? (
                 <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
-                  <bdi>{formatCountryPrice((cheapestListed ?? 0) + v.priceDelta, "KWD", country).primary}</bdi>
+                  <bdi>{formatCountryPrice(cheapestListed + v.priceDelta, "KWD", country).primary}</bdi>
                 </span>
-              )}
+              ) : null}
             </span>
           ))}
         </section>
@@ -740,13 +741,11 @@ export default function ProductResultCard({
             {t.pricesHeading}
           </h3>
           <div className="rc-offer-list">
-            {offers.map((o, i) => (
+            {offers.slice(0, MAX_SHELF_OFFERS).map((o) => (
               <ShelfOfferRow
                 key={`${o.merchant}-${o.url}`}
                 offer={o}
                 product={product}
-                index={i}
-                showLeadCta={showLeadCta}
                 query={query}
                 rank={rank}
                 country={country}
@@ -756,70 +755,112 @@ export default function ProductResultCard({
               />
             ))}
           </div>
+          {offers.length > MAX_SHELF_OFFERS && (
+            <Link href={`/product/${encodeURIComponent(product.productId)}`} className="rc-view-all">
+              {fill(t.viewAllOffers, { n: offers.length })}
+            </Link>
+          )}
         </section>
       )}
 
-      {best && cheapestListed != null && (
-        <p style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
-          <span className="tabular">{offers.length}</span>{" "}
-          {offers.length === 1 ? t.retailersOne : t.retailersMany} · {t.fromWord}{" "}
-          <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
-            <bdi>{formatCountryPrice(cheapestListed, "KWD", country).primary}</bdi>
-          </span>
-        </p>
-      )}
-      {best && cheapestListed == null && offers.length > 0 && (
-        <p style={{ font: "var(--rc-text-body)", color: "var(--rc-muted)" }}>
-          <span className="price-warn" title={t.verifyOutlier}>
-            <bdi>{t.priceVerifyBadge}</bdi>
-          </span>
-        </p>
-      )}
+      {/* REEA-1096 D6 — everything outside the accepted 7-item anatomy rides
+          ONE disclosure instead of lengthening every card: coupon honesty
+          lines, the retailer/price roll-up, the seen-range stamp, the
+          alternatives/pairs lists and the lead CTA. Each offer row keeps its
+          own outbound action, so the primary job stays one click away. */}
+      {hasMore && (
+      <details className="rc-card-more">
+        <summary className="rc-card-more-summary">{t.cardMoreDetails}</summary>
+        <div className="rc-card-more-body">
+          {showLeadCta && bestHref && leadEffLabel != null && (
+            <LeadOfferCta
+              merchant={best.merchant}
+              href={bestHref}
+              effectiveLabel={leadEffLabel}
+              couponed={leadCouponed}
+              pending={kuwaitChecking}
+              collectedAt={best.collectedAt}
+              initialSeconds={leadAgeSecs}
+              query={query}
+              rank={rank}
+              itemId={product.productId}
+              queryId={queryId}
+              locale={locale}
+            />
+          )}
 
-      {product.seenRange != null && (
-        <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
-          {`${t.seenRecentlyLead} `}
-          <span className="tabular"><bdi>{formatSeenRangeLabel(product.seenRange, country)}</bdi></span>
-          {` · ${t.seenRecentlyWindow}`}
-        </p>
-      )}
+          {couponRows.map((row) => (
+            <CouponLine key={`${row.merchant}-${row.coupon.code ?? ""}-${row.coupon.discount}`} row={row} locale={locale} />
+          ))}
 
-      {(
-        [
-          [t.alternativesLabel, foldAlternativeRows(product.alternatives)],
-          [t.pairsWithLabel, foldAlternativeRows(product.pairsWith ?? [])],
-        ] as const
-      ).map(([label, rows]) =>
-        rows.length === 0 ? null : (
-          <section key={label} aria-label={label}>
-            <h3 className="label-token" style={{ color: "var(--rc-body-text)", marginBottom: 4 }}>
-              {label}
-            </h3>
-            <ul>
-              {rows.map((a) => (
-                <li
-                  key={a.productId}
-                  className="flex min-h-12 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded px-1 py-1 hover:bg-[var(--rc-canvas)]"
-                >
-                  <a
-                    href={buildResultsHref(a.title, 1, country, showOutOfStock)}
-                    className="min-w-0 hover:underline"
-                    style={{ font: "var(--rc-text-body)", fontWeight: 500, color: "var(--rc-ink)" }}
-                    title={displayTitleChanged(a.title, cleanDisplayTitle(a.title)) ? a.title : undefined}
-                  >
-                    {cleanDisplayTitle(a.title)}
-                  </a>
-                  <span
-                    className="tabular ms-auto shrink-0"
-                    style={{ font: "var(--rc-text-body)", fontWeight: 600, color: "var(--rc-ink)" }}
-                  >
-                    <bdi>{`${t.fromWord} ${formatPrimaryPrice(a.fromPrice, "KWD").label}`}</bdi>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ),
+          {!primaryCoupon && offers.length > 0 && (
+            <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>{t.couponNoneLabel}</p>
+          )}
+
+          {best && cheapestListed != null && (
+            <p style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
+              <span className="tabular">{offers.length}</span>{" "}
+              {offers.length === 1 ? t.retailersOne : t.retailersMany} · {t.fromWord}{" "}
+              <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
+                <bdi>{formatCountryPrice(cheapestListed, "KWD", country).primary}</bdi>
+              </span>
+            </p>
+          )}
+          {best && cheapestListed == null && offers.length > 0 && (
+            <p style={{ font: "var(--rc-text-body)", color: "var(--rc-muted)" }}>
+              <span className="price-warn" title={t.verifyOutlier}>
+                <bdi>{t.priceVerifyBadge}</bdi>
+              </span>
+            </p>
+          )}
+
+          {product.seenRange != null && (
+            <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
+              {`${t.seenRecentlyLead} `}
+              <span className="tabular"><bdi>{formatSeenRangeLabel(product.seenRange, country)}</bdi></span>
+              {` · ${t.seenRecentlyWindow}`}
+            </p>
+          )}
+
+          {(
+            [
+              [t.alternativesLabel, altRows],
+              [t.pairsWithLabel, pairRows],
+            ] as const
+          ).map(([label, rows]) =>
+            rows.length === 0 ? null : (
+              <section key={label} aria-label={label}>
+                <h3 className="label-token" style={{ color: "var(--rc-body-text)", marginBottom: 4 }}>
+                  {label}
+                </h3>
+                <ul>
+                  {rows.map((a) => (
+                    <li
+                      key={a.productId}
+                      className="flex min-h-12 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded px-1 py-1 hover:bg-[var(--rc-canvas)]"
+                    >
+                      <a
+                        href={buildResultsHref(a.title, 1, country, showOutOfStock)}
+                        className="min-w-0 hover:underline"
+                        style={{ font: "var(--rc-text-body)", fontWeight: 500, color: "var(--rc-ink)" }}
+                        title={displayTitleChanged(a.title, cleanDisplayTitle(a.title)) ? a.title : undefined}
+                      >
+                        {cleanDisplayTitle(a.title)}
+                      </a>
+                      <span
+                        className="tabular ms-auto shrink-0"
+                        style={{ font: "var(--rc-text-body)", fontWeight: 600, color: "var(--rc-ink)" }}
+                      >
+                        <bdi>{`${t.fromWord} ${formatPrimaryPrice(a.fromPrice, "KWD").label}`}</bdi>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ),
+          )}
+        </div>
+      </details>
       )}
     </article>
   );

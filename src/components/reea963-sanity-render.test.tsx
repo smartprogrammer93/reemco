@@ -143,7 +143,10 @@ describe("REEA-963 FR-3.3 — an all-flagged variant family shows the warning, n
     );
     const chips = Array.from(container.querySelectorAll("section[aria-label] span"));
     const blackChip = chips.find((s) => s.textContent?.startsWith("Black"));
-    expect(blackChip?.textContent).toContain("Price needs verification");
+    // REEA-1096 D3: spec §3(6) keeps the chip to name + price — no status
+    // token on a variant chip, even for a needsVerification variation.
+    expect(blackChip?.textContent).toContain("KD");
+    expect(blackChip?.textContent).not.toContain("Price needs verification");
     // the healthy color still prints its figure
     const silverChip = chips.find((s) => s.textContent?.startsWith("Silver"));
     expect(silverChip?.textContent).toContain("KD");

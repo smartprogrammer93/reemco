@@ -922,12 +922,15 @@ describe("coverage line (REEA-290)", () => {
         <ResultsClient query="sony" page={1} country={null} stages={[Promise.resolve(snap), Promise.resolve(snap)]} />,
       );
     });
-    const html = document.body.innerHTML;
-    // The failing retailer is named on the page…
-    expect(html).toContain("No response from Jarir.");
+    const text = document.body.textContent ?? "";
+    // REEA-1096 D7: names are bdi.lat isolates, so assert the readable text
+    // (tags/comment seams no longer sit inside the sentence).
+    expect(text).toContain("No response from Jarir.");
     // …while the responding retailer's live offer still renders beside it.
-    expect(html).toContain("Prices from Xcite.");
-    expect(html).toContain("Sony WH-1000XM6");
+    expect(text).toContain("Prices from Xcite.");
+    expect(text).toContain("Sony WH-1000XM6");
+    // Every named retailer is a bdi.lat isolate (no bidi gluing in AR).
+    expect(document.querySelectorAll(".rc-partial bdi.lat").length).toBeGreaterThanOrEqual(2);
   });
 
   it("keeps the coverage line out of an all-answered plain snapshot only when notes are empty", async () => {
@@ -1009,9 +1012,11 @@ describe("coverage line (REEA-290)", () => {
     }
     // Union of painted rows, fixed adapter order: Xcite (block one), Blink and
     // Jarir (later blocks) — every named merchant has ≥1 row in this markup.
-    expect(html).toContain("Prices from Xcite, Blink and Jarir.");
+    // REEA-1096 D7 wraps each name in bdi.lat, so read the stripped text.
+    const text = html.replace(/<!--.*?-->/g, "").replace(/<[^>]+>/g, "");
+    expect(text).toContain("Prices from Xcite, Blink and Jarir.");
     // A merchant answered-but-displaced must not survive into the stamp…
-    expect(html).not.toContain("Prices from Jarir, Blink.");
+    expect(text).not.toContain("Prices from Jarir, Blink.");
     // …and A's painted row keeps its name beside it.
     expect(html).toContain("a sony title");
   });
@@ -1511,7 +1516,10 @@ describe("R2: honest empty state + relevance hierarchy (REEA-964)", () => {
       render(<ResultsClient query="dyson v15" page={1} country={null} locale="en" stages={[Promise.resolve(failedSnap), Promise.resolve(failedSnap)]} />);
     });
     const text = document.body.textContent ?? "";
-    expect(text).toContain("No match found");
+    // REEA-1096 D11: a collection failure must not claim a no-match — it says
+    // the stores didn't answer, and the outage line rides that one story.
+    expect(text).toContain("The stores didn’t answer this time");
+    expect(text).not.toContain("No match found");
     expect(text).toContain("temporarily unavailable");
   });
 

@@ -203,6 +203,10 @@ const en = {
   primaryResultsAria: "Primary results",
   emptyUnavailable:
     "The stores didn't answer this time — results are temporarily unavailable. Please try again shortly.",
+  // REEA-1096 D11 — when collection failed there is no match to claim: the
+  // outage gets its own heading instead of "No match found" plus the outage
+  // line in the same card.
+  emptyUnavailableTitle: "The stores didn’t answer this time",
   // REEA-332: the one hint line under the count heading when the answer is empty.
   emptyHint: "No matches — try a shorter phrase.",
   // REEA-437 AC-2: the empty state names the query forms the live run tried.
@@ -282,6 +286,11 @@ const en = {
   offerGo: "Go",
   offerGoTo: "Go to {x}",
   offersTableTitle: "All offers · {n} retailers",
+  /* REEA-1096 D6 — the capped shelf card points at the full live offer set on
+     the product page; the disclosure carries the blocks outside the accepted
+     card anatomy. */
+  viewAllOffers: "View all {n} offers",
+  cardMoreDetails: "Coupons, accessories & details",
   offersTableAria: "All offers by retailer",
   tableRetailer: "Retailer",
   tablePrice: "Price",
@@ -464,6 +473,7 @@ const ar: typeof en = {
   primaryResultsAria: "النتائج الأساسية",
   emptyUnavailable:
     "لم تستجب المتاجر هذه المرة — النتائج غير متوفرة مؤقتًا. حاول مرة أخرى بعد قليل.",
+  emptyUnavailableTitle: "لم تستجب المتاجر هذه المرة",
   emptyHint: "لا توجد نتائج — جرّب عبارة أقصر.",
   // REEA-437 AC-2: empty state lists the search forms tried live.
   triedForms: "بحثنا في: {tries}.",
@@ -537,6 +547,8 @@ const ar: typeof en = {
   offerGo: "اذهب",
   offerGoTo: "اذهب إلى {x}",
   offersTableTitle: "كل العروض · {n} متاجر",
+  viewAllOffers: "عرض كل {n} عروض",
+  cardMoreDetails: "الكوبونات والإكسسوارات والتفاصيل",
   offersTableAria: "كل العروض حسب المتجر",
   tableRetailer: "المتجر",
   tablePrice: "السعر",
@@ -619,6 +631,25 @@ export function localizedAge(locale: Locale, seconds: number): string {
 
 
 /**
+ * REEA-1069 + REEA-1096 D8 — the Arabic duration phrase the signed RTL
+ * checklist requires (`قبل دقيقتين` / `قبل 4 دقائق` / `قبل 26 دقيقة`), with
+ * the correct dual/plural forms and the `قبل` preposition that was missing.
+ */
+function arabicAgePhrase(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const unit =
+    s < 60 ? ["لحظة", "ثانية", "ثانيتين", "ثوانٍ", "ثانية"]
+    : s < 3600 ? ["دقيقة", "دقيقة", "دقيقتين", "دقائق", "دقيقة"]
+    : s < 86400 ? ["ساعة", "ساعة", "ساعتين", "ساعات", "ساعة"]
+    : ["يوم", "يوم", "يومين", "أيام", "يوم"];
+  const n = s < 60 ? s : s < 3600 ? Math.floor(s / 60) : s < 86400 ? Math.floor(s / 3600) : Math.floor(s / 86400);
+  if (n === 1) return `قبل ${unit[1]}`;
+  if (n === 2) return `قبل ${unit[2]}`;
+  if (n >= 3 && n <= 10) return `قبل ${n} ${unit[3]}`;
+  return `قبل ${n} ${unit[4]}`;
+}
+
+/**
  * REEA-1069 — humanised, locale-correct "checked" age for offer rows
  * (RTL checklist §A.3). English keeps the compact shelf form; Arabic gets the
  * correct dual/plural forms the signed checklist requires:
@@ -630,20 +661,23 @@ export function checkedAgeLabel(locale: Locale, seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   if (locale === "en") {
     if (s < 60) return t.checkedJustNow;
-    const n = s < 3600 ? Math.floor(s / 60) : s < 86400 ? Math.floor(s / 3600) : Math.floor(s / 86400);
     return `${t.checkedLead} ${localizedAge("en", s).replace(/ ago$/, "")} ago`;
   }
-  const unit =
-    s < 60 ? ["لحظة", "ثانية", "ثانيتين", "ثوانٍ", "ثانية"]
-    : s < 3600 ? ["دقيقة", "دقيقة", "دقيقتين", "دقائق", "دقيقة"]
-    : s < 86400 ? ["ساعة", "ساعة", "ساعتين", "ساعات", "ساعة"]
-    : ["يوم", "يوم", "يومين", "أيام", "يوم"];
-  if (s < 60 && s <= 5) return t.checkedJustNow;
-  const n = s < 60 ? s : s < 3600 ? Math.floor(s / 60) : s < 86400 ? Math.floor(s / 3600) : Math.floor(s / 86400);
-  if (n === 1) return `${t.checkedLead} ${unit[1]}`;
-  if (n === 2) return `${t.checkedLead} ${unit[2]}`;
-  if (n >= 3 && n <= 10) return `${t.checkedLead} ${n} ${unit[3]}`;
-  return `${t.checkedLead} ${n} ${unit[4]}`;
+  if (s <= 5) return t.checkedJustNow;
+  return `${t.checkedLead} ${arabicAgePhrase(s)}`;
+}
+
+/**
+ * REEA-1096 D8 — the bare age phrase for the results meta line. The meta
+ * line already says "collected live" / `جُمعت مباشرة`; concatenating the full
+ * checked sentence produced `جُمعت مباشرة حُدِّث 4 دقائق`. This returns just
+ * the duration (`4m ago` / `قبل 4 دقائق`), so the sentence reads
+ * `جُمعت مباشرة قبل 4 دقائق` and never repeats the verb.
+ */
+export function collectedAgeLabel(locale: Locale, seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  if (locale === "en") return localizedAge("en", s);
+  return arabicAgePhrase(s);
 }
 
 /* ---- Resolution chain: cookie → Accept-Language hint → "en". ------------ */

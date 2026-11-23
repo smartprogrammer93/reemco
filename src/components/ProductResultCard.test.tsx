@@ -129,10 +129,13 @@ describe("REEA-283 — country-led price rows (hero + retailer rows)", () => {
     for (const span of alt) {
       expect(span.textContent?.replace(/\s+/g, " ")).toMatch(/^· ≈?\s?KD\b/);
     }
-    // Hero treatment on the PRIMARY span only: price font + savings colour;
-    // the retailer-row primary carries 600/ink; the muted stamp is pure CSS.
+    // Hero treatment on the PRIMARY span only: price font; REEA-1096 D1 moved
+    // the colour out of the inline style so .rc-price-card's ink token applies
+    // (the price is never the savings green). The retailer-row primary carries
+    // 600/ink; the muted stamp is pure CSS.
     expect(primary[0].getAttribute("style")).toContain("--rc-text-price");
-    expect(primary[0].getAttribute("style")).toContain("--rc-savings");
+    expect(primary[0].getAttribute("style")).not.toContain("--rc-savings");
+    expect(primary[0].classList.contains("rc-price-card")).toBe(true);
     expect(primary[1].getAttribute("style")).toContain("font-weight: 600");
     expect(primary[1].getAttribute("style")).toContain("--rc-ink");
     expect(alt[1].getAttribute("style")).toBeNull();
@@ -553,7 +556,9 @@ describe("REEA-836 — displayed title hygiene", () => {
     const h2 = container.querySelector("h2");
     expect(h2?.textContent).toBe("Sony WH-1000XM6");
     expect(h2?.getAttribute("title")).toBeNull();
-    expect(container.querySelector("details")).toBeNull();
+    // The card-more disclosure is always present (D6); the ORIGINAL-TITLE
+    // disclosure is the one that must be absent for a clean title.
+    expect(container.querySelector(".rc-card-title-disclosure")).toBeNull();
   });
 });
 

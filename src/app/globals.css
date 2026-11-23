@@ -1763,6 +1763,57 @@ html[lang="ar"] .coupon-via {
   color: var(--rc-body-text);
 }
 
+/* REEA-1096 D6 — the shelf card keeps only the accepted 7-item anatomy.
+   Everything else (coupons, retailer roll-up, seen range, alternatives/pairs,
+   the lead CTA) lives behind this one disclosure so the default card height
+   is the shelf's, not a page section's. */
+.rc-card-more {
+  border-block-start: 1px solid var(--rc-line);
+  padding-block-start: var(--rc-space-1);
+}
+
+.rc-card-more-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-block-size: var(--rc-tap);
+  font: var(--rc-text-small);
+  color: var(--rc-body-text);
+  cursor: pointer;
+  list-style: none;
+}
+
+.rc-card-more-summary::-webkit-details-marker {
+  display: none;
+}
+
+.rc-card-more-summary::before {
+  content: "+";
+  color: var(--rc-primary);
+  font-weight: 700;
+}
+
+.rc-card-more[open] > .rc-card-more-summary::before {
+  content: "−";
+}
+
+.rc-card-more-body {
+  display: grid;
+  gap: var(--rc-space-2);
+  padding-block: var(--rc-space-1) var(--rc-space-2);
+}
+
+/* The full-offer-set link is the only card-height addition left in the
+   default anatomy (one 44px target at 375). */
+.rc-view-all {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--rc-tap);
+  font: var(--rc-text-small);
+  font-weight: 600;
+  color: var(--rc-primary);
+}
+
 .rc-variants {
   display: flex;
   flex-wrap: wrap;
@@ -1787,6 +1838,16 @@ html[lang="ar"] .coupon-via {
   border: 2px solid var(--rc-primary);
   color: var(--rc-ink);
   font-weight: 600;
+}
+
+/* REEA-1096 D2 — the selected chip carries the check glyph the pack's
+   aria-pressed=true state specifies, so selection is distinguishable without
+   colour alone. */
+.rc-variant[aria-pressed="true"] .check {
+  inline-size: 14px;
+  block-size: 14px;
+  color: var(--rc-primary-deep);
+  flex: none;
 }
 
 .rc-variant .swatch {
@@ -1910,9 +1971,13 @@ html[lang="ar"] .coupon-via {
   .rc-offers-table .rc-offer-row,
   .rc-product-hero .rc-offer-row {
     display: grid;
-    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+    /* REEA-1096 D10 — the price column carries the price AND its ≈KD
+       conversion on one line at 1280, so it gets the width the foreign-
+       currency figure needs; the row stays 64px. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, 0.7fr) minmax(0, 0.9fr) minmax(0, 0.9fr) auto;
     grid-template-areas: "retailer price stock status checked cta";
-    gap: var(--rc-space-3);
+    column-gap: var(--rc-space-3);
+    row-gap: 0;
     min-block-size: var(--rc-row-h);
     padding-block: 0;
   }
@@ -1947,6 +2012,15 @@ html[lang="ar"] .coupon-via {
     justify-self: end;
     align-self: center;
     block-size: 36px;
+  }
+  /* REEA-1096 D10 — the ≈KD conversion stays INSIDE the price cell (a second
+     line under the price) instead of an auto-placed grid item that grew the
+     row to 69px. row-gap:0 above keeps the row at its 64px token. */
+  .rc-offers-table .rc-offer-row .price-alt,
+  .rc-product-hero .rc-offer-row .price-alt {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: start;
   }
 }
 
@@ -2121,8 +2195,9 @@ html[lang="ar"] .coupon-via {
 
 .rc-table-head {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 1fr) auto;
-  gap: var(--rc-space-3);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, 0.7fr) minmax(0, 0.9fr) minmax(0, 0.9fr) auto;
+  column-gap: var(--rc-space-3);
+  row-gap: 0;
   padding-block: var(--rc-space-3);
   border-block-end: 1px solid var(--rc-line-strong);
   font: var(--rc-text-label);
@@ -2203,10 +2278,11 @@ html[lang="ar"] .coupon-via {
 
 .rc-hero h1 {
   color: var(--rc-dark-ink);
-  /* Token-diff §1: the display scale is the ONE type source (no per-component
-     font guess). 28px at 375 / 40px at 1280 keeps the query echo below the
-     price hierarchy on the shopper surfaces. */
-  font: var(--rc-text-display);
+  /* REEA-1096 D9 — the accepted pack's home hero is
+     clamp(34px, 4.2vw, 52px)/1.06 (34px at ≤640, 52px at 1280), not the
+     28/40 display token. The hero is the page's statement; the results
+     heading keeps the display token so the query echo stays below the price. */
+  font: 700 clamp(34px, 4.2vw, 52px) / 1.06 var(--rc-font-display);
   letter-spacing: -0.025em;
   max-inline-size: 17ch;
 }
@@ -2872,17 +2948,9 @@ html[lang="ar"] .coupon-via {
     flex-wrap: nowrap;
     min-block-size: var(--rc-tap);
   }
-  .rc-offer-row .rc-status {
-    padding-inline: 4px;
-    gap: 2px;
-  }
-  .rc-offer-row .rc-status svg {
-    inline-size: 10px;
-    block-size: 10px;
-  }
-  .rc-offer-row .rc-status .label {
-    letter-spacing: -0.03em;
-  }
+  /* REEA-1096 D4 — no component-level status squeeze: the token keeps its
+     designed geometry (padding-inline 8px, icon 14px, gap 4px). The 40% row
+     cap above still keeps "Needs verification" inside the 375 row. */
 }
 
 @media (min-width: 641px) {
@@ -2911,7 +2979,9 @@ html[lang="ar"] .coupon-via {
 }
 
 @media (max-width: 640px) {
-  .rc-card .rc-offer-row .rc-price-block {
+  .rc-card .rc-offer-row .rc-price-block,
+  .rc-offers-table .rc-offer-row .rc-price-block,
+  .rc-product-hero .rc-offer-row .rc-price-block {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
@@ -2919,7 +2989,9 @@ html[lang="ar"] .coupon-via {
     min-inline-size: 0;
     flex: 0 1 auto;
   }
-  .rc-card .rc-offer-row .rc-price-meta {
+  .rc-card .rc-offer-row .rc-price-meta,
+  .rc-offers-table .rc-offer-row .rc-price-meta,
+  .rc-product-hero .rc-offer-row .rc-price-meta {
     display: flex;
     align-items: baseline;
     gap: var(--rc-space-1);
@@ -2928,18 +3000,36 @@ html[lang="ar"] .coupon-via {
   }
   .rc-card .rc-offer-row .rc-price-block .price-cur,
   .rc-card .rc-offer-row .rc-price-meta .price-alt,
-  .rc-card .rc-offer-row .rc-price-meta .rc-checked {
+  .rc-card .rc-offer-row .rc-price-meta .rc-checked,
+  .rc-offers-table .rc-offer-row .rc-price-block .price-cur,
+  .rc-offers-table .rc-offer-row .rc-price-meta .price-alt,
+  .rc-offers-table .rc-offer-row .rc-price-meta .rc-checked,
+  .rc-product-hero .rc-offer-row .rc-price-block .price-cur,
+  .rc-product-hero .rc-offer-row .rc-price-meta .price-alt,
+  .rc-product-hero .rc-offer-row .rc-price-meta .rc-checked {
     white-space: nowrap;
   }
   /* The middot separated price from conversion on one line; on the stacked
      meta line it moves between the conversion and the collection stamp. */
-  .rc-card .rc-offer-row .price-alt-sep {
+  .rc-card .rc-offer-row .price-alt-sep,
+  .rc-offers-table .rc-offer-row .price-alt-sep,
+  .rc-product-hero .rc-offer-row .price-alt-sep {
     display: none;
   }
-  .rc-card .rc-offer-row .rc-price-meta .rc-checked::before {
+  .rc-card .rc-offer-row .rc-price-meta .rc-checked::before,
+  .rc-offers-table .rc-offer-row .rc-price-meta .rc-checked::before,
+  .rc-product-hero .rc-offer-row .rc-price-meta .rc-checked::before {
     content: "·";
     margin-inline-end: 4px;
     color: var(--rc-muted);
+  }
+  /* REEA-1096 D10 — the product surface uses the same two-line row geometry
+     as the shelf card at 375. Without nowrap the foreign-currency conversion
+     pushed the row to three lines (123px). */
+  .rc-offers-table .rc-offer-row .rc-offer-line.line-b,
+  .rc-product-hero .rc-offer-row .rc-offer-line.line-b {
+    flex-wrap: nowrap;
+    min-block-size: var(--rc-tap);
   }
 }
 
@@ -2977,21 +3067,8 @@ html[lang="ar"] .coupon-via {
   }
 }
 
-@media (max-width: 640px) {
-  /* The legend carries the same three tokens; keep its geometry inside the
-     375 content width and the 40%-of-row budget (AC6). */
-  .rc-legend .rc-status {
-    padding-inline: 4px;
-    gap: 2px;
-  }
-  .rc-legend .rc-status svg {
-    inline-size: 10px;
-    block-size: 10px;
-  }
-  .rc-legend .rc-status .label {
-    letter-spacing: -0.03em;
-  }
-}
+/* REEA-1096 D4 — the legend tokens are the same designed tokens as the offer
+   rows; no ≤640 squeeze (padding-inline 8px, icon 14px, gap 4px). */
 
 @media (max-width: 640px) {
   /* AC12: every interactive target at 375 is >=44x44. Inline text links get
@@ -3002,9 +3079,12 @@ html[lang="ar"] .coupon-via {
     align-items: center;
     min-block-size: var(--rc-tap);
   }
+  /* REEA-1096 D5 — the accepted pack's ≤640 card geometry is
+     padding:12px (--rc-space-3) / gap:4px; the 8/8 squeeze was a workaround
+     for the extra card blocks that D6 now moves behind the disclosure. */
   .rc-card {
-    padding: 8px;
-    gap: 8px;
+    padding: var(--rc-space-3);
+    gap: var(--rc-space-1);
   }
   .rc-alt .name {
     display: flex;

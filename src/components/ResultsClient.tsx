@@ -35,9 +35,9 @@ import { exactSkuKeep } from "@/lib/relevance";
 import { partitionByConfidence } from "@/lib/confidence";
 import { formatPrice, sortOffers } from "@/lib/format";
 import SearchForm from "@/components/SearchForm";
-import { coverageLine, type LiveSearchResult } from "@/lib/collect/coverage";
+import { coverageParts, type LiveSearchResult } from "@/lib/collect/coverage";
 import { markLiveRefresh, withRefreshBypass } from "@/lib/query-cache";
-import { checkedAgeLabel, clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
+import { collectedAgeLabel, clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
 import type { NormalizedProduct } from "@/types/product";
 
 /**
@@ -173,16 +173,18 @@ function EmptyState({
         <path d="M3 9.5 5.5 4h13L21 9.5V20H3V9.5Z" />
         <path d="M3 9.5h18M8.5 13.5h7" />
       </svg>
-      <h2>{t.emptyTitle}</h2>
-      <p>{t.emptyBody}</p>
-      {!unavailable ? (
-        <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>{t.emptyRetailersAsked}</p>
-      ) : null}
+      {/* REEA-1096 D11 — one story per state. A genuine no-match says "No
+          match found" + the answered-every-retailer line; a collection failure
+          says "The stores didn't answer" and never claims a no-match. */}
+      <h2>{unavailable ? t.emptyUnavailableTitle : t.emptyTitle}</h2>
       {unavailable ? (
-        <p className="mt-2" style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
-          {t.emptyUnavailable}
-        </p>
-      ) : null}
+        <p style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>{t.emptyUnavailable}</p>
+      ) : (
+        <>
+          <p>{t.emptyBody}</p>
+          <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>{t.emptyRetailersAsked}</p>
+        </>
+      )}
       {tries && tries.length > 0 ? (
         <p className="mt-2" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
           {fill(t.triedForms, { tries: tries.join('”, “') })}
@@ -203,6 +205,14 @@ function EmptyState({
       </div>
     </div>
   );
+}
+
+/** REEA-1096 D11 — a collection FAILURE is "no retailer answered" (every note
+ *  errored, or there are no notes at all). One errored lane among answering
+ *  ones is a partial response, not an outage: that empty state still says
+ *  "No match found" and drops the outage line. */
+function collectionFailed(notes: LiveSearchResult["notes"]): boolean {
+  return notes.length > 0 && notes.every((n) => typeof n.error === "string");
 }
 
 /* REEA-965 — map one rendered card to its offer-metrics facts (FR-3.3's
@@ -706,7 +716,9 @@ function ResultsSubline({
     n: visible.length,
     unit,
     offers,
-    age: ageSecs === 0 ? t.justNow : checkedAgeLabel(locale ?? clientLocale(), ageSecs),
+    // REEA-1096 D8 — the subline already says "collected live" / `جُمعت مباشرة`,
+    // so it takes the bare duration, never the "Checked/حُدِّث" sentence.
+    age: ageSecs === 0 ? t.justNow : collectedAgeLabel(locale ?? clientLocale(), ageSecs),
   };
   const [before, after] = t.resultsSubline.split("{q}");
   return (
@@ -744,7 +756,7 @@ function ResultsMeta({
     n: products.length,
     unit: products.length === 1 ? t.resultsOne : t.resultsMany,
     offers,
-    age: ageSecs === 0 ? t.justNow : checkedAgeLabel(locale ?? clientLocale(), ageSecs),
+    age: ageSecs === 0 ? t.justNow : collectedAgeLabel(locale ?? clientLocale(), ageSecs),
   };
   const [before, after] = t.resultsSubline.split("{q}");
   return (
@@ -766,6 +778,35 @@ function ResultsMeta({
    where every in-scope retailer has settled), so the sentence describes the
    whole collection while earlier retailers' offers are already painted — a
    late or failed retailer only deepens the line, it never blanks the grid. */
+/**
+ * REEA-1096 D7 — render one coverage name group with each Latin retailer name
+ * in `<bdi class="lat">` (unicode-bidi:isolate + dir=ltr from the .lat token).
+ * The separators/summary text reproduce `summarizeNames` byte-for-byte, so the
+ * sentence reads identically while bidi can no longer glue names together.
+ */
+function CoverageNames({ names, ar }: { names: string[]; ar: boolean }) {
+  const max = 3;
+  const shown = names.length > max ? names.slice(0, max) : names;
+  const rest = names.length - shown.length;
+  const out: ReactNode[] = [];
+  shown.forEach((name, i) => {
+    if (i > 0) {
+      out.push(
+        <span key={`sep-${i}`}>{ar ? " و" : i === shown.length - 1 && rest === 0 ? " and " : ", "}</span>,
+      );
+    }
+    out.push(
+      <bdi key={`name-${i}`} className="lat">
+        {name}
+      </bdi>,
+    );
+  });
+  if (rest > 0) {
+    out.push(<span key="rest">{ar ? ` و${rest} أخرى` : ` and ${rest} more`}</span>);
+  }
+  return <>{out}</>;
+}
+
 function CoverageLine({
   notes,
   products,
@@ -784,8 +825,8 @@ function CoverageLine({
   unreachableLanes?: readonly string[];
   className?: string;
 }) {
-  const text = coverageLine(notes, locale, products, unreachableLanes);
-  if (!text && !pendingStatus) return null;
+  const parts = coverageParts(notes, locale, products, unreachableLanes);
+  if (parts.length === 0 && !pendingStatus) return null;
   // REEA-778 — the settled sentence rides the SAME lh-tier box as its
   // StampGhost reserve (one shared deterministic box per locale tier): the
   // swap changes no height, so nothing below moves when the line lands.
@@ -800,13 +841,23 @@ function CoverageLine({
       className={`meta-stamp coverage-line${pendingStatus ? " has-status" : ""}${className ? " " + className : ""}`}
       style={{ color: "var(--rc-muted)", minHeight: `${coverageLhTier(locale)}lh` }}
     >
-      {text ? (
+      {parts.length > 0 ? (
         <span className="rc-partial">
           <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden>
             <circle cx="12" cy="12" r="9" />
             <path d="M12 11v5M12 7.8h.01" />
           </svg>
-          <span>{text}</span>
+          <span>
+            {/* REEA-1096 D7 — every Latin retailer name is a bdi.lat isolate,
+                so Arabic never glues "XciteوBlinkوEureka" into one token. */}
+            {parts.map((p, i) =>
+              p.kind === "text" ? (
+                <span key={i}>{p.value}</span>
+              ) : (
+                <CoverageNames key={i} names={p.names} ar={p.ar} />
+              ),
+            )}
+          </span>
         </span>
       ) : null}
       {pendingStatus ? (
@@ -883,15 +934,14 @@ function StageEmptyState(props: {
   if (props.query.length === 0 || snap.settled === false) return null;
   const sections = stagedSections(snap, props.query, props.country, props.showOutOfStock);
   if (sections.primary.length > 0) return null;
-  // E6 — zero offers because the merchants errored (not a real empty shelf)
+  // E6 — zero offers because the collection FAILED (not a real empty shelf)
   // says so, instead of implying a no-match. Requires zero related rows too:
   // with related items the page is "near match", not an outage story.
-  const sawErrors = snap.notes.some((n) => typeof n.error === "string");
   return (
     <>
       <EmptyState
         query={props.query}
-        unavailable={sections.related.length === 0 && sawErrors}
+        unavailable={sections.related.length === 0 && collectionFailed(snap.notes)}
         country={props.country}
         locale={props.locale}
         tries={snap.attemptedQueries}
@@ -1154,8 +1204,7 @@ function StagedResults(props: {
             <EmptyState
               query={query}
               unavailable={
-                finalSections.related.length === 0 &&
-                finalSnap.notes.some((n) => typeof n.error === "string")
+                finalSections.related.length === 0 && collectionFailed(finalSnap.notes)
               }
               country={country}
               locale={locale}

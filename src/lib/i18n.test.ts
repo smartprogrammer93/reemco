@@ -11,7 +11,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   LOCALE_COOKIE,
+  checkedAgeLabel,
   clientLocale,
+  collectedAgeLabel,
   fill,
   getStrings,
   localeDir,
@@ -21,6 +23,32 @@ import {
   resetLocalePrefs,
   resolveUiLocale,
 } from "@/lib/i18n";
+
+describe("REEA-1096 D8 — Arabic timestamps carry قبل", () => {
+  it("checked age reads حُدِّث قبل 4 دقائق, with the dual/plural ladder", () => {
+    expect(checkedAgeLabel("ar", 5)).toBe("حُدِّث الآن");
+    expect(checkedAgeLabel("ar", 60)).toBe("حُدِّث قبل دقيقة");
+    expect(checkedAgeLabel("ar", 120)).toBe("حُدِّث قبل دقيقتين");
+    expect(checkedAgeLabel("ar", 240)).toBe("حُدِّث قبل 4 دقائق");
+    expect(checkedAgeLabel("ar", 1560)).toBe("حُدِّث قبل 26 دقيقة");
+  });
+
+  it("the results subline takes the bare duration, never the checked sentence", () => {
+    // "collected live" / جُمعت مباشرة is already in the template; concatenating
+    // the full checked label produced "جُمعت مباشرة حُدِّث 4 دقائق".
+    expect(collectedAgeLabel("ar", 240)).toBe("قبل 4 دقائق");
+    expect(collectedAgeLabel("en", 240)).toBe("4m ago");
+    const ar = fill(getStrings("ar").resultsSubline, {
+      n: 7,
+      unit: "نتائج",
+      q: "iPhone 17 Pro",
+      offers: 31,
+      age: collectedAgeLabel("ar", 240),
+    });
+    expect(ar).toContain("جُمعت مباشرة قبل 4 دقائق");
+    expect(ar).not.toContain("حُدِّث");
+  });
+});
 
 describe("resolveUiLocale precedence (REEA-279)", () => {
   it("the explicit cookie wins over the browser hint", () => {

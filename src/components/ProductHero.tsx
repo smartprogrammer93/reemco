@@ -84,11 +84,24 @@ function HeroOfferRow({
         <OfferStatusToken status={status} locale={locale} />
       </div>
       <div className="rc-offer-line line-b">
-        <span className="price-cur rc-price-sm tabular" style={{ font: "var(--rc-text-price-sm)", fontWeight: 600, color: "var(--rc-ink)" }}>
-          <bdi>{price.primary}</bdi>
+        {/* REEA-1096 D10 — the conversion stays inside the price block, and at
+            375 the price + conversion + checked stamp share the card's proven
+            two-line geometry, so a foreign-currency row is 93px like every
+            other row (and 64px in the ≥641 single-line table). */}
+        <span className="rc-price-block">
+          <span className="price-cur rc-price-sm tabular" style={{ font: "var(--rc-text-price-sm)", fontWeight: 600, color: "var(--rc-ink)" }}>
+            <bdi>{price.primary}</bdi>
+          </span>
+          <span className="rc-price-meta">
+            {price.alt && (
+              <span className="price-alt">
+                <span className="price-alt-sep" aria-hidden>· </span>
+                <bdi>{price.alt}</bdi>
+              </span>
+            )}
+            <span className="rc-checked">{age == null ? t.dateUnknown : checkedAgeLabel(locale ?? clientLocale(), age)}</span>
+          </span>
         </span>
-        {price.alt && <span className="price-alt">· <bdi>{price.alt}</bdi></span>}
-        <span className="rc-checked">{age == null ? t.dateUnknown : checkedAgeLabel(locale ?? clientLocale(), age)}</span>
         {offer.inStock ? (
           <TrackedOutboundLink
             href={offer.url}
@@ -410,17 +423,22 @@ function ProductHeroBody({
           <h2 style={{ font: "var(--rc-text-h2)" }}>{t.variationsLabel}</h2>
           <div className="rc-variants" style={{ marginBlockStart: "var(--rc-space-3)" }}>
             {product.variations.map((v, i) => (
-              <span key={v.id} className={`rc-variant${i === 0 ? " is-selected" : ""}`}>
+              <span
+                key={v.id}
+                className={`rc-variant${i === 0 ? " is-selected" : ""}`}
+                aria-pressed={i === 0 ? "true" : "false"}
+              >
+                {i === 0 ? (
+                  <svg className="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="m4 12.5 5 5L20 6.5" />
+                  </svg>
+                ) : null}
                 {v.label}
-                {v.needsVerification ? (
-                  <span className="price-warn" title={t.verifyOutlier}>
-                    <bdi>{t.priceVerifyBadge}</bdi>
-                  </span>
-                ) : (
-                  <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
-                    <bdi>{formatPrimaryPrice(v.priceDelta, "KWD").label}</bdi>
-                  </span>
-                )}
+                {/* REEA-1096 D2/D3 — selected state keyed on aria-pressed; the
+                    chip is name + price, never a verification status token. */}
+                <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
+                  <bdi>{formatPrimaryPrice(v.priceDelta, "KWD").label}</bdi>
+                </span>
               </span>
             ))}
           </div>
