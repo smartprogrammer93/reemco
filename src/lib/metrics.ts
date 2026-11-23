@@ -18,6 +18,19 @@
  * query-level detail lives in the REEA-37 funnel store under its own
  * 90-day retention and only resurfaces as aggregate top-terms.
  *
+ * REEA-1078 — two aggregate additions, still counters only:
+ *  - comparison depth: `comparison_cards_total` / `comparison_cards_multi_retailer`
+ *    count product cards per serve and how many carried offers from ≥2 distinct
+ *    retailers (the core comparison promise, previously unmeasured). No
+ *    per-query or per-card data is stored — only the two totals.
+ *  - warm-serve latency: a fresh query-memo hit runs no fan-out, so its wall
+ *    clock is the SERVE clock (request → finalized response), not the cold
+ *    collection clock. Warm serves land in `latency_warm_band_*` (same edges)
+ *    instead of the cold `latency_band_*`; the two band sets sum to `searches`,
+ *    so a repeat shopper's experience is separable from a cold collection.
+ *    Without the split every warm serve read as 3–10 s cold and the counter
+ *    could not answer "what does a repeat shopper experience" (REEA-1074 F4).
+ *
  * Storage contract mirrors event-store.ts (REEA-233). REEA-1035 — the
  * shared-KV layout is per-field atomic counters: every increment is one
  * `SharedKv.incr(key, ttl)` under `metrics:weekly:v2:<isoWeek>:<field>`
@@ -108,6 +121,19 @@ export type LatencyBand =
   | "latency_band_3_10s"
   | "latency_band_gt_10s";
 
+/**
+ * REEA-1078 — warm-serve latency band names, ascending. A fresh query-memo
+ * hit runs NO fan-out, so its wall clock is the serve clock (request start →
+ * finalized response, recorded in the page's after() tail) rather than the
+ * cold collection clock the four bands above measure. Same edges; the two
+ * band sets are disjoint by serve kind and together sum to `searches`.
+ */
+export type WarmLatencyBand =
+  | "latency_warm_band_lt_1s"
+  | "latency_warm_band_1_3s"
+  | "latency_warm_band_3_10s"
+  | "latency_warm_band_gt_10s";
+
 /** Band edges in ms: <1000 | [1000,3000) | [3000,10000] | >10000. */
 export const LATENCY_BAND_EDGES_MS = { lt: 1_000, mid: 3_000, top: 10_000 } as const;
 
@@ -116,6 +142,33 @@ export function latencyBandOf(latencyMs: number): LatencyBand {
   const t = typeof latencyMs === "number" && Number.isFinite(latencyMs) ? Math.max(0, latencyMs) : 0;
   if (t < LATENCY_BAND_EDGES_MS.mid) return t < LATENCY_BAND_EDGES_MS.lt ? "latency_band_lt_1s" : "latency_band_1_3s";
   return t <= LATENCY_BAND_EDGES_MS.top ? "latency_band_3_10s" : "latency_band_gt_10s";
+}
+
+/** REEA-1078 — the warm-serve counterpart of latencyBandOf (same edges). */
+export function warmLatencyBandOf(latencyMs: number): WarmLatencyBand {
+  const t = typeof latencyMs === "number" && Number.isFinite(latencyMs) ? Math.max(0, latencyMs) : 0;
+  if (t < LATENCY_BAND_EDGES_MS.mid) {
+    return t < LATENCY_BAND_EDGES_MS.lt ? "latency_warm_band_lt_1s" : "latency_warm_band_1_3s";
+  }
+  return t <= LATENCY_BAND_EDGES_MS.top ? "latency_warm_band_3_10s" : "latency_warm_band_gt_10s";
+}
+
+/**
+ * REEA-1078 — which clock a serve's latency belongs to. "warm" = a fresh
+ * query-memo hit: no fan-out ran, so the recorded wall clock is the serve
+ * clock. "cold" = a live fan-out ran (fresh, stale-while-revalidate, or the
+ * shared-layer replay racing its own hops), so the recorded wall clock is the
+ * cold collection clock. Default "cold" keeps every pre-change caller/tests
+ * byte-identical.
+ */
+export type ServeKind = "cold" | "warm";
+
+/** REEA-1078 — the aggregate comparison depth of one serve's card set. */
+export interface ComparisonDepth {
+  /** Product cards in the served/converged answer. */
+  cardsTotal: number;
+  /** Cards carrying offers from ≥2 DISTINCT retailers. */
+  cardsMultiRetailer: number;
 }
 
 /** REEA-871 — how the converged answer stood at after() recording time:
@@ -143,11 +196,22 @@ export interface WeekCounters {
   /** REEA-871 — adapters that returned an error / empty-due-to-error outcome.
    *  Folded clamped to the attempts so `failures ≤ attempts` holds per week. */
   retailer_adapter_failures: Record<string, number>;
-  /** REEA-871 — serve latency bands (see LatencyBand); sum to `searches`. */
+  /** REEA-871 — serve latency bands (see LatencyBand); cold collection only
+   *  (REEA-1078). Warm serves land in latency_warm_band_* instead. */
   latency_band_lt_1s: number;
   latency_band_1_3s: number;
   latency_band_3_10s: number;
   latency_band_gt_10s: number;
+  /** REEA-1078 — warm-serve latency bands (see WarmLatencyBand). Cold bands +
+   *  warm bands == searches, so every serve lands in exactly one band. */
+  latency_warm_band_lt_1s: number;
+  latency_warm_band_1_3s: number;
+  latency_warm_band_3_10s: number;
+  latency_warm_band_gt_10s: number;
+  /** REEA-1078 — comparison depth totals over served cards (see
+   *  ComparisonDepth). cards_multi_retailer ≤ cards_total by construction. */
+  comparison_cards_total: number;
+  comparison_cards_multi_retailer: number;
   link_smoke: LinkSmokeCounters;
 }
 
@@ -175,6 +239,12 @@ export function emptyWeek(): WeekCounters {
     latency_band_1_3s: 0,
     latency_band_3_10s: 0,
     latency_band_gt_10s: 0,
+    latency_warm_band_lt_1s: 0,
+    latency_warm_band_1_3s: 0,
+    latency_warm_band_3_10s: 0,
+    latency_warm_band_gt_10s: 0,
+    comparison_cards_total: 0,
+    comparison_cards_multi_retailer: 0,
     link_smoke: emptyLinkSmoke(),
   };
 }
@@ -227,7 +297,37 @@ function ensureWeek(weeks: WeekCountersMap, week: string): WeekCounters {
   if (!w.link_smoke.by_retailer || typeof w.link_smoke.by_retailer !== "object") {
     w.link_smoke.by_retailer = {};
   }
-  return normalizeWeek(w);
+  // REEA-1078 — backfill only. The depth clamp must NOT run here: increments
+  // arrive one key at a time, so clamping multi against a still-zero total
+  // would zero a legitimate value (multi key applied before total key). The
+  // invariant is clamped on the final read (normalizeWeek), after the merge.
+  return backfillWeek(w);
+}
+
+/** Zero-fill every counter field on a week record (no cross-field clamps). */
+function backfillWeek(week: WeekCounters): WeekCounters {
+  for (const key of [
+    "cold_serves_full",
+    "cold_serves_pending",
+    "latency_band_lt_1s",
+    "latency_band_1_3s",
+    "latency_band_3_10s",
+    "latency_band_gt_10s",
+    // REEA-1078 — warm-serve bands and comparison-depth totals. Weeks stored
+    // before this extension backfill 0, exactly like the REEA-871 fields.
+    "latency_warm_band_lt_1s",
+    "latency_warm_band_1_3s",
+    "latency_warm_band_3_10s",
+    "latency_warm_band_gt_10s",
+    "comparison_cards_total",
+    "comparison_cards_multi_retailer",
+  ] as const) {
+    week[key] = clampCount(week[key]);
+  }
+  for (const key of ["retailer_adapter_attempts", "retailer_adapter_failures"] as const) {
+    if (!week[key] || typeof week[key] !== "object") week[key] = {};
+  }
+  return week;
 }
 
 /**
@@ -236,14 +336,16 @@ function ensureWeek(weeks: WeekCountersMap, week: string): WeekCounters {
  * weekly payload always carry complete non-negative integers. Existing
  * counter values are never rewritten (0 where a field was absent).
  * Idempotent: normalizing twice changes nothing beyond the first pass.
+ * REEA-1078 — the final read also enforces cards_multi_retailer ≤
+ * cards_total, after every increment has merged (see ensureWeek).
  */
 export function normalizeWeek(week: WeekCounters): WeekCounters {
-  for (const key of ["cold_serves_full", "cold_serves_pending", "latency_band_lt_1s", "latency_band_1_3s", "latency_band_3_10s", "latency_band_gt_10s"] as const) {
-    week[key] = clampCount(week[key]);
-  }
-  for (const key of ["retailer_adapter_attempts", "retailer_adapter_failures"] as const) {
-    if (!week[key] || typeof week[key] !== "object") week[key] = {};
-  }
+  backfillWeek(week);
+  // A hostile/partial payload can never invert the depth invariant.
+  week.comparison_cards_multi_retailer = Math.min(
+    week.comparison_cards_multi_retailer,
+    week.comparison_cards_total,
+  );
   // REEA-935 — per-outcome link-smoke aggregates. Weeks stored before the
   // extension have no ok/challenge: challenge backfills 0 (the old checker
   // had no challenge vocabulary) and ok backfills to checked - dead, so the
@@ -288,6 +390,9 @@ export interface SearchOutcomeBase {
   zeroOffers: boolean;
   /** Per-retailer delivered-offer counts (the snapshot's coverage notes). */
   offersByRetailer: Record<string, number>;
+  /** REEA-1078 — comparison depth over the same card set (see
+   *  ComparisonDepth). Aggregate-only: two integers, no per-card data. */
+  comparisonDepth?: ComparisonDepth;
 }
 
 /**
@@ -305,8 +410,16 @@ export interface SearchOutcome extends SearchOutcomeBase {
    */
   serveOutcome: ServeOutcome;
   /** REEA-871 — wall-clock ms from fan-out start to the after() recording;
-   *  folded into exactly one latency band (see latencyBandOf). */
+   *  folded into exactly one latency band (see latencyBandOf). REEA-1078 —
+   *  for a warm serve this is the SERVE clock (request start → finalized
+   *  response) because no fan-out ran; the band set is chosen by serveKind. */
   serveLatencyMs: number;
+  /** REEA-1078 — which clock serveLatencyMs measures (see ServeKind).
+   *  Absent = "cold" (pre-change callers stay byte-identical). */
+  serveKind?: ServeKind;
+  /** REEA-1078 — aggregate comparison depth of the served card set (see
+   *  ComparisonDepth). Absent = 0 cards (e.g. a snapshot-less serve). */
+  comparisonDepth?: ComparisonDepth;
   /** REEA-871 — adapter invocations per retailer that reached a network call
    *  or terminal failure in this serve's fan-out (retailer keys as stored by
    *  offersByRetailer). Absent = the serve ran no live fan-out (memo hit). */
@@ -329,9 +442,21 @@ export function applySearchOutcome(
   // cold_serves_full + cold_serves_pending == searches holds by construction.
   if (outcome.serveOutcome === "pending") w.cold_serves_pending += 1;
   else w.cold_serves_full += 1;
-  // REEA-871 — exactly one latency band per serve, so the four bands sum to
-  // searches. Only the band index is stored; the raw ms never persist.
-  w[latencyBandOf(outcome.serveLatencyMs)] += 1;
+  // REEA-871 — exactly one latency band per serve, so the four cold bands
+  // (plus the REEA-1078 warm bands) sum to searches. Only the band index is
+  // stored; the raw ms never persist. A warm serve lands in the warm set:
+  // its wall clock is the serve clock, not a collection clock.
+  if (outcome.serveKind === "warm") {
+    w[warmLatencyBandOf(outcome.serveLatencyMs)] += 1;
+  } else {
+    w[latencyBandOf(outcome.serveLatencyMs)] += 1;
+  }
+  // REEA-1078 — comparison depth totals. Clamped so multi ≤ total holds per
+  // serve and per week; aggregate-only (two integers per serve, no cards).
+  const cardsTotal = clampCount(outcome.comparisonDepth?.cardsTotal);
+  const cardsMulti = Math.min(clampCount(outcome.comparisonDepth?.cardsMultiRetailer), cardsTotal);
+  w.comparison_cards_total += cardsTotal;
+  w.comparison_cards_multi_retailer += cardsMulti;
   for (const [merchant, hits] of Object.entries(outcome.offersByRetailer ?? {})) {
     const by = clampCount(hits);
     if (by > 0) bumpRetailer(w.offers_by_retailer, merchant, by);
@@ -393,13 +518,40 @@ export function applyLinkSmoke(
   return weeks;
 }
 
+/** REEA-1078 — pure: comparison depth of a card set. A card counts as
+ *  multi-retailer when its offers name ≥2 DISTINCT sanitized retailers; an
+ *  offer with no usable merchant name cannot make a card a comparison, so it
+ *  is ignored (never counted as a second retailer). Aggregate-only — the
+ *  caller passes the same products the page renders, and only the two totals
+ *  are stored (no card ids, no per-query data). */
+export function comparisonDepthOf(
+  products: readonly { offers?: readonly { merchant?: string }[] }[],
+): ComparisonDepth {
+  let cardsTotal = 0;
+  let cardsMultiRetailer = 0;
+  for (const p of products ?? []) {
+    if (!p || typeof p !== "object") continue;
+    cardsTotal += 1;
+    const merchants = new Set<string>();
+    for (const o of p.offers ?? []) {
+      const name = sanitizeMerchant(typeof o?.merchant === "string" ? o.merchant : "");
+      // REEA-787's case-folded merchant identity: "Xcite" and "xcite" are
+      // the same retailer spelling, never a second comparison lane.
+      if (name) merchants.add(name.toLowerCase());
+    }
+    if (merchants.size >= 2) cardsMultiRetailer += 1;
+  }
+  return { cardsTotal, cardsMultiRetailer };
+}
+
 /** Pure: map a converged LiveSearchResult onto the aggregate outcome.
  *  Only successful notes count (an error note delivered nothing); the
  *  zero-offer flag reads the product count of the converged snapshot. The
  *  REEA-871 serve fields ride separately — the caller knows the fan-out
- *  clock and the adapter telemetry, the snapshot does not. */
+ *  clock and the adapter telemetry, the snapshot does not. REEA-1078 — the
+ *  comparison depth is derived from the SAME card set the snapshot carries. */
 export function searchOutcomeFromSnapshot(snap: {
-  products: unknown[];
+  products: { offers?: readonly { merchant?: string }[] }[];
   notes: { merchant: string; hits: number; error?: string }[];
 }): SearchOutcomeBase {
   const offersByRetailer: Record<string, number> = {};
@@ -407,7 +559,11 @@ export function searchOutcomeFromSnapshot(snap: {
     if (n?.error) continue;
     if (clampCount(n?.hits) > 0) offersByRetailer[n.merchant] = clampCount(n.hits);
   }
-  return { zeroOffers: (snap.products?.length ?? 0) === 0, offersByRetailer };
+  return {
+    zeroOffers: (snap.products?.length ?? 0) === 0,
+    offersByRetailer,
+    comparisonDepth: comparisonDepthOf(snap.products ?? []),
+  };
 }
 
 /**
@@ -624,6 +780,13 @@ const WEEKLY_SCALAR_FIELDS = [
   "latency_band_1_3s",
   "latency_band_3_10s",
   "latency_band_gt_10s",
+  // REEA-1078 — warm-serve bands and comparison-depth totals.
+  "latency_warm_band_lt_1s",
+  "latency_warm_band_1_3s",
+  "latency_warm_band_3_10s",
+  "latency_warm_band_gt_10s",
+  "comparison_cards_total",
+  "comparison_cards_multi_retailer",
 ] as const;
 type WeeklyScalarField = (typeof WEEKLY_SCALAR_FIELDS)[number];
 

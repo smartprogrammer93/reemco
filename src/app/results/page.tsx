@@ -168,6 +168,12 @@ export default async function ResultsPage({
   // dying when the stream closes on the completion budget. Same single
   // live fan-out; no second round of requests.
   after(async () => {
+    // REEA-1078 — the serve clock is read on ENTRY to the deferred tail (the
+    // document has been sent by the time after() runs). For a warm memo hit
+    // that elapsed time is the shopper's serve latency; for a cold serve the
+    // recording below reads the collection clock after allSettled instead.
+    // eslint-disable-next-line react-hooks/purity -- deferred after() tail, not render output.
+    const afterEntryMs = Date.now();
     await staged.allSettled;    // REEA-807 — aggregate outcome counters, folded in the same after() tail
     // that keeps the run's hops alive: one live fan-out page serve = one
     // search; zero-offer and per-retailer offer counts read the fullest
@@ -205,13 +211,19 @@ export default async function ResultsPage({
         staged.adapterTelemetry.catch(() => ({ attempts: {}, failures: {} })),
       ]);
       const pageSnap = convSnap ?? served;
+      // REEA-1078 — warm serves use the entry clock captured above (the serve
+      // clock); cold serves use the post-allSettled clock (collection clock).
+      // eslint-disable-next-line react-hooks/purity -- read in the deferred after() tail, never during render output.
+      const recordedMs = staged.serveKind === "warm" ? afterEntryMs : Date.now();
       await recordSearchOutcome({
         ...(pageSnap
           ? searchOutcomeFromSnapshot(pageSnap)
           : { zeroOffers: false, offersByRetailer: {} }),
         serveOutcome: serveOutcomeOf(served, convSnap),
-        // eslint-disable-next-line react-hooks/purity -- the recording clock is read in the deferred after() tail, never during render output.
-        serveLatencyMs: Math.max(0, Date.now() - fanoutStartMs),
+        // REEA-1078 — serve kind from the collection layer (only it knows
+        // whether a fresh memo answered with no fan-out).
+        serveKind: staged.serveKind,
+        serveLatencyMs: Math.max(0, recordedMs - fanoutStartMs),
         adapterAttempts: adapterTelemetry.attempts,
         adapterFailures: adapterTelemetry.failures,
       });

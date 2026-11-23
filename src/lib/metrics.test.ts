@@ -14,6 +14,7 @@ import {
   annotateLinkSmoke,
   applyLinkSmoke,
   applySearchOutcome,
+  comparisonDepthOf,
   emptyWeek,
   isoWeekKey,
   latencyBandOf,
@@ -30,6 +31,7 @@ import {
   serveOutcomeOf,
   RETENTION_WEEKS,
   updateWeeklyCounters,
+  warmLatencyBandOf,
   type WeekCountersMap,
 } from "@/lib/metrics";
 import type { SharedKv } from "@/lib/collect/kv";
@@ -287,6 +289,8 @@ describe("REEA-807 searchOutcomeFromSnapshot", () => {
     expect(searchOutcomeFromSnapshot(snap)).toEqual({
       zeroOffers: false,
       offersByRetailer: { Xcite: 4 },
+      // REEA-1078 — two empty products: zero multi-retailer cards.
+      comparisonDepth: { cardsTotal: 2, cardsMultiRetailer: 0 },
     });
     expect(searchOutcomeFromSnapshot({ products: [], notes: [] }).zeroOffers).toBe(true);
   });
@@ -344,10 +348,16 @@ describe("REEA-807 store round-trip", () => {
     expect(Object.keys(week).sort()).toEqual([
       "cold_serves_full",
       "cold_serves_pending",
+      "comparison_cards_multi_retailer",
+      "comparison_cards_total",
       "latency_band_1_3s",
       "latency_band_3_10s",
       "latency_band_gt_10s",
       "latency_band_lt_1s",
+      "latency_warm_band_1_3s",
+      "latency_warm_band_3_10s",
+      "latency_warm_band_gt_10s",
+      "latency_warm_band_lt_1s",
       "link_smoke",
       "offers_by_retailer",
       "retailer_adapter_attempts",
@@ -477,6 +487,110 @@ describe("REEA-871 cold-serve outcome + latency bands", () => {
     expect(w.latency_band_gt_10s).toBe(1);
     const bands = w.latency_band_lt_1s + w.latency_band_1_3s + w.latency_band_3_10s + w.latency_band_gt_10s;
     expect(bands).toBe(w.searches);
+  });
+});
+
+describe("REEA-1078 warm-serve latency split", () => {
+  it("maps a warm serve latency to the warm band set with the same edges", () => {
+    expect(warmLatencyBandOf(0)).toBe("latency_warm_band_lt_1s");
+    expect(warmLatencyBandOf(999)).toBe("latency_warm_band_lt_1s");
+    expect(warmLatencyBandOf(1_000)).toBe("latency_warm_band_1_3s");
+    expect(warmLatencyBandOf(2_999)).toBe("latency_warm_band_1_3s");
+    expect(warmLatencyBandOf(3_000)).toBe("latency_warm_band_3_10s");
+    expect(warmLatencyBandOf(10_001)).toBe("latency_warm_band_gt_10s");
+    expect(warmLatencyBandOf(Number.NaN)).toBe("latency_warm_band_lt_1s");
+  });
+
+  it("records a warm serve in the warm bands only, never as a cold collection", () => {
+    const weeks: WeekCountersMap = {};
+    applySearchOutcome(weeks, "2026-W37", {
+      zeroOffers: false,
+      offersByRetailer: {},
+      serveOutcome: "full",
+      serveLatencyMs: 1_400,
+      serveKind: "warm",
+    });
+    applySearchOutcome(weeks, "2026-W37", {
+      zeroOffers: false,
+      offersByRetailer: {},
+      serveOutcome: "full",
+      serveLatencyMs: 4_000,
+      serveKind: "cold",
+    });
+    const w = weeks["2026-W37"];
+    expect(w.searches).toBe(2);
+    expect(w.latency_warm_band_1_3s).toBe(1);
+    expect(w.latency_warm_band_lt_1s).toBe(0);
+    expect(w.latency_band_3_10s).toBe(1);
+    expect(w.latency_band_1_3s).toBe(0);
+    // The split stays reconcilable: every serve lands in exactly one of the
+    // eight bands, so the PM can separate a repeat shopper from a cold run.
+    const cold = w.latency_band_lt_1s + w.latency_band_1_3s + w.latency_band_3_10s + w.latency_band_gt_10s;
+    const warm = w.latency_warm_band_lt_1s + w.latency_warm_band_1_3s + w.latency_warm_band_3_10s + w.latency_warm_band_gt_10s;
+    expect(cold + warm).toBe(w.searches);
+    expect(warm).toBe(1);
+  });
+
+  it("absent serveKind keeps the pre-change cold-band semantics", () => {
+    const weeks: WeekCountersMap = {};
+    applySearchOutcome(weeks, "2026-W37", {
+      zeroOffers: false,
+      offersByRetailer: {},
+      serveOutcome: "full",
+      serveLatencyMs: 900,
+    });
+    const w = weeks["2026-W37"];
+    expect(w.latency_band_lt_1s).toBe(1);
+    expect(w.latency_warm_band_lt_1s).toBe(0);
+  });
+});
+
+describe("REEA-1078 comparison depth", () => {
+  it("counts a card as multi-retailer only when ≥2 DISTINCT retailers answered", () => {
+    expect(
+      comparisonDepthOf([
+        { offers: [{ merchant: "Xcite" }, { merchant: "Jarir" }] },
+        { offers: [{ merchant: "Xcite" }, { merchant: "xcite" }, { merchant: "" }] },
+        { offers: [{ merchant: "Eureka" }, { merchant: "Eureka" }] },
+        { offers: [] },
+      ]),
+    ).toEqual({ cardsTotal: 4, cardsMultiRetailer: 1 });
+  });
+
+  it("folds the totals per week and never lets multi exceed total", () => {
+    const weeks: WeekCountersMap = {};
+    applySearchOutcome(weeks, "2026-W37", {
+      zeroOffers: false,
+      offersByRetailer: {},
+      serveOutcome: "full",
+      serveLatencyMs: 900,
+      comparisonDepth: { cardsTotal: 3, cardsMultiRetailer: 2 },
+    });
+    applySearchOutcome(weeks, "2026-W37", {
+      zeroOffers: false,
+      offersByRetailer: {},
+      serveOutcome: "full",
+      serveLatencyMs: 900,
+      comparisonDepth: { cardsTotal: 2, cardsMultiRetailer: 9 }, // hostile
+    });
+    const w = weeks["2026-W37"];
+    expect(w.comparison_cards_total).toBe(5);
+    expect(w.comparison_cards_multi_retailer).toBe(4); // 2 + clamped 2
+    expect(w.comparison_cards_multi_retailer).toBeLessThanOrEqual(w.comparison_cards_total);
+  });
+
+  it("backfills and clamps a hostile stored week on normalize", () => {
+    const week = emptyWeek();
+    delete (week as unknown as Record<string, unknown>).comparison_cards_total;
+    delete (week as unknown as Record<string, unknown>).comparison_cards_multi_retailer;
+    week.comparison_cards_multi_retailer = 7; // multi without total
+    normalizeWeek(week);
+    expect(week.comparison_cards_total).toBe(0);
+    expect(week.comparison_cards_multi_retailer).toBe(0);
+    week.comparison_cards_total = 4;
+    week.comparison_cards_multi_retailer = 9;
+    normalizeWeek(week);
+    expect(week.comparison_cards_multi_retailer).toBe(4);
   });
 });
 

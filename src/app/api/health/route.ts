@@ -39,11 +39,12 @@
  * the ~21 s staged-collection finalize. The served body keeps the minimal
  * `{ok, build}` shape either way.
  */
-import type { NextRequest } from "next/server";
+import { after, type NextRequest } from "next/server";
 import { checkRateLimitShared } from "@/lib/rate-limit-kv";
 import { invalidateTrendingChips } from "@/lib/trending-chips";
 import { MAX_RESPONSE_BODY_BYTES, readBodyCapped } from "@/lib/collect/read-body";
 import { resolveBuildStamp } from "@/lib/build-stamp";
+import { maybeRunDailyLinkSmoke } from "@/lib/metrics/link-smoke-runner";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -173,6 +174,13 @@ export async function GET(req: NextRequest): Promise<Response> {
   // app is alive. REEMCO_HEALTH_ORIGIN pins it to the container's own
   // loopback; unset (Vercel) keeps the previous behaviour.
   const origin = process.env.REEMCO_HEALTH_ORIGIN || new URL(req.url).origin;
+  // REEA-1078 — daily dead-link smoke, scheduled BEHIND this response. The
+  // health timer (reemco-health.timer, REEA-1044) is the only scheduler the
+  // deploy path installs, so it is the daily smoke's clock too: the runner's
+  // shared-KV day guard makes this a no-op after the day's run. `after()` keeps
+  // the (network-heavy) smoke off the health response, and the runner never
+  // throws into the verdict.
+  after(() => maybeRunDailyLinkSmoke({ origin }));
   const failed: string[] = [];
   const checks: Record<string, string | number> = {};
 

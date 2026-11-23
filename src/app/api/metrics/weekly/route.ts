@@ -17,6 +17,9 @@
  *   retailer_adapter_attempts, retailer_adapter_failures,
  *   latency_band_lt_1s, latency_band_1_3s, latency_band_3_10s,
  *   latency_band_gt_10s,
+ *   latency_warm_band_lt_1s, latency_warm_band_1_3s,
+ *   latency_warm_band_3_10s, latency_warm_band_gt_10s,
+ *   comparison_depth: { cards_total, cards_multi_retailer, ratio },
  *   offer_link_clicks,
  *   link_smoke: { runs, checked, ok, dead, challenge, by_retailer,
  *                 dead_rate, challenge_rate,
@@ -55,6 +58,17 @@
  * p90 is band-interpolated, and the ratified shopper-visible targets
  * (first-offer p75 ≤ 2.0 s; follow-up-complete ≤ 8.5 s). Reporting text
  * only: no counter changes (AC-4).
+ *
+ * REEA-1078 — measurement integrity (REEA-1074 F4 / AC-A): the payload now
+ * carries (a) `comparison_depth` per week — cards_total,
+ * cards_multi_retailer and the derived ratio over the served card sets, the
+ * core comparison promise that was previously unmeasured — and (b) a warm
+ * serve latency band set (`latency_warm_band_*`) disjoint from the cold
+ * collection bands (`latency_band_*`). A fresh memo hit ran no fan-out, so
+ * its recorded wall clock is the serve clock; without the split every warm
+ * serve read as 3–10 s cold. Cold + warm bands sum to searches, and
+ * cards_multi_retailer ≤ cards_total by construction. Aggregate integers
+ * only — still no per-user, per-query or per-card data.
  */
 import { RETENTION_WEEKS, isoWeekKey, linkSmokeRates, readWeeklyCountersDetailed } from "@/lib/metrics";
 import type { WeeklyCountersRead } from "@/lib/metrics";
@@ -123,6 +137,19 @@ export function weeklyResponse(
       latency_band_1_3s: w.latency_band_1_3s,
       latency_band_3_10s: w.latency_band_3_10s,
       latency_band_gt_10s: w.latency_band_gt_10s,
+      // REEA-1078 — warm-serve bands: a fresh memo hit's SERVE clock, kept
+      // disjoint from the cold collection bands above. Cold + warm == searches.
+      latency_warm_band_lt_1s: w.latency_warm_band_lt_1s,
+      latency_warm_band_1_3s: w.latency_warm_band_1_3s,
+      latency_warm_band_3_10s: w.latency_warm_band_3_10s,
+      latency_warm_band_gt_10s: w.latency_warm_band_gt_10s,
+      // REEA-1078 — comparison depth: one aggregate per week, never per query
+      // or per card (Data Minimization). ratio is derived, 0 when no cards.
+      comparison_depth: {
+        cards_total: w.comparison_cards_total,
+        cards_multi_retailer: w.comparison_cards_multi_retailer,
+        ratio: w.comparison_cards_total > 0 ? w.comparison_cards_multi_retailer / w.comparison_cards_total : 0,
+      },
       offer_link_clicks: clicks[week] ?? 0,
       // REEA-935 — per-outcome counts plus the derived dead/challenge rates;
       // the annotation fields ride verbatim when stamped.

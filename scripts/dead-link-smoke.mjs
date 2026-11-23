@@ -264,12 +264,14 @@ export async function checkQueueWithPacing(items, deps = {}) {
  * the sample exactly when the feed is slow-but-healthy; the retry keeps the
  * smoke's pacing polite (one pause, still one bounded fetch pair per query).
  */
-async function collectOffers(query) {
-  const url = `${BASE}/api/results-followup?q=${encodeURIComponent(query)}`;
+async function collectOffers(query, opts = {}) {
+  const base = (opts.base ?? BASE).replace(/\/$/, "");
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const url = `${base}/api/results-followup?q=${encodeURIComponent(query)}`;
   for (let attempt = 0; attempt < 2; attempt++) {
-    if (attempt > 0) await sleep(1500);
+    if (attempt > 0) await (opts.sleep ?? sleep)(1500);
     try {
-      const res = await fetch(url, {
+      const res = await fetchImpl(url, {
         headers: { accept: "application/json" },
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         redirect: "follow",
@@ -296,18 +298,38 @@ async function collectOffers(query) {
   return [];
 }
 
-async function main() {
+/**
+ * REEA-1078 — the callable smoke runner. Same collection, pacing, identity and
+ * outcome classification as the CLI, but it RETURNS the aggregate instead of
+ * posting it, so the app can run the daily smoke in-process (the existing
+ * health timer is the schedule — no new host unit needed) and record the
+ * counters directly. `base` is the origin whose own converged feed is sampled;
+ * `fetchImpl`/`sleep`/pacing are injectable so the pins stay network-free.
+ *
+ * Returns { checked, dead, challenge, ok, byRetailer } with every checked URL
+ * in exactly one of ok/dead/challenge (REEA-935 vocabulary). Never throws on
+ * a per-URL failure — those are counted outcomes; only a caller-level error
+ * (e.g. no feed at all) surfaces as a zero-check result.
+ */
+export async function runDeadLinkSmoke(opts = {}) {
+  const base = (opts.base ?? BASE).replace(/\/$/, "");
+  const queries = opts.queries ?? QUERIES;
+  const perRetailerLimit = Math.max(1, Math.min(20, Number(opts.perRetailer ?? PER_RETAILER) || 8));
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const sleepFn = opts.sleep ?? sleep;
+  const pauseMs = Math.max(0, Number(opts.pauseMs ?? PAUSE_MS) || 0);
+
   // ---- collect a bounded, deduped sample per retailer ----
   const perRetailer = new Map(); // merchant -> { queue: [...] }
   const seenUrls = new Set();
-  for (const q of QUERIES) {
-    const offers = await collectOffers(q);
+  for (const q of queries) {
+    const offers = await collectOffers(q, { base, fetchImpl, sleep: sleepFn });
     console.log(`query "${q}": ${offers.length} live offers in the converged snapshot`);
     for (const o of offers) {
       if (seenUrls.has(o.url)) continue;
       seenUrls.add(o.url);
       const bucket = perRetailer.get(o.merchant) ?? { queue: [] };
-      if (bucket.queue.length < PER_RETAILER) bucket.queue.push(o.url);
+      if (bucket.queue.length < perRetailerLimit) bucket.queue.push(o.url);
       perRetailer.set(o.merchant, bucket);
     }
   }
@@ -317,7 +339,11 @@ async function main() {
   let dead = 0;
   let challenge = 0;
   for (const [merchant, bucket] of [...perRetailer.entries()].sort()) {
-    const results = await checkQueueWithPacing(bucket.queue.map((url) => ({ merchant, url })));
+    const results = await checkQueueWithPacing(bucket.queue.map((url) => ({ merchant, url })), {
+      check: (url) => checkUrl(fetchImpl, url, { sleep: sleepFn }),
+      pauseMs,
+      sleep: sleepFn,
+    });
     const counts = { checked: 0, dead: 0, challenge: 0 };
     for (const r of results) {
       counts.checked += 1;
@@ -340,11 +366,15 @@ async function main() {
   const ok = Math.max(0, checked - dead - challenge);
   console.log(`outcomes: ${ok} ok / ${dead} dead / ${challenge} challenge`);
 
-  // ---- record the aggregate outcome ----
   const byRetailer = {};
   for (const [merchant, c] of perRetailer) {
     if (!c.queue) byRetailer[merchant] = { checked: c.checked, dead: c.dead, challenge: c.challenge };
   }
+  return { checked, dead, challenge, ok, byRetailer };
+}
+
+async function main() {
+  const { checked, dead, challenge, byRetailer } = await runDeadLinkSmoke();
 
   const ingest = `${BASE}/api/metrics/link-smoke`;
   try {

@@ -51,13 +51,24 @@ export default function TrackedOutboundLink({
       className={className}
       style={style}
       onClick={() => {
-        trackEvent({
+        // REEA-1078 — a surface with no shopper query (product-detail offer
+        // rows, diagnostics) must still count as an offer click: omit the
+        // empty query field instead of sending query:"" (which the funnel
+        // schema rejected, silently dropping the click).
+        const funnel: {
+          type: "item_clicked";
+          query?: string;
+          rank: number;
+          item_id: string;
+          outbound_url: string;
+        } = {
           type: "item_clicked",
-          query,
           rank,
           item_id: itemId,
           outbound_url: href,
-        });
+        };
+        if (query) funnel.query = query;
+        trackEvent(funnel);
         if (queryId && retailer && rank >= 0) {
           const position = rank + 1;
           const events = [buildResultClick({ queryId, offerId: itemId, retailer, position })];

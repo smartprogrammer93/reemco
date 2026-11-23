@@ -85,7 +85,14 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
     expect(week.cold_serves_pending).toBe(1);
     expect((week.cold_serves_full as number) + (week.cold_serves_pending as number)).toBe(week.searches);
     const bands = ["latency_band_lt_1s", "latency_band_1_3s", "latency_band_3_10s", "latency_band_gt_10s"] as const;
+    const warmBands = [
+      "latency_warm_band_lt_1s",
+      "latency_warm_band_1_3s",
+      "latency_warm_band_3_10s",
+      "latency_warm_band_gt_10s",
+    ] as const;
     expect(bands.reduce((n, b) => n + (week[b] as number), 0)).toBe(week.searches);
+    expect(warmBands.reduce((n, b) => n + (week[b] as number), 0)).toBe(0);
     expect(week.retailer_adapter_attempts).toEqual({ Xcite: 2, Jarir: 1 });
     expect(week.retailer_adapter_failures).toEqual({ Xcite: 1 });
     for (const [merchant, attempts] of Object.entries(week.retailer_adapter_attempts as Record<string, number>)) {
@@ -95,10 +102,15 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
     expect(Object.keys(week).sort()).toEqual([
       "cold_serves_full",
       "cold_serves_pending",
+      "comparison_depth",
       "latency_band_1_3s",
       "latency_band_3_10s",
       "latency_band_gt_10s",
       "latency_band_lt_1s",
+      "latency_warm_band_1_3s",
+      "latency_warm_band_3_10s",
+      "latency_warm_band_gt_10s",
+      "latency_warm_band_lt_1s",
       "link_smoke",
       "offer_link_clicks",
       "offers_by_retailer",
@@ -107,12 +119,50 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
       "searches",
       "zero_offer_searches",
     ]);
+    // REEA-1078 — comparison depth is one aggregate block, never per card.
+    expect(week.comparison_depth).toEqual({
+      cards_total: 0,
+      cards_multi_retailer: 0,
+      ratio: 0,
+    });
   });
 
   it("caps the requested window at the retention ceiling", async () => {
     const res = await weeklyGET(jsonReq("http://localhost/api/metrics/weekly?weeks=999"));
     const body = (await res.json()) as { window_weeks: number };
     expect(body.window_weeks).toBe(26);
+  });
+
+  // REEA-1078 — AC-A3/A4: the payload must be able to show a non-zero warm
+  // band and a comparison-depth ratio, without any per-query data.
+  it("exposes comparison depth and a warm-serve band that can be non-zero", async () => {
+    await recordSearchOutcome(
+      {
+        zeroOffers: false,
+        offersByRetailer: { Xcite: 1 },
+        serveOutcome: "full",
+        serveLatencyMs: 800,
+        serveKind: "warm",
+        comparisonDepth: { cardsTotal: 4, cardsMultiRetailer: 2 },
+      },
+      { now: WEEK_MS },
+    );
+    const res = await weeklyGET(jsonReq("http://localhost/api/metrics/weekly?weeks=1"));
+    const body = (await res.json()) as { weeks: Record<string, Record<string, unknown>> };
+    const week = body.weeks[WEEK_KEY];
+    expect(week.latency_warm_band_lt_1s).toBe(1);
+    expect(week.latency_band_lt_1s).toBe(0); // warm is not a cold collection
+    expect(week.comparison_depth).toEqual({
+      cards_total: 4,
+      cards_multi_retailer: 2,
+      ratio: 0.5,
+    });
+    // Aggregate only: two integers and a derived ratio.
+    expect(Object.keys(week.comparison_depth as object).sort()).toEqual([
+      "cards_multi_retailer",
+      "cards_total",
+      "ratio",
+    ]);
   });
 });
 

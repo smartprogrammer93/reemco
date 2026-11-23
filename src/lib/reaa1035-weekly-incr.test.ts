@@ -162,6 +162,7 @@ describe("REEA-1035 atomic write path", () => {
     expect(w.searches).toBe(N);
     expect(w.cold_serves_full + w.cold_serves_pending).toBe(N);
     expect(w.latency_band_lt_1s + w.latency_band_1_3s + w.latency_band_3_10s + w.latency_band_gt_10s).toBe(N);
+    expect(w.latency_warm_band_lt_1s + w.latency_warm_band_1_3s + w.latency_warm_band_3_10s + w.latency_warm_band_gt_10s).toBe(0);
     expect(w.offers_by_retailer).toEqual({ Xcite: 50, Jarir: 25 });
     expect(w.retailer_adapter_attempts).toEqual({ Xcite: 50, Jarir: 25 });
     expect(w.retailer_adapter_failures).toEqual({ Jarir: 25 });
@@ -174,6 +175,29 @@ describe("REEA-1035 atomic write path", () => {
     expect(counter(kv, v2(`${WEEK}:cold_serves_pending`))).toBe(1);
     expect(counter(kv, v2(`${WEEK}:cold_serves_full`))).toBe(0);
     expect(counter(kv, v2(`${WEEK}:latency_band_gt_10s`))).toBe(1);
+  });
+
+  // REEA-1078 — warm serves and comparison depth ride the same atomic layout.
+  it("writes a warm serve into the warm band keys and folds comparison depth", async () => {
+    const kv = fakeIncrKv();
+    await recordSearchOutcome(
+      outcome({
+        serveKind: "warm",
+        serveLatencyMs: 900,
+        comparisonDepth: { cardsTotal: 6, cardsMultiRetailer: 3 },
+      }),
+      { kv, now: WEEK_MS },
+    );
+    expect(counter(kv, v2(`${WEEK}:latency_warm_band_lt_1s`))).toBe(1);
+    expect(counter(kv, v2(`${WEEK}:latency_band_lt_1s`))).toBe(0);
+    expect(counter(kv, v2(`${WEEK}:comparison_cards_total`))).toBe(6);
+    expect(counter(kv, v2(`${WEEK}:comparison_cards_multi_retailer`))).toBe(3);
+    const weeks = await readWeeklyCounters({ kv });
+    const w = weeks[WEEK];
+    expect(w.latency_warm_band_lt_1s).toBe(1);
+    expect(w.comparison_cards_total).toBe(6);
+    expect(w.comparison_cards_multi_retailer).toBe(3);
+    expect(w.comparison_cards_multi_retailer).toBeLessThanOrEqual(w.comparison_cards_total);
   });
 
   it("a failed INCR degrades the increment to the local layer, never drops the request", async () => {
@@ -273,7 +297,7 @@ describe("REEA-1035 stored schema + route byte-shape", () => {
       { kv, now: WEEK_MS },
     );
     const keyRe =
-      /^metrics:weekly:v2:\d{4}-W\d{2}:(searches|zero_offer_searches|cold_serves_full|cold_serves_pending|latency_band_(lt_1s|1_3s|3_10s|gt_10s)|ls_(runs|checked|dead|ok|challenge)|(offer|att|fail|lsbr_checked|lsbr_dead|lsbr_challenge):[^:]+)$/;
+      /^metrics:weekly:v2:\d{4}-W\d{2}:(searches|zero_offer_searches|cold_serves_full|cold_serves_pending|comparison_cards_total|comparison_cards_multi_retailer|latency_band_(lt_1s|1_3s|3_10s|gt_10s)|latency_warm_band_(lt_1s|1_3s|3_10s|gt_10s)|ls_(runs|checked|dead|ok|challenge)|(offer|att|fail|lsbr_checked|lsbr_dead|lsbr_challenge):[^:]+)$/;
     for (const [key, value] of kv.entries) {
       expect(key).toMatch(keyRe);
       expect(value).toMatch(/^\d+$/);
@@ -301,10 +325,15 @@ describe("REEA-1035 stored schema + route byte-shape", () => {
     expect(Object.keys(week).sort()).toEqual([
       "cold_serves_full",
       "cold_serves_pending",
+      "comparison_depth",
       "latency_band_1_3s",
       "latency_band_3_10s",
       "latency_band_gt_10s",
       "latency_band_lt_1s",
+      "latency_warm_band_1_3s",
+      "latency_warm_band_3_10s",
+      "latency_warm_band_gt_10s",
+      "latency_warm_band_lt_1s",
       "link_smoke",
       "offer_link_clicks",
       "offers_by_retailer",

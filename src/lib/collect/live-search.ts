@@ -86,6 +86,9 @@ import type { LiveSearchResult } from "@/lib/collect/coverage";
 export type { LiveSearchResult } from "@/lib/collect/coverage";
 export { coverageLine } from "@/lib/collect/coverage";
 import { deviceLeadFlags, summarizeResponders } from "@/lib/collect/coverage";
+// REEA-1078 — serve-kind type only (erased at build; no runtime import of the
+// server-only metrics module into this graph).
+import type { ServeKind } from "@/lib/metrics";
 
 /**
  * Per-attempt fetch ceiling for the search fan-out (parallel per retailer).
@@ -3022,6 +3025,16 @@ export interface LiveSearchStages {
    * weekly fold records no attempts for that serve.
    */
   adapterTelemetry: Promise<AdapterTelemetry>;
+  /**
+   * REEA-1078 — which clock this serve's weekly latency record measures.
+   * "warm" = a fresh query-memo hit: NO fan-out ran, so the page's after()
+   * wall clock is the serve clock (request → finalized response) and the
+   * weekly fold lands it in the warm band set. "cold" = a live fan-out ran
+   * (fresh, stale-while-revalidate, or the shared replay racing its hops),
+   * so the recorded wall clock is the cold collection clock. Set here, not
+   * guessed in the page: only this function knows whether the memo answered.
+   */
+  serveKind: ServeKind;
 }
 
 /** REEA-871 — per-retailer adapter attempts/failures of one round-one
@@ -3618,6 +3631,9 @@ export function collectLiveResultsStaged(
       allSettled: Promise.resolve(),
       converged: served,
       adapterTelemetry: Promise.resolve({ attempts: {}, failures: {} }),
+      // REEA-1078 — no fan-out ran: this serve's weekly latency record is the
+      // warm serve clock, not a cold collection clock.
+      serveKind: "warm",
     };
   }
 
@@ -3815,10 +3831,18 @@ export function collectLiveResultsStaged(
 
   if (cached) {
     // Stale window only reaches here (fresh returns above): cache-first flush,
-    // live stages behind it, converged full-ranked final.
-    return { stages: [Promise.resolve(skuLeadSnap(q, cached.value)), ...stages], final, allSettled, converged, adapterTelemetry };
+    // live stages behind it, converged full-ranked final. REEA-1078 — a live
+    // fan-out DID run behind the response, so this is a cold serve.
+    return {
+      stages: [Promise.resolve(skuLeadSnap(q, cached.value)), ...stages],
+      final,
+      allSettled,
+      converged,
+      adapterTelemetry,
+      serveKind: "cold",
+    };
   }
-  return { stages, final, allSettled, converged, adapterTelemetry };
+  return { stages, final, allSettled, converged, adapterTelemetry, serveKind: "cold" };
 }
 
 /**

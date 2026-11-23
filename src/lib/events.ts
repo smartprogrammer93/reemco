@@ -154,7 +154,12 @@ const eventSchema = z
       need(ev.item_id !== undefined, "item_id required", "item_id");
       break;
     case "item_clicked":
-      need(ev.query !== undefined, "query required", "query");
+      // REEA-1078 — query is OPTIONAL on item_clicked. The product-detail
+      // page's offer CTAs are real offer clicks with no shopper query (the
+      // page was reached by product id); requiring query made the client
+      // beacon get rejected there, so those clicks never reached the weekly
+      // offer_link_clicks counter. rank/item_id/outbound_url still pin the
+      // click; a query-carrying click stores it unchanged.
       need(ev.rank !== undefined, "rank required", "rank");
       need(ev.item_id !== undefined, "item_id required", "item_id");
       need(ev.outbound_url !== undefined, "outbound_url required", "outbound_url");

@@ -39,6 +39,29 @@ describe("validateEvent", () => {
     expect(validateEvent({ ...ev, rank: 0, outbound_url: "https://x.example/y" }).ok).toBe(true);
   });
 
+  // REEA-1078 — a queryless offer CTA (product-detail page) is still a real
+  // click and must validate, or it never reaches the weekly counter.
+  it("accepts item_clicked without a query (queryless offer CTA)", () => {
+    expect(
+      validateEvent({
+        type: "item_clicked",
+        rank: 0,
+        item_id: "p-1",
+        outbound_url: "https://x.example/y",
+      }).ok,
+    ).toBe(true);
+    // An explicitly empty query is still rejected; the client omits it.
+    expect(
+      validateEvent({
+        type: "item_clicked",
+        query: "",
+        rank: 0,
+        item_id: "p-1",
+        outbound_url: "https://x.example/y",
+      }).ok,
+    ).toBe(false);
+  });
+
   it("rejects non-http(s) outbound URLs (SSRF/javascript: guard)", () => {
     expect(
       validateEvent({
