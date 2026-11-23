@@ -286,13 +286,15 @@ describe("REEA-807 searchOutcomeFromSnapshot", () => {
         { merchant: "Jarir", hits: 9, error: "timeout" },
       ],
     };
-    expect(searchOutcomeFromSnapshot(snap)).toEqual({
+    // REEA-1099 — the caller passes the RESULTS-PAGE SHELF slice, not the
+    // whole snapshot: the depth is folded over exactly the painted cards.
+    expect(searchOutcomeFromSnapshot(snap, snap.products)).toEqual({
       zeroOffers: false,
       offersByRetailer: { Xcite: 4 },
       // REEA-1078 — two empty products: zero multi-retailer cards.
       comparisonDepth: { cardsTotal: 2, cardsMultiRetailer: 0 },
     });
-    expect(searchOutcomeFromSnapshot({ products: [], notes: [] }).zeroOffers).toBe(true);
+    expect(searchOutcomeFromSnapshot({ products: [], notes: [] }, []).zeroOffers).toBe(true);
   });
 });
 

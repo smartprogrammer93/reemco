@@ -1,6 +1,9 @@
 import ResultsClient from "@/components/ResultsClient";
 import { collectLiveResultsStaged } from "@/lib/collect/live-search";
 import { recordSearchOutcome, searchOutcomeFromSnapshot, serveOutcomeOf } from "@/lib/metrics";
+// REEA-1099 — the ONE results-page shelf card definition the renderer uses;
+// the comparison-depth counter folds over this same set.
+import { resultsShelfCards } from "@/lib/results-shelf";
 // REEA-1078 S2 — the serve path applies the persisted dead-lane retirement set
 // on top of the static retirement (see lib/collect/lane-health.ts).
 import { readRetiredLanes, recordLaneAttempts } from "@/lib/collect/lane-health";
@@ -227,13 +230,21 @@ export default async function ResultsPage({
         staged.adapterTelemetry.catch(() => ({ attempts: {}, failures: {} })),
       ]);
       const pageSnap = convSnap ?? served;
+      // REEA-1099 — comparison depth is folded over the SAME shelf the page
+      // paints (the primary slice of the filtered, confidence-partitioned
+      // snapshot), never every product the snapshot carries: related-band
+      // rows and selection-dropped rows are not results-page cards. The
+      // shared helper is the renderer's own chain, so counter and page agree.
+      const shelfCards = pageSnap
+        ? resultsShelfCards(pageSnap, query, 1, country, showOutOfStock)
+        : [];
       // REEA-1078 — warm serves use the entry clock captured above (the serve
       // clock); cold serves use the post-allSettled clock (collection clock).
       // eslint-disable-next-line react-hooks/purity -- read in the deferred after() tail, never during render output.
       const recordedMs = staged.serveKind === "warm" ? afterEntryMs : Date.now();
       await recordSearchOutcome({
         ...(pageSnap
-          ? searchOutcomeFromSnapshot(pageSnap)
+          ? searchOutcomeFromSnapshot(pageSnap, shelfCards)
           : { zeroOffers: false, offersByRetailer: {} }),
         serveOutcome: serveOutcomeOf(served, convSnap),
         // REEA-1078 — serve kind from the collection layer (only it knows

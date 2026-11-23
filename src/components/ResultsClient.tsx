@@ -8,16 +8,10 @@ import { StatusLegend } from "@/components/OfferStatus";
 import ProductResultCard from "@/components/ProductResultCard";
 import { searchProducts } from "@/lib/search";
 import { sanitizePage, sanitizeSearchQuery } from "@/lib/search-params";
-import {
-  bestBadgeIndex,
-  filterProductsByStock,
-  recallShowOutOfStock,
-  sanitizeShowOutOfStock,
-} from "@/lib/stock";
+import { bestBadgeIndex, recallShowOutOfStock, sanitizeShowOutOfStock } from "@/lib/stock";
 import {
   buildResultsHref,
   countryFromAcceptLanguage,
-  filterProductsByCountry,
   recallCountry,
   sanitizeCountry,
   type CountryCode,
@@ -31,8 +25,7 @@ import {
 } from "@/lib/metrics-events";
 import { HeadingGhost, SkeletonCard, StampGhost, coverageLhTier } from "@/components/SkeletonSlots";
 import { PRODUCTS } from "@/lib/feed";
-import { exactSkuKeep } from "@/lib/relevance";
-import { partitionByConfidence } from "@/lib/confidence";
+import { resultsShelfCards, resultsShelfSections, shelfSectionsFromProducts, RESULTS_PAGE_SIZE } from "@/lib/results-shelf";
 import { formatPrice, sortOffers } from "@/lib/format";
 import SearchForm from "@/components/SearchForm";
 import { coverageParts, type LiveSearchResult } from "@/lib/collect/coverage";
@@ -56,7 +49,7 @@ import type { NormalizedProduct } from "@/types/product";
  * applied per snapshot before slicing, same rules as the plain path.
  */
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = RESULTS_PAGE_SIZE;
 
 /* Brief v4 loading/error states come from app/results/loading.tsx and the
    boundary below — keep the markup identical to the former in-component
@@ -426,46 +419,19 @@ function SelectionRow({
   );
 }
 
-/* Selections apply BEFORE slicing, per snapshot — same chain (country, then
-   stock) the plain path runs, so staged and converged views agree. REEA-822:
-   the exact-SKU keep-predicate rides the stock stage so the code-matched card
-   survives the default OOS card-level drop (its all-OOS offer set renders
-   honestly as out-of-stock instead of erasing the lead into a fake zero). */
-/* Selections apply BEFORE the confidence partition, per snapshot — same chain
-   (country, then stock) the plain path runs, so staged and converged views
-   agree. REEA-964: the partition splits the filtered set into primary
+/* REEA-1099 — the shelf card population lives in ONE shared definition
+   (src/lib/results-shelf.ts) so the renderer and the comparison-depth counter
+   can never drift apart. Selections apply BEFORE the confidence partition,
+   per snapshot — same chain the plain path runs, so staged and converged
+   views agree. REEA-964: the partition splits the filtered set into primary
    (confident) and related (below threshold, capped) — the page slice applies
    to the PRIMARY list only; the related band is capped by the partition
    itself, on every page. REEA-822: the exact-SKU keep-predicate rides the
    stock stage so the code-matched card survives the default OOS card-level
    drop (its all-OOS offer set renders honestly as out-of-stock instead of
    erasing the lead into a fake zero). */
-function stagedSections(
-  snap: LiveSearchResult,
-  query: string,
-  country: CountryCode | null,
-  showOutOfStock: boolean,
-): { primary: NormalizedProduct[]; related: NormalizedProduct[] } {
-  const filtered = filterProductsByStock(
-    filterProductsByCountry(snap.products, country),
-    showOutOfStock,
-    exactSkuKeep(query),
-  );
-  return partitionByConfidence(query, filtered);
-}
-
-function stagedView(
-  snap: LiveSearchResult,
-  query: string,
-  page: number,
-  country: CountryCode | null,
-  showOutOfStock: boolean,
-): NormalizedProduct[] {
-  return stagedSections(snap, query, country, showOutOfStock).primary.slice(
-    (page - 1) * PAGE_SIZE,
-    page * PAGE_SIZE,
-  );
-}
+const stagedSections = resultsShelfSections;
+const stagedView = resultsShelfCards;
 
 /* Design v3 grid inside one streaming block (see StageAppend). */
 const GRID_CLASS = "rc-shelf";
@@ -1446,14 +1412,7 @@ function ResultsInner(props: {
   // REEA-964: the confidence partition rides the SAME filtered set on the
   // fallback path — primary results vs the capped related band — so the
   // static-host view obeys the two-section contract too.
-  const plainSections = partitionByConfidence(
-    query,
-    filterProductsByStock(
-      filterProductsByCountry(served, country),
-      showOutOfStock,
-      exactSkuKeep(query),
-    ),
-  );
+  const plainSections = shelfSectionsFromProducts(served, query, country, showOutOfStock);
   const products = plainSections.primary;
   const matchCount = products.length;
   const zero = query.length > 0 && matchCount === 0;

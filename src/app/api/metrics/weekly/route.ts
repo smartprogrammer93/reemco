@@ -72,6 +72,21 @@
  * read as 3–10 s cold. Cold + warm bands sum to searches, and
  * cards_multi_retailer ≤ cards_total by construction. Aggregate integers
  * only — still no per-user, per-query or per-card data.
+ *
+ * REEA-1099 — measurement integrity for the two counters above:
+ *  - `comparison_depth` now folds the RESULTS-PAGE SHELF card population
+ *    (the primary slice the page paints, see lib/results-shelf.ts), not every
+ *    product the snapshot carries. Related-band rows (chips, not result
+ *    cards) and selection-dropped rows no longer count. A week that mixes
+ *    serves recorded before this counter shipped still reads a deflated
+ *    cards/serve (the numerator starts at the ship; the week's `searches`
+ *    includes earlier serves) — read cards/serve only across an all-shipped
+ *    window.
+ *  - `retailer_adapter_failures` now counts a DISPATCHED lane that returned no
+ *    usable payload (Cloudflare 403 / challenge / zone block) as a failure,
+ *    the same lane the results page already names unreachable (REEA-1078 AC9).
+ *    The plan's failure-share formula stays failures / attempts — no new
+ *    bucket, still aggregate-only.
  */
 import { RETENTION_WEEKS, isoWeekKey, linkSmokeRates, readWeeklyCountersDetailed } from "@/lib/metrics";
 import type { WeeklyCountersRead } from "@/lib/metrics";

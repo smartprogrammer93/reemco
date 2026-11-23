@@ -20,8 +20,11 @@
  *
  * REEA-1078 — two aggregate additions, still counters only:
  *  - comparison depth: `comparison_cards_total` / `comparison_cards_multi_retailer`
- *    count product cards per serve and how many carried offers from ≥2 distinct
- *    retailers (the core comparison promise, previously unmeasured). No
+ *    count results-page SHELF cards per serve and how many carried offers from
+ *    ≥2 distinct retailers (the core comparison promise, previously
+ *    unmeasured). REEA-1099 — the population is the rendered primary slice
+ *    (see results-shelf.ts), never every product the snapshot carries: the
+ *    related band and selection-dropped rows are not result cards. No
  *    per-query or per-card data is stored — only the two totals.
  *  - warm-serve latency: a fresh query-memo hit runs no fan-out, so its wall
  *    clock is the SERVE clock (request → finalized response), not the cold
@@ -164,9 +167,11 @@ export function warmLatencyBandOf(latencyMs: number): WarmLatencyBand {
  */
 export type ServeKind = "cold" | "warm";
 
-/** REEA-1078 — the aggregate comparison depth of one serve's card set. */
+/** REEA-1078/REEA-1099 — the aggregate comparison depth of one serve's
+ *  RESULTS-PAGE SHELF card set (the primary slice the page paints, derived
+ *  through results-shelf.ts — not every product in the snapshot). */
 export interface ComparisonDepth {
-  /** Product cards in the served/converged answer. */
+  /** Results-page shelf cards painted for this serve. */
   cardsTotal: number;
   /** Cards carrying offers from ≥2 DISTINCT retailers. */
   cardsMultiRetailer: number;
@@ -209,8 +214,9 @@ export interface WeekCounters {
   latency_warm_band_1_3s: number;
   latency_warm_band_3_10s: number;
   latency_warm_band_gt_10s: number;
-  /** REEA-1078 — comparison depth totals over served cards (see
-   *  ComparisonDepth). cards_multi_retailer ≤ cards_total by construction. */
+  /** REEA-1078/REEA-1099 — comparison depth totals over results-page shelf
+   *  cards (see ComparisonDepth). cards_multi_retailer ≤ cards_total by
+   *  construction. */
   comparison_cards_total: number;
   comparison_cards_multi_retailer: number;
   link_smoke: LinkSmokeCounters;
@@ -523,12 +529,13 @@ export function applyLinkSmoke(
   return weeks;
 }
 
-/** REEA-1078 — pure: comparison depth of a card set. A card counts as
- *  multi-retailer when its offers name ≥2 DISTINCT sanitized retailers; an
- *  offer with no usable merchant name cannot make a card a comparison, so it
- *  is ignored (never counted as a second retailer). Aggregate-only — the
- *  caller passes the same products the page renders, and only the two totals
- *  are stored (no card ids, no per-query data). */
+/** REEA-1078/REEA-1099 — pure: comparison depth of a RESULTS-PAGE SHELF
+ *  card set. A card counts as multi-retailer when its offers name ≥2 DISTINCT
+ *  sanitized retailers; an offer with no usable merchant name cannot make a
+ *  card a comparison, so it is ignored (never counted as a second retailer).
+ *  Aggregate-only — the caller passes the exact shelf slice the page paints
+ *  (resultsShelfCards), and only the two totals are stored (no card ids, no
+ *  per-query data). */
 export function comparisonDepthOf(
   products: readonly { offers?: readonly { merchant?: string }[] }[],
 ): ComparisonDepth {
@@ -553,12 +560,23 @@ export function comparisonDepthOf(
  *  Only successful notes count (an error note delivered nothing); the
  *  zero-offer flag reads the product count of the converged snapshot. The
  *  REEA-871 serve fields ride separately — the caller knows the fan-out
- *  clock and the adapter telemetry, the snapshot does not. REEA-1078 — the
- *  comparison depth is derived from the SAME card set the snapshot carries. */
-export function searchOutcomeFromSnapshot(snap: {
-  products: { offers?: readonly { merchant?: string }[] }[];
-  notes: { merchant: string; hits: number; error?: string }[];
-}): SearchOutcomeBase {
+ *  clock and the adapter telemetry, the snapshot does not.
+ *
+ *  REEA-1099 — the comparison depth is folded over the RESULTS-PAGE SHELF
+ *  CARDS the caller passes (`cards`), NOT over every product the snapshot
+ *  carries. The snapshot also holds related-band rows (rendered as chips, not
+ *  result cards — REEA-964) and rows the country/stock selections drop before
+ *  paint, so counting `snap.products` measured a different population than
+ *  the plan's §4b gate names (measured live: 20 recorded vs 10 painted).
+ *  Callers must derive `cards` through `resultsShelfCards` so the increment is
+ *  exactly the shelf the shopper's page painted. */
+export function searchOutcomeFromSnapshot(
+  snap: {
+    products: { offers?: readonly { merchant?: string }[] }[];
+    notes: { merchant: string; hits: number; error?: string }[];
+  },
+  cards: readonly { offers?: readonly { merchant?: string }[] }[],
+): SearchOutcomeBase {
   const offersByRetailer: Record<string, number> = {};
   for (const n of snap.notes ?? []) {
     if (n?.error) continue;
@@ -567,7 +585,7 @@ export function searchOutcomeFromSnapshot(snap: {
   return {
     zeroOffers: (snap.products?.length ?? 0) === 0,
     offersByRetailer,
-    comparisonDepth: comparisonDepthOf(snap.products ?? []),
+    comparisonDepth: comparisonDepthOf(cards),
   };
 }
 
