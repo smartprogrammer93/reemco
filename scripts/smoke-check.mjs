@@ -156,11 +156,13 @@ await step(4, "results surface last-verified freshness (REEA-65)", async () => {
   await page.goto(`${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`, { waitUntil: "load" });
   await page.waitForSelector(".result-card", { timeout: 25000 });
   const html = await page.content();
-  // REEA-283/REEA-254 chip copy renders uppercase with the minute figure inside:
-  // "UPDATED {n} MINUTES AGO" / "UPDATED DATE UNKNOWN". Match case-insensitively
-  // and allow the digit before MINUTES AGO, alongside the legacy
-  // "updated <!-- -->minutes ago" and "Verified 2d ago" spellings.
-  const chip = "(?:Verified|updated)[ ]*(?:<!--[ ]-->)?[ ]*(?:\\d+[hd] ago|\\d+ minutes ago|minutes ago)";
+  // REEA-283/REEA-254/REEA-1092 chip copy renders uppercase with the minute
+  // figure inside: "UPDATED {n} MINUTES AGO" / "UPDATED DATE UNKNOWN", and
+  // since REEA-1069 AC10 "UPDATED JUST NOW" / "UPDATED 1 MINUTE AGO". Match
+  // case-insensitively, alongside the legacy "updated <!-- -->minutes ago" and
+  // "Verified 2d ago" spellings. Keep this literal identical to
+  // src/lib/freshness-chip.ts — src/lib/freshness-chip.test.ts pins the pair.
+  const chip = "(?:Verified|updated)[ ]*(?:<!--[ ]-->)?[ ]*(?:just now|\\d+[ ]*minutes? ago|\\d+[hd] ago|minutes? ago)";
   const fresh = (html.match(new RegExp(chip, "gi")) || []).length;
   const stale = (html.match(/may be outdated/gi) || []).length;
   const unknown = (html.match(/(?:updated|Verification) date unknown/gi) || []).length;

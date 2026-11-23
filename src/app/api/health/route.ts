@@ -52,6 +52,10 @@ import { maybeRunDailyLaneHealth } from "@/lib/collect/lane-health";
 // REEA-1078 AC9 — the daily zone-reachability record the results page reads
 // to name a blocked lane as unreachable (same probes /api/echo reports).
 import { maybeRunDailyZoneStatus } from "@/lib/collect/zone-status";
+import {
+  FRESH_CHIP_ALT_RE as CHIP_ALT_RE,
+  FRESH_CHIP_RE as CHIP_RE,
+} from "@/lib/freshness-chip";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -74,11 +78,11 @@ const HOME_TIMEOUT_MS = 12000;
 const RESULTS_TIMEOUT_MS = 30000;
 const PRODUCT_TIMEOUT_MS = 25000;
 
-// REEA-283/REEA-254 chip copy renders uppercase with the minute figure; keep
-// in sync with step 4 of scripts/smoke-check.mjs (case-insensitive, legacy
-// spellings allowed so a healthy deploy never false-fails).
-const CHIP_RE = "(?:Verified|updated)[ ]*(?:<!--[ ]-->)?[ ]*(?:\\d+[hd] ago|\\d+ minutes ago|minutes ago)";
-const CHIP_ALT_RE = "may be outdated|(?:updated|Verification) date unknown";
+// REEA-283/REEA-254/REEA-1092 chip copy: the matcher lives in
+// lib/freshness-chip.ts so the probe and scripts/smoke-check.mjs step 4 cannot
+// drift. REEA-1069 AC10 introduced "Updated just now" / "Updated 1 minute
+// ago"; the old "N minutes ago"-only matcher turned a healthy fresh deploy
+// into a health 503 (run 45125867791 rolled the Shelf build back).
 
 async function get(origin: string, path: string, timeoutMs: number) {
   return readHop(origin, path, timeoutMs);
