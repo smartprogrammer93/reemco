@@ -1,5 +1,7 @@
 import { PRODUCTS } from "@/lib/feed";
 import { canonicalFields, compatibleFields } from "@/lib/collect/canonical-product";
+// REEA-1078 S2 — dead-lane retirement for the detail page's live resolution.
+import { readRetiredLanes } from "@/lib/collect/lane-health";
 import type { CountryCode } from "@/lib/country";
 import type { NormalizedProduct } from "@/types/product";
 
@@ -27,7 +29,11 @@ export async function resolveProductIdentity(
   const query = productId.replace(/-/g, " ").trim();
   if (!query) return null;
   const { collectLiveResults } = await import("@/lib/collect/live-search");
-  const { products } = await collectLiveResults(query, { country: country ?? null });
+  const { products } = await collectLiveResults(query, {
+    country: country ?? null,
+    // REEA-1078 S2 — the product page's live answer skips retired lanes too.
+    retiredLanes: await readRetiredLanes(),
+  });
   const exact = products.find((p) => p.productId === productId);
   if (exact) return exact;
   // REEA-167 §2 alias behaviour, rendered in place: an alias slug decodes to

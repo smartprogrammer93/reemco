@@ -372,6 +372,10 @@ export default function ResultsClient(props: {
   /** REEA-965 — per-query-execution id from the server render; consumed by
    *  the R2 instrumentation (search_performed / zero_result_shown). */
   queryId?: string;
+  /** REEA-1078 AC9 — merchants whose retailer zone is recorded unreachable
+   *  from this egress. The coverage sentence names them as unreachable
+   *  instead of letting a silent zero read as "we don't stock it". */
+  unreachableLanes?: readonly string[];
 }) {
   return (
     <Suspense fallback={<LoadingFallback locale={props.locale} />}>
@@ -663,14 +667,17 @@ function CoverageLine({
   locale,
   pendingStatus,
   onRefresh,
+  unreachableLanes,
 }: {
   notes: LiveSearchResult["notes"];
   products: NormalizedProduct[];
   locale?: Locale;
   pendingStatus?: boolean;
   onRefresh?: () => void;
+  /** REEA-1078 AC9 — merchants the reachability record names as blocked. */
+  unreachableLanes?: readonly string[];
 }) {
-  const text = coverageLine(notes, locale, products);
+  const text = coverageLine(notes, locale, products, unreachableLanes);
   if (!text && !pendingStatus) return null;
   // REEA-778 — the settled sentence rides the SAME lh-tier box as its
   // StampGhost reserve (one shared deterministic box per locale tier): the
@@ -845,6 +852,7 @@ function StageCoverage(props: {
   showOutOfStock: boolean;
   locale?: Locale;
   onRefresh?: () => void;
+  unreachableLanes?: readonly string[];
 }) {
   const snap = use(props.stages[props.stages.length - 1]);
   const products = use(
@@ -865,6 +873,7 @@ function StageCoverage(props: {
       locale={props.locale}
       pendingStatus={snap.kuwaitPendingStatus}
       onRefresh={props.onRefresh}
+      unreachableLanes={props.unreachableLanes}
     />
   );
 }
@@ -882,6 +891,8 @@ function StagedResults(props: {
   locale?: Locale;
   /** REEA-965 — per-query metrics id from the server render. */
   queryId?: string;
+  /** REEA-1078 AC9 — merchants the reachability record names as blocked. */
+  unreachableLanes?: readonly string[];
 }) {
   const { stages, query, page, country, showOutOfStock, onSelectCountry, onToggleStock, onRefresh, locale } = props;
   const finalPromise = stages[stages.length - 1];
@@ -995,7 +1006,7 @@ function StagedResults(props: {
           <Suspense fallback={null}>
             <StagePendingRow stages={stages} locale={locale} />
           </Suspense>
-          <CoverageLine notes={finalSnap.notes} products={products} locale={locale} />
+          <CoverageLine notes={finalSnap.notes} products={products} locale={locale} unreachableLanes={props.unreachableLanes} />
         </ResultsErrorBoundary>
       );
     }
@@ -1025,7 +1036,7 @@ function StagedResults(props: {
           </>
         ) : (
           <>
-            <CoverageLine notes={finalSnap.notes} products={products} locale={locale} pendingStatus={finalSnap.kuwaitPendingStatus} onRefresh={onRefresh} />
+            <CoverageLine notes={finalSnap.notes} products={products} locale={locale} pendingStatus={finalSnap.kuwaitPendingStatus} onRefresh={onRefresh} unreachableLanes={props.unreachableLanes} />
             <ResultsGrid
               products={products}
               query={query}
@@ -1100,6 +1111,7 @@ function StagedResults(props: {
           showOutOfStock={showOutOfStock}
           locale={locale}
           onRefresh={onRefresh}
+          unreachableLanes={props.unreachableLanes}
         />
       </Suspense>
       <div className="flex min-w-0 flex-col items-stretch gap-4" style={{ marginTop: "var(--rc-space-8)" }}>
@@ -1150,6 +1162,7 @@ function ResultsInner(props: {
   renderStartMs?: number;
   locale?: Locale;
   queryId?: string;
+  unreachableLanes?: readonly string[];
 }) {
   const searchParams = useSearchParams();
   // REEA-279: one resolution per view — prop first (server-resolved), then
@@ -1301,6 +1314,7 @@ function ResultsInner(props: {
         onRefresh={onRefresh}
         renderStartMs={props.renderStartMs}
         queryId={props.queryId}
+        unreachableLanes={props.unreachableLanes}
       />
     );
   }

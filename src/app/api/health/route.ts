@@ -45,6 +45,13 @@ import { invalidateTrendingChips } from "@/lib/trending-chips";
 import { MAX_RESPONSE_BODY_BYTES, readBodyCapped } from "@/lib/collect/read-body";
 import { resolveBuildStamp } from "@/lib/build-stamp";
 import { maybeRunDailyLinkSmoke } from "@/lib/metrics/link-smoke-runner";
+// REEA-1078 S2 — the daily lane-health pass (7-day auto-retire + canary
+// re-admission) rides this same timer, behind the response.
+import { COLLECTORS, runLaneCanary } from "@/lib/collect/live-search";
+import { maybeRunDailyLaneHealth } from "@/lib/collect/lane-health";
+// REEA-1078 AC9 — the daily zone-reachability record the results page reads
+// to name a blocked lane as unreachable (same probes /api/echo reports).
+import { maybeRunDailyZoneStatus } from "@/lib/collect/zone-status";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -181,6 +188,27 @@ export async function GET(req: NextRequest): Promise<Response> {
   // the (network-heavy) smoke off the health response, and the runner never
   // throws into the verdict.
   after(() => maybeRunDailyLinkSmoke({ origin }));
+  // REEA-1078 S2 — dead-lane retirement, once per UTC day, behind the same
+  // response: evaluate the 7-day all-failure rule over the persisted per-lane
+  // evidence, then canary every retired lane once through its REAL adapter.
+  // N consecutive canary answers re-admit the lane; a failure resets the
+  // streak. Best-effort — the runner never throws into the verdict.
+  // REEA-1078 AC9 — refresh the zone-reachability record once per UTC day so
+  // the "unreachable" label never depends on someone hitting /api/echo. Same
+  // probe shape as the echo zone cells; behind the response, never in it.
+  after(() => maybeRunDailyZoneStatus());
+  after(() =>
+    maybeRunDailyLaneHealth({
+      // Every declared lane: the runner derives the active set from the
+      // persisted retirement state, so a canary-readmitted lane is evaluated
+      // by the 7-day rule again.
+      allLanes: COLLECTORS.map((c) => c.merchant),
+      canaryTargets: COLLECTORS.map((c) => ({
+        merchant: c.merchant,
+        canary: (merchant: string) => runLaneCanary(merchant),
+      })),
+    }),
+  );
   const failed: string[] = [];
   const checks: Record<string, string | number> = {};
 

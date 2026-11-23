@@ -7,10 +7,17 @@ import "./test-cache-dir";
 import { describe, expect, it } from "vitest";
 import { PER_RETAILER_TIMEOUT_MS } from "@/lib/collect/types";
 import { COVERAGE_ORDER } from "@/lib/collect/coverage";
+// REEA-1078 S2 — the dispatch layer never contacts a statically retired lane,
+// so the fan-out the staged/finalize tests exercise is COLLECTORS minus that
+// set (the adapters stay declared and tested).
+import { DEFAULT_RETIRED_LANES } from "@/lib/collect/lane-health";
 
 // The live rotation the staged/finalize tests exercise: every KW-tagged
-// adapter (SA/EG lanes are country-scoped out of a country: "KW" run).
-const KW_ADAPTER_COUNT = COLLECTORS.filter((c) => c.country === "KW").length;
+// adapter that is still dispatched (SA/EG lanes are country-scoped out of a
+// country: "KW" run; retired lanes never reach the fan-out).
+const KW_ADAPTER_COUNT = COLLECTORS.filter(
+  (c) => c.country === "KW" && !DEFAULT_RETIRED_LANES.includes(c.merchant),
+).length;
 import { jarirFallbackKey } from "@/lib/collect/search-fallback";
 import type { NormalizedProduct } from "@/types/product";
 import {

@@ -108,3 +108,66 @@ describe("summarizeResponders (REEA-1070 AC2: partial-response truth)", () => {
     expect(responders.answeredEmpty).toEqual(["Jarir"]);
   });
 });
+
+describe("coverageLine — REEA-1078 AC9: a blocked lane is unreachable, not empty", () => {
+  const product = (merchant: string): NormalizedProduct => ({
+    productId: `p-${merchant}`,
+    title: "Apple iPhone 17 Pro",
+    brand: "Apple",
+    offers: [{ merchant, price: 389, currency: "KWD", url: "https://x/1", inStock: true }],
+    coupons: [],
+    variations: [],
+    alternatives: [],
+  });
+
+  it("names a blocked lane as unreachable in EN, instead of leaving its zero silent", () => {
+    const notes = [
+      { merchant: "Xcite", hits: 1 },
+      { merchant: "Lulu Hypermarket", hits: 0 },
+    ];
+    expect(coverageLine(notes, "en", [product("Xcite")], ["Lulu Hypermarket"])).toBe(
+      "Unreachable: Lulu Hypermarket. Prices from Xcite.",
+    );
+  });
+
+  it("speaks Arabic for the same lane, with no status codes or internals", () => {
+    const notes = [
+      { merchant: "Xcite", hits: 1 },
+      { merchant: "Lulu Hypermarket", hits: 0 },
+    ];
+    const line = coverageLine(notes, "ar", [product("Xcite")], ["Lulu Hypermarket"]);
+    expect(line).toBe("تعذّر الوصول إلى Lulu Hypermarket. أسعار من Xcite.");
+    expect(line).not.toMatch(/40\d|timeout|abort/i);
+  });
+
+  it("does not report the same lane as both unreachable and 'no response'", () => {
+    const notes = [
+      { merchant: "Xcite", hits: 1 },
+      { merchant: "Lulu Hypermarket", hits: 0, error: "HTTP 403" },
+    ];
+    expect(coverageLine(notes, "en", [product("Xcite")], ["Lulu Hypermarket"])).toBe(
+      "Unreachable: Lulu Hypermarket. Prices from Xcite.",
+    );
+  });
+
+  it("leaves a lane that answered byte-for-byte as today", () => {
+    const notes = [
+      { merchant: "Xcite", hits: 1 },
+      { merchant: "Lulu Hypermarket", hits: 2 },
+    ];
+    const rendered = [product("Xcite"), product("Lulu Hypermarket")];
+    expect(coverageLine(notes, "en", rendered, ["Lulu Hypermarket"])).toBe(
+      coverageLine(notes, "en", rendered),
+    );
+  });
+
+  it("keeps today's sentence when no reachability record is available", () => {
+    const notes = [
+      { merchant: "Xcite", hits: 1 },
+      { merchant: "Blink", hits: 0, error: "timeout" },
+    ];
+    expect(coverageLine(notes, "en", [product("Xcite")], undefined)).toBe(
+      "No response from Blink. Prices from Xcite.",
+    );
+  });
+});

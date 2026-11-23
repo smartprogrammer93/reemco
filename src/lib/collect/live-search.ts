@@ -89,6 +89,10 @@ import { deviceLeadFlags, summarizeResponders } from "@/lib/collect/coverage";
 // REEA-1078 — serve-kind type only (erased at build; no runtime import of the
 // server-only metrics module into this graph).
 import type { ServeKind } from "@/lib/metrics";
+// REEA-1078 S2 — dead-lane retirement: the static retired set always applies,
+// and the caller may add the dynamically retired lanes read from the shared
+// lane-health state (see ./lane-health.ts).
+import { DEFAULT_RETIRED_LANES, LANE_CANARY_QUERY } from "@/lib/collect/lane-health";
 
 /**
  * Per-attempt fetch ceiling for the search fan-out (parallel per retailer).
@@ -3372,6 +3376,7 @@ async function finalSnapshot(
   snapshotsEnabled = true,
   locale?: "en" | "ar",
   observations: SeenRow[] = [],
+  retiredLanes?: readonly string[],
 ): Promise<LiveSearchResult> {
   const { hits, notes } = filterNotes(country, settled);
   let products = groupHits(q, hits, true, locale);
@@ -3391,7 +3396,15 @@ async function finalSnapshot(
     // returns IS live data from this run — still no bundled snapshot.
     const wider = widerQuery(q);
     attemptedQueries = wider === q ? [q] : [q, wider];
-    const retry = await collectLiveResults(wider, { fetchImpl, country, widenedRetry: true, locale });
+    const retry = await collectLiveResults(wider, {
+      fetchImpl,
+      country,
+      widenedRetry: true,
+      locale,
+      // REEA-1078 S2 — the widened round is the same dispatch decision: a
+      // retired lane must not be re-contacted here either.
+      retiredLanes,
+    });
     retrySuggestions = retry.suggestions?.length ? retry.suggestions : retry.products.slice(0, 3);
     if (retry.products.length > 0) {
       products = retry.products;
@@ -3443,6 +3456,30 @@ async function finalSnapshot(
   return withHonestyFlags(q, { products, notes: servedNotes, suggestions, attemptedQueries });
 }
 
+/**
+ * REEA-1078 S2 — one bounded canary hop for a retired lane: run its REAL
+ * adapter once with the canary query and report whether the lane ANSWERED.
+ * "Answered" is deliberately the same signal the retirement rule reads: the
+ * adapter completed without an error. A lane that answers empty for this one
+ * query is reachable (just thin for that query); a challenge exhaustion or a
+ * timeout is still unreachable. Never throws — a canary failure must not fail
+ * the health tick.
+ */
+export async function runLaneCanary(
+  merchant: string,
+  opts: { fetchImpl?: FetchImpl; query?: string } = {},
+): Promise<boolean> {
+  const collector = COLLECTORS.find((c) => c.merchant === merchant);
+  if (!collector) return false;
+  const fetchImpl: FetchImpl = opts.fetchImpl ?? ((u, init) => fetch(u, init));
+  try {
+    const settled = await collectSettled(collector, opts.query ?? LANE_CANARY_QUERY, fetchImpl);
+    return !settled.error;
+  } catch {
+    return false;
+  }
+}
+
 /** Options shared by the staged and blocking collection entries. */
 export interface StagedCollectOptions {
   fetchImpl?: FetchImpl;
@@ -3486,6 +3523,16 @@ export interface StagedCollectOptions {
    * as its English equivalent.
    */
   locale?: "en" | "ar";
+  /**
+   * REEA-1078 S2 — additional lanes the default fan-out must NOT contact,
+   * on top of the static DEFAULT_RETIRED_LANES. Callers read the dynamic set
+   * from the shared lane-health state (readRetiredLanes) and pass it here;
+   * the static retirement applies even when nothing is passed, so a retired
+   * lane can never creep back into the fan-out through a caller that forgot.
+   * Absent/empty = static retirement only (the pre-S2 call sites keep
+   * working, minus the retired lanes).
+   */
+  retiredLanes?: readonly string[];
 }
 
 /** Always-miss cache used when the caller injects its own fetchImpl: a
@@ -3583,9 +3630,16 @@ export function collectLiveResultsStaged(
     baseFetch(u, { ...init, signal: joinSignals(hopCeiling, init?.signal ?? undefined) });
   const q = query.trim();
   const country = opts.country ?? null;
-  const collectors = country
+  // REEA-1078 S2 — dead-lane retirement at the ONE dispatch point: a retired
+  // lane is never contacted, so its attempts counter stops growing and its
+  // (possibly silent-zero) note never reaches the coverage sentence. The
+  // adapter and its parser stay declared/tested in COLLECTORS; re-admission is
+  // the canary path in ./lane-health.ts.
+  const retired = new Set<string>([...DEFAULT_RETIRED_LANES, ...(opts.retiredLanes ?? [])]);
+  const collectors = (country
     ? COLLECTORS.filter((c) => c.country === country)
-    : COLLECTORS;
+    : COLLECTORS
+  ).filter((c) => !retired.has(c.merchant));
   const cache = opts.cache ?? (opts.fetchImpl ? NO_CACHE : defaultQueryCache);
   // REEA-510 — same injected-fetch isolation as NO_CACHE above: stubbed runs
   // observe only their own hops; production runs share the last-seen store.
@@ -3740,7 +3794,8 @@ export function collectLiveResultsStaged(
     // after() window): one write per run, behind the finalized response, so
     // the next silent pass for a retailer+query has its labeled fallback.
     .then(() => (snapshotsEnabled ? rememberRound(q, settled) : undefined))
-    .then(async () => finalSnapshot(q, country, settled, fetchImpl, opts.widenedRetry === true, snapshotsEnabled, locale, await seenRowsP));
+    .then(async () =>
+      finalSnapshot(q, country, settled, fetchImpl, opts.widenedRetry === true, snapshotsEnabled, locale, await seenRowsP, opts.retiredLanes));
 
   // The shared-layer warm leads ONLY the first flush (k === 0): a replayed
   // snapshot must not mute this round's own deepening stages, so from the

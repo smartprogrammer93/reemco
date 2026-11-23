@@ -6,6 +6,8 @@ import SearchForm from "@/components/SearchForm";
 import HomeDiscoveryModules, { HomeDiscoverySkeleton } from "@/components/HomeDiscoveryModules";
 import { collectLiveResultsStaged } from "@/lib/collect/live-search";
 import { collectHomeDiscovery } from "@/lib/collect/home-discovery";
+// REEA-1078 S2 — dead-lane retirement for the chip pre-warm fan-outs.
+import { readRetiredLanes } from "@/lib/collect/lane-health";
 import { getTrendingChips } from "@/lib/trending-chips";
 import { getStrings } from "@/lib/i18n";
 import { resolveRequestLocale } from "@/lib/i18n-server";
@@ -55,9 +57,12 @@ export default async function Home() {
   // discovery modules below (retailer strip, price drops, categories, method
   // band). One fan-out per rendered query feeds both the warm cache and the
   // modules; no bundled catalogue and no second round of retailer requests.
+  // REEA-1078 S2 — the pre-warm runs obey the same dead-lane retirement set
+  // as the results page; a store failure fails open (static retirement only).
+  const retiredLanes = await readRetiredLanes();
   const runs = chips.map((c) => ({
     query: c.query,
-    stages: collectLiveResultsStaged(c.query),
+    stages: collectLiveResultsStaged(c.query, { retiredLanes }),
   }));
   const discovery = collectHomeDiscovery(runs);
   after(async () => {

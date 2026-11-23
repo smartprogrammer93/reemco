@@ -192,25 +192,61 @@ export function summarizeResponders(
  *    empty-result page keeps only the empty state (R3), never a phantom
  *    merchant list above zero rows. Without a rendered set (notes-only
  *    diagnostic callers) `hits` is the row count to filter on.
+ *
+ * REEA-1078 AC9 adds a third, separate sentence: a lane the reachability
+ * record says is blocked from this egress is named as UNREACHABLE, never left
+ * to read as "no offers". It is excluded from the "No response" half so one
+ * lane gets one statement, and it is the one sentence that still renders on a
+ * zero-row page — because that is exactly where a silent zero lies loudest.
  */
 export function coverageLine(
   notes: LiveSearchResult["notes"],
   locale?: "en" | "ar",
   rendered?: readonly NormalizedProduct[],
+  /**
+   * REEA-1078 AC9 — merchants whose zone the reachability record says is
+   * blocked from this egress right now. Empty/absent = the pre-AC9 sentence,
+   * byte for byte.
+   */
+  unreachable?: readonly string[],
 ): string {
   const ordered = [...notes].sort(
     (a, b) => coverageRank(a.merchant) - coverageRank(b.merchant),
   );
+  const ar = locale === "ar";
+  const unreachableSet = new Set(unreachable ?? []);
   const failed: string[] = [];
   const answered: string[] = [];
+  // REEA-1078 AC9 — the blocked set is derived FIRST so the zero-row branch
+  // below can still speak: a blocked lane is the reason the shelf is empty,
+  // and "0 results" with no explanation is exactly the defect this AC names.
+  // A lane whose offers rendered (or, notes-only, that answered with rows)
+  // disproves the record and keeps today's sentence untouched.
+  const seen = new Set<string>();
+  if (rendered) {
+    for (const p of rendered) for (const o of p.offers) seen.add(o.merchant);
+  }
+  const blocked: string[] = [];
+  for (const n of ordered) {
+    if (!unreachableSet.has(n.merchant)) continue;
+    if (seen.has(n.merchant)) continue;
+    if (!rendered && n.hits > 0 && !n.error) continue;
+    blocked.push(n.merchant);
+  }
+  // AC9 — shopper copy only: no status code, no adapter internals.
+  const blockedText =
+    blocked.length > 0
+      ? ar
+        ? `تعذّر الوصول إلى ${joinNames(blocked, ar)}.`
+        : `Unreachable: ${joinNames(blocked)}.`
+      : "";
   if (rendered) {
     // REEA-574 rev 1 (R1): zero rendered rows → nothing to vouch for, and the
     // error half would still phantom a merchant above an empty page — hide
-    // the whole sentence, not just the contributor half.
-    if (rendered.length === 0) return "";
+    // the whole sentence, not just the contributor half. AC9 exception: a
+    // blocked lane is named, because it explains the empty shelf.
+    if (rendered.length === 0) return blockedText;
     // Contributor set from the rows actually on screen, in fixed adapter order.
-    const seen = new Set<string>();
-    for (const p of rendered) for (const o of p.offers) seen.add(o.merchant);
     answered.push(
       ...[...seen].sort((a, b) => coverageRank(a) - coverageRank(b)),
     );
@@ -225,10 +261,15 @@ export function coverageLine(
       else if (n.hits > 0) answered.push(n.merchant); // success-but-empty: unnamed
     }
   }
-  // REEA-279: the two sentence shapes live in the static table so the stamp
+  // A lane spoken for as UNREACHABLE is not ALSO reported as "no response":
+  // one honest statement per lane.
+  for (let i = failed.length - 1; i >= 0; i--) {
+    if (unreachableSet.has(failed[i])) failed.splice(i, 1);
+  }
+  // REEA-279: the sentence shapes live in the static table so the stamp
   // matches the shell language; EN keeps the exact figures it had before.
-  const ar = locale === "ar";
   const parts: string[] = [];
+  if (blockedText) parts.push(blockedText);
   if (failed.length > 0)
     // REEA-468 G3 (PM copy decision): short-form scans faster at the grid
     // slot — "No response from X" pairs with the coupon badge as its

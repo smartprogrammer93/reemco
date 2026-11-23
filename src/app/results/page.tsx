@@ -1,6 +1,11 @@
 import ResultsClient from "@/components/ResultsClient";
 import { collectLiveResultsStaged } from "@/lib/collect/live-search";
 import { recordSearchOutcome, searchOutcomeFromSnapshot, serveOutcomeOf } from "@/lib/metrics";
+// REEA-1078 S2 — the serve path applies the persisted dead-lane retirement set
+// on top of the static retirement (see lib/collect/lane-health.ts).
+import { readRetiredLanes, recordLaneAttempts } from "@/lib/collect/lane-health";
+// REEA-1078 AC9 — lane reachability from the same zone status /api/echo reports.
+import { readUnreachableLanes } from "@/lib/collect/zone-status";
 import { MARKET_COOKIE, resolveCountrySelection, filterProductsByCountry } from "@/lib/country";
 import { LOCALE_COOKIE, resolveUiLocale } from "@/lib/i18n";
 import { isRefreshSignal, REFRESH_COOKIE } from "@/lib/query-cache";
@@ -160,7 +165,18 @@ export default async function ResultsPage({
   // value never leaves the counter fold (only its band is stored).
   // eslint-disable-next-line react-hooks/purity -- intentional single clock read per server render (REEA-283 pattern); not a render output.
   const fanoutStartMs = Date.now();
-  const staged = collectLiveResultsStaged(query, { refresh: hint.refresh, locale });
+  // REEA-1078 S2 — retired lanes never enter this fan-out. REEA-1078 AC9 — the
+  // coverage sentence names a blocked lane as unreachable instead of letting
+  // its silent zero read as a coverage statement. Both reads are small shared-
+  // store GETs memoized per instance for a minute and are issued together so
+  // they cannot serialize extra latency onto the fan-out (AC-8); either one
+  // fails OPEN (nothing extra retired / no label) so instrumentation can never
+  // blank a search.
+  const [retiredLanes, unreachableLanes] = await Promise.all([
+    readRetiredLanes(),
+    readUnreachableLanes(),
+  ]);
+  const staged = collectLiveResultsStaged(query, { refresh: hint.refresh, locale, retiredLanes });
   // REEA-398 — keep the hops still in flight alive BEHIND the finalized
   // response: after() runs the run's allSettled chain once the document is
   // sent, so late offers converge into the cache and the follow-up feed
@@ -226,6 +242,14 @@ export default async function ResultsPage({
         serveLatencyMs: Math.max(0, recordedMs - fanoutStartMs),
         adapterAttempts: adapterTelemetry.attempts,
         adapterFailures: adapterTelemetry.failures,
+      });
+      // REEA-1078 S2 — the same telemetry feeds the per-lane daily evidence
+      // the 7-day auto-retire rule reads. Behind the response (deferred
+      // after() tail), aggregate-only, best-effort: a store failure leaves the
+      // next serve to try again.
+      await recordLaneAttempts({
+        attempts: adapterTelemetry.attempts,
+        failures: adapterTelemetry.failures,
       });
     }
   });
@@ -293,6 +317,7 @@ export default async function ResultsPage({
         stages={staged.stages}
         renderStartMs={renderStartMs}
         queryId={queryId}
+        unreachableLanes={unreachableLanes}
       />
     </div>
   );

@@ -10,7 +10,15 @@
  * truncated stage list would cause.
  */
 import { describe, expect, it } from "vitest";
-import { collectLiveResultsStaged, resetDiscoveryCache } from "@/lib/collect/live-search";
+import {
+  COLLECTORS,
+  collectLiveResultsStaged,
+  resetDiscoveryCache,
+} from "@/lib/collect/live-search";
+// REEA-1078 S2 — statically retired lanes are deliberately absent from the
+// default fan-out, so the dispatch guard must exclude them from the expected
+// set (they stay declared/tested in COLLECTORS; re-admission is the canary).
+import { DEFAULT_RETIRED_LANES } from "@/lib/collect/lane-health";
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
@@ -182,40 +190,15 @@ describe("REEA-262 staged adapter dispatch", () => {
     // Every adapter of the nineteen-store set (REA-270 batch, the
     // REEA-378 batch three and the REEA-557 first wave included) must
     // appear in the converged notes.
-    expect(new Set(snap.notes.map((n) => n.merchant))).toEqual(
-      new Set([
-        "Xcite",
-        "Blink",
-        "Aster Pharmacy",
-        "Eureka",
-        "Sultan Center",
-        "Jarir",
-        "Amazon.eg",
-        "Quadra Stores",
-        "Next Store",
-        "Lulu Hypermarket",
-        "Switch",
-        "Wibi",
-        "Astore",
-        "Zayoom",
-        "Yousifi",
-        "Aster Pharmacy",
-        "Nahdi",
-        "Danube Home",
-        "Alghanim Electronics",
-        "BinSina",
-        "Nest",
-        "Bomai",
-        "Hobby Center",
-        "YasO",
-      ]),
+    const expected = COLLECTORS.map((c) => c.merchant).filter(
+      (m) => !DEFAULT_RETIRED_LANES.includes(m),
     );
+    expect(new Set(snap.notes.map((n) => n.merchant))).toEqual(new Set(expected));
 
     // Scheduled-and-silent would look identical for the new stores: each
     // one must also have answered with parsed hits and no error note.
     for (const merchant of [
       "Quadra Stores",
-      "Next Store",
       "Lulu Hypermarket",
       "Aster Pharmacy",
       "Nahdi",
@@ -231,7 +214,7 @@ describe("REEA-262 staged adapter dispatch", () => {
     // The offers themselves ride the merged cards (price + availability).
     const card = snap.products[0];
     const merchants = card.offers.map((o) => o.merchant);
-    expect(merchants).toEqual(expect.arrayContaining(["Quadra Stores", "Next Store", "Lulu Hypermarket"]));
+    expect(merchants).toEqual(expect.arrayContaining(["Quadra Stores", "Lulu Hypermarket"]));
     expect(card.offers.every((o) => o.price > 0)).toBe(true);
   });
 });

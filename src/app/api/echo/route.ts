@@ -46,8 +46,10 @@ import { jarirHits, jsdClearedHtml } from "@/lib/collect/live-search";
 // across instances on the shared KV when bound, degrading to the per-process
 // window otherwise). Gate sits ahead of the probe fan-out: past the limit
 // the route answers 429 with ZERO upstream fetches.
+import { after } from "next/server";
 import { checkRateLimitShared } from "@/lib/rate-limit-kv";
 import { rateLimitHeaders } from "@/lib/rate-limit";
+import { recordEchoZoneStatus } from "@/lib/collect/zone-status";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -372,6 +374,28 @@ export async function GET(req: Request): Promise<Response> {
     withClearanceTier(fetch, pckRaw, PCK_URL),
   ]);
 
+  const zones = {
+    "www.luluhypermarket.com": lulu,
+    "pckuwait.com": pckuwait,
+    "www.sultan-center.com": sultan,
+    // REEA-1009 S2(ii) — AC-7 tripwire (read-only, no new counters).
+    // S2(iii) derotation criterion, pre-agreed on the REEA-901 governance
+    // template: rolling Next Store failure share > 10% rotates the lane
+    // out of round one; a green probe here restores it.
+    "www.nextstore.com.kw": nextstore,
+  };
+  // REEA-1078 AC9 — the zone status the results page reads is SOURCED HERE:
+  // the same probe that answers this endpoint persists its per-zone
+  // reachability behind the response, so the coverage sentence's "unreachable"
+  // label is this observation, not a second opinion. Best-effort: a store
+  // failure just leaves the previous record.
+  try {
+    after(() => recordEchoZoneStatus(zones));
+  } catch {
+    // No request scope (a direct handler call in tests, a non-Next host):
+    // persist in the background instead of failing the probe response.
+    void recordEchoZoneStatus(zones);
+  }
   // REEA-837 — the budget is observable on success responses too, so a burst
   // is diagnosable before it trips.
   return Response.json(
@@ -379,16 +403,7 @@ export async function GET(req: Request): Promise<Response> {
       hop: echo.headers,
       originIp: echo.originIp || fallbackIp,
       echoError: echo.error,
-      zones: {
-        "www.luluhypermarket.com": lulu,
-        "pckuwait.com": pckuwait,
-        "www.sultan-center.com": sultan,
-        // REEA-1009 S2(ii) — AC-7 tripwire (read-only, no new counters).
-        // S2(iii) derotation criterion, pre-agreed on the REEA-901 governance
-        // template: rolling Next Store failure share > 10% rotates the lane
-        // out of round one; a green probe here restores it.
-        "www.nextstore.com.kw": nextstore,
-      },
+      zones,
       // REEA-1051 — per-route Jarir discovery shape from this egress.
       jarir,
       pinned: {

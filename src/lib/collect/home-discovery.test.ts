@@ -16,6 +16,9 @@ function stagesOf(final: Promise<LiveSearchResult>): LiveSearchStages {
     allSettled: Promise.resolve(),
     converged: final,
     adapterTelemetry: Promise.resolve({ attempts: {}, failures: {} }),
+    // REEA-1078 — the collection layer always stamps the serve kind; this
+    // fixture stands for a cold run (no fan-out-less memo hit).
+    serveKind: "cold",
   };
 }
 
