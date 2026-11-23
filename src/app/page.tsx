@@ -1,8 +1,11 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { after } from "next/server";
 import type { Metadata } from "next";
 import SearchForm from "@/components/SearchForm";
+import HomeDiscoveryModules, { HomeDiscoverySkeleton } from "@/components/HomeDiscoveryModules";
 import { collectLiveResultsStaged } from "@/lib/collect/live-search";
+import { collectHomeDiscovery } from "@/lib/collect/home-discovery";
 import { getTrendingChips } from "@/lib/trending-chips";
 import { getStrings } from "@/lib/i18n";
 import { resolveRequestLocale } from "@/lib/i18n-server";
@@ -47,8 +50,18 @@ export default async function Home() {
   // snapshots: every memo entry is this run's own live fetch, and the
   // per-instance memo expires with the instance — offers stay live at query
   // time. `after` keeps the chain alive behind the finished response.
+  //
+  // REEA-1070 AC1 — those SAME runs are the live source for the home
+  // discovery modules below (retailer strip, price drops, categories, method
+  // band). One fan-out per rendered query feeds both the warm cache and the
+  // modules; no bundled catalogue and no second round of retailer requests.
+  const runs = chips.map((c) => ({
+    query: c.query,
+    stages: collectLiveResultsStaged(c.query),
+  }));
+  const discovery = collectHomeDiscovery(runs);
   after(async () => {
-    await Promise.all(chips.map((c) => collectLiveResultsStaged(c.query).allSettled));
+    await Promise.all(runs.map((r) => r.stages.allSettled));
   });
   return (
     <>
@@ -79,6 +92,15 @@ export default async function Home() {
         <p className="mt-4" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
           {t.heroCaption}
         </p>
+        {/* REEA-1070 AC1 — the live discovery modules stream in behind the
+            hero. The fallback is the loading state; the resolved data carries
+            live / empty / no-response per module so the UI never invents
+            merchandise. Visual polish is the Frontend Engineer's REEA-1069
+            pass; this is the server-backed contract rendered with the current
+            token vocabulary. */}
+        <Suspense fallback={<HomeDiscoverySkeleton locale={locale} />}>
+          <HomeDiscoveryModules discovery={discovery} locale={locale} />
+        </Suspense>
       </div>
     </>
   );
