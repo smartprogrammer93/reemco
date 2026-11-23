@@ -7,8 +7,9 @@
 #   fatal: could not read Username for 'https://github.com'
 # The token is resolved at run time (the DEV_GITHUB_PAT env binding when the lane
 # has one, otherwise the Paperclip Secrets API for this agent) and handed to git
-# through a one-shot credential helper: it is never written to .git/config and
-# never echoed into the output.
+# through a one-shot credential helper shared by every authenticated git call
+# (fetch, ls-remote, push): it is never written to .git/config, never echoed into
+# the output, and never placed in a URL argument, so it cannot be read from `ps`.
 #
 # Usage:
 #   scripts/push-main.sh              # push the current HEAD to origin/main
@@ -128,6 +129,16 @@ fi
 # exported for it. It is still never printed.
 export DEV_GITHUB_PAT="$TOKEN"
 
+# REEA-1135 (F6) — one credential helper for EVERY authenticated git call.
+# Before this, fetch/ls-remote were handed an AUTH_URL that embedded the PAT
+# (`https://x-access-token:<pat>@github.com/...`), so the token sat in those
+# processes' argv and was visible in `ps` for the duration of the call. Passing
+# the helper through `-c` instead keeps argv clean: the only token-bearing
+# argument is the literal string `$DEV_GITHUB_PAT`, expanded by the helper's
+# child shell from the environment. Still one-shot: nothing is written to
+# .git/config and nothing is echoed.
+CRED_HELPER='!f() { echo username=x-access-token; echo "password=$DEV_GITHUB_PAT"; }; f'
+
 fallback_bundle() {
   local base remote bundle sha256 comment tmp_ref created
   # A bundle prerequisite must be an ancestor of the head, so use the merge-base
@@ -212,8 +223,10 @@ if [ -z "$TOKEN" ]; then
 fi
 
 # --- fast-forward pre-flight ------------------------------------------------
-AUTH_URL="https://x-access-token:$TOKEN@github.com/$SLUG.git"
-GIT_TERMINAL_PROMPT=0 git fetch --no-tags --quiet "$AUTH_URL" refs/heads/main 2>/dev/null ||
+# Origin's URL stays clean (`https://github.com/...`); the helper supplies the
+# credential to the child process. No PAT in argv.
+GIT_TERMINAL_PROMPT=0 git -c credential.helper="$CRED_HELPER" \
+  fetch --no-tags --quiet origin refs/heads/main 2>/dev/null ||
   fail_push "could not fetch origin/main (auth rejected or network down)"
 REMOTE=$(git rev-parse FETCH_HEAD)
 
@@ -232,14 +245,15 @@ if [ "$DRY_RUN" = 1 ]; then
 fi
 
 # --- push -------------------------------------------------------------------
-# One-shot credential helper: keeps the remote URL clean in git's output and the
-# token out of .git/config (Least Privilege, no secret on disk).
+# Same one-shot helper as the pre-flight: keeps the remote URL clean in git's
+# output and the token out of .git/config (Least Privilege, no secret on disk).
 GIT_TERMINAL_PROMPT=0 git \
-  -c credential.helper='!f() { echo username=x-access-token; echo "password=$DEV_GITHUB_PAT"; }; f' \
+  -c credential.helper="$CRED_HELPER" \
   push --quiet origin "$SHA:refs/heads/main" ||
   fail_push "git push failed (see the message above)"
 
-PUSHED=$(GIT_TERMINAL_PROMPT=0 git ls-remote --heads "$AUTH_URL" refs/heads/main | cut -f1)
+PUSHED=$(GIT_TERMINAL_PROMPT=0 git -c credential.helper="$CRED_HELPER" \
+  ls-remote --heads origin refs/heads/main | cut -f1)
 if [ "$PUSHED" != "$SHA" ]; then
   fail_push "push did not land: origin/main is $PUSHED, expected $SHA"
 fi
