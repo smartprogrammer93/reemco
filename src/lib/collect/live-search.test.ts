@@ -2206,9 +2206,12 @@ describe("relevance-first ranking (REEA-213 Bet 1, REEA-211 acceptance)", () => 
       hit({ title: "Apple iPhone 17 Pro, 256 GB Black", merchant: "Xcite", price: 449.9, url: "https://xcite.example/17p", brand: "Apple" }),
       hit({ title: "Razer Viper V4 Pro Wireless Gaming Mouse for iPhone", merchant: "Blink", price: 29, url: "https://blink.example/mouse", brand: "Razer" }),
     ]);
-    // Tier 1 (head-name phones) before tier 2 (bundle/case) before tier 3
-    // (single-token cross-category); price never blends the blocks: the 9.9
-    // case outranks nothing above the phone block.
+    // Tier 1 (head-name phones) before tier 2 (accessories) before tier 3
+    // (single-token cross-category); price never blends the blocks: the cheap
+    // case and bundle outrank nothing above the phone block. REEA-1068 — a
+    // "bundle" pack is an accessory class, so it sorts inside the accessory
+    // block (cross-retailer breadth puts Blink's bundle ahead of Amazon.eg's
+    // case) instead of competing with the phones on price.
     expect(products.map((p) => p.title)).toEqual([
       "Apple iPhone 17 Pro, 256 GB Black",
       "Apple iPhone 17 Pro Max 256GB Black",

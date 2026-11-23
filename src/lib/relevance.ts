@@ -44,11 +44,14 @@ const BRAND_STOP_VALUES: readonly string[] = [
 ];
 
 /* EN + AR accessory markers (spec Rule 2). Substring match on the
-   normalized lowercase title. */
+   normalized lowercase title. REEA-1068 — "bundle" and "protection" join the
+   list: an add-on pack or a protection ring/pack is an accessory class, not a
+   device, so a cheap bundle/lens ring cannot outrank the phone set it
+   complements. */
 const ACCESSORY_MARKERS: readonly string[] = [
-  "case", "cover", "protector", "tempered glass", "film", "skin",
+  "case", "cover", "protector", "protection", "tempered glass", "film", "skin",
   "adapter", "adaptor", "charger", "dock", "holder", "hanger", "rack",
-  "eartips", "ear tips", "sleeve",
+  "eartips", "ear tips", "sleeve", "bundle",
   "كفر", "جراب", "واقي", "غطاء", "شاحن", "كابل", "وصلة", "حامل",
 ];
 

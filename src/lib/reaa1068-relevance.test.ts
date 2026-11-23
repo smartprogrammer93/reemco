@@ -143,6 +143,16 @@ describe("REEA-1068 — compact model spelling", () => {
     expect(isModelExtended("iphone 16 pro", "Apple iPhone 16 Pro, 256 GB")).toBe(false);
   });
 
+  it("accessory-class bundles/protection rings sit below the phone set", () => {
+    // REEA-1068 — the magnetic bundle and the lens ring are add-on packs, not
+    // devices; Rule 2 keeps them out of the device block the phones lead.
+    expect(isAccessoryTitle(FOLD7_BRACKET)).toBe(true);
+    expect(
+      isAccessoryTitle("Araree Camera Lens Ring Protection - Samsung Galaxy Z Fold 7 / Clear"),
+    ).toBe(true);
+    expect(isAccessoryTitle(FOLD7_PHONE)).toBe(false);
+  });
+
   it("grouping+ranking produces the same card set for fold7 / fold 7 / Fold 7", () => {
     // The measured fold7 payload, plus the noise rows the broken gate used to
     // admit for `fold 7`. Each spelling runs through the same adapter gate the
