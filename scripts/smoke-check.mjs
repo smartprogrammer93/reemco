@@ -346,7 +346,7 @@ await step(7, "deployed results notes carry every registered adapter (REEA-238/2
   if (arrays.length === 0) throw new Error("no notes array found in deployed results HTML");
   const finalNotes = arrays.reduce((a, b) => (b.length > a.length ? b : a));
   const merchants = [...finalNotes.matchAll(/merchant\\":\\"([^\\]+)/g)].map((m) => m[1]);
-  // REEA-1059: the list must name lanes that are REGISTERED in
+  // REEA-1059: the list must name lanes that are DISPATCHED in
   // src/lib/collect/live-search.ts. "PC Kuwait" was removed here because the
   // lane itself was retired in REEA-901 (Cloudflare 403 on every hop shape from
   // the deployed egress; no `merchant: "PC Kuwait"` entry remains). Keeping a
@@ -354,7 +354,12 @@ await step(7, "deployed results notes carry every registered adapter (REEA-238/2
   // healthy build — the gate would be red for a lane we deliberately stopped
   // calling. Rule: a lane that is retired or re-admitted must enter/leave this
   // list in the same commit that changes the registry, or the gate is lying.
-  const required = ["Xcite", "Blink", "Eureka", "Sultan Center", "Jarir", "Amazon.eg", "Quadra Stores", "Next Store", "Lulu Hypermarket"];
+  //
+  // REEA-1078 S2: "Next Store" left the dispatch set the same way (1,338/1,338
+  // failures in W47, 365/365 in W48 — see DEFAULT_RETIRED_LANES in
+  // src/lib/collect/lane-health.ts). It stays REGISTERED and tested, and the
+  // canary path re-admits it; when that happens, put it back here.
+  const required = ["Xcite", "Blink", "Eureka", "Sultan Center", "Jarir", "Amazon.eg", "Quadra Stores", "Lulu Hypermarket"];
   const missing = required.filter((m) => !merchants.includes(m));
   if (missing.length) throw new Error(`deployed notes array misses ${missing.join(", ")} (seen: ${merchants.join(", ")})`);
   const hitLines = finalNotes.replace(/\\/g, "");
