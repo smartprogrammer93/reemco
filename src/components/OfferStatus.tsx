@@ -54,20 +54,29 @@ export function statusCopy(status: OfferStatus, locale?: Locale) {
 export default function OfferStatusToken({
   status,
   locale,
+  title,
 }: {
   status: OfferStatus;
   locale?: Locale;
+  /**
+   * REEA-1094 — optional state-specific sentence. The offer row's ONE status
+   * token is the only verification surface (AC6), so a sanity-flagged row
+   * passes its reason here instead of repeating a second "needs verification"
+   * badge on line B. The generic per-state tip stays the default.
+   */
+  title?: string;
 }) {
   const t = getStrings(locale ?? "en");
   const copy = statusCopy(status, locale);
+  const tip = title ?? copy.tip;
   return (
     <span
       className={`rc-status ${copy.cls}`}
       role="img"
-      aria-label={`${t.offerStatusAria}: ${copy.label}. ${copy.tip}`}
-      title={copy.tip}
+      aria-label={`${t.offerStatusAria}: ${copy.label}. ${tip}`}
+      title={tip}
       tabIndex={0}
-      data-tip={copy.tip}
+      data-tip={tip}
     >
       {status === "verified" ? <VerifiedIcon /> : status === "stale" ? <StaleIcon /> : <UnverifiedIcon />}
       <span className="label">{copy.label}</span>

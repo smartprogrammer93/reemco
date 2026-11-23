@@ -723,3 +723,87 @@ describe("REEA-944 — pending-pill containment contract (REEA-863 spec)", () =>
     expect(flag.className).not.toContain("min-w-0");
   });
 });
+
+describe("REEA-1094 — 375 offer-row containment anatomy (AC5/AC6/AC13)", () => {
+  // Foreign-currency row with the worst measured content: a 4-digit EGP lead
+  // price, its ≈KD conversion, a snapshot collection stamp and a flagged
+  // sanity verdict. Geometry (scrollWidth 375, row heights, CTA containment)
+  // is browser QA per scripts/reea1094-probe.mjs; these pins keep the served
+  // anatomy that makes that geometry possible.
+  const RENDER_MS = Date.parse("2026-09-14T06:50:00.000Z");
+  const foreign = (): NormalizedProduct => ({
+    productId: "p-1094",
+    title: "Sony WH-1000XM6",
+    brand: "Sony",
+    offers: [
+      {
+        merchant: "Amazon.eg",
+        price: 4330,
+        currency: "EGP",
+        url: "https://amazon.eg.example/p",
+        inStock: true,
+        collectedAt: "2026-09-14T06:47:00.000Z",
+        fromSnapshot: true,
+        sanity: { status: "flagged", reason: "outlier_high", ratioToMedian: 3 },
+      },
+    ],
+    coupons: [
+      {
+        code: "SAVE10",
+        description: "10% off accessories",
+        discount: "10% off",
+        expiresAt: null,
+        merchant: "Amazon.eg",
+      },
+    ],
+    variations: [],
+    alternatives: [],
+    scrapedAt: "2026-09-14T06:47:00.000Z",
+  });
+
+  it("AC6: ONE verification surface per offer — line A's token, never a line-B badge", () => {
+    const { container } = render(<ProductResultCard product={foreign()} query="sony" rank={0} renderStartMs={RENDER_MS} />);
+    const row = container.querySelector("li.offer-row") as HTMLElement;
+    expect(row).toBeTruthy();
+    expect(row.querySelectorAll(".rc-status")).toHaveLength(1);
+    expect(row.querySelectorAll(".price-warn")).toHaveLength(0);
+    // The removed badge's reason sentence is not lost: it rides the ONE token.
+    expect(row.querySelector(".rc-status")?.getAttribute("title")).toContain("typical price");
+  });
+
+  it("AC13: effective price, conversion, collection stamp, coupon, stock and action all render", () => {
+    const { container } = render(<ProductResultCard product={foreign()} query="sony" rank={0} renderStartMs={RENDER_MS} />);
+    const row = container.querySelector("li.offer-row") as HTMLElement;
+    // formatPrice uses a NBSP between code and figure; normalise for the pin.
+    const rowText = (row.textContent ?? "").replace(/\u00A0/g, " ");
+    expect(rowText).toContain("EGP 4,330.00");
+    expect(row.querySelector(".price-alt")?.textContent).toMatch(/≈KD/);
+    expect(row.querySelector(".rc-checked")?.textContent).toContain("collected 06:47");
+    expect(row.querySelector(".rc-stock")?.textContent).toContain("In stock");
+    expect(row.querySelector(".rc-offer-cta")).toBeTruthy();
+    // Card-level coupon line stays (AC13 coupon) — the row never owns it.
+    expect((container.textContent ?? "").replace(/\u00A0/g, " ")).toContain("SAVE10");
+  });
+
+  it("AC5: the price is the row's largest text and the conversion + stamp share its meta sub-line", () => {
+    const { container } = render(<ProductResultCard product={foreign()} query="sony" rank={0} renderStartMs={RENDER_MS} />);
+    const row = container.querySelector("li.offer-row") as HTMLElement;
+    const price = row.querySelector(".price-cur") as HTMLElement;
+    expect(price.className).toContain("rc-price-sm");
+    // 20px/1.1 --rc-text-price-sm vs 13px/12px meta — the price token wins.
+    expect(price.getAttribute("style")).toContain("font-weight: 600");
+    // The 375 anatomy: price block + meta sub-line (conversion + collection
+    // stamp) yield the width instead of the action; the action keeps its own
+    // inline-end slot as a sibling of the price block.
+    const block = row.querySelector(".rc-price-block") as HTMLElement;
+    const meta = row.querySelector(".rc-price-meta") as HTMLElement;
+    expect(block?.contains(price)).toBe(true);
+    expect(meta?.contains(row.querySelector(".price-alt") as HTMLElement)).toBe(true);
+    expect(meta?.contains(row.querySelector(".rc-checked") as HTMLElement)).toBe(true);
+    const cta = row.querySelector(".rc-offer-cta") as HTMLElement;
+    expect(block.contains(cta)).toBe(false);
+    // The middot that separated price from conversion now separates the
+    // conversion from the stamp (CSS hides .price-alt-sep at ≤640).
+    expect(row.querySelector(".price-alt-sep")).toBeTruthy();
+  });
+});

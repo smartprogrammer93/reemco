@@ -353,28 +353,44 @@ function ShelfOfferRow({
           <span className="dot" aria-hidden />
           {offer.inStock ? t.inStock : t.outOfStock}
         </span>
-        <OfferStatusToken status={status} locale={locale} />
+        <OfferStatusToken
+          status={status}
+          locale={locale}
+          title={rowReason && !rowUnavailable ? verifyTitleFor(rowReason, t) : undefined}
+        />
       </div>
       <div className="rc-offer-line line-b">
-        {rowUnavailable ? (
-          <span className="price-cur rc-price-sm tabular" style={{ color: "var(--rc-muted)" }}>
-            <bdi>{t.priceUnavailable}</bdi>
+        {/* REEA-1094 — line B keeps the price as the largest figure and the
+            action in the inline-end slot; the conversion stamp and the
+            collection stamp share ONE meta sub-line under the price at 375,
+            so a foreign-currency row never has to widen past the card. The
+            wrappers are display:contents above 641px (globals.css), so the
+            desktop line/table geometry is unchanged. */}
+        <span className="rc-price-block">
+          {rowUnavailable ? (
+            <span className="price-cur rc-price-sm tabular" style={{ color: "var(--rc-muted)" }}>
+              <bdi>{t.priceUnavailable}</bdi>
+            </span>
+          ) : (
+            <span
+              className="price-cur rc-price-sm tabular"
+              style={{ fontWeight: 600, color: "var(--rc-ink)" }}
+            >
+              <bdi>{row.primary}</bdi>
+            </span>
+          )}
+          <span className="rc-price-meta">
+            {!rowUnavailable && row.alt && (
+              <span className="price-alt">
+                <span className="price-alt-sep" aria-hidden>
+                  ·{" "}
+                </span>
+                <bdi>{row.alt}</bdi>
+              </span>
+            )}
+            <span className="rc-checked">{checked}</span>
           </span>
-        ) : (
-          <span
-            className="price-cur rc-price-sm tabular"
-            style={{ fontWeight: 600, color: "var(--rc-ink)" }}
-          >
-            <bdi>{row.primary}</bdi>
-          </span>
-        )}
-        {!rowUnavailable && row.alt && <span className="price-alt">· <bdi>{row.alt}</bdi></span>}
-        {rowReason && !rowUnavailable && (
-          <span className="price-warn" title={verifyTitleFor(rowReason, t)}>
-            <bdi>{t.priceVerifyBadge}</bdi>
-          </span>
-        )}
-        <span className="rc-checked">{checked}</span>
+        </span>
         {!offer.inStock || !href ? (
           <button type="button" className="btn-secondary rc-offer-cta" disabled>
             {t.offerGo}

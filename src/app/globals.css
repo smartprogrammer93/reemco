@@ -2822,6 +2822,55 @@ html[lang="ar"] .coupon-via {
     min-block-size: 36px;
   }
 }
+/* REEA-1094 — 375px foreign-currency offer rows. The price block and its
+   meta sub-line are wrappers that vanish (display:contents) at 641px+, so the
+   desktop card line and the offers-table/product-hero grid keep their served
+   geometry exactly. At 375 the conversion stamp and the collection stamp share
+   ONE meta sub-line under the price, and the action keeps the inline-end slot:
+   the row's widest content becomes max(price, meta) + action instead of the
+   sum of every child, so a 4-digit EGP row (or a long "Checked N minutes ago")
+   can no longer push the CTA past the card edge. Price stays the row's largest
+   text; the line-B 44px floor is untouched (AC5 variance); every AC13 item —
+   effective price, coupon (card-level line), stock (line A) and the collection
+   stamp — stays visible untruncated. AC6: the duplicate line-B verification
+   badge is gone; line A's status token is the one verification surface. */
+.rc-offer-row .rc-price-block,
+.rc-offer-row .rc-price-meta {
+  display: contents;
+}
+
+@media (max-width: 640px) {
+  .rc-card .rc-offer-row .rc-price-block {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+    min-inline-size: 0;
+    flex: 0 1 auto;
+  }
+  .rc-card .rc-offer-row .rc-price-meta {
+    display: flex;
+    align-items: baseline;
+    gap: var(--rc-space-1);
+    min-inline-size: 0;
+    white-space: nowrap;
+  }
+  .rc-card .rc-offer-row .rc-price-block .price-cur,
+  .rc-card .rc-offer-row .rc-price-meta .price-alt,
+  .rc-card .rc-offer-row .rc-price-meta .rc-checked {
+    white-space: nowrap;
+  }
+  /* The middot separated price from conversion on one line; on the stacked
+     meta line it moves between the conversion and the collection stamp. */
+  .rc-card .rc-offer-row .price-alt-sep {
+    display: none;
+  }
+  .rc-card .rc-offer-row .rc-price-meta .rc-checked::before {
+    content: "·";
+    margin-inline-end: 4px;
+    color: var(--rc-muted);
+  }
+}
 
 .rc-retailer-more {
   color: var(--rc-muted);
