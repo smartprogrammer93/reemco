@@ -34,6 +34,13 @@ export interface PriceOffer {
   inStock: boolean;
   wasPrice?: number; // optional was-price for the F2 savings pill
   /**
+   * REEA-1070 AC7 — the named savings baseline for this offer's "Save"
+   * figure: struck − current (±0.01) plus the retailer/listed price it is
+   * measured against. Absent when the listing carries no compare-at price
+   * that exceeds the current price; the UI then renders no savings claim.
+   */
+  savings?: import("@/lib/savings").OfferSavings;
+  /**
    * REEA-963 — the query-time sanity verdict for THIS offer (the cohort pass
    * in lib/collect/price-sanity.ts). Absent on surfaces that never ran the
    * pass (catalog feed seeds, suggestion pills).
@@ -64,6 +71,12 @@ export interface PriceOffer {
    * just to the card's completion stamp. Absent on catalog-fallback rows.
    */
   collectedAt?: string;
+  /**
+   * REEA-1070 AC10 — the same collection moment as epoch milliseconds, so
+   * EN/AR clients humanise it ("just now / 4 min ago" / `حُدِّث قبل دقيقتين`)
+   * against their own clock instead of receiving a preformatted "0s ago".
+   */
+  collectedAtEpochMs?: number;
   /**
    * REEA-510 — true when the row was replayed from the retailer's ≤24 h
    * last-seen snapshot after its LIVE pass stayed silent for the query.
@@ -131,6 +144,12 @@ export interface NormalizedProduct {
    * collected. Missing/undefined renders "Verification date unknown".
    */
   scrapedAt?: string;
+  /**
+   * REEA-1070 AC10 — the same scrape moment as epoch milliseconds so the
+   * EN/AR UI can humanise the collection timestamp itself ("just now /
+   * 4 min ago" / `حُدِّث قبل دقيقتين`), never a preformatted "0s ago".
+   */
+  scrapedAtEpochMs?: number;
   /**
    * REEA-540 Bet A — the results-list confidence line: min/max of the
    * merchant-day observations the last-seen store kept for this query

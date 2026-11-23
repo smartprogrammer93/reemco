@@ -17,6 +17,23 @@ import {
  * lived in live-search.ts — the split is purely about graph weight.
  */
 
+/**
+ * REEA-1070 AC2 — the structured partial-response truth for one query: which
+ * retailers answered, which did not, and which answered but kept no offer.
+ * Derived only from the run's own live notes (never a static registry), in the
+ * fixed adapter order so repeated renders read identically.
+ */
+export interface ResponderSummary {
+  /** Every retailer this fan-out queried, in fixed adapter order. */
+  queried: string[];
+  /** Retailers whose adapter answered with ≥1 kept offer. */
+  answered: string[];
+  /** Retailers that answered successfully but kept zero offers. */
+  answeredEmpty: string[];
+  /** Retailers that errored, timed out, or missed the completion budget. */
+  noResponse: string[];
+}
+
 export interface LiveSearchResult {
   products: NormalizedProduct[];
   /** Per-retailer notes for the diagnostics panel; failures included.
@@ -24,6 +41,19 @@ export interface LiveSearchResult {
    *  coupon info among `hits` — coupon coverage per stage, so under-delivery
    *  by a specific adapter is measurable instead of guessed. */
   notes: { merchant: string; hits: number; coupons?: number; error?: string }[];
+  /**
+   * REEA-1070 AC2 — structured responder truth for this query, stamped by
+   * the live snapshot builder from the same notes the page renders. The calm
+   * inline status can name both groups without re-deriving them from prose.
+   */
+  responders?: ResponderSummary;
+  /**
+   * REEA-1070 AC10 — ISO + epoch collection moment of this snapshot. The UI
+   * humanises the epoch against its own clock in EN/AR; the ISO stays for
+   * traceability and absolute stamps.
+   */
+  collectedAt?: string;
+  collectedAtEpochMs?: number;
   /** Empty-match suggestion set (REEA-114); every snapshot carries its own. */
   suggestions?: NormalizedProduct[];
   /**
@@ -115,6 +145,32 @@ export const COVERAGE_ORDER = [
 function coverageRank(merchant: string): number {
   const i = COVERAGE_ORDER.indexOf(merchant as (typeof COVERAGE_ORDER)[number]);
   return i < 0 ? COVERAGE_ORDER.length : i;
+}
+
+/**
+ * REEA-1070 AC2 — structured responder truth from the run's own live notes.
+ * Pure and deterministic: fixed adapter order, no clock, no fetch. An adapter
+ * note carrying an error is a non-responder; a note with zero kept offers is
+ * "answered empty"; a note with offers is an answer. The calm inline status
+ * can therefore name both groups from one object instead of parsing prose.
+ */
+export function summarizeResponders(
+  notes: LiveSearchResult["notes"],
+): ResponderSummary {
+  const ordered = [...notes].sort(
+    (a, b) => coverageRank(a.merchant) - coverageRank(b.merchant),
+  );
+  const queried: string[] = [];
+  const answered: string[] = [];
+  const answeredEmpty: string[] = [];
+  const noResponse: string[] = [];
+  for (const n of ordered) {
+    queried.push(n.merchant);
+    if (n.error) noResponse.push(n.merchant);
+    else if (n.hits > 0) answered.push(n.merchant);
+    else answeredEmpty.push(n.merchant);
+  }
+  return { queried, answered, answeredEmpty, noResponse };
 }
 
 /**

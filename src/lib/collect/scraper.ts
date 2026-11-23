@@ -15,6 +15,7 @@ import { PER_RETAILER_TIMEOUT_MS } from "@/lib/collect/types";
 import { searchRetailerFallback } from "@/lib/collect/search-fallback";
 import { siteOrigin } from "@/lib/site-origin";
 import { readBodyCapped } from "@/lib/collect/read-body";
+import { savingsFor } from "@/lib/savings";
 
 export function domainOf(url: string): string {
   try {
@@ -215,6 +216,15 @@ export async function scrapeOffer(
   // seeded catalog URLs go stale (REEA-67) and some PDPs are client-rendered.
   try {
     const found = await searchRetailerFallback(domain, offer.titleQuery ?? "", fetchImpl);
+    const collectedAt = new Date(opts.now ?? Date.now()).toISOString();
+    const savings = savingsFor({
+      merchant: offer.merchant,
+      price: found.price,
+      currency: found.currency,
+      url: found.url,
+      wasPrice: found.wasPrice,
+      collectedAt,
+    });
     return {
       offers: [
         {
@@ -225,7 +235,9 @@ export async function scrapeOffer(
           url: found.url,
           inStock: found.inStock,
           ...(found.wasPrice != null ? { wasPrice: found.wasPrice } : {}),
-          collectedAt: new Date(opts.now ?? Date.now()).toISOString(),
+          ...(savings ? { savings } : {}),
+          collectedAt,
+          collectedAtEpochMs: Date.parse(collectedAt),
           method: "live",
         },
       ],
@@ -262,6 +274,15 @@ async function tryDirectFetch(
   // JSON-LD) against cross-currency records on the same page.
   const price = extractPrice(html, offer.currency);
   if (price == null) return null; // unparseable/client-rendered — try fallback
+  const collectedAt = new Date(opts.now ?? Date.now()).toISOString();
+  const savings = savingsFor({
+    merchant: offer.merchant,
+    price,
+    currency: offer.currency,
+    url: offer.url,
+    wasPrice: offer.wasPrice,
+    collectedAt,
+  });
   return {
     offers: [
       {
@@ -271,8 +292,10 @@ async function tryDirectFetch(
         currency: offer.currency,
         url: offer.url,
         inStock: extractInStock(html),
-        wasPrice: offer.wasPrice,
-        collectedAt: new Date(opts.now ?? Date.now()).toISOString(),
+        ...(offer.wasPrice != null ? { wasPrice: offer.wasPrice } : {}),
+        ...(savings ? { savings } : {}),
+        collectedAt,
+        collectedAtEpochMs: Date.parse(collectedAt),
         method: "live",
       },
     ],

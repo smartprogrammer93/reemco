@@ -51,6 +51,7 @@ import { attachSeenRanges, type SeenRow } from "@/lib/seen-range";
 import { sanitizeExternalUrl } from "@/lib/safe-url";
 import { normalizedListingUrlOf } from "@/lib/collect/types";
 import { effectivePriceKwd, formatPrice } from "@/lib/format";
+import { savingsFor } from "@/lib/savings";
 import {
   computeCohortSanity,
   logSanitySummary,
@@ -84,7 +85,7 @@ import type { Coupon, NormalizedProduct, PriceOffer, ProductAlternative, Product
 import type { LiveSearchResult } from "@/lib/collect/coverage";
 export type { LiveSearchResult } from "@/lib/collect/coverage";
 export { coverageLine } from "@/lib/collect/coverage";
-import { deviceLeadFlags } from "@/lib/collect/coverage";
+import { deviceLeadFlags, summarizeResponders } from "@/lib/collect/coverage";
 
 /**
  * Per-attempt fetch ceiling for the search fan-out (parallel per retailer).
@@ -2648,6 +2649,7 @@ function finalizeGroups(
   // on the same merged count (the parity bar stays arithmetic, not sampled).
   const groups = mergeSameTitleGroups(selected);
   const scrapedAt = new Date().toISOString(); // real collection completion time
+  const scrapedAtEpochMs = Date.parse(scrapedAt);
 
   // REEA-254 payload trim, REEA-488 shape — cheaper same-family alternatives.
   // Every card's row list re-references ONE computed entry per referenced
@@ -2791,6 +2793,18 @@ function finalizeGroups(
         // every render component reads THIS object (FR-2.1: one resolved
         // price object per (retailer, SKU) per render).
         const verdict = sanityByOffer?.get(o);
+        // REEA-1070 AC7 — the named savings baseline for this row (struck −
+        // current ±0.01, same retailer's listed price), never a cross-retailer
+        // guess. Absent when the listing carries no usable compare-at price.
+        const savings = savingsFor({
+          merchant: o.merchant,
+          price: o.price,
+          currency: o.currency,
+          url: o.url,
+          wasPrice: o.wasPrice,
+          collectedAt: o.collectedAt,
+        });
+        const collectedEpoch = o.collectedAt ? Date.parse(o.collectedAt) : Number.NaN;
         return {
           merchant: o.merchant,
           price: o.price,
@@ -2798,10 +2812,15 @@ function finalizeGroups(
           url: o.url,
           inStock: o.inStock,
           ...(o.wasPrice != null ? { wasPrice: o.wasPrice } : {}),
+          ...(savings ? { savings } : {}),
           ...(grade !== "new" ? { grade } : {}),
           ...(label !== "" ? { label } : {}),
           // REEA-486 AC-2: per-row collected-at from the retailer's own hop.
           ...(o.collectedAt ? { collectedAt: o.collectedAt } : {}),
+          // REEA-1070 AC10 — epoch twin for locale-ready humanisation.
+          ...(o.collectedAt && !Number.isNaN(collectedEpoch)
+            ? { collectedAtEpochMs: collectedEpoch }
+            : {}),
           // REEA-510: the snapshot marker rides to the rendered row so the
           // card can show its collection clock instead of the fresh age.
           ...(o.fromSnapshot ? { fromSnapshot: true } : {}),
@@ -2878,6 +2897,8 @@ function finalizeGroups(
       alternatives: includeAlternatives ? alternativesFor(group) : [],
       pairsWith: includeAlternatives ? pairsWithFor(group) : [],
       scrapedAt,
+      // REEA-1070 AC10 — epoch twin of the card's collection stamp.
+      ...(Number.isNaN(scrapedAtEpochMs) ? {} : { scrapedAtEpochMs }),
     } satisfies NormalizedProduct;
   });
 }
@@ -3274,6 +3295,9 @@ function finalizedSnapshot(
       });
     }
   }
+  // REEA-1070 AC2 — re-derive the responder truth after the missing-adapter
+  // notes were appended, so the finalized snapshot names every gap it owns.
+  snap.responders = summarizeResponders(snap.notes);
   // REEA-437 — hops are still landing behind this response, so its count is
   // provisional: mark the snapshot as not-settled and let the heading keep
   // its skeleton until the converged answer (or the follow-up feed) lands.
@@ -3477,10 +3501,23 @@ const NO_CACHE: QueryCache = {
  *  narrows first, then re-stamps — idempotent by the same contract). */
 function withHonestyFlags(q: string, snap: LiveSearchResult): LiveSearchResult {
   const flags = deviceLeadFlags(q, snap.products);
+  // REEA-1070 AC2 — stamp the structured responder truth from the same notes
+  // the page renders, on every snapshot (fresh, finalized, memo/KV replay).
+  const responders = summarizeResponders(snap.notes);
+  // REEA-1070 AC10 — the collection moment as ISO + epoch. A snapshot that
+  // already carries one keeps it (memo/KV replays stay honestly aged); a new
+  // one reads the products' own scrape stamp, else the build clock.
+  const productStamp = snap.products.find((p) => p.scrapedAt)?.scrapedAt;
+  const collectedAt = snap.collectedAt ?? productStamp ?? new Date().toISOString();
+  const parsed = Date.parse(collectedAt);
+  const collectedAtEpochMs = snap.collectedAtEpochMs ?? (Number.isNaN(parsed) ? Date.now() : parsed);
   return {
     ...snap,
     ...(flags.deviceLeadPending ? { deviceLeadPending: true } : {}),
     ...(flags.kuwaitPendingStatus ? { kuwaitPendingStatus: true } : {}),
+    responders,
+    collectedAt,
+    collectedAtEpochMs,
   };
 }
 

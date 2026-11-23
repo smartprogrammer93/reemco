@@ -92,6 +92,87 @@ export function ageSeconds(
  * invalid stamps — the same honesty rule as relativeAge: callers render
  * nothing rather than fabricate a moment.
  */
+/* ---- REEA-1070 AC10: locale-ready humanised collection timestamps. ---- */
+
+export type AgeLocale = "en" | "ar";
+
+export interface LocalizedAgePair {
+  en: string;
+  ar: string;
+}
+
+/** Arabic counted-noun forms for the age ladder: singular / dual / plural. */
+const ARABIC_AGE_UNITS = {
+  minute: { one: "دقيقة", two: "دقيقتين", few: "دقائق" },
+  hour: { one: "ساعة", two: "ساعتين", few: "ساعات" },
+  day: { one: "يوم", two: "يومين", few: "أيام" },
+} as const;
+
+function arabicAge(n: number, unit: keyof typeof ARABIC_AGE_UNITS): string {
+  const forms = ARABIC_AGE_UNITS[unit];
+  if (n === 1) return `قبل ${forms.one}`;
+  if (n === 2) return `قبل ${forms.two}`;
+  if (n >= 3 && n <= 10) return `قبل ${n} ${forms.few}`;
+  return `قبل ${n} ${forms.one}`;
+}
+
+/**
+ * Humanise a collection moment into the EN/AR pair the design pack asks for:
+ * "just now" / "4 min ago" and `الآن` / `حُدِّث قبل دقيقتين`. Sub-minute ages
+ * read "just now"/"الآن" — never a preformatted "0s ago" (AC10). The clock is
+ * injectable so SSR/hydration can agree on a baked reference moment; a future
+ * stamp clamps to 0 (the same honest race discipline as ageSeconds).
+ */
+export function localizedAgePair(epochMs: number, nowMs: number = Date.now()): LocalizedAgePair {
+  if (!Number.isFinite(epochMs)) return { en: "unknown", ar: "وقت غير معروف" };
+  const s = Math.max(0, Math.floor((nowMs - epochMs) / 1000));
+  if (s < 60) return { en: "just now", ar: "الآن" };
+  const m = Math.floor(s / 60);
+  if (m < 60) {
+    return {
+      en: m === 1 ? "1 min ago" : `${m} min ago`,
+      ar: arabicAge(m, "minute"),
+    };
+  }
+  const h = Math.floor(m / 60);
+  if (h < 24) {
+    return {
+      en: h === 1 ? "1 hr ago" : `${h} hr ago`,
+      ar: arabicAge(h, "hour"),
+    };
+  }
+  const d = Math.floor(h / 24);
+  return {
+    en: d === 1 ? "1 day ago" : `${d} days ago`,
+    ar: arabicAge(d, "day"),
+  };
+}
+
+/** One locale's humanised age, from the same pair helper. */
+export function localizedAgeFor(
+  locale: AgeLocale,
+  epochMs: number,
+  nowMs: number = Date.now(),
+): string {
+  const pair = localizedAgePair(epochMs, nowMs);
+  return locale === "ar" ? pair.ar : pair.en;
+}
+
+/**
+ * The "updated/checked" sentence the design uses around the collection
+ * timestamp: EN "updated just now / updated 4 min ago", AR `حُدِّث قبل
+ * دقيقتين`. Prefix composition lives here so the UI never has to splice an
+ * English "ago" onto an Arabic noun.
+ */
+export function localizedUpdatedFor(
+  locale: AgeLocale,
+  epochMs: number,
+  nowMs: number = Date.now(),
+): string {
+  const age = localizedAgeFor(locale, epochMs, nowMs);
+  return locale === "ar" ? `حُدِّث ${age}` : `updated ${age}`;
+}
+
 export function absoluteStamp(iso: string | undefined): string | null {
   if (!iso) return null;
   const t = new Date(iso).getTime();

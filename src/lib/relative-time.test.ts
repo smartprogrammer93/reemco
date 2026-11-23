@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { absoluteStamp, relativeAge } from "@/lib/relative-time";
+import {
+  absoluteStamp,
+  localizedAgeFor,
+  localizedAgePair,
+  localizedUpdatedFor,
+  relativeAge,
+} from "@/lib/relative-time";
 
 describe("relativeAge (plan AC4: collected Xs ago)", () => {
   const now = Date.parse("2026-09-05T21:00:00Z");
@@ -18,6 +24,64 @@ describe("relativeAge (plan AC4: collected Xs ago)", () => {
     expect(relativeAge(undefined, now)).toBeNull();
     expect(relativeAge("not-a-date", now)).toBeNull();
     expect(relativeAge("2026-09-05T21:00:01Z", now)).toBeNull();
+  });
+});
+
+describe("localizedAgePair (REEA-1070 AC10: locale-ready collection timestamps)", () => {
+  const now = Date.parse("2026-11-23T12:00:00Z");
+
+  it("sub-minute reads just now / الآن, never a preformatted 0s ago", () => {
+    expect(localizedAgePair(now - 12_000, now)).toEqual({ en: "just now", ar: "الآن" });
+    expect(localizedAgeFor("en", now - 45_000, now)).toBe("just now");
+    expect(localizedAgeFor("ar", now - 45_000, now)).toBe("الآن");
+  });
+
+  it("minutes use the design's EN ladder and Arabic dual/plural forms", () => {
+    expect(localizedAgePair(now - 4 * 60_000, now)).toEqual({
+      en: "4 min ago",
+      ar: "قبل 4 دقائق",
+    });
+    expect(localizedAgePair(now - 2 * 60_000, now)).toEqual({
+      en: "2 min ago",
+      ar: "قبل دقيقتين",
+    });
+    expect(localizedAgePair(now - 60_000, now)).toEqual({
+      en: "1 min ago",
+      ar: "قبل دقيقة",
+    });
+    expect(localizedAgePair(now - 26 * 60_000, now)).toEqual({
+      en: "26 min ago",
+      ar: "قبل 26 دقيقة",
+    });
+    expect(localizedAgePair(now - 11 * 60_000, now).ar).toBe("قبل 11 دقيقة");
+  });
+
+  it("hours and days keep the same localized ladder", () => {
+    expect(localizedAgePair(now - 2 * 3_600_000, now)).toEqual({
+      en: "2 hr ago",
+      ar: "قبل ساعتين",
+    });
+    expect(localizedAgePair(now - 2 * 86_400_000, now)).toEqual({
+      en: "2 days ago",
+      ar: "قبل يومين",
+    });
+  });
+
+  it("composes the updated sentence the design pack asks for", () => {
+    expect(localizedUpdatedFor("en", now - 4 * 60_000, now)).toBe("updated 4 min ago");
+    expect(localizedUpdatedFor("ar", now - 2 * 60_000, now)).toBe("حُدِّث قبل دقيقتين");
+    expect(localizedUpdatedFor("ar", now - 10_000, now)).toBe("حُدِّث الآن");
+  });
+
+  it("clamps a future stamp to just now rather than fabricating a negative age", () => {
+    expect(localizedAgePair(now + 5_000, now)).toEqual({ en: "just now", ar: "الآن" });
+  });
+
+  it("returns an honest unknown for a non-finite epoch", () => {
+    expect(localizedAgePair(Number.NaN, now)).toEqual({
+      en: "unknown",
+      ar: "وقت غير معروف",
+    });
   });
 });
 

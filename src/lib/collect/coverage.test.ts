@@ -9,6 +9,8 @@ import type { NormalizedProduct } from "@/types/product";
 import {
   aggregateAlternativesFill,
   aggregateCouponCoverage,
+  coverageLine,
+  summarizeResponders,
 } from "@/lib/collect/coverage";
 
 describe("aggregateCouponCoverage (REEA-488 item 2)", () => {
@@ -71,5 +73,38 @@ describe("aggregateAlternativesFill (REEA-488 metrics)", () => {
       productsWithAlternatives: 0,
       nonEmptyRate: null,
     });
+  });
+});
+
+describe("summarizeResponders (REEA-1070 AC2: partial-response truth)", () => {
+  it("splits answered / answered-empty / no-response in fixed adapter order", () => {
+    const responders = summarizeResponders([
+      { merchant: "Jarir", hits: 0, error: "timeout" },
+      { merchant: "Xcite", hits: 3 },
+      { merchant: "Blink", hits: 0 },
+      { merchant: "Eureka", hits: 0, error: "HTTP 503" },
+    ]);
+    expect(responders).toEqual({
+      queried: ["Xcite", "Blink", "Eureka", "Jarir"],
+      answered: ["Xcite"],
+      answeredEmpty: ["Blink"],
+      noResponse: ["Eureka", "Jarir"],
+    });
+  });
+
+  it("agrees with the calm coverage sentence it feeds", () => {
+    const notes = [
+      { merchant: "Xcite", hits: 2 },
+      { merchant: "Blink", hits: 0, error: "timeout" },
+      { merchant: "Jarir", hits: 0 },
+    ];
+    const responders = summarizeResponders(notes);
+    const line = coverageLine(notes, "en");
+    expect(line).toContain("Prices from Xcite");
+    expect(line).toContain("No response from Blink");
+    expect(line).not.toContain("Jarir");
+    expect(responders.answered).toEqual(["Xcite"]);
+    expect(responders.noResponse).toEqual(["Blink"]);
+    expect(responders.answeredEmpty).toEqual(["Jarir"]);
   });
 });

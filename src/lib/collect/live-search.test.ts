@@ -1789,6 +1789,83 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     const shape = (s: typeof staged) => s.products.map((p) => [p.productId, p.offers.map((o) => `${o.merchant}:${o.price}`)]);
     expect(shape(staged)).toEqual(shape(blocking));
   });
+
+  // REEA-1070 — the served snapshot now carries the structured partial-
+  // response truth, the named savings baseline and epoch collection stamps.
+  it("stamps responders, savings baseline and epoch collection timestamps (REEA-1070)", async () => {
+    resetDiscoveryCache();
+    const fetchImpl: FetchImplLike = async (url: string): Promise<Response> => {
+      if (url.includes("xcite.com")) {
+        return jsonResponse({
+          results: [
+            {
+              hits: [
+                {
+                  name: "Apple iPhone 17 Pro 256GB",
+                  slug: "iphone-17-pro",
+                  price: 189.9,
+                  currency: "KWD",
+                  inStock: true,
+                  unmodifiedPrice: 214,
+                },
+              ],
+            },
+          ],
+        });
+      }
+      if (url.includes("blink.com.kw")) {
+        return jsonResponse({
+          products: [
+            {
+              title: "Apple iPhone 17 Pro 256GB",
+              handle: "iphone-17-pro",
+              variants: [{ price: "214.90", available: true }],
+            },
+          ],
+        });
+      }
+      if (url.includes("sultan-center.com")) throw new Error("sultan down");
+      return jsonResponse({});
+    };
+    const snap = await collectLiveResultsStaged("iphone 17 pro", {
+      fetchImpl,
+      country: "KW",
+    }).final;
+
+    // AC2 — every queried adapter is named, and the answered/no-response
+    // groups are structured rather than left for the UI to parse from prose.
+    expect(snap.responders).toBeDefined();
+    expect(snap.responders!.queried.length).toBe(snap.notes.length);
+    expect(snap.responders!.answered).toContain("Xcite");
+    expect(snap.responders!.noResponse).toContain("Sultan Center");
+
+    // AC10 — the snapshot carries both the ISO and the epoch moment.
+    expect(snap.collectedAt).toBeTruthy();
+    expect(typeof snap.collectedAtEpochMs).toBe("number");
+    expect(snap.collectedAtEpochMs).toBe(Date.parse(snap.collectedAt!));
+
+    const xcite = snap.products
+      .flatMap((p) => p.offers)
+      .find((o) => o.merchant === "Xcite");
+    expect(xcite).toBeDefined();
+    // AC7 — struck − current ±0.01 with the retailer/listed price named.
+    expect(xcite!.savings).toEqual({
+      amount: 24.1,
+      struckPrice: 214,
+      currentPrice: 189.9,
+      currency: "KWD",
+      baseline: {
+        merchant: "Xcite",
+        listedPrice: 214,
+        currency: "KWD",
+        kind: "was_price",
+        observedAt: xcite!.collectedAt,
+        url: xcite!.url,
+      },
+    });
+    expect(typeof xcite!.collectedAtEpochMs).toBe("number");
+    expect(snap.products[0].scrapedAtEpochMs).toBe(Date.parse(snap.products[0].scrapedAt!));
+  });
 });
 
 describe("completion-budget finalize (REEA-398)", () => {

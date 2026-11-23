@@ -30,8 +30,19 @@ export interface LiveOffer {
   url: string;
   inStock: boolean;
   wasPrice?: number;
+  /**
+   * REEA-1070 AC7 — the named savings baseline for this offer's "Save"
+   * figure (struck − current ±0.01 plus the retailer/listed price it is
+   * measured against). Absent when there is no compare-at evidence.
+   */
+  savings?: import("@/lib/savings").OfferSavings;
   /** ISO 8601 collection timestamp for this offer. */
   collectedAt: string;
+  /**
+   * REEA-1070 AC10 — epoch milliseconds of the same collection moment, so
+   * EN/AR clients humanise it against their own clock.
+   */
+  collectedAtEpochMs?: number;
   /** "live" for a fresh scrape, "cache" when replayed from the short-TTL cache. */
   method: "live" | "cache";
 }
