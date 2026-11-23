@@ -29,7 +29,7 @@ vi.mock("next/link", () => ({
   ),
 }));
 
-import ResultsClient, { LoadingFallback } from "@/components/ResultsClient";
+import ResultsClient, { LoadingFallback, renderedAcrossStages } from "@/components/ResultsClient";
 import HeaderSearch from "@/components/HeaderSearch";
 import { resetStockPrefs } from "@/lib/stock";
 import type { LiveSearchResult } from "@/lib/collect/live-search";
@@ -419,12 +419,72 @@ describe("staged progressive results (REEA-178)", () => {
     expect(search?.result_count).toBe(2);
   });
 
+  it("REEA-1068 D3 — an empty first flush keeps the shelf ghost until the final stage resolves", async () => {
+    // QA live repro on `zzzzqqq`: the index-0 boundary swapped its ghost out
+    // for nothing and the card region stayed blank for up to ~11 s until the
+    // honest empty state landed. While nothing has painted and a later stage
+    // is still in flight, the named-slot ghost must hold the reserve.
+    searchParams.set("q", "zzzzqqq");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    let resolveFinal: (v: LiveSearchResult) => void = () => {};
+    const stages: Promise<LiveSearchResult>[] = [
+      Promise.resolve({ products: [], notes: [], suggestions: [] }),
+      new Promise<LiveSearchResult>((res) => {
+        resolveFinal = res;
+      }),
+    ];
+    await act(async () => {
+      render(<ResultsClient query="zzzzqqq" page={1} country={null} stages={stages} />);
+    });
+    // Not a blank band: the skeleton cards reserve the shelf while the final
+    // stage is pending, and the empty state has not been claimed yet.
+    expect(document.querySelectorAll(".skeleton-card").length).toBeGreaterThan(0);
+    expect(document.querySelector('[data-empty-state="true"]')).toBeNull();
+
+    await act(async () => {
+      resolveFinal({ products: [], notes: [], suggestions: [] });
+      await Promise.resolve();
+    });
+    // Converged zero: the honest empty state replaces the ghost.
+    expect(document.querySelector('[data-empty-state="true"]')).not.toBeNull();
+    expect(document.querySelectorAll(".skeleton-card")).toHaveLength(0);
+  });
+
+  it("REEA-1068 D1 — renderedAcrossStages adopts React thenables (SSR prop shape)", async () => {
+    // Live repro on the local production build: the SSR prop layer hands the
+    // client component thenables whose `then` returns void. Calling
+    // `stage.then(...)` directly yielded undefined views, so the coverage
+    // sentence saw an empty rendered set on a 10-card page and printed
+    // "No match at …" under populated results.
+    const product: NormalizedProduct = {
+      productId: "sony-xm6",
+      title: "Sony WH-1000XM6",
+      brand: "Sony",
+      offers: [{ merchant: "Xcite", price: 94.95, currency: "KWD", url: "https://xcite.example/xm6", inStock: true }],
+      coupons: [],
+      variations: [],
+      alternatives: [],
+      scrapedAt: new Date().toISOString(),
+    };
+    const snap: LiveSearchResult = { products: [product], notes: [], suggestions: [] };
+    const thenable = {
+      then(resolve: (v: LiveSearchResult) => void) {
+        resolve(snap);
+      },
+    } as unknown as Promise<LiveSearchResult>;
+    const rows = await renderedAcrossStages([thenable], "sony", 1, null, false);
+    expect(rows.map((p) => p.productId)).toEqual(["sony-xm6"]);
+  });
+
   it("REEA-222: the streaming shell keeps exactly one Best-price badge when early flushes render nothing", async () => {
     // Live repro: `Case for iPhone 17 Pro` answered with an empty first
     // snapshot — every later flush used to render badge-less because only
     // index 0 could own the badge. Badge ownership now follows the first
     // flush that actually renders cards.
     searchParams.set("q", "Case for iPhone 17 Pro");
+    searchParams.delete("oos");
+    searchParams.delete("c");
     searchParams.delete("oos");
     searchParams.delete("c");
     const CASE_A: NormalizedProduct = {
@@ -1113,10 +1173,13 @@ describe("cold-start zero handling (REEA-437)", () => {
     expect(document.querySelector("h1")?.textContent).toContain("wh-1000xm6");
     expect(document.body.textContent).not.toContain("0 results for");
     expect(document.body.textContent).not.toContain("No matches — try a shorter phrase.");
-    // REEA-574 rev 1 (R1): nothing is rendered yet, so the coverage sentence
-    // stays hidden too — the empty page state shows heading + hint + empty
-    // state only, and the line lands with the first rendered rows.
-    expect(document.body.textContent).not.toContain("No response from");
+    // REEA-574 rev 1 (R1) hides the CONTRIBUTOR half when nothing rendered;
+    // REEA-1068 D1 supersedes its blanket hide for the failure half: a lane
+    // that missed the budget is named, because that is the explanation for
+    // the zero. FINALIZED_EMPTY carries Xcite's timeout, so its name shows —
+    // never a phantom "Prices from …" with no rows behind it.
+    expect(document.body.textContent).toContain("No response from Xcite.");
+    expect(document.body.textContent).not.toContain("Prices from");
     // The follow-up feed lands the converged live answer — heading + cards.
     const late: LiveSearchResult = { products: SAMPLE_PRODUCTS, notes: [], suggestions: SAMPLE_PRODUCTS };
     await act(async () => {

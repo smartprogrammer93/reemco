@@ -553,8 +553,16 @@ function StageAppend(props: {
   // interim SAR/EGP lead a Kuwait best price (REEA-847 cold-query repro).
   const kuwaitBatchPending = index < stages.length - 1 || snap.settled === false;
   const kuwaitPendingStatus = snap.kuwaitPendingStatus === true;
+  // REEA-1068 D3 — a first flush that landed empty used to leave the card
+  // region BLANK until the final stage resolved (QA measured up to ~11 s on
+  // `zzzzqqq`): the index-0 boundary swapped its named-slot ghost out for
+  // nothing, and every later append boundary kept `fallback={null}`. While
+  // NOTHING has painted and a later stage is still in flight, keep the same
+  // named-slot ghost in the reserve, so the shopper sees "still checking"
+  // geometry instead of an empty band until the honest empty state lands.
+  const shelfStillEmpty = prevVisible.length === 0 && fresh.length === 0;
   const next = index + 1 < stages.length ? (
-    <Suspense fallback={null}>
+    <Suspense fallback={shelfStillEmpty ? <StagedGridGhost /> : null}>
       <StageAppend {...props} index={index + 1} />
     </Suspense>
   ) : null;
@@ -939,7 +947,16 @@ export function renderedAcrossStages(
 ): Promise<NormalizedProduct[]> {
   return Promise.all(
     stages.map((stage) =>
-      stage.then((snap) => {
+      // REEA-1068 D1 — adopt the stage through Promise.resolve instead of
+      // calling `stage.then` directly. The SSR prop layer hands client
+      // components React thenables whose `then` returns void; `stage.then(cb)`
+      // on one of those returns undefined, so the union below saw no views
+      // and the coverage sentence believed NOTHING was rendered (measured on
+      // the local production build: 22 stages → 22 undefined views on a
+      // 10-card `sony` page). Promise.resolve adopts any thenable and always
+      // returns a real Promise, so the painted-row union is what actually
+      // painted.
+      Promise.resolve(stage).then((snap) => {
         // REEA-964 — the painted set is primary slice + related band (both
         // derive from the same confidence partition the render uses), so a
         // merchant visible only through the related band still gets named.
@@ -1179,7 +1196,11 @@ function StagedResults(props: {
               tries={finalSnap.attemptedQueries}
             />
             <RelatedBand items={finalSections.related} locale={locale} queryId={props.queryId} />
-            <CoverageLine notes={finalSnap.notes} products={products} locale={locale} />
+            {/* REEA-1068 D1 — on a zero-row page the coverage sentence keeps
+                only its failure/empty half (the lanes that errored or
+                answered with nothing), so "No match found" is explained
+                instead of bare. AC9's unreachable names ride it too. */}
+            <CoverageLine notes={finalSnap.notes} products={products} locale={locale} unreachableLanes={props.unreachableLanes} />
           </>
         ) : (
           <>
