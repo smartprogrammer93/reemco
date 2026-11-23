@@ -91,8 +91,12 @@ from git.
    all four security headers (CSP, X-Content-Type-Options, Referrer-Policy, HSTS)
    must be present, and `X-Powered-By` must be absent (REE-1084 F7a: suppressed at
    the source via `poweredByHeader: false`, asserted on the wire by both gates).
+   Since REEA-1088 the CSP check is stricter than presence: the served `script-src`
+   must carry a per-request nonce plus `'strict-dynamic'` and no `'unsafe-inline'`
+   (a bare `'self' 'unsafe-inline'` policy is the pre-F10 regression).
 7. Funnel smoke suite (`npm run smoke`: home → results → click-out, freshness, 375px
-   mobile pass, offer link-health, adapter-registration parity, cache headers).
+   mobile pass, offer link-health, adapter-registration parity, cache headers, served
+   CSP nonce freshness).
    Restored to blocking in REEA-1059 after the two deterministic failures that had made
    it advisory were fixed: step 5 now proves reachability inside the deliberately
    scrollable coverage row instead of failing on it (REEA-1056), and step 7 no longer

@@ -58,11 +58,24 @@ fi
 
 # 2. Security headers. The app's middleware owns CSP/CTO/Referrer-Policy;
 # Caddy adds HSTS. Missing any of them means the proxy or app is misconfigured.
+# REEA-1088 — presence alone is not enough for the CSP: the policy must be the
+# strict per-request nonce policy. `script-src 'self' 'unsafe-inline'` is what
+# shipped on 682f3db and let inline-script XSS through; a nonce policy without
+# 'strict-dynamic' (or with the nonce missing from the served header) means the
+# proxy stopped running. Either is a regression, so fail the deploy.
 HEADERS=$(curl -fsSI -m 15 "$BASE/" 2>/dev/null || true)
 [ -n "$HEADERS" ] || fail "GET / returned no headers"
 for H in content-security-policy x-content-type-options referrer-policy strict-transport-security; do
   printf '%s\n' "$HEADERS" | grep -iq "^$H:" || fail "missing security header: $H"
 done
+CSP=$(printf '%s\n' "$HEADERS" | grep -i '^content-security-policy:' | sed -E 's/^[^:]+:[[:space:]]*//' | tail -1)
+SCRIPT_SRC=$(printf '%s' "$CSP" | tr ';' '\n' | grep -i '^[[:space:]]*script-src' | head -1)
+[ -n "$SCRIPT_SRC" ] || fail "CSP has no script-src directive (REEA-1088)"
+printf '%s' "$SCRIPT_SRC" | grep -Eq "'nonce-[A-Za-z0-9+/_-]+={0,2}'" || fail "CSP script-src has no nonce (REEA-1088)"
+printf '%s' "$SCRIPT_SRC" | grep -q "'strict-dynamic'" || fail "CSP script-src lacks 'strict-dynamic' (REEA-1088)"
+if printf '%s' "$SCRIPT_SRC" | grep -q "'unsafe-inline'"; then
+  fail "CSP script-src still allows 'unsafe-inline' (REEA-1088)"
+fi
 # REEA-1085 (F7b): reverse_proxy must not fingerprint the proxy. The Caddyfile
 # strips Via with handle_response; if it leaks again the edge config regressed.
 printf '%s\n' "$HEADERS" | grep -iq "^via:" && fail "Via leaked"
@@ -71,7 +84,7 @@ printf '%s\n' "$HEADERS" | grep -iq "^via:" && fail "Via leaked"
 # suppressed via `poweredByHeader: false` in next.config.ts; assert the wire,
 # not the config, so a stripped/regressed config cannot reach production.
 printf '%s\n' "$HEADERS" | grep -iq "^x-powered-by:" && fail "X-Powered-By leaked"
-echo "security headers OK (4/4), no Via leak, X-Powered-By absent"
+echo "security headers OK (4/4), CSP nonce + strict-dynamic, no Via leak, X-Powered-By absent"
 
 # 3. Health through the proxy — proves Caddy→app routing, not just loopback.
 # REEA-1044: this endpoint walks the live shopper funnel (home → results →

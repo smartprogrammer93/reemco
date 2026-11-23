@@ -391,4 +391,39 @@ await step(8, "served cache-window headers on repeated /results (REEA-447 R5)", 
   return `window served (s-maxage + Accept-Language vary, no-store absent) — repeat x-vercel-cache=${cacheState} age=${age}s`;
 });
 
-console.log(`SMOKE PASSED — ${BASE} funnel (home → search → click-out → freshness → link-health → adapter parity → served cache window) is healthy.`);
+// REEA-1088: the served CSP must be the strict per-request nonce policy, and
+// the nonce must be FRESH on every document GET. This is the wire-level half of
+// the F10 regression: the unit test pins buildCsp(), but only the served
+// header proves the proxy actually ran on the deployed artifact and that a
+// cache/CDN did not freeze one nonce. `'strict-dynamic'` without a matching
+// nonce on the script tags blocks every script — hydration silently stops and
+// /results stays on its loading skeletons (the REEA-82 failure mode), so step
+// 2's hydration assertion runs alongside this one.
+await step(9, "served CSP carries a fresh per-request nonce (REEA-1088)", async () => {
+  const read = async () => {
+    const resp = await fetch(`${BASE}/`, {
+      headers: { accept: "text/html" },
+      redirect: "follow",
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!resp.ok) throw new Error(`GET / returned HTTP ${resp.status}`);
+    return resp.headers.get("content-security-policy") ?? resp.headers.get("content-security-policy-report-only") ?? "";
+  };
+  const cspOf = (policy) =>
+    policy.split(";").map((d) => d.trim()).find((d) => d.startsWith("script-src")) ?? "";
+  const nonceOf = (policy) => /'nonce-([A-Za-z0-9+/_-]+={0,2})'/.exec(cspOf(policy))?.[1];
+  const first = await read();
+  if (!first) throw new Error("no Content-Security-Policy header served on /");
+  const scriptSrc = cspOf(first);
+  const nonce = nonceOf(first);
+  if (!nonce) throw new Error(`script-src has no nonce: "${scriptSrc}"`);
+  if (!scriptSrc.includes("'strict-dynamic'")) throw new Error(`script-src lacks 'strict-dynamic': "${scriptSrc}"`);
+  if (scriptSrc.includes("'unsafe-inline'")) throw new Error(`script-src still allows 'unsafe-inline': "${scriptSrc}"`);
+  const second = await read();
+  const secondNonce = nonceOf(second);
+  if (!secondNonce) throw new Error("repeat GET / served a CSP without a nonce");
+  if (secondNonce === nonce) throw new Error(`nonce reused across requests (${nonce}) — per-request freshness is broken`);
+  return `nonce ${nonce.slice(0, 8)}… fresh per request, script-src strict-dynamic, no unsafe-inline`;
+});
+
+console.log(`SMOKE PASSED — ${BASE} funnel (home → search → click-out → freshness → link-health → adapter parity → served cache window → CSP nonce) is healthy.`);
