@@ -228,6 +228,10 @@ export function coverageParts(
   const unreachableSet = new Set(unreachable ?? []);
   const failed: string[] = [];
   const answered: string[] = [];
+  /* REEA-1068 D1 — lanes that answered the query but kept zero offers. On a
+     zero-row page this is the second half of "why is the shelf empty"; it
+     stays unnamed everywhere else (REEA-574 R1's success-but-empty rule). */
+  const answeredEmpty: string[] = [];
   // REEA-1078 AC9 — the blocked set is derived FIRST so the zero-row branch
   // below can still speak: a blocked lane is the reason the shelf is empty,
   // and "0 results" with no explanation is exactly the defect this AC names.
@@ -258,18 +262,32 @@ export function coverageParts(
     ]);
   }
   if (rendered) {
-    // REEA-574 rev 1 (R1): zero rendered rows → nothing to vouch for, and the
-    // error half would still phantom a merchant above an empty page — hide
-    // the whole sentence, not just the contributor half. AC9 exception: a
-    // blocked lane is named, because it explains the empty shelf.
-    if (rendered.length === 0) return parts;
-    // Contributor set from the rows actually on screen, in fixed adapter order.
-    answered.push(
-      ...[...seen].sort((a, b) => coverageRank(a) - coverageRank(b)),
-    );
-    // A merchant whose offers rendered DID answer — never also a gap.
-    for (const n of ordered) {
-      if (n.error && !seen.has(n.merchant)) failed.push(n.merchant);
+    if (rendered.length === 0) {
+      // REEA-574 rev 1 (R1) still hides the CONTRIBUTOR half on a zero-row
+      // page — there are no rendered prices to vouch for, so "Prices from …"
+      // would phantom a merchant above an empty shelf. REEA-1068 D1 changes
+      // the failure half: a bare "No match found" for a stocked product is a
+      // lie of omission, so the lanes that errored (and the lanes that
+      // answered with nothing) are named as the reason the shelf is empty.
+      // AC9's unreachable sentence rides the same branch for the same reason.
+      for (const n of ordered) {
+        if (n.error) failed.push(n.merchant);
+        else if (n.hits === 0) answeredEmpty.push(n.merchant);
+      }
+      // A genuine zero (every lane answered, all with nothing) needs no lane
+      // list — the empty state already says "no match". The empty-answer half
+      // is only the second half of an EXPLANATION: it rides a page where at
+      // least one lane could not answer, and names what the rest did.
+      if (failed.length === 0) answeredEmpty.length = 0;
+    } else {
+      // Contributor set from the rows actually on screen, in fixed adapter order.
+      answered.push(
+        ...[...seen].sort((a, b) => coverageRank(a) - coverageRank(b)),
+      );
+      // A merchant whose offers rendered DID answer — never also a gap.
+      for (const n of ordered) {
+        if (n.error && !seen.has(n.merchant)) failed.push(n.merchant);
+      }
     }
   } else {
     // Notes-only fallback (server diagnostics): kept-hits count is the row count.
@@ -282,6 +300,9 @@ export function coverageParts(
   // one honest statement per lane.
   for (let i = failed.length - 1; i >= 0; i--) {
     if (unreachableSet.has(failed[i])) failed.splice(i, 1);
+  }
+  for (let i = answeredEmpty.length - 1; i >= 0; i--) {
+    if (unreachableSet.has(answeredEmpty[i])) answeredEmpty.splice(i, 1);
   }
   // REEA-279: the sentence shapes live in the static table so the stamp
   // matches the shell language; EN keeps the exact figures it had before.
@@ -301,6 +322,13 @@ export function coverageParts(
         { kind: "names", names: failed, ar },
         { kind: "text", value: " هذه المرة." },
       ]);
+    // REEA-1068 D1 — the empty answer half, zero-row pages only.
+    if (answeredEmpty.length > 0)
+      sentence([
+        { kind: "text", value: "لا توجد مطابقة لدى " },
+        { kind: "names", names: answeredEmpty, ar },
+        { kind: "text", value: "." },
+      ]);
     return parts;
   }
   if (failed.length > 0)
@@ -310,6 +338,15 @@ export function coverageParts(
     sentence([
       { kind: "text", value: "No response from " },
       { kind: "names", names: failed, ar },
+      { kind: "text", value: "." },
+    ]);
+  // REEA-1068 D1 — a lane that answered the query with zero offers is named
+  // as the empty half of the explanation on a zero-row page. Everywhere else
+  // it stays unnamed (REEA-574 R1's success-but-empty rule).
+  if (answeredEmpty.length > 0)
+    sentence([
+      { kind: "text", value: "No match at " },
+      { kind: "names", names: answeredEmpty, ar },
       { kind: "text", value: "." },
     ]);
   if (answered.length > 0)

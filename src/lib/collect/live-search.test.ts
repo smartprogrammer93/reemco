@@ -2449,8 +2449,50 @@ describe("REA-290 — retry once with backoff + per-query coverage line", () => 
     expect(coverageLine([...notes, { merchant: "Jarir", hits: 0, error: "timeout" }], "en", [product("p", ["Jarir"])])).toBe(
       "Prices from Jarir.",
     );
-    // Zero rendered rows → nothing to vouch for: sentence hidden entirely.
+    // Zero rendered rows, no failures, no empty answers → nothing to vouch
+    // for: sentence hidden entirely (REEA-574 R1, unchanged).
     expect(coverageLine(notes, "en", [])).toBe("");
+  });
+
+  it("REEA-1068 D1 — a zero-row page names the lanes that failed or answered empty", () => {
+    // QA live repro on `panadol`: Aster Pharmacy and BinSina missed the
+    // completion budget, Nahdi answered with zero hits, and Danube Home's
+    // four Panadol rows were outside the Kuwait scope. The page said only
+    // "No match found" and the coverage line was empty — a shopper had no
+    // way to tell a real zero from a lane outage.
+    const notes = [
+      { merchant: "Aster Pharmacy", hits: 0, error: "no response within budget" },
+      { merchant: "Nahdi", hits: 0 },
+      { merchant: "BinSina", hits: 0, error: "no response within budget" },
+      // Answered with rows, but the Kuwait-scoped settled view dropped them:
+      // it must NOT appear as a contributor on a zero-row page.
+      { merchant: "Danube Home", hits: 4 },
+    ];
+    expect(coverageLine(notes, "en", [])).toBe(
+      "No response from Aster Pharmacy and BinSina. No match at Nahdi.",
+    );
+    expect(coverageLine(notes, "en", [])).not.toContain("Prices from");
+    // AR/RTL — same facts, Arabic sentence shapes, isolated Latin names.
+    expect(coverageLine(notes, "ar", []).trim()).toBe(
+      "لم تستجب Aster Pharmacy وBinSina هذه المرة. لا توجد مطابقة لدى Nahdi.",
+    );
+    // One statement per lane: an unreachable lane is not also "no response".
+    expect(coverageLine(notes, "en", [], ["Aster Pharmacy"])).toBe(
+      "Unreachable: Aster Pharmacy. No response from BinSina. No match at Nahdi.",
+    );
+    // A GENUINE zero (every lane answered, all with nothing) keeps the old
+    // quiet page — naming twenty empty lanes would just be noise.
+    expect(
+      coverageLine(
+        [
+          { merchant: "Xcite", hits: 0 },
+          { merchant: "Blink", hits: 0 },
+          { merchant: "Eureka", hits: 0 },
+        ],
+        "en",
+        [],
+      ),
+    ).toBe("");
   });
 });
 
