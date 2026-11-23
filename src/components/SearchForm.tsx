@@ -4,18 +4,19 @@ import { recallCountry, sanitizeCountry } from "@/lib/country";
 import { recallShowOutOfStock, sanitizeShowOutOfStock } from "@/lib/stock";
 import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
 
-/** Brief v4 search: hero 52px / compact 44px (AC6 tap floor) input + button.
- *  defaultValue echoes the active ?q so the query survives retry (AC5).
- *  REEA-279: chrome strings ride the static EN/AR table; the server-resolved
- *  locale comes down as a prop so first paint and hydration agree. */
+/** Direction A search: header 44px input + button inside a two-row 375
+ *  header (input ≥200px), hero 52px, inline 44px. defaultValue echoes the
+ *  active ?q so the query survives retry (AC5). REEA-279: chrome strings ride
+ *  the static EN/AR table; the server-resolved locale comes down as a prop so
+ *  first paint and hydration agree. */
 export default function SearchForm({
-  compact = false,
+  variant = "inline",
   defaultValue,
   country,
   oos,
   locale,
 }: {
-  compact?: boolean;
+  variant?: "header" | "hero" | "inline";
   defaultValue?: string;
   /** REEA-170 active country selection from the URL, if any. */
   country?: string | null;
@@ -25,7 +26,9 @@ export default function SearchForm({
   locale?: Locale;
 }) {
   const t = getStrings(locale ?? clientLocale());
-  const height = compact ? 44 : 52;
+  const header = variant === "header";
+  const hero = variant === "hero";
+  const height = hero ? 52 : 44;
   // REEA-170: the selection rides every search through this hidden field —
   // URL param first, then the same-tab remembered choice — so a new search
   // keeps the filter without re-selecting (no cookies / localStorage).
@@ -33,20 +36,22 @@ export default function SearchForm({
   // REEA-186: same carry-over mechanism for the stock selection — checked
   // ships `oos=1`, unchecked submits the empty value (hide out-of-stock).
   const carriedOos = (sanitizeShowOutOfStock(oos) ?? recallShowOutOfStock()) ?? false;
+  const formClass = header
+    ? "rc-header-search"
+    : hero
+      ? "rc-hero-search"
+      : "flex flex-wrap gap-2 sm:flex-nowrap";
   return (
     <form
       key={`${defaultValue ?? ""}|${carried ?? ""}|${carriedOos ? "1" : ""}`}
       action="/results"
       method="get"
-      className="flex flex-wrap gap-2 sm:flex-nowrap"
+      className={formClass}
       role="search"
       onSubmit={(e) => {
-        // REEA-291 AC4 — the in-place selections (REEA-170 pills, REEA-186
-        // toggle) echo the address with history.replaceState, which does NOT
-        // re-render this header form. Read the LIVE location + the remembered
-        // slots right at submit so the hidden carry-over fields ship the
-        // shopper's current selections with the next query — the hand-off the
-        // old link-navigation model got for free.
+        // REEA-291 AC4 — read the LIVE location + the remembered slots right
+        // at submit so the hidden carry-over fields ship the shopper's current
+        // selections with the next query.
         const form = e.currentTarget;
         const live = new URLSearchParams(window.location.search);
         const liveCountry = sanitizeCountry(live.get("c")) ?? recallCountry();
@@ -59,22 +64,27 @@ export default function SearchForm({
     >
       <input type="hidden" name="c" defaultValue={carried ?? ""} />
       <input type="hidden" name="oos" defaultValue={carriedOos ? "1" : ""} />
-      {/* REEA-75: min-w-0 lets the input shrink below its intrinsic width;
-          basis-full stacks it above the button under sm (375px-safe). */}
-      <input
-        type="search"
-        name="q"
-        placeholder={t.searchPlaceholder}
-        aria-label={t.searchLabel}
-        defaultValue={defaultValue}
-        className="text-input focusable min-w-0 flex-1 basis-full px-4 sm:basis-auto"
-        style={{ height }}
-      />
-      <button
-        type="submit"
-        className="btn-primary focusable w-full min-h-11 px-6 sm:w-auto"
-        style={{ height }}
-      >
+      <div className="rc-search-field">
+        <label className="sr-only" htmlFor={header ? "header-q" : hero ? "hero-q" : "inline-q"}>
+          {t.searchLabel}
+        </label>
+        <input
+          id={header ? "header-q" : hero ? "hero-q" : "inline-q"}
+          type="search"
+          name="q"
+          placeholder={t.searchPlaceholder}
+          aria-label={t.searchLabel}
+          defaultValue={defaultValue}
+          autoComplete="off"
+          className="focusable"
+          style={{ height }}
+        />
+        <svg className="icon-search" width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden>
+          <circle cx="11" cy="11" r="7" />
+          <path d="m20 20-3.6-3.6" />
+        </svg>
+      </div>
+      <button type="submit" className="btn-primary focusable shrink-0 px-6" style={{ height }}>
         {t.searchButton}
       </button>
     </form>

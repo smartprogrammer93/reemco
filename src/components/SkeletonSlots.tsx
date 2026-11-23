@@ -26,7 +26,7 @@ import { COVERAGE_ORDER } from "@/lib/collect/coverage";
    carry, so the heading paints in-slot from the very first paint. */
 export function HeadingGhost() {
   return (
-    <div className="heading-slot skeleton-block" style={{ width: "45%", height: "clamp(36px, 4.8vw, 55px)" }} aria-hidden />
+    <div className="heading-slot skeleton-block" style={{ width: "45%", height: "clamp(28px, 2.4vw, 32px)" }} aria-hidden />
   );
 }
 

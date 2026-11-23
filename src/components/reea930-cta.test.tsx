@@ -87,32 +87,38 @@ function lead(overrides: Partial<NormalizedProduct> = {}): { container: HTMLElem
 }
 
 describe("REEA-930 AC1 — freshness-anchored offer CTAs", () => {
-  it("renders the collection age + retailer on a non-lead row CTA", () => {
+  it("renders the collection age + retailer on the non-lead offer row", () => {
     const { container } = lead();
-    const rowCta = Array.from(container.querySelectorAll("a")).find((a) =>
-      a.textContent?.includes("Eureka"),
-    );
-    expect(rowCta?.textContent).toContain("Checked");
-    expect(rowCta?.textContent).toContain(localizedAge("en", 12));
-    expect(rowCta?.textContent).toContain("Eureka");
+    // Direction A (REEA-1069): the checked time is its own muted column on
+    // line B, the retailer names line A, and the action is the compact "Go".
+    // The freshness the REEA-930 AC requires is still on the row, verbatim.
+    const row = Array.from(container.querySelectorAll("li.offer-row")).find((li) =>
+      li.textContent?.includes("Eureka"),
+    ) as HTMLElement | undefined;
+    expect(row?.textContent).toContain("Checked");
+    // A just-collected offer reads "Checked just now" in the shelf grammar
+    // (design §3); the age is still derived from the baked render clock.
+    expect(row?.textContent).toContain("Checked just now");
+    expect(row?.textContent).toContain("Eureka");
+    expect(row?.querySelector("a.btn-primary")?.textContent).toBe("Go");
   });
 
   it("falls back to the plain label when the offer carries no stamp", () => {
     const offers = product().offers.map((o, i) => (i === 1 ? { ...o, collectedAt: undefined } : o));
     const { container } = lead({ offers });
-    const rowCta = Array.from(container.querySelectorAll("a")).find((a) =>
-      a.textContent?.includes("Go to store"),
+    const rowCta = Array.from(container.querySelectorAll("a.btn-primary")).find(
+      (a) => a.textContent === "Go",
     );
-    expect(rowCta?.textContent).toBe("Go to store");
+    expect(rowCta?.textContent).toBe("Go");
   });
 
   it("falls back to the plain label on an invalid stamp", () => {
     const offers = product().offers.map((o, i) => (i === 1 ? { ...o, collectedAt: "not-a-date" } : o));
     const { container } = lead({ offers });
-    const rowCta = Array.from(container.querySelectorAll("a")).find((a) =>
-      a.textContent?.includes("Go to store"),
+    const rowCta = Array.from(container.querySelectorAll("a.btn-primary")).find(
+      (a) => a.textContent === "Go",
     );
-    expect(rowCta?.textContent).toBe("Go to store");
+    expect(rowCta?.textContent).toBe("Go");
   });
 
   it("the OfferCard (detail view) CTA carries the age too, with plain fallback", () => {
@@ -182,10 +188,10 @@ describe("REEA-930 AC2 — lead primary CTA states effective price + retailer", 
       <ProductResultCard product={product()} isBest={false} query="headphones" rank={1} renderStartMs={RENDER_MS} />,
     );
     expect(container.querySelector(".cta-lead")).toBeNull();
-    const rowCta = Array.from(container.querySelectorAll("a")).find((a) =>
-      a.textContent?.includes("Checked"),
-    );
-    expect(rowCta).toBeDefined();
+    // The row still carries its own freshness column and outbound action.
+    const row = container.querySelector("li.offer-row") as HTMLElement;
+    expect(row?.textContent).toContain("Checked");
+    expect(row?.querySelector("a.btn-primary")?.textContent).toBe("Go");
   });
 
   it("best offer out of stock → the CTA rides the best AVAILABLE (in-stock) offer", () => {
@@ -278,10 +284,10 @@ describe("REEA-930 AC6 — Arabic locale", () => {
     expect(cta?.textContent).toContain("KD 99");
     expect(cta?.textContent).toContain("تم التحقق");
     expect(cta?.textContent).toContain(localizedAge("ar", 12));
-    const rowCta = Array.from(container.querySelectorAll("a")).find((a) =>
-      a.textContent?.includes("Eureka"),
-    );
-    expect(rowCta?.textContent).toContain("تم التحقق");
+    const row = Array.from(container.querySelectorAll("li.offer-row")).find((li) =>
+      li.textContent?.includes("Eureka"),
+    ) as HTMLElement | undefined;
+    expect(row?.textContent).toContain("حُدِّث");
   });
 });
 

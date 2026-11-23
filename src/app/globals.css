@@ -14,71 +14,122 @@
 :root {
   color-scheme: light dark;
 
-  /* Canvas & ink — Warm Signal light values, verbatim from the brief */
+  /* =====================================================================
+     Reemco Design v5 — Direction A "Shelf" (REEA-1055 token diff, REEA-1069).
+     ONE namespace stays --rc-*; every hex lives here and nowhere else.
+     Existing v4 palette hex is preserved — the refresh adds roles and changes
+     type/geometry/status, it does not repaint the palette.
+     ===================================================================== */
+
+  /* Base palette — unchanged Warm Signal values (AA preserved) */
   --rc-canvas: #F8F5EF;
   --rc-surface: #FFFFFF;
+  --rc-surface-sunken: #F1EDE4;
   --rc-ink: #1F1A14;
   --rc-body-text: #453D33;
   --rc-muted: #7A6F61;
   --rc-line: #E8E2D6;
   --rc-line-strong: #CFC5B4;
-
-  /* Signal — burnt amber, actions + live pulse only (§Direction) */
   --rc-primary: #C2410C;
   --rc-primary-deep: #9A3412;
   --rc-accent: #F97316;
   --rc-on-primary: #FFFFFF;
-  --rc-hero: #1F1A14; /* solid espresso hero band, replaces the v3 gradient */
+  --rc-hero: #1F1A14;
   --rc-primary-tint: #FFEDD5;
+  --rc-savings: #166534;
+  --rc-savings-bg: #DCFCE7;
+  --rc-error: #B91C1C;
+  --rc-error-bg: #FEE2E2;
 
-  /* Semantic — green = money saved; amber = freshness; red = error */
-  --rc-savings: #166534; --rc-savings-bg: #DCFCE7;
-  --rc-fresh: #92400E;    --rc-fresh-bg: #FEF3C7;
-  --rc-error: #B91C1C;    --rc-error-bg: #FEE2E2;
+  /* Legacy freshness aliases — the v5 status system replaces the ad-hoc
+     dashed freshness pill, but the coupon/age surfaces still consume these
+     names. Mapped onto the status system, never a forked colour. */
+  --rc-fresh: #92400E;
+  --rc-fresh-bg: #FEF3C7;
 
-  /* Type roles: Space Grotesk = display/prices/headings; Inter = body/UI;
-     ui-monospace = meta stamps only */
-  --rc-font-display: var(--font-space-grotesk), ui-sans-serif, sans-serif;
-  --rc-font-body: var(--font-inter), ui-sans-serif, sans-serif;
+  /* Status system — ONE neutral container for all three states; state is
+     carried by icon shape + label + tooltip, never by colour alone. */
+  --rc-status-bg: #F1EDE4;
+  --rc-status-border: #E8E2D6;
+  --rc-status-ink: #1F1A14;
+  --rc-status-verified: #166534;
+  --rc-status-unverified: #92400E;
+  --rc-status-stale: #6B6156;
+  --rc-status-h: 22px;
+  --rc-status-pad-x: 8px;
+  --rc-status-icon: 14px;
+  --rc-status-radius: 6px;
+  --rc-status-label: 600 12px/1.2 var(--rc-font-body);
+
+  /* Type — Direction A targets (v4 values in the REEA-1055 token diff).
+     Meta is BODY FONT, sentence case, tabular numerals only — no uppercase
+     mono for shopper strings. Mono survives for technical labels only. */
+  --rc-font-display: var(--font-space-grotesk), "Space Grotesk", ui-sans-serif, sans-serif;
+  --rc-font-body: var(--font-inter), "Inter", ui-sans-serif, sans-serif;
+  --rc-font-arabic: var(--font-noto-arabic), "Noto Sans Arabic", "IBM Plex Sans Arabic", "Inter", ui-sans-serif, sans-serif;
   --rc-font-mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
-  --rc-text-display: 700 clamp(34px, 4.6vw, 52px)/1.05 var(--rc-font-display);
-  --rc-text-h2: 650 24px/1.25 var(--rc-font-display);
-  --rc-text-price: 700 clamp(30px, 3.2vw, 40px)/1.05 var(--rc-font-display);
+
+  --rc-text-display: 700 clamp(28px, 3.2vw, 40px)/1.1 var(--rc-font-display);
+  --rc-text-h1: 700 clamp(28px, 2.4vw, 32px)/1.12 var(--rc-font-display);
+  --rc-text-h1-product: 700 clamp(22px, 2.2vw, 28px)/1.2 var(--rc-font-display);
+  --rc-text-h2: 650 22px/1.3 var(--rc-font-display);
+  --rc-text-h3: 600 17px/1.35 var(--rc-font-display);
+  --rc-text-price: 700 clamp(34px, 3.6vw, 44px)/1.02 var(--rc-font-display);
+  --rc-text-price-card: 700 clamp(32px, 3vw, 40px)/1.04 var(--rc-font-display);
+  --rc-text-price-sm: 700 20px/1.1 var(--rc-font-display);
   --rc-text-title: 600 16px/1.35 var(--rc-font-body);
   --rc-text-body: 400 15px/1.6 var(--rc-font-body);
   --rc-text-small: 400 13px/1.5 var(--rc-font-body);
-  --rc-text-meta: 400 12px/1.4 var(--rc-font-mono);
-  --rc-text-label: 600 12px/1.4 var(--rc-font-body);
+  --rc-text-meta: 400 12px/1.4 var(--rc-font-body);
+  --rc-text-label: 600 13px/1.35 var(--rc-font-body);
 
-  /* Space rhythm unchanged (4px base; sections on 8) */
+  /* Space rhythm — 4px base; new row/gutter tokens on-scale */
   --rc-space-1: 4px; --rc-space-2: 8px; --rc-space-3: 12px; --rc-space-4: 16px;
-  --rc-space-6: 24px; --rc-space-8: 32px; --rc-space-12: 48px; --rc-space-16: 64px;
+  --rc-space-5: 20px; --rc-space-6: 24px; --rc-space-8: 32px; --rc-space-12: 48px; --rc-space-16: 64px;
   --rc-section-pad: clamp(48px, 7vw, 96px);
   --rc-layout-max-w: 1120px;
-  --rc-gutter: 24px; /* tightens to 20px ≤400px below */
+  --rc-gutter: 24px;
+  --rc-gutter-mobile: 16px;
+  --rc-row-h: 64px;          /* desktop offer row */
+  --rc-row-h-mobile: 88px;   /* 375 two-line offer row */
+  --rc-tap: 44px;            /* WCAG 2.2 AA target floor */
 
   /* Shape */
   --rc-radius-control: 10px;
-  --rc-radius-card: 14px;
+  --rc-radius-card: 12px;
+  --rc-radius-row: 10px;
+  --rc-radius-chip: 8px;
   --rc-radius-pill: 999px;
 
-  /* Elevation ladder — shadows warmed toward the espresso ink */
+  /* Imagery — shelf scale, not thumbnail.
+     The signed evidence pack fixes the mobile card frame at 100px (AC15
+     first-price-above-620 trade-off; token diff §3). */
+  --rc-image-card: 160px;
+  --rc-image-card-mobile: 100px;
+  --rc-image-hero: 320px;
+  --rc-image-hero-mobile: 200px;
+  --rc-image-radius: 10px;
+
+  /* Elevation */
   --rc-elev-1: 0 1px 2px #1F1A140F, 0 2px 8px #1F1A140A;
   --rc-elev-2: 0 2px 4px #1F1A1412, 0 8px 24px #1F1A1414;
   --rc-elev-3: 0 12px 32px #1F1A1421;
 
-  /* Interaction — the Arrival moment carries the motion budget */
+  /* Interaction */
   --rc-focus-ring: 0 0 0 3px #C2410C59;
   --rc-motion-fast: 0.15s;
   --rc-motion-arrival: 0.3s;
   --rc-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --rc-stagger: 45ms;
 
-  /* Dark-mode token map — Warm Signal dark values, verbatim from the brief;
-     attached onto the shared names by the prefers-color-scheme block below
-     (token-level theming only, no JS). */
+  /* Skeleton */
+  --rc-skeleton-bg: #EFEAE1;
+  --rc-skeleton-fill: #E2DCCF;
+
+  /* Dark map — parity for every new role */
   --rc-dark-canvas: #171310;
   --rc-dark-surface: #201A15;
+  --rc-dark-surface-sunken: #2A231C;
   --rc-dark-line: #3A3128;
   --rc-dark-line-strong: #57493A;
   --rc-dark-ink: #F5EFE6;
@@ -86,24 +137,23 @@
   --rc-dark-muted: #A79783;
   --rc-dark-primary: #FB923C;
   --rc-dark-savings: #4ADE80;
+  --rc-dark-savings-bg: #14351F;
   --rc-dark-fresh: #FBBF24;
   --rc-dark-error: #F87171;
-
-  /* Streaming-skeleton geometry (REEA-217 pass / REEA-224 item 2): the ghost
-     cards reserve the real card geometry — same radius, padding and gutter —
-     with these two fill tones, so nothing below the fold shifts between first
-     paint and the settled grid. Verbatim from the design pass. */
-  --rc-skeleton-bg: #EFEAE1;
-  --rc-skeleton-fill: #E2DCCF;
+  --rc-dark-error-bg: #3B1D1D;
+  --rc-dark-status-bg: #2A231C;
+  --rc-dark-status-border: #3A3128;
+  --rc-dark-status-ink: #F5EFE6;
+  --rc-dark-status-verified: #4ADE80;
+  --rc-dark-status-unverified: #FBBF24;
+  --rc-dark-status-stale: #A79783;
 }
 
-/* Dark theme attaches the verbatim dark values onto the shared names. Tints
-   and the espresso hero keep their light values (the brief lists dark
-   overrides for these nine roles only). */
 @media (prefers-color-scheme: dark) {
   :root {
     --rc-canvas: var(--rc-dark-canvas);
     --rc-surface: var(--rc-dark-surface);
+    --rc-surface-sunken: var(--rc-dark-surface-sunken);
     --rc-line: var(--rc-dark-line);
     --rc-line-strong: var(--rc-dark-line-strong);
     --rc-ink: var(--rc-dark-ink);
@@ -111,8 +161,18 @@
     --rc-muted: var(--rc-dark-muted);
     --rc-primary: var(--rc-dark-primary);
     --rc-savings: var(--rc-dark-savings);
+    --rc-savings-bg: var(--rc-dark-savings-bg);
     --rc-fresh: var(--rc-dark-fresh);
     --rc-error: var(--rc-dark-error);
+    --rc-error-bg: var(--rc-dark-error-bg);
+    --rc-status-bg: var(--rc-dark-status-bg);
+    --rc-status-border: var(--rc-dark-status-border);
+    --rc-status-ink: var(--rc-dark-status-ink);
+    --rc-status-verified: var(--rc-dark-status-verified);
+    --rc-status-unverified: var(--rc-dark-status-unverified);
+    --rc-status-stale: var(--rc-dark-status-stale);
+    --rc-skeleton-bg: #241E18;
+    --rc-skeleton-fill: #2E261E;
   }
 
   /* REEA-760 coupon chip fix (spec §6): the dark swap moves the chip fg to
@@ -124,13 +184,32 @@
   }
 }
 
-/* Layout gutter tightens below 400px (brief Layout line: "20px ≤400px"). */
+/* Layout gutter tightens below 400px (Direction A: 16px mobile density). */
 @media (max-width: 400px) {
   :root {
-    --rc-gutter: 20px;
+    --rc-gutter: var(--rc-gutter-mobile);
   }
 }
 
+/* Arabic typography: designed, not a mirrored fallback. */
+[dir="rtl"] {
+  --rc-font-body: var(--rc-font-arabic);
+  --rc-font-display: var(--rc-font-arabic);
+}
+
+/* Latin product tokens inside AR are bidi-isolated, never split mid-token. */
+.lat {
+  direction: ltr;
+  unicode-bidi: isolate;
+  font-family: var(--rc-font-display);
+  font-variant-numeric: tabular-nums;
+}
+
+[dir="rtl"] .num,
+[dir="rtl"] .price {
+  font-family: var(--rc-font-display);
+  font-variant-numeric: tabular-nums;
+}
 body {
   background: var(--rc-canvas);
   color: var(--rc-body-text);
@@ -523,7 +602,7 @@ html[lang="ar"] .coupon-via {
 }
 
 .hero-sub {
-  color: rgba(245, 239, 230, 0.82);
+  color: var(--rc-dark-body-text);
   font: var(--rc-text-body);
 }
 
@@ -560,12 +639,12 @@ html[lang="ar"] .coupon-via {
    cascade: #FB923C on #2B2118 ≈ 6.9:1. */
 @media (prefers-color-scheme: dark) {
   .query-pill-on-light {
-    background: #2b2118;
+    background: var(--rc-dark-surface-sunken);
     color: var(--rc-dark-primary);
   }
 
   .query-pill-on-light:hover {
-    background: #352a1f;
+    background: var(--rc-dark-line);
   }
 }
 
@@ -599,14 +678,14 @@ html[lang="ar"] .coupon-via {
   background: var(--rc-canvas);
   border: 1px solid var(--rc-line);
   border-radius: var(--rc-radius-card);
-  padding: var(--rc-space-6);
-  min-height: 300px;
+  padding: var(--rc-space-4);
+  min-height: 640px;
   margin-bottom: var(--rc-space-4);
 }
 
 @media (max-width: 640px) {
   .skeleton-card {
-    min-height: 432px;
+    min-height: 560px;
   }
 }
 
@@ -631,7 +710,7 @@ html[lang="ar"] .coupon-via {
    Coverage line: desktop 2lh; mobile EN wraps deeper (7lh), the Arabic
    sentence lands shorter (html[lang=ar] override 5lh). */
 .heading-slot {
-  height: calc(clamp(36px, 4.8vw, 55px) * 1.05) !important; /* lh 1.05 */
+  height: calc(clamp(28px, 2.4vw, 32px) * 1.12) !important; /* --rc-text-h1 */
 }
 
 .coverage-line {
@@ -642,7 +721,7 @@ html[lang="ar"] .coupon-via {
 
 @media (max-width: 640px) {
   .heading-slot {
-    height: calc(clamp(36px, 4.8vw, 55px) * 2.1) !important; /* lh 2.1 */
+    height: calc(clamp(28px, 2.4vw, 32px) * 2.24) !important; /* two h1 lines */
   }
   .coverage-line {
     min-height: 9.8em;
@@ -1126,5 +1205,1465 @@ html[lang="ar"] .coupon-via {
 
   .result-card {
     padding: var(--rc-space-4);
+  }
+}
+
+/* ============================================================================
+ * DIRECTION A — "SHELF" (REEA-1055 design pack, REEA-1069 implementation).
+ * Retail-shelf grammar: price is the hero, one status token per offer, fixed
+ * offer anatomy, 2-up aligned shelf at 1280, 44px targets. Every colour is a
+ * --rc-* token; no forked hex below this line.
+ * ========================================================================== */
+
+.sr-only {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---------- Global header: brand row + search row at 375 ---------- */
+.site-header {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 30;
+  block-size: auto;
+  min-block-size: 64px;
+  background: var(--rc-surface);
+  border-block-end: 1px solid var(--rc-line);
+}
+
+.rc-header-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--rc-space-4);
+  inline-size: 100%;
+  max-inline-size: var(--rc-layout-max-w);
+  margin-inline: auto;
+  padding-inline: var(--rc-gutter);
+  padding-block: var(--rc-space-2);
+}
+
+.rc-brand {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--rc-tap);
+  flex: 0 0 auto;
+}
+
+.rc-wordmark {
+  font: 700 22px/1 var(--rc-font-display);
+  letter-spacing: -0.03em;
+  color: var(--rc-ink);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.rc-wordmark .dot {
+  color: var(--rc-primary);
+}
+
+.rc-header-search {
+  flex: 1 1 auto;
+  display: flex;
+  gap: var(--rc-space-2);
+  min-inline-size: 0;
+  min-block-size: var(--rc-tap);
+}
+
+.rc-search-field {
+  position: relative;
+  flex: 1 1 auto;
+  min-inline-size: 200px;
+}
+
+.rc-search-field input {
+  inline-size: 100%;
+  block-size: var(--rc-tap);
+  padding-inline: 14px 40px;
+  background: var(--rc-canvas);
+  border: 1px solid var(--rc-line-strong);
+  border-radius: var(--rc-radius-control);
+  font: var(--rc-text-body);
+  color: var(--rc-ink);
+}
+
+.rc-search-field input::placeholder {
+  color: var(--rc-muted);
+}
+
+.rc-search-field .icon-search {
+  position: absolute;
+  inset-inline-end: 12px;
+  inset-block-start: 50%;
+  translate: 0 -50%;
+  color: var(--rc-muted);
+  pointer-events: none;
+}
+
+.rc-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--rc-space-1);
+  margin-inline-start: auto;
+}
+
+.rc-icon-btn,
+.rc-lang-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-inline-size: var(--rc-tap);
+  block-size: var(--rc-tap);
+  padding-inline: 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--rc-radius-control);
+  color: var(--rc-ink);
+  cursor: pointer;
+}
+
+.rc-lang-btn {
+  font: var(--rc-text-label);
+  border-color: var(--rc-line);
+}
+
+.rc-icon-btn:hover,
+.rc-lang-btn:hover {
+  background: var(--rc-surface-sunken);
+}
+
+/* Menu panel: a real navigation surface, never a decorative icon. */
+.rc-menu {
+  position: relative;
+}
+
+.rc-menu-panel {
+  position: absolute;
+  inset-block-start: calc(100% + 6px);
+  inset-inline-end: 0;
+  min-inline-size: 220px;
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-line);
+  border-radius: var(--rc-radius-card);
+  box-shadow: var(--rc-elev-2);
+  padding: var(--rc-space-2);
+  display: grid;
+  gap: 2px;
+  z-index: 40;
+}
+
+.rc-menu-panel a {
+  display: flex;
+  align-items: center;
+  min-block-size: var(--rc-tap);
+  padding-inline: var(--rc-space-3);
+  border-radius: var(--rc-radius-control);
+  font: var(--rc-text-label);
+  color: var(--rc-ink);
+  text-decoration: none;
+}
+
+.rc-menu-panel a:hover {
+  background: var(--rc-surface-sunken);
+}
+
+@media (max-width: 640px) {
+  .rc-header-inner {
+    row-gap: 4px;
+    padding-block: 4px;
+  }
+  .rc-header-search {
+    flex-basis: 100%;
+    order: 3;
+  }
+  .rc-header-search .rc-search-field {
+    min-inline-size: 0;
+  }
+}
+
+/* ---------- Filter / market bar: 6 controls, 2 rows at 375 ---------- */
+.rc-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--rc-space-2);
+  padding-block: var(--rc-space-3);
+}
+
+.rc-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-block-size: var(--rc-tap);
+  padding-inline: 14px;
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-line-strong);
+  border-radius: var(--rc-radius-pill);
+  font: var(--rc-text-label);
+  color: var(--rc-body-text);
+  cursor: pointer;
+}
+
+.rc-chip:hover {
+  border-color: var(--rc-ink);
+}
+
+.rc-chip[aria-pressed="true"],
+.rc-chip.is-selected {
+  background: var(--rc-primary-tint);
+  border-color: var(--rc-primary);
+  color: var(--rc-ink);
+}
+
+.rc-chip .check {
+  inline-size: 14px;
+  block-size: 14px;
+  color: var(--rc-primary-deep);
+  flex: none;
+}
+
+.rc-chip.is-action {
+  color: var(--rc-primary);
+  border-color: var(--rc-line);
+}
+
+@media (max-width: 640px) {
+  .rc-filter-bar {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--rc-space-2);
+    padding-block: var(--rc-space-2);
+  }
+  .rc-chip {
+    inline-size: 100%;
+    padding-inline: 6px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+}
+
+/* ---------- Results heading + status line ---------- */
+.rc-results-head {
+  padding-block: var(--rc-space-3) var(--rc-space-2);
+}
+
+.rc-results-head h1 {
+  font: var(--rc-text-h1);
+  letter-spacing: -0.02em;
+  color: var(--rc-ink);
+  overflow-wrap: anywhere;
+}
+
+.rc-results-meta {
+  margin-block-start: 6px;
+  font: var(--rc-text-meta);
+  color: var(--rc-muted);
+}
+
+/* Partial response: one neutral inline status, sentence case, 13px. */
+.rc-partial {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-block-start: var(--rc-space-2);
+  background: var(--rc-status-bg);
+  border: 1px solid var(--rc-status-border);
+  border-radius: var(--rc-radius-row);
+  padding: 8px 12px;
+  font: var(--rc-text-small);
+  color: var(--rc-body-text);
+  max-inline-size: 100%;
+}
+
+.rc-partial svg {
+  color: var(--rc-status-unverified);
+  flex: none;
+}
+
+.rc-partial .who {
+  color: var(--rc-ink);
+  font-weight: 600;
+}
+
+/* Status legend: once under the results heading, once on the product page.
+   Collapsed by default so it never pushes the first price below the fold. */
+.rc-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--rc-space-2);
+  margin-block-start: var(--rc-space-2);
+  min-block-size: var(--rc-status-h);
+}
+
+.rc-legend-title {
+  font: var(--rc-text-meta);
+  color: var(--rc-muted);
+}
+
+.rc-legend > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-block-size: var(--rc-tap);
+  font: var(--rc-text-small);
+  color: var(--rc-body-text);
+  cursor: pointer;
+  list-style: none;
+}
+
+.rc-legend > summary::-webkit-details-marker {
+  display: none;
+}
+
+.rc-legend > summary::before {
+  content: "ⓘ";
+  color: var(--rc-status-unverified);
+}
+
+.rc-legend-body {
+  display: grid;
+  gap: 10px;
+  margin-block-start: var(--rc-space-2);
+  padding: var(--rc-space-3);
+  background: var(--rc-status-bg);
+  border: 1px solid var(--rc-status-border);
+  border-radius: var(--rc-radius-row);
+}
+
+.rc-legend-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.rc-legend-row p {
+  font: var(--rc-text-small);
+  color: var(--rc-body-text);
+}
+
+/* ---------- Shelf + comparison card ---------- */
+.rc-shelf {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--rc-space-4);
+  padding-block: var(--rc-space-4) var(--rc-section-pad);
+  align-items: stretch;
+}
+
+@media (min-width: 1280px) {
+  .rc-shelf {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--rc-space-5);
+  }
+}
+
+.rc-card {
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-line);
+  border-radius: var(--rc-radius-card);
+  padding: var(--rc-space-4);
+  box-shadow: var(--rc-elev-1);
+  display: flex;
+  flex-direction: column;
+  gap: var(--rc-space-3);
+  min-inline-size: 0;
+  transition:
+    box-shadow var(--rc-motion-fast) var(--rc-ease-out),
+    border-color var(--rc-motion-fast) var(--rc-ease-out);
+}
+
+.rc-card:hover,
+.rc-card:focus-within {
+  box-shadow: var(--rc-elev-2);
+  border-color: var(--rc-line-strong);
+}
+
+.rc-card-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--rc-space-2);
+  min-inline-size: 0;
+}
+
+.rc-card-cat {
+  font: var(--rc-text-meta);
+  color: var(--rc-muted);
+  text-transform: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rc-card-basis {
+  font: var(--rc-text-meta);
+  color: var(--rc-muted);
+  text-transform: none;
+  white-space: nowrap;
+  flex: none;
+}
+
+.rc-card-media {
+  position: relative;
+  inline-size: 100%;
+  block-size: var(--rc-image-card);
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-line);
+  border-radius: var(--rc-image-radius);
+  overflow: hidden;
+  flex: none;
+}
+
+.rc-card-media img,
+.rc-product-media img,
+.rc-drop-thumb img,
+.rc-alt-thumb img {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: contain;
+}
+
+.rc-card-share {
+  position: absolute;
+  inset-block-start: 6px;
+  inset-inline-end: 6px;
+  z-index: 2;
+}
+
+.rc-card-media .rc-media-glyph {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--rc-muted);
+}
+
+.rc-card h2,
+.rc-card .rc-card-title {
+  font: var(--rc-text-title);
+  color: var(--rc-ink);
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.rc-price-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.rc-price-card {
+  font: var(--rc-text-price-card);
+  color: var(--rc-ink);
+  letter-spacing: -0.02em;
+}
+
+.rc-price-was {
+  font: var(--rc-text-small);
+  color: var(--rc-muted);
+  text-decoration: line-through;
+}
+
+.rc-savings {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--rc-savings-bg);
+  color: var(--rc-savings);
+  font: var(--rc-text-label);
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
+.rc-savings-basis {
+  font: var(--rc-text-meta);
+  color: var(--rc-body-text);
+}
+
+.rc-variants {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rc-variant {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-block-size: 36px;
+  padding-inline: 12px;
+  border: 1px solid var(--rc-line-strong);
+  border-radius: var(--rc-radius-chip);
+  background: var(--rc-surface);
+  font: var(--rc-text-small);
+  color: var(--rc-body-text);
+  cursor: pointer;
+}
+
+.rc-variant[aria-pressed="true"] {
+  border: 2px solid var(--rc-primary);
+  color: var(--rc-ink);
+  font-weight: 600;
+}
+
+.rc-variant .swatch {
+  inline-size: 12px;
+  block-size: 12px;
+  border-radius: 50%;
+  border: 1px solid var(--rc-line-strong);
+}
+
+/* ---------- Offer rows: two explicit lines, fixed anatomy ---------- */
+.rc-offer-list {
+  display: grid;
+}
+
+.rc-offer-row {
+  display: grid;
+  gap: 4px;
+  min-block-size: var(--rc-row-h);
+  border-block-start: 1px solid var(--rc-line);
+  padding-block: 8px;
+  padding-inline: 2px;
+  color: var(--rc-body-text);
+}
+
+.rc-offer-row:first-child {
+  border-block-start: 0;
+}
+
+.rc-offer-row:hover {
+  background: var(--rc-surface-sunken);
+}
+
+.rc-offer-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--rc-space-2);
+  min-inline-size: 0;
+}
+
+.rc-offer-line.line-a,
+.rc-offer-line.line-b {
+  justify-content: space-between;
+}
+
+.rc-offer-row .rc-retailer-name {
+  font: var(--rc-text-label);
+  color: var(--rc-ink);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-inline-size: 0;
+}
+
+.rc-offer-row .rc-retailer-name .logo {
+  font: 700 14px/1 var(--rc-font-display);
+  letter-spacing: -0.02em;
+}
+
+.rc-offer-row .rc-stock {
+  font: var(--rc-text-meta);
+  color: var(--rc-body-text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.rc-offer-row .rc-stock .dot {
+  inline-size: 7px;
+  block-size: 7px;
+  border-radius: 50%;
+  background: var(--rc-savings);
+  flex: none;
+}
+
+.rc-offer-row .rc-stock.is-out .dot {
+  background: var(--rc-muted);
+}
+
+.rc-offer-row .rc-status {
+  flex: none;
+}
+
+.rc-offer-row .rc-checked {
+  font: var(--rc-text-meta);
+  color: var(--rc-muted);
+  white-space: nowrap;
+}
+
+.rc-offer-row .rc-offer-cta {
+  min-block-size: 36px;
+  padding-inline: 12px;
+  flex: none;
+}
+
+.rc-offer-row.is-out {
+  color: var(--rc-body-text);
+}
+
+.rc-offer-row.is-out .rc-price-sm {
+  color: var(--rc-body-text);
+}
+
+.rc-offer-row.is-out .rc-offer-cta {
+  background: var(--rc-surface-sunken);
+  color: var(--rc-muted);
+  border-color: var(--rc-line);
+}
+
+.rc-price-sm {
+  font: var(--rc-text-price-sm);
+  color: var(--rc-ink);
+  letter-spacing: -0.01em;
+}
+
+/* Full-width offers table and product hero: one visual line at >=641px.
+   display:contents promotes the two line wrappers so children occupy the
+   fixed columns: retailer, price, stock, status, checked, action. */
+@media (min-width: 641px) {
+  .rc-offers-table .rc-offer-row,
+  .rc-product-hero .rc-offer-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+    grid-template-areas: "retailer price stock status checked cta";
+    gap: var(--rc-space-3);
+    min-block-size: var(--rc-row-h);
+    padding-block: 0;
+  }
+  .rc-offers-table .rc-offer-line,
+  .rc-product-hero .rc-offer-line {
+    display: contents;
+  }
+  .rc-offers-table .rc-offer-row .rc-retailer-name,
+  .rc-product-hero .rc-offer-row .rc-retailer-name {
+    grid-area: retailer;
+  }
+  .rc-offers-table .rc-offer-row .rc-price-sm,
+  .rc-product-hero .rc-offer-row .rc-price-sm {
+    grid-area: price;
+  }
+  .rc-offers-table .rc-offer-row .rc-stock,
+  .rc-product-hero .rc-offer-row .rc-stock {
+    grid-area: stock;
+  }
+  .rc-offers-table .rc-offer-row .rc-status,
+  .rc-product-hero .rc-offer-row .rc-status {
+    grid-area: status;
+    justify-self: start;
+  }
+  .rc-offers-table .rc-offer-row .rc-checked,
+  .rc-product-hero .rc-offer-row .rc-checked {
+    grid-area: checked;
+  }
+  .rc-offers-table .rc-offer-row .rc-offer-cta,
+  .rc-product-hero .rc-offer-row .rc-offer-cta {
+    grid-area: cta;
+    justify-self: end;
+    align-self: center;
+    block-size: 36px;
+  }
+}
+
+@media (max-width: 640px) {
+  .rc-card {
+    padding: var(--rc-space-3);
+    gap: var(--rc-space-1);
+  }
+  .rc-card-media {
+    block-size: var(--rc-image-card-mobile);
+  }
+  .rc-offer-row {
+    gap: 6px;
+    min-block-size: var(--rc-row-h-mobile);
+    padding-block: 10px;
+  }
+  .rc-offer-row .rc-status {
+    max-inline-size: 40%;
+  }
+  .rc-offer-row .rc-offer-cta {
+    min-block-size: var(--rc-tap);
+  }
+}
+
+/* ---------- Status token: one neutral container for all three states ---------- */
+.rc-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  block-size: var(--rc-status-h);
+  padding-inline: var(--rc-status-pad-x);
+  background: var(--rc-status-bg);
+  border: 1px solid var(--rc-status-border);
+  border-radius: var(--rc-status-radius);
+  color: var(--rc-status-ink);
+  font: var(--rc-status-label);
+  white-space: nowrap;
+  max-inline-size: 100%;
+}
+
+.rc-status svg {
+  inline-size: var(--rc-status-icon);
+  block-size: var(--rc-status-icon);
+  flex: none;
+}
+
+.rc-status.is-verified svg {
+  color: var(--rc-status-verified);
+}
+
+.rc-status.is-unverified svg {
+  color: var(--rc-status-unverified);
+}
+
+.rc-status.is-stale svg {
+  color: var(--rc-status-stale);
+}
+
+.rc-status .label {
+  white-space: nowrap;
+}
+
+/* Tooltip: the same sentence as the aria-label/title, shown on hover and
+   keyboard focus (the token is focusable), never colour-only. */
+.rc-status[data-tip] {
+  position: relative;
+}
+
+.rc-status[data-tip]:hover::after,
+.rc-status[data-tip]:focus-visible::after {
+  content: attr(data-tip);
+  position: absolute;
+  inset-block-end: calc(100% + 6px);
+  inset-inline-start: 0;
+  background: var(--rc-ink);
+  color: var(--rc-canvas);
+  font: var(--rc-text-small);
+  padding: 6px 10px;
+  border-radius: 8px;
+  white-space: normal;
+  inline-size: 240px;
+  z-index: 5;
+}
+
+/* ---------- Product hero + offers table ---------- */
+.rc-product-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--rc-space-4);
+  padding-block: var(--rc-space-6);
+  align-items: start;
+}
+
+@media (min-width: 641px) {
+  .rc-product-hero {
+    grid-template-columns: var(--rc-image-hero) minmax(0, 1fr);
+    gap: var(--rc-space-6);
+  }
+}
+
+.rc-product-media {
+  position: relative;
+  inline-size: var(--rc-image-hero-mobile);
+  block-size: var(--rc-image-hero-mobile);
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-line);
+  border-radius: var(--rc-image-radius);
+  overflow: hidden;
+}
+
+@media (min-width: 641px) {
+  .rc-product-media {
+    inline-size: var(--rc-image-hero);
+    block-size: var(--rc-image-hero);
+  }
+}
+
+.rc-product-hero h1 {
+  font: var(--rc-text-h1-product);
+  color: var(--rc-ink);
+  overflow-wrap: anywhere;
+}
+
+.rc-product-best {
+  margin-block-start: var(--rc-space-3);
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.rc-product-price {
+  font: var(--rc-text-price);
+  color: var(--rc-ink);
+  letter-spacing: -0.02em;
+}
+
+.rc-product-basis {
+  font: var(--rc-text-small);
+  color: var(--rc-body-text);
+  margin-block-start: 4px;
+}
+
+.rc-product-coupon {
+  font: var(--rc-text-small);
+  color: var(--rc-body-text);
+  margin-block-start: 4px;
+}
+
+.rc-product-meta {
+  font: var(--rc-text-meta);
+  color: var(--rc-muted);
+  margin-block-start: var(--rc-space-3);
+}
+
+.rc-hero-offer {
+  margin-block-start: var(--rc-space-3);
+}
+
+.rc-offers-table {
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-line);
+  border-radius: var(--rc-radius-card);
+  padding: var(--rc-space-4);
+  inline-size: 100%;
+}
+
+.rc-offers-table h2 {
+  font: var(--rc-text-h2);
+  color: var(--rc-ink);
+}
+
+.rc-table-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: var(--rc-space-3);
+  padding-block: var(--rc-space-3);
+  border-block-end: 1px solid var(--rc-line-strong);
+  font: var(--rc-text-label);
+  color: var(--rc-muted);
+}
+
+@media (max-width: 640px) {
+  .rc-table-head {
+    display: none;
+  }
+  .rc-offers-table {
+    padding: var(--rc-space-3);
+  }
+}
+
+.rc-alt-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--rc-space-3);
+  padding-block: var(--rc-space-5);
+}
+
+@media (max-width: 900px) {
+  .rc-alt-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .rc-alt-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.rc-alt {
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-line);
+  border-radius: var(--rc-radius-row);
+  padding: var(--rc-space-3);
+  min-inline-size: 0;
+}
+
+.rc-alt-thumb {
+  position: relative;
+  inline-size: 100%;
+  block-size: 88px;
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.rc-alt .name {
+  font: var(--rc-text-small);
+  color: var(--rc-ink);
+  margin-block-start: 8px;
+  overflow-wrap: anywhere;
+}
+
+.rc-alt .price {
+  font: var(--rc-text-price-sm);
+  margin-block-start: 4px;
+}
+
+/* ---------- Home discovery modules ---------- */
+.rc-hero {
+  background: var(--rc-hero);
+  color: var(--rc-dark-ink);
+  padding-block: clamp(40px, 6vw, 72px);
+}
+
+.rc-hero-inner {
+  inline-size: 100%;
+  max-inline-size: var(--rc-layout-max-w);
+  margin-inline: auto;
+  padding-inline: var(--rc-gutter);
+}
+
+.rc-hero h1 {
+  color: var(--rc-dark-ink);
+  font: 700 clamp(34px, 4.2vw, 52px)/1.06 var(--rc-font-display);
+  letter-spacing: -0.025em;
+  max-inline-size: 17ch;
+}
+
+[dir="rtl"] .rc-hero h1 {
+  max-inline-size: 24ch;
+}
+
+.rc-hero .lead {
+  color: var(--rc-dark-body-text);
+  font: var(--rc-text-body);
+  max-inline-size: 52ch;
+  margin-block-start: var(--rc-space-3);
+}
+
+.rc-hero-search {
+  display: flex;
+  gap: var(--rc-space-2);
+  margin-block-start: var(--rc-space-6);
+  max-inline-size: 680px;
+}
+
+.rc-hero-search .rc-search-field input {
+  block-size: 52px;
+  background: var(--rc-surface);
+  border-color: var(--rc-surface);
+}
+
+.rc-hero-search .btn-primary {
+  min-block-size: 52px;
+  padding-inline: 22px;
+}
+
+@media (max-width: 640px) {
+  .rc-hero-search {
+    flex-direction: column;
+  }
+  .rc-hero-search .btn-primary {
+    inline-size: 100%;
+  }
+}
+
+.rc-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--rc-space-2);
+  margin-block-start: var(--rc-space-4);
+}
+
+.rc-suggestion {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--rc-tap);
+  padding-inline: 14px;
+  border: 1px solid var(--rc-dark-line-strong);
+  border-radius: var(--rc-radius-pill);
+  color: var(--rc-dark-ink);
+  font: var(--rc-text-small);
+  background: transparent;
+  text-decoration: none;
+}
+
+.rc-suggestion:hover {
+  background: var(--rc-dark-surface-sunken);
+}
+
+.rc-module {
+  padding-block: clamp(32px, 4vw, 56px);
+  border-block-start: 1px solid var(--rc-line);
+}
+
+.rc-module-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--rc-space-4);
+  margin-block-end: var(--rc-space-5);
+  flex-wrap: wrap;
+}
+
+.rc-module-head h2 {
+  font: var(--rc-text-h2);
+  color: var(--rc-ink);
+}
+
+.rc-live-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: var(--rc-text-meta);
+  color: var(--rc-muted);
+}
+
+.rc-pulse {
+  inline-size: 7px;
+  block-size: 7px;
+  border-radius: 50%;
+  background: var(--rc-savings);
+  flex: none;
+}
+
+.rc-retailer-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--rc-space-2);
+}
+
+.rc-retailer {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  block-size: 48px;
+  padding-inline: 14px;
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-line);
+  border-radius: var(--rc-radius-row);
+  font: var(--rc-text-label);
+  color: var(--rc-ink);
+}
+
+.rc-retailer .logo {
+  font: 700 15px/1 var(--rc-font-display);
+  letter-spacing: -0.02em;
+  color: var(--rc-ink);
+}
+
+.rc-retailer .dot-live {
+  inline-size: 7px;
+  block-size: 7px;
+  border-radius: 50%;
+  background: var(--rc-savings);
+  flex: none;
+}
+
+.rc-retailer .dot-live.is-down {
+  background: var(--rc-muted);
+}
+
+@media (max-width: 640px) {
+  .rc-retailer {
+    flex: 1 1 calc(50% - var(--rc-space-2));
+    justify-content: center;
+    white-space: nowrap;
+  }
+  .rc-retailer .rc-retailer-note {
+    display: none;
+  }
+}
+
+.rc-drop-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--rc-space-4);
+}
+
+@media (max-width: 900px) {
+  .rc-drop-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .rc-drop-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.rc-drop-card {
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-line);
+  border-radius: var(--rc-radius-card);
+  padding: var(--rc-space-4);
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: var(--rc-space-4);
+  align-items: start;
+  min-inline-size: 0;
+}
+
+.rc-drop-thumb {
+  position: relative;
+  inline-size: 96px;
+  block-size: 96px;
+  border-radius: var(--rc-image-radius);
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-line);
+  overflow: hidden;
+}
+
+.rc-drop-card .name {
+  font: var(--rc-text-title);
+  color: var(--rc-ink);
+  min-block-size: 44px;
+  overflow-wrap: anywhere;
+}
+
+.rc-drop-card .price {
+  font: var(--rc-text-price-card);
+  margin-block-start: 6px;
+  color: var(--rc-ink);
+}
+
+.rc-drop-card .drop {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: var(--rc-text-label);
+  color: var(--rc-savings);
+  margin-block-start: 4px;
+}
+
+@media (max-width: 640px) {
+  .rc-drop-card {
+    grid-template-columns: 88px minmax(0, 1fr);
+  }
+  .rc-drop-thumb {
+    inline-size: 88px;
+    block-size: 88px;
+  }
+}
+
+.rc-cat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--rc-space-3);
+}
+
+@media (max-width: 900px) {
+  .rc-cat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .rc-cat-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.rc-cat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-block-size: 56px;
+  padding-inline: 16px;
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-line);
+  border-radius: var(--rc-radius-row);
+  font: var(--rc-text-title);
+  color: var(--rc-ink);
+  text-decoration: none;
+}
+
+.rc-cat:hover {
+  border-color: var(--rc-line-strong);
+}
+
+.rc-cat .rc-icon-dir {
+  color: var(--rc-muted);
+}
+
+.rc-method-band {
+  background: var(--rc-surface-sunken);
+  border-radius: var(--rc-radius-card);
+  padding: var(--rc-space-6);
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: var(--rc-space-6);
+}
+
+@media (max-width: 900px) {
+  .rc-method-band {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.rc-method-band h3 {
+  font: var(--rc-text-h3);
+  color: var(--rc-ink);
+}
+
+.rc-method-band p {
+  font: var(--rc-text-body);
+  margin-block-start: var(--rc-space-2);
+  color: var(--rc-body-text);
+}
+
+.rc-trust-list {
+  display: grid;
+  gap: 10px;
+  font: var(--rc-text-small);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.rc-trust-list li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  color: var(--rc-body-text);
+}
+
+.rc-trust-list .tick {
+  color: var(--rc-savings);
+  flex: none;
+}
+
+.rc-module-empty {
+  background: var(--rc-surface-sunken);
+  border: 1px solid var(--rc-line);
+  border-radius: var(--rc-radius-card);
+  padding: var(--rc-space-5);
+  display: grid;
+  gap: var(--rc-space-2);
+}
+
+.rc-module-empty .title {
+  font: var(--rc-text-label);
+  color: var(--rc-ink);
+}
+
+.rc-module-empty .note {
+  font: var(--rc-text-small);
+  color: var(--rc-body-text);
+}
+
+/* ---------- Designed states: loading / empty / error ---------- */
+.rc-skeleton {
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-line);
+  border-radius: var(--rc-radius-card);
+  padding: var(--rc-space-4);
+  display: grid;
+  gap: var(--rc-space-3);
+}
+
+.rc-sk {
+  background: var(--rc-skeleton-bg);
+  border-radius: 8px;
+}
+
+.rc-sk-fill {
+  background: var(--rc-skeleton-fill);
+}
+
+.rc-sk-media {
+  block-size: var(--rc-image-card);
+}
+
+.rc-sk-line {
+  block-size: 14px;
+}
+
+.rc-sk-line.short {
+  inline-size: 55%;
+}
+
+.rc-sk-price {
+  block-size: 34px;
+  inline-size: 45%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .rc-skeleton {
+    animation: rc-breathe 1.6s ease-in-out infinite;
+  }
+  @keyframes rc-breathe {
+    50% {
+      opacity: 0.65;
+    }
+  }
+}
+
+@media (max-width: 640px) {
+  .rc-sk-media {
+    block-size: var(--rc-image-card-mobile);
+  }
+}
+
+.rc-empty,
+.rc-error-state {
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-line);
+  border-radius: var(--rc-radius-card);
+  padding: var(--rc-space-8) var(--rc-space-6);
+  text-align: center;
+  display: grid;
+  gap: var(--rc-space-3);
+  justify-items: center;
+}
+
+.rc-empty .icon,
+.rc-error-state .icon {
+  color: var(--rc-muted);
+}
+
+.rc-empty h2,
+.rc-error-state h2 {
+  font: var(--rc-text-h2);
+  color: var(--rc-ink);
+}
+
+.rc-empty p,
+.rc-error-state p {
+  font: var(--rc-text-body);
+  color: var(--rc-body-text);
+  max-inline-size: 46ch;
+}
+
+.rc-empty .rc-suggestions,
+.rc-empty .suggestions {
+  justify-content: center;
+}
+
+.rc-empty .rc-suggestion {
+  border-color: var(--rc-line-strong);
+  color: var(--rc-ink);
+}
+
+.rc-error-state {
+  border-color: var(--rc-error-bg);
+  background: var(--rc-error-bg);
+}
+
+.rc-error-state .icon {
+  color: var(--rc-error);
+}
+
+/* ---------- Footer / trust band ---------- */
+.rc-footer {
+  border-block-start: 1px solid var(--rc-line);
+  padding-block: var(--rc-space-8) var(--rc-space-12);
+  background: var(--rc-canvas);
+}
+
+.rc-footer-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: var(--rc-space-6);
+}
+
+@media (max-width: 900px) {
+  .rc-footer-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.rc-disclosure {
+  font: var(--rc-text-small);
+  color: var(--rc-body-text);
+  max-inline-size: 56ch;
+}
+
+.rc-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--rc-space-4);
+  font: var(--rc-text-small);
+}
+
+.rc-footer-links a {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--rc-tap);
+  color: var(--rc-body-text);
+}
+
+.rc-market-line {
+  font: var(--rc-text-meta);
+  color: var(--rc-muted);
+  margin-block-start: var(--rc-space-3);
+}
+
+/* ---------- Directional icon mirroring (RTL only) ---------- */
+[dir="rtl"] .rc-icon-dir {
+  transform: scaleX(-1);
+}
+
+/* ---------- v5 overrides of legacy v4 presentation ----------
+   Meta/label tokens are now body font, sentence case (token diff §1). */
+.label-token,
+.meta-stamp {
+  font: var(--rc-text-meta);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.fresh-chip {
+  font: var(--rc-text-meta);
+  text-transform: none;
+  letter-spacing: normal;
+  min-inline-size: 0;
+}
+
+.coupon-via {
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* No dashed outlines anywhere (token diff §4). */
+.best-flag-pending,
+.price-warn {
+  border-style: solid;
+  border-color: var(--rc-status-border);
+  background: var(--rc-status-bg);
+  color: var(--rc-body-text);
+}
+
+/* Card surface: shelf density. */
+.result-card {
+  border-radius: var(--rc-radius-card);
+  padding: var(--rc-space-4);
+  gap: var(--rc-space-3);
+}
+
+@media (max-width: 640px) {
+  .result-card {
+    padding: var(--rc-space-3);
+  }
+}
+
+/* Suggestion pills are 44px targets. */
+.query-pill {
+  min-block-size: var(--rc-tap);
+}
+
+/* REEA-945 compaction is superseded by the designed 2-row filter bar. */
+@media (max-width: 375px) {
+  .selection-row {
+    overflow-x: visible;
+    flex-wrap: wrap;
   }
 }

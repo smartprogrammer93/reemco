@@ -27,6 +27,7 @@ export default function ShareSummaryButton({
   query = "",
   country = null,
   locale,
+  iconOnly = false,
 }: {
   product: NormalizedProduct;
   /** REEA-37 funnel context; "" on the detail page (see copySummary). */
@@ -35,6 +36,8 @@ export default function ShareSummaryButton({
   country?: CountryCode | null;
   /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
   locale?: Locale;
+  /** Direction A card-media overlay: a 44x44 icon button, same action. */
+  iconOnly?: boolean;
 }) {
   const loc = locale ?? clientLocale();
   const t = getStrings(loc);
@@ -82,12 +85,32 @@ export default function ShareSummaryButton({
     trackEvent({ type: "summary_copied", query: query || product.title, item_id: product.productId });
   }
 
+  if (iconOnly) {
+    return (
+      <button
+        type="button"
+        onClick={copySummary}
+        aria-label={t.shareSummaryAria}
+        className="rc-icon-btn focusable"
+        style={{ background: "var(--rc-surface)", border: "1px solid var(--rc-line)" }}
+      >
+        {copied ? (
+          <span aria-hidden>✓</span>
+        ) : (
+          <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <rect x="8" y="8" width="12" height="12" rx="2" />
+            <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+          </svg>
+        )}
+      </button>
+    );
+  }
   return (
     <button
       type="button"
       onClick={copySummary}
       aria-label={t.shareSummaryAria}
-      className="query-pill query-pill-on-light focusable ml-auto shrink-0 whitespace-nowrap"
+      className="query-pill query-pill-on-light focusable ms-auto shrink-0 whitespace-nowrap"
     >
       {copied ? "✓" : t.copyLabel}
     </button>

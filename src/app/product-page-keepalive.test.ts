@@ -19,7 +19,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CollectJob } from "@/lib/collect/types";
 import type { NormalizedProduct } from "@/types/product";
-import CollectionPanel from "@/components/CollectionPanel";
+import ProductHero from "@/components/ProductHero";
 
 const mocks = vi.hoisted(() => ({
   startStaged: vi.fn(),
@@ -105,7 +105,7 @@ function findPanel(node: unknown): PanelElement | null {
     return null;
   }
   const el = node as { type?: unknown; props?: { children?: unknown } };
-  if (el.type === CollectionPanel) return el as unknown as PanelElement;
+  if (el.type === ProductHero) return el as unknown as PanelElement;
   return el.props ? findPanel(el.props.children) : null;
 }
 

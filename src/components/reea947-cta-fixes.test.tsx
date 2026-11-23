@@ -95,13 +95,15 @@ function lead(overrides: Partial<NormalizedProduct> = {}): { container: HTMLElem
 }
 
 describe("REEA-947 AC1 — a stamp collected during the render still anchors the CTA", () => {
-  it("the row CTA renders the age line, not the plain fallback", () => {
+  it("the row renders the age line beside the action, not a bare fallback", () => {
     const { container } = lead();
-    const rowCta = Array.from(container.querySelectorAll("a")).find((a) =>
-      a.textContent?.includes("Blink"),
-    );
-    expect(rowCta?.textContent).toContain("Checked");
-    expect(rowCta?.textContent).not.toContain("Go to store");
+    // Direction A: the checked time is its own line-B column; the action is
+    // the compact "Go". The stamp collected during render still anchors it.
+    const row = Array.from(container.querySelectorAll("li.offer-row")).find((li) =>
+      li.textContent?.includes("Blink"),
+    ) as HTMLElement | undefined;
+    expect(row?.textContent).toContain("Checked");
+    expect(row?.querySelector("a.btn-primary")?.textContent).toBe("Go");
   });
 
   it("the lead CTA carries the freshness line too", () => {

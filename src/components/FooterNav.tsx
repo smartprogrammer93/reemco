@@ -21,14 +21,13 @@ export default function FooterNav({ locale }: { locale?: Locale }) {
   const t = getStrings(locale ?? clientLocale());
   const pathname = usePathname();
   return (
-    <nav className="mt-1 flex gap-3" style={{ font: "var(--rc-text-small)" }} aria-label={t.footerNav}>
+    <nav className="rc-footer-links" aria-label={t.footerNav}>
       {LINKS.map(({ href, key }) => (
         <Link
           key={href}
           href={href}
           aria-current={pathname === href ? "page" : undefined}
           className="hover:underline"
-          style={{ color: "var(--rc-primary)" }}
         >
           {t[key]}
         </Link>

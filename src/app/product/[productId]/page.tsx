@@ -1,18 +1,11 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { after } from "next/server";
-import ProductResultCard from "@/components/ProductResultCard";
-import CollectionPanel from "@/components/CollectionPanel";
+import ProductHero from "@/components/ProductHero";
 import { startProductCollectionStaged } from "@/lib/collect/runner";
 import type { StagedProductCollection } from "@/lib/collect/runner";
 import { PRODUCTS } from "@/lib/feed";
 import { resolveProductIdentity } from "@/lib/product-identity";
-import {
-  buildResultsHref,
-  filterProductsByCountry,
-  sanitizeCountry,
-} from "@/lib/country";
-import { getStrings } from "@/lib/i18n";
+import { filterProductsByCountry, sanitizeCountry } from "@/lib/country";
 import { resolveRequestLocale } from "@/lib/i18n-server";
 
 export const metadata = {
@@ -45,7 +38,6 @@ export default async function ProductPage({
   // REEA-279 — chrome locale for the detail card, the live panel and the
   // back link; cookie → Accept-Language hint → "en".
   const locale = await resolveRequestLocale();
-  const t = getStrings(locale);
   const product = await resolveProductIdentity(productId, country);
   if (!product) notFound();
   // Catalog identities carry bundled offers — apply the same selection the
@@ -97,31 +89,11 @@ export default async function ProductPage({
   }
 
   return (
-    <div
-      className="mx-auto w-full px-6 py-6"
-      style={{ maxWidth: "var(--rc-layout-max-w)" }}
-    >
-      {/* Theme v1 §3.4: product hero uses the detail variant (28px price, variations, alternatives). */}
-      <ProductResultCard product={shown} isBest variant="detail" country={country} locale={locale} />
-      {/* REEA-84 W1: live per-product collection with progress UX (T4/T5/T6).
-          Client-only — degrades to the catalog card above when the API is
-          unavailable, e.g. on the static preview host (AC10). */}
-      <CollectionPanel
-        productId={shown.productId}
-        currency={shown.offers[0]?.currency ?? "KWD"}
-        country={country}
-        locale={locale}
-        firstStage={firstStage}
-      />
-      <p style={{ marginTop: "var(--rc-space-4)" }}>
-        <Link
-          href={buildResultsHref(shown.title, 1, country)}
-          className="hover:underline"
-          style={{ font: "var(--rc-text-small)", color: "var(--rc-primary)" }}
-        >
-          {t.allOffersLead}
-        </Link>
-      </p>
-    </div>
+    <ProductHero
+      product={shown}
+      country={country}
+      locale={locale}
+      firstStage={firstStage}
+    />
   );
 }

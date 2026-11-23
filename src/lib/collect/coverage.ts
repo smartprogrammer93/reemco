@@ -270,13 +270,21 @@ export function coverageLine(
   // matches the shell language; EN keeps the exact figures it had before.
   const parts: string[] = [];
   if (blockedText) parts.push(blockedText);
+  if (ar) {
+    // REEA-1069 — the signed AR/RTL checklist names this sentence verbatim:
+    // "الأسعار من … . لم تستجب … هذه المرة." Responders first, then the
+    // non-responders, both with isolated Latin retailer names.
+    if (answered.length > 0) parts.push(`الأسعار من ${summarizeNames(answered, ar)}.`);
+    if (failed.length > 0) parts.push(`لم تستجب ${summarizeNames(failed, ar)} هذه المرة.`);
+    return parts.join(" ");
+  }
   if (failed.length > 0)
     // REEA-468 G3 (PM copy decision): short-form scans faster at the grid
     // slot — "No response from X" pairs with the coupon badge as its
     // counterpart, instead of the longer sentence.
-    parts.push(ar ? `لا يوجد رد من ${joinNames(failed, ar)}.` : `No response from ${joinNames(failed)}.`);
+    parts.push(`No response from ${summarizeNames(failed)}.`);
   if (answered.length > 0)
-    parts.push(ar ? `أسعار من ${joinNames(answered, ar)}.` : `Prices from ${joinNames(answered)}.`);
+    parts.push(`Prices from ${summarizeNames(answered)}.`);
   return parts.join(" ");
 }
 
@@ -284,6 +292,21 @@ export function coverageLine(
 function joinNames(names: string[], ar = false): string {
   if (names.length <= 1) return names.join("");
   return `${names.slice(0, -1).join(", ")}${ar ? " و" : " and "}${names[names.length - 1]}`;
+}
+
+/**
+ * REEA-1069 — the Direction A partial-response status must stay ONE calm
+ * inline line at 375. The live rotation now has ~20 adapters, so listing every
+ * name produced an 8-line band above the first price. Name up to three
+ * responders / three non-responders and summarise the rest ("and N more" /
+ * "وN أخرى"): still honest about who answered and who did not, still a single
+ * neutral container, no invented names.
+ */
+function summarizeNames(names: string[], ar = false, max = 3): string {
+  if (names.length <= max) return joinNames(names, ar);
+  const shown = names.slice(0, max);
+  const rest = names.length - max;
+  return `${shown.join(ar ? " و" : ", ")}${ar ? ` و${rest} أخرى` : ` and ${rest} more`}`;
 }
 
 /** REEA-488 item 2 — per-merchant coupon coverage rolled up over the notes

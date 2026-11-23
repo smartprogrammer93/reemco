@@ -42,7 +42,7 @@ const LOCALE_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
    {x} retailer name, {cur} currency code — fill() substitutes them. */
 
 const en = {
-  toggleLabel: "عربي",
+  toggleLabel: "العربية",
   toggleAria: "Switch language",
   searchPlaceholder: "Search for a product…",
   searchLabel: "Search for a product",
@@ -161,8 +161,8 @@ const en = {
   liveWord: "live",
   cachedWord: "cached",
   updatedWord: "updated",
-  freshUpdatedMinutes: "UPDATED {n} MINUTES AGO",
-  freshUnknown: "UPDATED DATE UNKNOWN",
+  freshUpdatedMinutes: "Updated {n} minutes ago",
+  freshUnknown: "Updated date unknown",
   staleSuffix: " · may be outdated",
   staleTitle: "Last verified more than 7 days ago — the price may be outdated.",
   copyLabel: "Copy",
@@ -251,6 +251,77 @@ const en = {
   metaTitle: "{q} prices in {country} - Reemco",
   metaDescription:
     "Compare live prices, coupons and stock for {q} across retailers in {country}. Offers are collected the moment you search — best effective price wins.",
+  // REEA-1069 — Direction A "Shelf" chrome (design pack REEA-1055).
+  brandHomeAria: "Reemco home",
+  menuLabel: "Menu",
+  menuClose: "Close menu",
+  menuHowCompare: "How we compare",
+  toggleAriaTo: "Switch language to {lang}",
+  filterAria: "Filters and market",
+  filterSaudi: "Saudi",
+  resultsHeading: "{q} prices in {country}",
+  resultsHeadingAll: "All products prices in {country}",
+  resultsSubline: "{n} {unit} for “{q}” · {offers} retailer offers · collected live {age}",
+  productsWord: "products",
+  retailerOffersWord: "retailer offers",
+  legendSummary: "What the status labels mean",
+  statusLegendAria: "Status legend",
+  offerStatusAria: "Verification status",
+  statusVerified: "Verified",
+  statusUnverified: "Needs verification",
+  statusStale: "Stale",
+  statusVerifiedTip: "Cross-checked against the retailer’s live page during this collection run.",
+  statusUnverifiedTip: "Collected from the retailer, not yet cross-checked. Treat as indicative.",
+  statusStaleTip: "Collected more than 24 hours ago. Re-check before you buy.",
+  savingsBaseline: "vs {x} listed price",
+  bestEffectiveLabel: "best effective price",
+  checkedLead: "Checked",
+  checkedJustNow: "Checked just now",
+  offerGo: "Go",
+  offerGoTo: "Go to {x}",
+  offersTableTitle: "All offers · {n} retailers",
+  offersTableAria: "All offers by retailer",
+  tableRetailer: "Retailer",
+  tablePrice: "Price",
+  tableStock: "Stock",
+  tableStatus: "Status",
+  tableChecked: "Checked",
+  productCollected: "Collected live {age} · {n} retailers answered",
+  productRetailersAnswered: "{n} retailers answered",
+  couponApplied: "{x} coupon applied at checkout",
+  homeRetailersTitle: "Retailers collecting now",
+  homeLiveNote: "live per-query collection · last answer {age}",
+  retailerLive: "live",
+  retailerNoResponse: "no response",
+  homeDropsTitle: "Price drops right now",
+  homeDropsNote: "Live · updated in the last minute",
+  homeAllDrops: "All price drops",
+  homeDropsEmptyTitle: "No price drops in the last hour",
+  homeDropsEmptyNote:
+    "We checked every retailer live just now. Nothing moved yet — the next collection runs when you open a product.",
+  dropLower: "lower than its listed price",
+  homeCategoriesTitle: "Browse by category",
+  catPhones: "Phones",
+  catLaptops: "Laptops",
+  catHomeKitchen: "Home & kitchen",
+  catAudio: "Audio",
+  homeMethodTitle: "How the price you see is chosen",
+  homeMethodBody:
+    "We collect every retailer offer live, apply coupons that work at checkout, and rank by the price you actually pay. The best effective price always wins — no paid placement.",
+  trustBest: "Best effective price ranks first, always",
+  trustCoupons: "Coupons applied before ranking",
+  trustProvenance: "Every price shows when it was collected and by whom",
+  trustAffiliate: "Affiliate commission never changes the order",
+  homeModuleLoading: "Checking retailers live…",
+  homeModuleNoResponse: "No retailer answered just now.",
+  homeChecked: "Checked",
+  emptyRetailersAsked: "We asked every retailer just now.",
+  errorRetailersTitle: "We couldn’t reach the retailers",
+  errorRetailersBody:
+    "No prices are being shown rather than showing a stale snapshot. Try again in a moment.",
+  tryAgain: "Try again",
+  footerHowCompare: "How we compare",
+  marketLine: "Kuwait · prices in KWD",
   // REEA-448 G1: home-page chrome pair. The results templates localize through
   // buildResultsMeta; the home pair rides the same table so the ar session no
   // longer keeps the English <title>/description under lang="ar".
@@ -428,6 +499,78 @@ const ar: typeof en = {
   metaTitle: "أسعار {q} في {country} - ريمكو",
   metaDescription:
     "قارن الأسعار والكوبونات وحالة التوافر لـ{q} عبر متاجر {country}. تُجمع العروض لحظة بحثك — أفضل سعر فعلي يفوز.",
+  // REEA-1069 — Arabic Direction A "Shelf" chrome, designed in Arabic (not a
+  // mirrored afterthought): price order, timestamps, status labels and CTAs
+  // follow the signed REEA-1055 RTL checklist.
+  brandHomeAria: "ريمكو — الرئيسية",
+  menuLabel: "القائمة",
+  menuClose: "أغلق القائمة",
+  menuHowCompare: "كيف نقارن",
+  toggleAriaTo: "تبديل اللغة إلى {lang}",
+  filterAria: "التصفية والسوق",
+  filterSaudi: "السعودية",
+  resultsHeading: "أسعار {q} في {country}",
+  resultsHeadingAll: "أسعار كل المنتجات في {country}",
+  resultsSubline: "{n} {unit} لـ«{q}» · {offers} عرضًا من المتاجر · جُمعت مباشرة {age}",
+  productsWord: "منتجات",
+  retailerOffersWord: "عروض المتاجر",
+  legendSummary: "ماذا تعني حالات التحقق",
+  statusLegendAria: "دليل حالات التحقق",
+  offerStatusAria: "حالة التحقق",
+  statusVerified: "موثّق",
+  statusUnverified: "بحاجة للتحقق",
+  statusStale: "قديم",
+  statusVerifiedTip: "تم التحقق منه مقابل صفحة المتجر المباشرة أثناء هذا الجمع.",
+  statusUnverifiedTip: "جُمع من المتجر ولم يُتحقق منه بعد. تعامل معه كإشارة.",
+  statusStaleTip: "جُمع قبل أكثر من 24 ساعة. أعد التحقق قبل الشراء.",
+  savingsBaseline: "مقارنةً بسعر {x} المعلن",
+  bestEffectiveLabel: "أفضل سعر فعلي",
+  checkedLead: "حُدِّث",
+  checkedJustNow: "حُدِّث الآن",
+  offerGo: "اذهب",
+  offerGoTo: "اذهب إلى {x}",
+  offersTableTitle: "كل العروض · {n} متاجر",
+  offersTableAria: "كل العروض حسب المتجر",
+  tableRetailer: "المتجر",
+  tablePrice: "السعر",
+  tableStock: "التوافر",
+  tableStatus: "الحالة",
+  tableChecked: "وقت الجمع",
+  productCollected: "جُمع مباشرةً {age} · استجاب {n} متاجر",
+  productRetailersAnswered: "استجاب {n} متاجر",
+  couponApplied: "كوبون {x} يُطبَّق عند الدفع",
+  homeRetailersTitle: "متاجر تجمع الآن",
+  homeLiveNote: "جمع مباشر لكل بحث · آخر إجابة {age}",
+  retailerLive: "مباشر",
+  retailerNoResponse: "لا استجابة",
+  homeDropsTitle: "انخفاضات الأسعار الآن",
+  homeDropsNote: "مباشر · حُدِّث خلال الدقيقة الأخيرة",
+  homeAllDrops: "كل انخفاضات الأسعار",
+  homeDropsEmptyTitle: "لا انخفاضات خلال الساعة الأخيرة",
+  homeDropsEmptyNote:
+    "تحققنا من كل متجر مباشرةً الآن. لم يتغير شيء بعد — يبدأ الجمع التالي عند فتح منتج.",
+  dropLower: "أقل من سعره المعلن",
+  homeCategoriesTitle: "تصفح حسب الفئة",
+  catPhones: "هواتف",
+  catLaptops: "حواسيب محمولة",
+  catHomeKitchen: "المنزل والمطبخ",
+  catAudio: "صوتيات",
+  homeMethodTitle: "كيف يُختار السعر الذي تراه",
+  homeMethodBody:
+    "نجمع كل عرض من المتاجر مباشرةً، ونطبق الكوبونات الصالحة عند الدفع، ونرتب حسب السعر الذي تدفعه فعليًا. أفضل سعر فعلي يفوز دائمًا — بلا ترتيب مدفوع.",
+  trustBest: "أفضل سعر فعلي يتصدر دائمًا",
+  trustCoupons: "تُطبق الكوبونات قبل الترتيب",
+  trustProvenance: "كل سعر يوضح وقت جمعه ومن جمعه",
+  trustAffiliate: "عمولة الإحالة لا تغير الترتيب",
+  homeModuleLoading: "جارٍ التحقق من المتاجر مباشرة…",
+  homeModuleNoResponse: "لم يستجب أي متجر الآن.",
+  homeChecked: "تم التحقق",
+  emptyRetailersAsked: "سألنا كل متجر الآن.",
+  errorRetailersTitle: "تعذّر الوصول إلى المتاجر",
+  errorRetailersBody: "لا نعرض أسعارًا بدلًا من عرض لقطة قديمة. حاول مرة أخرى بعد قليل.",
+  tryAgain: "أعد المحاولة",
+  footerHowCompare: "كيف نقارن",
+  marketLine: "الكويت · الأسعار بالدينار الكويتي",
   // REEA-448 G1: Arabic home chrome pair, verbatim from the REEA-440 spec.
   homeTitle: "ريمكو — قارن الأسعار في الكويت",
   homeDescription:
@@ -462,6 +605,35 @@ export function localizedAge(locale: Locale, seconds: number): string {
   const n =
     s < 60 ? s : s < 3600 ? Math.floor(s / 60) : s < 86400 ? Math.floor(s / 3600) : Math.floor(s / 86400);
   return fill(s < 60 ? t.ageSec : s < 3600 ? t.ageMin : s < 86400 ? t.ageHour : t.ageDay, { n });
+}
+
+
+/**
+ * REEA-1069 — humanised, locale-correct "checked" age for offer rows
+ * (RTL checklist §A.3). English keeps the compact shelf form; Arabic gets the
+ * correct dual/plural forms the signed checklist requires:
+ * حُدِّث الآن / حُدِّث قبل دقيقتين / حُدِّث قبل 4 دقائق / حُدِّث قبل 26 دقيقة —
+ * never "0s ago", never an untranslated fragment.
+ */
+export function checkedAgeLabel(locale: Locale, seconds: number): string {
+  const t = getStrings(locale);
+  const s = Math.max(0, Math.floor(seconds));
+  if (locale === "en") {
+    if (s < 60) return t.checkedJustNow;
+    const n = s < 3600 ? Math.floor(s / 60) : s < 86400 ? Math.floor(s / 3600) : Math.floor(s / 86400);
+    return `${t.checkedLead} ${localizedAge("en", s).replace(/ ago$/, "")} ago`;
+  }
+  const unit =
+    s < 60 ? ["لحظة", "ثانية", "ثانيتين", "ثوانٍ", "ثانية"]
+    : s < 3600 ? ["دقيقة", "دقيقة", "دقيقتين", "دقائق", "دقيقة"]
+    : s < 86400 ? ["ساعة", "ساعة", "ساعتين", "ساعات", "ساعة"]
+    : ["يوم", "يوم", "يومين", "أيام", "يوم"];
+  if (s < 60 && s <= 5) return `${t.checkedLead} ${unit[0]}`;
+  const n = s < 60 ? s : s < 3600 ? Math.floor(s / 60) : s < 86400 ? Math.floor(s / 3600) : Math.floor(s / 86400);
+  if (n === 1) return `${t.checkedLead} ${unit[1]}`;
+  if (n === 2) return `${t.checkedLead} ${unit[2]}`;
+  if (n >= 3 && n <= 10) return `${t.checkedLead} ${n} ${unit[3]}`;
+  return `${t.checkedLead} ${n} ${unit[4]}`;
 }
 
 /* ---- Resolution chain: cookie → Accept-Language hint → "en". ------------ */

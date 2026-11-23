@@ -144,18 +144,21 @@ describe("country filter UI (REEA-170)", () => {
       );
     });
     const pills = Array.from(
-      document.querySelectorAll('nav[aria-label="Filter offers by country"] button'),
+      document.querySelectorAll('[role="group"][aria-label="Filters and market"] button'),
     );
+    // REEA-1069 — the Direction A six-control filter/market bar (AC3):
+    // All / Kuwait / Saudi / Egypt / In stock / Refresh.
     expect(pills.map((b) => b.textContent)).toEqual([
       "All",
-      "Kuwait (KWD)",
-      "Saudi Arabia (SAR)",
-      "Egypt (EGP)",
+      "Kuwait",
+      "Saudi",
+      "Egypt",
+      "In stock",
+      "Refresh",
     ]);
-    // REEA-291 AC4: pills are in-place controls — the active one is marked,
-    // no link navigation involved. Clicking another pill filters the loaded
-    // payload on the client without any navigation.
-    expect(pills[1].getAttribute("aria-current")).toBe("true");
+    // REEA-291 AC4: the controls are in-place — the active one carries
+    // aria-pressed (REEA-1069 AC3), no link navigation involved.
+    expect(pills[1].getAttribute("aria-pressed")).toBe("true");
     const html = document.body.innerHTML;
     // Offer rows honor the selection: the SAR listing is suppressed, the KWD
     // one stays.
@@ -169,9 +172,9 @@ describe("country filter UI (REEA-170)", () => {
     expect(document.body.innerHTML).toContain("Jarir");
     expect(document.body.innerHTML).not.toContain("Xcite");
     const pillsAfter = Array.from(
-      document.querySelectorAll('nav[aria-label="Filter offers by country"] button'),
+      document.querySelectorAll('[role="group"][aria-label="Filters and market"] button'),
     );
-    expect(pillsAfter[2].getAttribute("aria-current")).toBe("true");
+    expect(pillsAfter[2].getAttribute("aria-pressed")).toBe("true");
     expect(window.location.search).toContain("c=SA");
     await act(async () => {
       fireEvent.click(pillsAfter[0]); // All
@@ -215,32 +218,34 @@ describe("stock selection UI (REEA-186)", () => {
     resetStockPrefs();
   });
 
-  it("hides out-of-stock listings by default and shows the toggle unchecked", async () => {
+  it("filters to in-stock listings by default (In stock pressed) and flips in place", async () => {
     searchParams.set("q", "xm6");
     await act(async () => {
       render(<ResultsClient query="xm6" page={1} products={MIXED_STOCK} suggestions={MIXED_STOCK} />);
     });
-    // Default: only the in-stock listing renders.
+    // Default: only the in-stock listing renders; the Direction A "In stock"
+    // control is the pressed (aria-pressed) state.
     const html = document.body.innerHTML;
     expect(html).toContain("Xcite");
     expect(html).not.toContain("Jarir");
-    // Visible checkbox-style toggle, unchecked, in-place (REEA-291 AC4).
-    const toggle = document.querySelector('[role="checkbox"]');
-    expect(toggle).not.toBeNull();
-    expect(toggle?.textContent).toContain("Show out-of-stock items");
-    expect(toggle?.getAttribute("aria-checked")).toBe("false");
+    const inStockBtn = () =>
+      Array.from(document.querySelectorAll('[role="group"][aria-label="Filters and market"] button')).find(
+        (b) => b.textContent === "In stock",
+      ) as HTMLElement | undefined;
+    expect(inStockBtn()).toBeDefined();
+    expect(inStockBtn()?.getAttribute("aria-pressed")).toBe("true");
     // REEA-291 AC4: clicking flips the view against the loaded payload on the
     // client — no navigation, no refetch behind the selection change.
     await act(async () => {
-      fireEvent.click(toggle as HTMLElement);
+      fireEvent.click(inStockBtn() as HTMLElement);
     });
-    expect(document.querySelector('[role="checkbox"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(inStockBtn()?.getAttribute("aria-pressed")).toBe("false");
     expect(document.body.innerHTML).toContain("Jarir");
     expect(window.location.search).toContain("oos=1");
     await act(async () => {
-      fireEvent.click(document.querySelector('[role="checkbox"]') as HTMLElement);
+      fireEvent.click(inStockBtn() as HTMLElement);
     });
-    expect(document.querySelector('[role="checkbox"]')?.getAttribute("aria-checked")).toBe("false");
+    expect(inStockBtn()?.getAttribute("aria-pressed")).toBe("true");
     expect(document.body.innerHTML).not.toContain("Jarir");
   });
 
@@ -255,14 +260,17 @@ describe("stock selection UI (REEA-186)", () => {
     const html = document.body.innerHTML;
     expect(html).toContain("Xcite");
     expect(html).toContain("Jarir");
-    const toggle = document.querySelector('[role="checkbox"]');
-    expect(toggle?.getAttribute("aria-checked")).toBe("true");
-    // Unchecking filters the SAME loaded payload again — the hidden listings
+    const inStockBtn = () =>
+      Array.from(document.querySelectorAll('[role="group"][aria-label="Filters and market"] button')).find(
+        (b) => b.textContent === "In stock",
+      ) as HTMLElement | undefined;
+    expect(inStockBtn()?.getAttribute("aria-pressed")).toBe("false");
+    // Re-pressing filters the SAME loaded payload again — the hidden listings
     // drop without any request.
     await act(async () => {
-      fireEvent.click(toggle as HTMLElement);
+      fireEvent.click(inStockBtn() as HTMLElement);
     });
-    expect(document.querySelector('[role="checkbox"]')?.getAttribute("aria-checked")).toBe("false");
+    expect(inStockBtn()?.getAttribute("aria-pressed")).toBe("true");
     expect(document.body.innerHTML).not.toContain("Jarir");
   });
 
@@ -319,7 +327,9 @@ describe("refresh action (REEA-291 AC4)", () => {
     // window can never answer the Refresh: guaranteed miss, newer scrapedAt.
     expect(String(refreshSpy.mock.calls[0][0])).toContain("_r=");
     // Selection changes on the same view never go through the router either.
-    const toggle = document.querySelector('[role="checkbox"]') as HTMLElement;
+    const toggle = Array.from(
+      document.querySelectorAll('[role="group"][aria-label="Filters and market"] button'),
+    ).find((b) => b.textContent === "In stock") as HTMLElement;
     await act(async () => {
       fireEvent.click(toggle);
     });
@@ -1092,11 +1102,15 @@ describe("cold-start zero handling (REEA-437)", () => {
         />,
       );
     });
-    // Provisional zero: skeleton heading instead of a flashing "0 results".
+    // Provisional zero: the Direction A h1 renders immediately from the query
+    // (design loading state), but the COUNT subline keeps its skeleton and no
+    // "0 results"/hint flashes while the page may still deepen.
+    expect(document.querySelector("h1")?.textContent).toContain("wh-1000xm6");
+    expect(document.body.textContent).not.toContain("0 results for");
+    expect(document.body.textContent).not.toContain("No matches — try a shorter phrase.");
     // REEA-574 rev 1 (R1): nothing is rendered yet, so the coverage sentence
     // stays hidden too — the empty page state shows heading + hint + empty
     // state only, and the line lands with the first rendered rows.
-    expect(document.querySelector("h1")).toBeNull();
     expect(document.body.textContent).not.toContain("No response from");
     // The follow-up feed lands the converged live answer — heading + cards.
     const late: LiveSearchResult = { products: SAMPLE_PRODUCTS, notes: [], suggestions: SAMPLE_PRODUCTS };
@@ -1216,7 +1230,10 @@ describe("first-flush reserves (REEA-778)", () => {
     const html = renderToStaticMarkup(
       <ResultsClient query="iPhone 17 Pro" page={1} country={null} stages={[PENDING]} locale="en" />,
     );
-    expect(html).toContain("heading-slot skeleton-block");
+    // REEA-1069 — the Direction A h1 renders immediately (no heading-slot
+    // ghost is needed); the count subline keeps its stamp reserve.
+    expect(html).toContain("<h1>");
+    expect(html).toContain("iPhone 17 Pro");
     expect(html).toContain('class="meta-stamp coverage-line"');
   });
 
@@ -1427,7 +1444,7 @@ describe("R2: honest empty state + relevance hierarchy (REEA-964)", () => {
     });
     const html = document.body.innerHTML;
     expect(html).toContain("No match found");
-    expect((document.querySelector("h1")?.textContent ?? "").replace(/\s+/g, " ")).toContain("0 results for");
+    expect((document.body.textContent ?? "").replace(/\s+/g, " ")).toContain("0 results for");
     const band = document.querySelector('[data-related-band="true"]');
     expect(band?.getAttribute("aria-label")).toBe("Related items — not an exact match");
     expect(band?.querySelectorAll("[data-related-item]").length).toBe(3);

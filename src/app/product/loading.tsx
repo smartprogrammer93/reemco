@@ -31,8 +31,8 @@ export default async function ProductLoading() {
   const t = getStrings(locale);
   return (
     <div
-      className="mx-auto w-full space-y-4 px-6 py-6"
-      style={{ maxWidth: "var(--rc-layout-max-w)" }}
+      className="mx-auto w-full space-y-4 py-6"
+      style={{ maxWidth: "var(--rc-layout-max-w)", paddingInline: "var(--rc-gutter)" }}
     >
       {/* REEA-447 R1 — busy state mirrors the results flash: aria-busy rides
           while collecting, removed with the container on the settled swap. */}
@@ -45,7 +45,7 @@ export default async function ProductLoading() {
       {/* Heading slot at the detail hero's title height, then the hero card
           ghost and one offer-row ghost so the panel area keeps its position
           while the first streamed offer boundary lands. */}
-      <div className="skeleton-block" style={{ width: "45%", height: "clamp(36px, 4.8vw, 55px)" }} aria-hidden />
+      <div className="skeleton-block" style={{ width: "45%", height: "clamp(22px, 2.2vw, 28px)" }} aria-hidden />
       <SkeletonCard tall />
       <SkeletonCard />
     </div>

@@ -2440,7 +2440,7 @@ describe("REA-290 — retry once with backoff + per-query coverage line", () => 
     );
     // AR: same helper, Arabic connective before the last name, half-width commas.
     expect(coverageLine(notes, "ar", [product("p", ["Sultan Center", "Eureka"])]).trim()).toBe(
-      "أسعار من Eureka وSultan Center.",
+      "الأسعار من Eureka وSultan Center.",
     );
     // A merchant that answered rows but also logged an error stays a contributor.
     expect(coverageLine([...notes, { merchant: "Jarir", hits: 0, error: "timeout" }], "en", [product("p", ["Jarir"])])).toBe(

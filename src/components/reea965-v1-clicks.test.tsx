@@ -138,10 +138,10 @@ describe("v1 result_click instrumentation (REEA-965)", () => {
         renderStartMs={Date.parse("2026-09-14T00:00:00.000Z")}
       />,
     );
-    // With a usable stamp the row CTA names its merchant ("Checked … · Jarir"),
-    // so the row button is selectable by the retailer it leads to.
+    // Direction A: the row names its merchant on line A and the outbound
+    // action is the compact "Go"; select the action by its destination href.
     const row = Array.from(document.body.querySelectorAll<HTMLAnchorElement>("a.btn-primary")).find(
-      (a) => a.textContent?.includes("Jarir"),
+      (a) => a.getAttribute("href")?.includes("jarir"),
     );
     expect(row).toBeTruthy();
     fireEvent.click(row as HTMLAnchorElement);

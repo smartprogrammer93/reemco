@@ -3,8 +3,8 @@
 import { Component, Suspense, useEffect, useMemo, useRef, useState, use, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import CountryFilter from "@/components/CountryFilter";
-import StockToggle from "@/components/StockToggle";
+import FilterBar from "@/components/FilterBar";
+import { StatusLegend } from "@/components/OfferStatus";
 import ProductResultCard from "@/components/ProductResultCard";
 import { searchProducts } from "@/lib/search";
 import { sanitizePage, sanitizeSearchQuery } from "@/lib/search-params";
@@ -37,7 +37,7 @@ import { formatPrice, sortOffers } from "@/lib/format";
 import SearchForm from "@/components/SearchForm";
 import { coverageLine, type LiveSearchResult } from "@/lib/collect/coverage";
 import { markLiveRefresh, withRefreshBypass } from "@/lib/query-cache";
-import { clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
+import { checkedAgeLabel, clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
 import type { NormalizedProduct } from "@/types/product";
 
 /**
@@ -75,23 +75,19 @@ class ResultsErrorBoundary extends Component<
     if (this.state.failed) {
       const t = getStrings(this.props.locale ?? clientLocale());
       return (
-        <div
-          className="result-card"
-          role="alert"
-          style={{ borderLeft: "3px solid var(--rc-error)", background: "var(--rc-error-bg)" }}
-        >
-          <h2 style={{ font: "var(--rc-text-title)", color: "var(--rc-ink)" }}>
-            {t.errorTitle}
-          </h2>
-          <p className="mt-1" style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
-            {t.errorBodyShort}
-          </p>
+        <div className="rc-error-state" role="alert">
+          <svg className="icon" width={34} height={34} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} aria-hidden>
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7v6M12 17h.01" />
+          </svg>
+          <h2>{t.errorRetailersTitle}</h2>
+          <p>{t.errorRetailersBody}</p>
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="btn-primary focusable mt-4 min-h-11 px-4"
+            className="btn-primary focusable min-h-11 px-4"
           >
-            {t.retry}
+            {t.tryAgain}
           </button>
         </div>
       );
@@ -172,11 +168,16 @@ function EmptyState({
 }) {
   const t = getStrings(locale ?? clientLocale());
   return (
-    <div className="result-card empty-state mx-auto w-full max-w-xl" data-empty-state="true">
-      <h2 style={{ font: "var(--rc-text-h2)", color: "var(--rc-ink)" }}>{t.emptyTitle}</h2>
-      <p className="mt-2" style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
-        {t.emptyBody}
-      </p>
+    <div className="result-card empty-state rc-empty mx-auto w-full max-w-xl" data-empty-state="true">
+      <svg className="icon" width={34} height={34} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} aria-hidden>
+        <path d="M3 9.5 5.5 4h13L21 9.5V20H3V9.5Z" />
+        <path d="M3 9.5h18M8.5 13.5h7" />
+      </svg>
+      <h2>{t.emptyTitle}</h2>
+      <p>{t.emptyBody}</p>
+      {!unavailable ? (
+        <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>{t.emptyRetailersAsked}</p>
+      ) : null}
       {unavailable ? (
         <p className="mt-2" style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
           {t.emptyUnavailable}
@@ -327,7 +328,7 @@ function ResultsGrid({
   return (
     <section aria-label={t.primaryResultsAria} data-primary-section="true">
       <div
-        className="grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]"
+        className="rc-shelf"
         style={{ marginTop: "var(--rc-space-8)" }}
       >
         {products.map((p, i) => (
@@ -399,28 +400,19 @@ function SelectionRow({
   onRefresh: () => void;
   locale?: Locale;
 }) {
-  const t = getStrings(locale ?? clientLocale());
+  // REEA-1069 — the Direction A filter/market bar: six 44px controls, two
+  // rows at 375, selected state with a check glyph + aria-pressed. The
+  // controls filter the already-loaded live payload IN PLACE (REEA-291 AC4);
+  // Refresh is the one explicit action that re-runs the collection.
   return (
-    /* REEA-170: country pills above the list — same control for both the
-       result list and the empty state, active choice echoed from the URL.
-       REEA-186: stock selection beside the country pills — visible in both
-       the result list and the empty state, same control.
-       REEA-291 AC4: the pills and the checkbox filter the already-loaded
-       payload IN PLACE (ResultsClient state); the Refresh button is the one
-       explicit action that re-runs the live collection server-side. */
-    /* REEA-945 — named hook for the ≤375px compaction block in globals.css:
-       on SE-class widths the row becomes one horizontally scrollable line
-       instead of wrapping to 3-4 lines above the results. */
-    <div
-      className="selection-row flex flex-wrap items-center gap-2"
-      style={{ marginBottom: "var(--rc-space-4)" }}
-    >
-      <CountryFilter country={country} onSelect={onSelectCountry} locale={locale} />
-      <StockToggle showOutOfStock={showOutOfStock} locale={locale} onToggle={onToggleStock} />
-      <button type="button" onClick={onRefresh} className="query-pill query-pill-on-light focusable">
-        {t.refresh}
-      </button>
-    </div>
+    <FilterBar
+      country={country}
+      showOutOfStock={showOutOfStock}
+      onSelectCountry={onSelectCountry}
+      onToggleStock={onToggleStock}
+      onRefresh={onRefresh}
+      locale={locale}
+    />
   );
 }
 
@@ -466,8 +458,7 @@ function stagedView(
 }
 
 /* Design v3 grid inside one streaming block (see StageAppend). */
-const GRID_CLASS =
-  "grid min-w-0 grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[repeat(2,minmax(0,1fr))]";
+const GRID_CLASS = "rc-shelf";
 
 /* REEA-970 — pending-window ghost for the streamed FIRST-flush boundary.
    Root cause of the QA adverse finding on REEA-759 criterion 3: the REEA-756
@@ -600,55 +591,169 @@ function StageAppend(props: {
   );
 }
 
-function CountHeading({ count, query, locale }: { count: number; query: string; locale?: Locale }) {
+function countryLabel(country: CountryCode | null, t: ReturnType<typeof getStrings>): string {
+  if (country === "SA") return t.countrySA;
+  if (country === "EG") return t.countryEG;
+  return t.countryKW;
+}
+
+/* REEA-1069 — Direction A results heading (REEA-1055 §3, AC4).
+   ONE h1 carrying the query echo (never the count), at --rc-text-h1
+   (28/32px), deliberately smaller than the card price (32/40px): the price
+   wins the hierarchy. The count and the live-collection stamp ride the meta
+   subline below. The status legend sits once under this heading. */
+function ResultsHead({
+  query,
+  country,
+  locale,
+  children,
+}: {
+  query: string;
+  country: CountryCode | null;
+  locale?: Locale;
+  /** The hint slot sits DIRECTLY under the h1 (REEA-332 item 2). */
+  children?: ReactNode;
+}) {
   const t = getStrings(locale ?? clientLocale());
+  const label = countryLabel(country, t);
+  // The query is a bidi-isolated Latin/Arabic token inserted at the template's
+  // {q} slot, so the Arabic sentence keeps its designed order
+  // (أسعار iPhone 15 في الكويت) instead of a prepended echo.
+  const [before, after] = t.resultsHeading.split("{q}");
   return (
-    <>
-      {/* Theme v1 §4: display-scale H1, tabular count */}
-      <h1 style={{ font: "var(--rc-text-display)", color: "var(--rc-ink)" }}>
-        <span className="tabular">{count}</span>{" "}
-        {count === 1 ? t.resultsOne : t.resultsMany} {t.resultsForWord} &ldquo;{query || t.allProducts}&rdquo;
+    <div className="rc-results-head">
+      <h1>
+        {query ? (
+          <>
+            {before}
+            <bdi>{query}</bdi>
+            {(after ?? "").replace("{country}", label)}
+          </>
+        ) : (
+          fill(t.resultsHeadingAll, { country: label })
+        )}
       </h1>
-      {count === 0 && query ? (
-        <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>{t.emptyHint}</p>
-      ) : null}
-    </>
+      {children}
+    </div>
   );
 }
 
-/* REEA-224 item 2 — the `N results for …` h1 must be part of the initial
-   server shell, not something that appears only when the view converges:
-   without it the late heading pushes the footer down between first paint and
-   the settled grid. This boundary resolves with the FIRST staged flush (the
-   same promise StageAppend index 0 consumes), so the heading rides the first
-   streamed chunk and only its count deepens as slower retailers land.
+/* The honest-empty hint sits DIRECTLY under the h1 (REEA-332 item 2): one
+   muted line naming the retry shape. It renders only once the answer is an
+   honest zero — never while a finalized-at-budget snapshot may still deepen. */
+function HintLine({ locale }: { locale?: Locale }) {
+  const t = getStrings(locale ?? clientLocale());
+  return <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>{t.emptyHint}</p>;
+}
 
-   REEA-437 AC-3 — while the count-so-far is still ZERO and more answers may
-   land (this snapshot is a finalized-at-budget provisional one with hops
-   converging behind the response), the heading slot keeps its skeleton
-   instead of flashing "0 results — No matches" before the cards arrive.
-
-   REEA-721 follow-up (QA grade item 5) — once the FINAL snapshot SETTLES at
-   zero the answer is honest and final: the served document itself carries
-   `0 results for …` plus CountHeading's hint line, so a no-match state
-   reads as an explicit empty result even before hydration — not just the
-   filter row over empty space. The provisional guard still speaks through
-   `settled === false`, which is exactly the finalized-at-budget shape. */
-function ResultsHeading(props: {
+function ResultsHint({
+  stage,
+  query,
+  page,
+  country,
+  showOutOfStock,
+  locale,
+}: {
   stage: Promise<LiveSearchResult>;
-  stagesCount: number;
   query: string;
   page: number;
   country: CountryCode | null;
   showOutOfStock: boolean;
   locale?: Locale;
 }) {
-  const snap = use(props.stage);
-  const visible = stagedView(snap, props.query, props.page, props.country, props.showOutOfStock);
-  if (visible.length === 0 && snap.settled === false) {
-    return <HeadingGhost />;
+  const snap = use(stage);
+  if (snap.settled === false) return null;
+  const visible = stagedView(snap, query, page, country, showOutOfStock);
+  if (visible.length > 0) return null;
+  return <HintLine locale={locale} />;
+}
+
+/* The meta subline under the heading: count + retailer offers + the live
+   collection age. It streams with the final snapshot, while the h1 above is
+   already on screen (design loading state: heading renders immediately, only
+   the shelf is busy). */
+function ResultsSubline({
+  stage,
+  query,
+  page,
+  country,
+  showOutOfStock,
+  renderStartMs,
+  locale,
+}: {
+  stage: Promise<LiveSearchResult>;
+  query: string;
+  page: number;
+  country: CountryCode | null;
+  showOutOfStock: boolean;
+  renderStartMs?: number;
+  locale?: Locale;
+}) {
+  const snap = use(stage);
+  const visible = stagedView(snap, query, page, country, showOutOfStock);
+  if (visible.length === 0 && snap.settled === false) return <StampGhost locale={locale} />;
+  const offers = visible.reduce((n, p) => n + p.offers.length, 0);
+  let newest = 0;
+  for (const p of visible) for (const o of p.offers) {
+    const ms = o.collectedAt ? Date.parse(o.collectedAt) : NaN;
+    if (Number.isFinite(ms) && ms > newest) newest = ms;
   }
-  return <CountHeading count={visible.length} query={props.query} locale={props.locale} />;
+  // eslint-disable-next-line react-hooks/purity -- baked server clock; fallback only when absent.
+  const ageSecs = newest > 0 ? Math.max(0, Math.floor(((renderStartMs ?? Date.now()) - newest) / 1000)) : 0;
+  const t = getStrings(locale ?? clientLocale());
+  const unit = visible.length === 1 ? t.resultsOne : t.resultsMany;
+  const values = {
+    n: visible.length,
+    unit,
+    offers,
+    age: ageSecs === 0 ? t.justNow : checkedAgeLabel(locale ?? clientLocale(), ageSecs),
+  };
+  const [before, after] = t.resultsSubline.split("{q}");
+  return (
+    <p className="rc-results-meta">
+      {fill(before, values)}
+      <bdi>{query || t.allProducts}</bdi>
+      {fill(after ?? "", values)}
+    </p>
+  );
+}
+
+/* Settled form of the meta subline (converged/plain views already hold the
+   visible set; the streamed form above resolves its own snapshot). */
+function ResultsMeta({
+  products,
+  query,
+  renderStartMs,
+  locale,
+}: {
+  products: NormalizedProduct[];
+  query: string;
+  renderStartMs?: number;
+  locale?: Locale;
+}) {
+  const t = getStrings(locale ?? clientLocale());
+  const offers = products.reduce((n, p) => n + p.offers.length, 0);
+  let newest = 0;
+  for (const p of products) for (const o of p.offers) {
+    const ms = o.collectedAt ? Date.parse(o.collectedAt) : NaN;
+    if (Number.isFinite(ms) && ms > newest) newest = ms;
+  }
+  // eslint-disable-next-line react-hooks/purity -- baked server clock; fallback only when absent.
+  const ageSecs = newest > 0 ? Math.max(0, Math.floor(((renderStartMs ?? Date.now()) - newest) / 1000)) : 0;
+  const values = {
+    n: products.length,
+    unit: products.length === 1 ? t.resultsOne : t.resultsMany,
+    offers,
+    age: ageSecs === 0 ? t.justNow : checkedAgeLabel(locale ?? clientLocale(), ageSecs),
+  };
+  const [before, after] = t.resultsSubline.split("{q}");
+  return (
+    <p className="rc-results-meta">
+      {fill(before, values)}
+      <bdi>{query || t.allProducts}</bdi>
+      {fill(after ?? "", values)}
+    </p>
+  );
 }
 
 /* REEA-290 — per-query coverage line: which retailers answered this search
@@ -693,7 +798,15 @@ function CoverageLine({
       className={`meta-stamp coverage-line${pendingStatus ? " has-status" : ""}`}
       style={{ color: "var(--rc-muted)", minHeight: `${coverageLhTier(locale)}lh` }}
     >
-      {text}
+      {text ? (
+        <span className="rc-partial">
+          <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden>
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 11v5M12 7.8h.01" />
+          </svg>
+          <span>{text}</span>
+        </span>
+      ) : null}
       {pendingStatus ? (
         <span className="cached-chip coverage-status-chip">
           {KUWAIT_PENDING_TEXT[l]}
@@ -1001,7 +1114,15 @@ function StagedResults(props: {
       return (
         <ResultsErrorBoundary locale={locale}>
           <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
-          <HeadingGhost />
+          <ResultsHead query={query} country={country} locale={locale}>
+            <Suspense fallback={null}>
+              <ResultsHint stage={finalPromise} query={query} page={page} country={country} showOutOfStock={showOutOfStock} locale={locale} />
+            </Suspense>
+          </ResultsHead>
+          <StatusLegend locale={locale} />
+          <Suspense fallback={<StampGhost locale={locale} />}>
+            <ResultsSubline stage={finalPromise} query={query} page={page} country={country} showOutOfStock={showOutOfStock} renderStartMs={props.renderStartMs} locale={locale} />
+          </Suspense>
           {/* REEA-793 — pending row ahead of the stamp boundary in this view too. */}
           <Suspense fallback={null}>
             <StagePendingRow stages={stages} locale={locale} />
@@ -1013,7 +1134,11 @@ function StagedResults(props: {
     return (
       <ResultsErrorBoundary locale={locale}>
         <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
-        <CountHeading count={products.length} query={query} locale={locale} />
+        <ResultsHead query={query} country={country} locale={locale}>
+          {products.length === 0 && query.length > 0 ? <HintLine locale={locale} /> : null}
+        </ResultsHead>
+        <StatusLegend locale={locale} />
+        <ResultsMeta products={products} query={query} renderStartMs={props.renderStartMs} locale={locale} />
         {/* REEA-793 B1 — the pending row sits DIRECTLY UNDER the count line
             in the converged view, before the coverage stamp. */}
         {finalSnap.deviceLeadPending ? <DeviceLeadPendingRow locale={locale} /> : null}
@@ -1072,28 +1197,33 @@ function StagedResults(props: {
   return (
     <ResultsErrorBoundary locale={locale}>
       <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
-      {/* REEA-778 check 2 — the heading/stamp reserves ride the FIRST
-          streamed flush: the boundaries carry the shared SkeletonSlots
-          ghosts as their fallback markup, so the served document paints
-          heading-slot + coverage-line boxes before either boundary swaps,
-          and the settled heading/stamp land in-slot instead of pushing the
-          already-painted card grid down (~79px on the old null fallback). */}
-      <Suspense fallback={<HeadingGhost />}>
-        <ResultsHeading
-          // REEA-382 AC-1 — the count reads from the FINAL stage, the same
-          // snapshot the appended flushes converge onto, so the delivered
-          // document's heading number equals the rendered card count. Stage
-          // zero used to feed it: the shell then kept a stage-one count while
-          // later flushes kept stacking cards under it ("20 results" over a
-          // 67-card grid at the nineteen-store set). The skeleton covers the
-          // gap exactly like the REEA-437 zero case — the number that lands
-          // is already true when it lands.
+      {/* REEA-1069 — the Direction A h1 renders IMMEDIATELY from the query
+          (design loading state: heading on screen, only the shelf busy); the
+          count/offers/age subline streams with the final snapshot in the SAME
+          lh-tier reserve the previous heading slot used, so nothing below
+          moves when it lands. */}
+      <ResultsHead query={query} country={country} locale={locale}>
+        <Suspense fallback={null}>
+          <ResultsHint
+            stage={finalPromise}
+            query={query}
+            page={page}
+            country={country}
+            showOutOfStock={showOutOfStock}
+            locale={locale}
+          />
+        </Suspense>
+      </ResultsHead>
+      <StatusLegend locale={locale} />
+      <Suspense fallback={<StampGhost locale={locale} />}>
+        <ResultsSubline
           stage={finalPromise}
-          stagesCount={stages.length}
           query={query}
           page={page}
           country={country}
-          showOutOfStock={showOutOfStock} locale={locale}
+          showOutOfStock={showOutOfStock}
+          renderStartMs={props.renderStartMs}
+          locale={locale}
         />
       </Suspense>
       {/* REEA-793 — the pending-row boundary is REORDERED AHEAD of the stamp
@@ -1322,8 +1452,11 @@ function ResultsInner(props: {
   return (
     <ResultsErrorBoundary locale={locale}>
       <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
-      {/* REEA-332 item 2: same heading + hint rule as the staged paths. */}
-      <CountHeading count={products.length} query={query} locale={locale} />
+      <ResultsHead query={query} country={country} locale={locale}>
+        {zero ? <HintLine locale={locale} /> : null}
+      </ResultsHead>
+      <StatusLegend locale={locale} />
+      <ResultsMeta products={products} query={query} renderStartMs={props.renderStartMs} locale={locale} />
       {zero ? (
         <>
           <EmptyState query={query} country={country} locale={locale} />

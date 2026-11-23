@@ -302,8 +302,8 @@ export default async function ResultsPage({
 
   return (
     <div
-      className="results-viewport-reserve mx-auto w-full px-6 py-6"
-      style={{ maxWidth: "var(--rc-layout-max-w)" }}
+      className="results-viewport-reserve mx-auto w-full py-6"
+      style={{ maxWidth: "var(--rc-layout-max-w)", paddingInline: "var(--rc-gutter)" }}
     >
       {/* REEA-965 — the per-query id rides the committed REEA-964 props seam:
           click events client-side join the same query execution's server-side

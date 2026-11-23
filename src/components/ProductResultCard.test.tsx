@@ -47,19 +47,16 @@ function product(withImages: boolean): NormalizedProduct {
 }
 
 describe("REEA-281 AC-1 — thumbnails per product row", () => {
-  it("renders at most 2 thumbnails, deduped across card + offer images", () => {
+  it("renders ONE recognition-scale card image, deduped across card + offer images", () => {
     const { container } = render(<ProductResultCard product={product(true)} query="headphones" rank={0} />);
     const imgs = Array.from(container.querySelectorAll("img"));
-    // Card photo (a.png, also on offer 1 → ONE slot) + first distinct offer
-    // photo (b.png); c.png never gets a third slot.
-    expect(imgs).toHaveLength(2);
-    expect(imgs.map((i) => i.getAttribute("src")).sort()).toEqual([
-      "https://cdn.example/1.png",
-      "https://cdn.example/2.png",
-    ]);
+    // Direction A card anatomy: ONE 160px product frame (REEA-1055 §3), never
+    // a thumbnail strip. The card photo is the first distinct source.
+    expect(imgs).toHaveLength(1);
+    expect(imgs[0].getAttribute("src")).toBe("https://cdn.example/1.png");
   });
 
-  it("thumbnails are lazy + async-decoded, so first paint never waits on them", () => {
+  it("the card image is lazy + async-decoded in its fixed 160px frame", () => {
     const { container } = render(<ProductResultCard product={product(true)} />);
     const imgs = Array.from(container.querySelectorAll("img"));
     expect(imgs.length).toBeGreaterThan(0);
@@ -67,8 +64,8 @@ describe("REEA-281 AC-1 — thumbnails per product row", () => {
       expect(img.getAttribute("loading")).toBe("lazy");
       expect(img.getAttribute("decoding")).toBe("async");
       // Fixed intrinsic box reserves layout space (no CLS when the photo lands).
-      expect(img.getAttribute("width")).toBe("64");
-      expect(img.getAttribute("height")).toBe("64");
+      expect(img.getAttribute("width")).toBe("160");
+      expect(img.getAttribute("height")).toBe("160");
     }
   });
 
@@ -184,7 +181,7 @@ describe("REEA-283 — freshness digit ships in the first render", () => {
       <ProductResultCard product={withStamp} query="xm6" rank={0} renderStartMs={renderStartMs} />,
     );
     expect(chipOf(container)).toMatch(/\d/);
-    expect(chipOf(container).replace(/\s+/g, " ")).toContain("UPDATED 3 MINUTES AGO");
+    expect(chipOf(container).replace(/\s+/g, " ")).toContain("Updated 3 minutes ago");
   });
 
   it("a repeated pass with the same renderStartMs reproduces identical chip text", () => {
@@ -195,7 +192,7 @@ describe("REEA-283 — freshness digit ships in the first render", () => {
     cleanup();
     const second = render(<ProductResultCard {...props} />);
     expect(chipOf(second.container)).toBe(ssrText);
-    expect(ssrText.replace(/\s+/g, " ")).toContain("UPDATED 12 MINUTES AGO");
+    expect(ssrText.replace(/\s+/g, " ")).toContain("Updated 12 minutes ago");
   });
 
   it("a stale (>7d) stamp keeps the explicit outdated suffix", () => {
@@ -637,7 +634,7 @@ describe("REEA-848 — offer-row layout contract (chip/stock gap, CTA containmen
   // visual-spec doc). Geometry (no overlap / CTA inside the card at 1280) is
   // browser QA per the doc's AC; these pins keep the wrap/compact contract
   // from regressing back into forced-nowrap clusters.
-  it("clusters wrap between whole tokens instead of forcing nowrap; chips and CTA carry the REEA-848 contract", () => {
+  it("two explicit offer lines carry the fixed anatomy and the containment contract", () => {
     const p = product(false);
     // The card reorders offers (cross-currency cheapest-first), so label EVERY
     // offer — the pinned contract must hold on whatever row renders first.
@@ -645,42 +642,31 @@ describe("REEA-848 — offer-row layout contract (chip/stock gap, CTA containmen
     const { container } = render(<ProductResultCard product={p} query="headphones" rank={0} />);
     const row = container.querySelector("li.offer-row") as HTMLElement;
     expect(row).toBeTruthy();
+    // Direction A offer row: exactly two explicit lines (line A retailer +
+    // stock + one status token; line B price + checked + action). No shared
+    // grid tracks, so nothing can collide or ellipsize at 375.
     const [left, right] = Array.from(row.children) as HTMLElement[];
-    // Fix 1 — neither cluster forces nowrap from sm up: wrap is the
-    // containment mechanism, so the chip can never be painted over by the
-    // stock dot and the row can never overflow the card.
-    expect(left.className).toContain("flex-wrap");
-    expect(left.className).not.toContain("sm:flex-nowrap");
-    expect(left.className).not.toContain("min-w-[160px]");
-    expect(right.className).toContain("flex-wrap");
-    expect(right.className).not.toContain("sm:flex-nowrap");
-    expect(right.className).not.toContain("sm:shrink-0");
-    // Fix 1 gap scale: 12px between the clusters (min chip↔dot gap), 8px
-    // inside the label cluster; wrap line gaps ride the 2/4px baseline scale.
-    expect(left.className).toContain("gap-x-2");
-    expect(left.className).toContain("gap-y-0.5");
-    expect(right.className).toContain("gap-x-3");
-    expect(right.className).toContain("gap-y-1");
-    // Fix 2: CTA states the compact rule itself at every width (the unlayered
-    // 1280px CSS rule needs utility backup below 1280); the label never
-    // truncates (white-space:nowrap stays on .offer-row .btn-primary).
-    const btn = row.querySelector("a.btn-primary") as HTMLElement;
-    expect(btn.className).toContain("min-h-9");
-    expect(btn.className).toContain("px-3");
-    expect(btn.className).not.toContain("min-h-11");
-    // Fix 3: variant chip — 36ch floor, unshrinkable, dir=auto keeps Latin
-    // variant strings one unbroken LTR run inside the RTL row.
+    expect(left.className).toContain("rc-offer-line");
+    expect(left.className).toContain("line-a");
+    expect(right.className).toContain("rc-offer-line");
+    expect(right.className).toContain("line-b");
+    // The listing qualifier stays visible and unshrinkable, bidi-isolated.
     const chip = (Array.from(row.getElementsByTagName("span")).find(
       (el) => el.getAttribute("dir") === "auto",
     ) ?? null) as HTMLElement | null;
     expect(chip?.className).toContain("max-w-[36ch]");
     expect(chip?.className).toContain("shrink-0");
     expect(chip?.getAttribute("dir")).toBe("auto");
-    // The savings chip never shrinks into the stock dot either.
-    const lowest = Array.from(row.querySelectorAll(".label-token")).find(
-      (el) => el.textContent === "Lowest listed price",
-    );
-    expect(lowest?.className).toContain("shrink-0");
+    // Price is the row's largest text (20px token) and the CTA keeps the
+    // compact 36px desktop floor with 44px at 375 via CSS.
+    const price = row.querySelector(".rc-price-sm") as HTMLElement;
+    expect(price?.className).toContain("rc-price-sm");
+    expect(price?.getAttribute("style")).toContain("font-weight: 600");
+    const btn = row.querySelector("a.btn-primary") as HTMLElement;
+    expect(btn.className).toContain("min-h-9");
+    expect(btn.className).toContain("px-3");
+    // ONE status token per offer; no status on variant chips.
+    expect(row.querySelectorAll(".rc-status")).toHaveLength(1);
   });
 });
 

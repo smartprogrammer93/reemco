@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { Inter, Space_Grotesk } from "next/font/google";
+import { Inter, Noto_Sans_Arabic, Space_Grotesk } from "next/font/google";
 import Link from "next/link";
 import HeaderSearch from "@/components/HeaderSearch";
+import HeaderMenu from "@/components/HeaderMenu";
 import FooterNav from "@/components/FooterNav";
 import LocaleToggle from "@/components/LocaleToggle";
 import { getStrings, localeDir } from "@/lib/i18n";
@@ -25,12 +26,19 @@ const spaceGrotesk = Space_Grotesk({
   display: "swap",
 });
 
+/* REEA-1069 — Direction A Arabic is designed, not a mirrored fallback
+ * (REEA-1055 RTL checklist §B: Noto Sans Arabic 400/600/700). Loaded through
+ * next/font so the AR chrome ships the same self-hosted font path as EN. */
+const notoArabic = Noto_Sans_Arabic({
+  variable: "--font-noto-arabic",
+  subsets: ["arabic"],
+  weight: ["400", "600", "700"],
+  display: "swap",
+});
+
 export const metadata: Metadata = {
   title: "Reemco Price Compare",
   description: "Prices, coupons and stock, compared honestly across retailers.",
-  // Static-export builds cannot emit a Referrer-Policy response header;
-  // the <meta name="referrer"> equivalent is honored by browsers. The canonical
-  // header is set by src/proxy.ts when served from a server host (Vercel).
   other: { referrer: "strict-origin-when-cross-origin" },
 };
 
@@ -45,13 +53,9 @@ export function Wordmark({ size = 20 }: { size?: number }) {
 export default async function RootLayout({ children }: LayoutProps<"/">) {
   // REEA-279: locale comes from the request itself — rc_locale cookie first,
   // then the coarse Accept-Language hint, then the Arabic-script query text
-  // forwarded through the request (REEA-447 R2: resolveRequestLocale reads
-  // Next's `next-url` / the proxy-forwarded query so /results?q=كيفيات ships
-  // lang="ar" dir="rtl" even with no cookie and no header), then "en". The
-  // served HTML carries the right lang/dir and chrome strings on first paint,
-  // with no client-side flip and no hydration mismatch. The request-time
-  // reads fall back silently on the static-export host (same guard as
-  // /results).
+  // forwarded through the request, then "en". The served HTML carries the
+  // right lang/dir and chrome strings on first paint, with no client-side
+  // flip and no hydration mismatch.
   const locale = await resolveRequestLocale();
   const dir = localeDir(locale);
   const t = getStrings(locale);
@@ -59,7 +63,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang={locale}
       dir={dir}
-      className={`${inter.variable} ${spaceGrotesk.variable} h-full antialiased`}
+      className={`${inter.variable} ${spaceGrotesk.variable} ${notoArabic.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col">
         {/* REEA-42 interim F2 control for the STATIC-EXPORT host only (Surge):
@@ -84,47 +88,53 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
             content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; upgrade-insecure-requests"
           />
         )}
+        {/* REEA-1069 — Direction A global header: at 375 this is TWO rows
+            (brand + labelled language/menu controls, then a full-width search
+            row with a ≥200px input); at ≥641 it is one 64px row. Every
+            control is 44x44. */}
         <header className="site-header">
-          <div
-            className="mx-auto flex h-full w-full flex-wrap items-center justify-between gap-x-4 gap-y-1 px-6 py-2 sm:flex-nowrap sm:py-0"
-            style={{ maxWidth: "var(--rc-layout-max-w)" }}
-          >
-            <Link href="/" className="focusable shrink-0 rounded">
-              <Wordmark />
+          <div className="rc-header-inner">
+            <Link href="/" className="rc-brand focusable" aria-label={t.brandHomeAria}>
+              <span className="rc-wordmark lat">
+                reemco<span className="dot">.</span>
+              </span>
             </Link>
             <Suspense fallback={null}>
               <HeaderSearch locale={locale} />
             </Suspense>
-            {/* REEA-279: EN/AR toggle, always visible (HeaderSearch hides
-                itself on "/"). Small text button — visual polish can ride a
-                Graphic Designer pass later; the control itself is final. */}
-            <LocaleToggle locale={locale} />
+            <div className="rc-header-actions">
+              <LocaleToggle locale={locale} />
+              <HeaderMenu locale={locale} />
+            </div>
           </div>
         </header>
         <main className="flex-1">{children}</main>
-        {/* §3.6 footer with affiliate disclosure */}
-        <footer
-          className="border-t"
-          style={{
-            background: "var(--rc-canvas)",
-            borderTopColor: "var(--rc-line)",
-          }}
-        >
+        {/* Direction A footer / trust band: affiliate disclosure EN/AR, method
+            link, contact, market/currency line, 44px link targets at 375. */}
+        <footer className="rc-footer">
           <div
-            className="mx-auto w-full px-6 py-6"
-            style={{ maxWidth: "var(--rc-layout-max-w)" }}
+            className="mx-auto w-full"
+            style={{ maxWidth: "var(--rc-layout-max-w)", paddingInline: "var(--rc-gutter)" }}
           >
-            <Wordmark size={16} />
-            <p
-              className="mt-1"
-              style={{ font: "var(--rc-text-small)", color: "var(--rc-body-text)" }}
-            >
-              {t.footerDisclosure}
-            </p>
-            {/* REEA-181: each label links to its own page now (was: three
-                copies of href="/"). Markup moved to FooterNav so the active
-                route can carry aria-current="page". */}
-            <FooterNav locale={locale} />
+            <div className="rc-footer-grid">
+              <div>
+                <span className="rc-wordmark lat">
+                  reemco<span className="dot">.</span>
+                </span>
+                <p className="rc-disclosure" style={{ marginBlockStart: "var(--rc-space-3)" }}>
+                  {t.footerDisclosure}
+                </p>
+              </div>
+              <div>
+                <nav className="rc-footer-links" aria-label={t.footerNav}>
+                  <Link href="/about">{t.menuHowCompare}</Link>
+                </nav>
+                <div style={{ marginBlockStart: "var(--rc-space-2)" }}>
+                  <FooterNav locale={locale} />
+                </div>
+                <p className="rc-market-line">{t.marketLine}</p>
+              </div>
+            </div>
           </div>
         </footer>
       </body>

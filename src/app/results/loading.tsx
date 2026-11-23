@@ -31,8 +31,8 @@ export default async function ResultsLoading() {
   const t = getStrings(locale);
   return (
     <div
-      className="results-viewport-reserve mx-auto w-full space-y-4 px-6 py-6"
-      style={{ maxWidth: "var(--rc-layout-max-w)" }}
+      className="results-viewport-reserve mx-auto w-full space-y-4 py-6"
+      style={{ maxWidth: "var(--rc-layout-max-w)", paddingInline: "var(--rc-gutter)" }}
     >
       {/* REEA-447 R1 — busy state mirrors LoadingFallback exactly (REEA-224
           identical-markup rule): aria-busy rides the collecting rail and is

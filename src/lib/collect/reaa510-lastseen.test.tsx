@@ -145,7 +145,10 @@ describe("REEA-510 last-seen snapshot store", () => {
     );
     const text = container.textContent ?? "";
     expect(text).toContain("جُمعت 14:05");
-    expect(text).toContain("10m ago"); // the live row keeps its relative age
+    // REEA-1069 — Arabic timestamps are humanised Arabic (RTL checklist §A.3),
+    // not an ASCII "10m ago" fragment inside AR chrome.
+    expect(text).toContain("حُدِّث");
+    expect(text).toContain("10 دقائق");
   });
 });
 
