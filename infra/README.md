@@ -73,22 +73,35 @@ from git.
 
 **Blocking — a failure fails the deploy and takes the rollback path:**
 
-1. Production dependency audit gate — `npm audit --omit=dev --audit-level=high` on
+1. Build gate — `npm run lint` and
+   `NODE_ENV=test KV_REST_API_URL= KV_REST_API_TOKEN= npm run test` on the pushed
+   tree (REEA-1067). Runs on the GitHub runner **before** any SSH or host build, so
+   a red gate never mutates the box; skipped only for an explicit `rollback_sha`
+   (redeploys an already-verified artifact, and an emergency rollback must not be
+   blocked by a gate that is red on `main`). Pinned by `src/deploy-gate.test.ts`.
+2. Production dependency audit gate — `npm audit --omit=dev --audit-level=high` on
    the committed lockfile (skipped only for an explicit `rollback_sha`, which
    redeploys an already-verified commit).
-2. Compose hardening invariants — `infra/scripts/assert-compose-hardening.sh`
+3. Compose hardening invariants — `infra/scripts/assert-compose-hardening.sh`
    (cap_drop ALL / non-root, digest-pinned infra images, segmented networks).
-3. On-host build of the pinned commit tag.
-4. Deploy of the pinned tag — `deploy.sh` auto-rolls-back if its on-box verify fails.
-5. Public-surface verification — served `/__commit.txt` must equal the intended SHA
+4. On-host build of the pinned commit tag.
+5. Deploy of the pinned tag — `deploy.sh` auto-rolls-back if its on-box verify fails.
+6. Public-surface verification — served `/__commit.txt` must equal the intended SHA
    and all four security headers (CSP, X-Content-Type-Options, Referrer-Policy, HSTS)
    must be present.
-6. Funnel smoke suite (`npm run smoke`: home → results → click-out, freshness, 375px
+7. Funnel smoke suite (`npm run smoke`: home → results → click-out, freshness, 375px
    mobile pass, offer link-health, adapter-registration parity, cache headers).
    Restored to blocking in REEA-1059 after the two deterministic failures that had made
    it advisory were fixed: step 5 now proves reachability inside the deliberately
    scrollable coverage row instead of failing on it (REEA-1056), and step 7 no longer
    requires the retired PC Kuwait lane (REEA-901).
+
+The build gate is CI-side rather than in `infra/Dockerfile`: the box's CPU is
+production capacity, and `.dockerignore` excludes `.github` while
+`src/ci-secrets.test.ts` reads `.github/workflows/deploy.yml`, so an in-image suite
+would need a widened build context to mean anything. The manual on-box build
+fallback therefore bypasses CI — treat it as emergency-only and run the gate
+commands by hand first.
 
 **Advisory — runs and alerts, but does not fail the deploy:**
 
