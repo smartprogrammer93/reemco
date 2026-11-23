@@ -1,23 +1,30 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ageSeconds } from "@/lib/relative-time";
-import { clientLocale, getStrings, localizedAge, type Locale } from "@/lib/i18n";
+import { ageSeconds, localizedAgeFromStamp } from "@/lib/relative-time";
+import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
 
 /**
- * REEA-930 scope 1 — freshness-anchored offer CTA label: "Checked 12s ago ·
- * Xcite" (AR "تم التحقق قبل 12ث · اكسترا"). The label is composed at render
- * time from the offer's own `collectedAt` — never a stored or bundled age —
- * and RE-TICKS on the client from the same stamp without any refetch: the
- * collection moment is fixed, only the clock moves. Offers without a usable
- * stamp fall back to the plain label passed by the caller (AC1) — never an
- * invented age.
+ * REEA-930 scope 1 / REEA-1100 — freshness-anchored offer CTA label:
+ * "Checked just now · Xcite" (AR "تم التحقق الآن · اكسترا"). The label is
+ * composed at render time from the offer's own `collectedAt` — never a
+ * stored or bundled age — and RE-TICKS on the client from the same stamp
+ * without any refetch: the collection moment is fixed, only the clock moves.
+ * Offers without a usable stamp fall back to the plain label passed by the
+ * caller (AC1) — never an invented age.
+ *
+ * REEA-1100 — the age token goes through localizedAgeFromStamp (the same
+ * localizedAgePair ladder ProductHero uses), so a sub-minute stamp reads
+ * "just now"/"الآن" instead of a raw "0s ago", and Arabic gets its dual/
+ * plural forms (`قبل دقيقتين`) with no English "s ago"/"m ago" suffix.
+ * Missing/invalid stamps render the existing localized unknown copy rather
+ * than fabricating a "just now".
  *
  * Hydration contract (REEA-283 clock discipline): the initial render uses the
  * `initialSeconds` the caller derived from the baked server clock
  * (renderStartMs), so the served HTML and the first client render agree;
  * only the post-hydration effect reads Date.now(). The interval re-settles on
- * every tick and React bails out when the computed second is unchanged, so a
+ * every tick and React bails out when the computed text is unchanged, so a
  * quiet page costs no renders. The label sits on its own line with tabular
  * numerals, so a ticking digit changes no width around it (AC1 no-shift).
  *
@@ -34,25 +41,39 @@ export function LiveAge({
   initialSeconds: number;
   locale?: Locale;
 }) {
-  const [secs, setSecs] = useState(initialSeconds);
+  const localeResolved = locale ?? clientLocale();
+  const t = getStrings(localeResolved);
+  // The caller's baked second count is itself the reference clock: stamp +
+  // initialSeconds is the moment the server measured, so SSR and hydration
+  // land on the same localized bucket without a second clock read.
+  const stampMs = Date.parse(collectedAt);
+  const bakedNowMs = Number.isFinite(stampMs)
+    ? stampMs + Math.max(0, initialSeconds) * 1000
+    : Number.NaN;
+  const bakedText =
+    localizedAgeFromStamp(localeResolved, collectedAt, bakedNowMs) ?? t.dateUnknown;
+  const [text, setText] = useState(bakedText);
   const [lastInitial, setLastInitial] = useState(initialSeconds);
   // Guarded render-time adjustment (react.dev pattern, same as CountUpPrice):
   // a refreshed offer carries a new stamp — reset during render so the label
-  // never shows a stale baked second.
+  // never shows a stale baked age.
   if (lastInitial !== initialSeconds) {
     setLastInitial(initialSeconds);
-    setSecs(initialSeconds);
+    setText(bakedText);
   }
   useEffect(() => {
     const tick = () => {
       const s = ageSeconds(collectedAt, Date.now());
-      if (s != null) setSecs(s);
+      if (s == null) return;
+      const next =
+        localizedAgeFromStamp(localeResolved, collectedAt, stampMs + s * 1000) ?? t.dateUnknown;
+      setText(next);
     };
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [collectedAt]);
-  return <span className="tabular">{localizedAge(locale ?? clientLocale(), secs)}</span>;
+  }, [collectedAt, localeResolved, stampMs, t.dateUnknown]);
+  return <span className="tabular">{text}</span>;
 }
 
 export default function OfferCtaLabel({

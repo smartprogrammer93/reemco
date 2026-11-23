@@ -4,7 +4,7 @@ import type { NormalizedProduct, PriceOffer, ProductAlternative } from "@/types/
 import { buildResultsHref, currencyForCountry, type CountryCode } from "@/lib/country";
 import { effectivePriceKwd, formatCountryPrice, formatKWD, formatPrimaryPrice, sortOffers } from "@/lib/format";
 import { canonicalKey, dedupVariantKey, gradeBadgeLabel } from "@/lib/collect/canonical-product";
-import { ageSeconds, collectedClock } from "@/lib/relative-time";
+import { ageSeconds, collectedClock, localizedAgeFromStamp } from "@/lib/relative-time";
 import CouponLine, { buildCouponRows } from "@/components/CouponLine";
 import ShareSummaryButton from "@/components/ShareSummaryButton";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
@@ -12,7 +12,7 @@ import { LiveAge } from "@/components/OfferCtaLabel";
 import { resolveOfferUrl } from "@/lib/links";
 import { formatSeenRangeLabel } from "@/lib/seen-range";
 import { cleanDisplayTitle, displayTitleChanged } from "@/lib/display-title";
-import { clientLocale, fill, getStrings, checkedAgeLabel, type Locale } from "@/lib/i18n";
+import { clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
 import FreshnessBadge from "@/components/FreshnessBadge";
 import OfferStatusToken from "@/components/OfferStatus";
 import { offerStatusForOffer } from "@/lib/offer-status";
@@ -319,13 +319,17 @@ function ShelfOfferRow({
   const row = formatCountryPrice(offer.price, offer.currency, country);
   const rowReason = offerFlagged(offer) ? offer.sanity?.reason : undefined;
   const rowUnavailable = rowReason === "price_unavailable";
-  const age = ageSeconds(offer.collectedAt, renderStartMs);
+  // REEA-1100 — the legacy offer-row age rides the same localized age helper
+  // as the shelf CTA and ProductHero: sub-minute reads "Checked just now" /
+  // "حُدِّث الآن", never a raw "0s ago"; invalid stamps keep the localized
+  // unknown copy instead of inventing a moment.
+  const ageLabel = localizedAgeFromStamp(locale ?? clientLocale(), offer.collectedAt, renderStartMs);
   const clock = collectedClock(offer.collectedAt);
   const checked =
     offer.fromSnapshot && clock != null
       ? `${t.collectedWord} ${clock}`
-      : age != null
-        ? checkedAgeLabel(locale ?? clientLocale(), age)
+      : ageLabel != null
+        ? `${t.checkedLead} ${ageLabel}`
         : t.dateUnknown;
   // eslint-disable-next-line react-hooks/purity -- fallback clock only when the server did not bake renderStartMs (REEA-283 pattern).
   const status = offerStatusForOffer(offer, renderStartMs ?? Date.now());

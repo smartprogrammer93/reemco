@@ -283,7 +283,10 @@ describe("REEA-930 AC6 — Arabic locale", () => {
     expect(cta?.textContent).toContain("←");
     expect(cta?.textContent).toContain("KD 99");
     expect(cta?.textContent).toContain("تم التحقق");
-    expect(cta?.textContent).toContain(localizedAge("ar", 12));
+    // REEA-1100 — the CTA age is the localizedAgePair ladder now: a 12s
+    // stamp reads "الآن", never the old compact "قبل 12ث" and never "12s ago".
+    expect(cta?.textContent).toContain("الآن");
+    expect(cta?.textContent).not.toMatch(/\d+s ago/);
     const row = Array.from(container.querySelectorAll("li.offer-row")).find((li) =>
       li.textContent?.includes("Eureka"),
     ) as HTMLElement | undefined;
