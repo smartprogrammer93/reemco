@@ -186,6 +186,52 @@ previous commit through the deploy workflow with `rollback_sha` (it re-syncs
 copied to `/opt/reemco/backup/reea1061-20261122T222355Z/` on the box as a
 belt-and-braces restore path.
 
+## Enforced ingress surface (REEA-1087 / F9)
+
+Follow-up to the REEA-1052 security review. Three residuals, each with an
+explicit disposition — none is left silent.
+
+**1. SSH source allowlist — deferred with reason.** `ufw` still allows
+`22/tcp` from Anywhere (v4 and v6). The admin/office/VPN CIDR was never supplied
+by the board, so the recorded decision is to keep 22 world-open and rely on the
+compensating controls: key-only SSH (`PasswordAuthentication no`,
+`PermitRootLogin no`, `MaxAuthTries 4`) plus the fail2ban sshd jail (maxretry 4,
+1h ban). Residual risk: 22 is world-open but unauthenticated clients cannot get
+in. Closing it is one versioned knob: set `reemco_ssh_allow_from: "<CIDR>"` in
+`infra/ansible/playbook.yml` and run the playbook — it adds
+`ufw allow from <CIDR> to any port 22 proto tcp` and deletes the world-open
+rule. **Keep the current session open and prove a NEW connection before you
+finish; rollback is `sudo ufw allow 22/tcp` from the still-open session.**
+
+**2. DOCKER-USER — closed in code.** Docker publishes ports by DNAT + FORWARD,
+which bypasses UFW's INPUT chain entirely; an empty `DOCKER-USER` therefore made
+the declared firewall posture a fiction. `infra/scripts/docker-user-firewall.sh`
+installs a `REEMCO-DOCKER-INGRESS` chain jumped from `DOCKER-USER` on both
+families that allows ESTABLISHED/RELATED, ICMP, tcp 80, tcp 443 and udp 443
+(HTTP/3), and drops everything else **arriving on the WAN interface** — the `-i`
+scope is deliberate so container egress (the retailer adapters) is untouched.
+It is applied by `infra/systemd/reemco-docker-user-firewall.service`, installed
+and enabled by the playbook; `PartOf=docker.service` re-applies it after a
+docker restart (Docker recreates the chain, so rules are not self-persistent).
+Rollback: `sudo /opt/reemco/scripts/docker-user-firewall.sh revert` then
+`sudo systemctl disable --now reemco-docker-user-firewall.service` — this
+restores Docker's default (published ports reachable), so it is fail-open.
+
+The compensating check is in `infra/scripts/assert-containers.sh`, run by
+`verify.sh` on every deploy and rollback: the published-port set must be exactly
+proxy 80/443 (tcp + udp) on all interfaces and app 3000 on `127.0.0.1`, and
+`DOCKER-USER` must carry the jump on v4 and v6. A new `ports:` entry therefore
+fails the deploy gate instead of silently widening the attack surface.
+
+**3. docker group — accepted with reason.** `deploy` and `ubuntu` are members of
+`docker`, which is root-equivalent on the host: `docker run -v /:/host` is a root
+shell. The scoped sudo allow-list (`/etc/sudoers.d/reemco-deploy`, REEA-1054) is
+**not** a no-root-shell guarantee — it only narrows the non-Docker surface.
+Accepted for the single-tenant box: both accounts are ours, CI runs as `deploy`
+and needs Docker to build and deploy. Revisit if the box ever hosts untrusted
+workloads or a second tenant — the fix is rootless Docker or sudo-only compose
+invocation.
+
 ## Backup and restore
 
 The durable state is the docker named volumes (`reemco_metrics`,

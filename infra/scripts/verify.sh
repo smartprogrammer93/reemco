@@ -10,7 +10,10 @@
 #   3. /api/health answers 200 through the proxy
 #   4. container hardening on the running stack (REEA-1061): non-root redis and
 #      proxy, cap_drop ALL, read-only rootfs, pinned image digests, segmented
-#      networks. Runs only when docker is available (i.e. on the host).
+#      networks; plus the enforced ingress surface (REEA-1087 F9): the published
+#      port set is exactly proxy 80/443 + loopback app 3000, and DOCKER-USER
+#      carries the Reemco allow-list on v4 and v6. Runs only when docker is
+#      available (i.e. on the host).
 # Exit 0 = verified; non-zero = treat the deploy as failed.
 set -uo pipefail
 

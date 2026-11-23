@@ -1,0 +1,22 @@
+[Unit]
+# REEA-1087 (F9) — enforce the DOCKER-USER ingress allow-list (tcp 80/443,
+# udp 443; everything else forwarded on the WAN interface dropped).
+#
+# Docker owns the DOCKER-USER chain and recreates/flushes it when the daemon
+# restarts, so the rules are not persistent by themselves. This oneshot applies
+# the versioned script after docker is up, and `PartOf=docker.service` re-runs it
+# whenever docker is restarted, so a restart cannot silently reopen the ports.
+# Reproducibility: installed and enabled by infra/ansible/playbook.yml.
+Description=Reemco DOCKER-USER ingress allow-list (REEa-1087 F9)
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/reemco/scripts/docker-user-firewall.sh apply
+# Fail-open on error: if the rules cannot be applied the previous state is kept
+# (Docker's default), rather than leaving the box unreachable.
+ExecStop=/opt/reemco/scripts/docker-user-firewall.sh revert
+TimeoutStartSec=30

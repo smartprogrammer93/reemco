@@ -27,6 +27,13 @@
     # so a rebuild of the box converges to the same versions.
     docker_version: "5:29.10.0-1~ubuntu.26.04~resolute"
     compose_version: "5.8.0-1~ubuntu.26.04~resolute"
+    # REEA-1087 (F9) — SSH source allowlist. Empty = keep 22/tcp open to Anywhere,
+    # which is the recorded, explicit decision (key-only SSH + fail2ban maxretry 4
+    # is the compensating control) until the board supplies the admin/office/VPN
+    # CIDR. Set it here (single knob, versioned) and a playbook run applies
+    # `allow from <CIDR> to any port 22` and deletes the world-open rule; keep the
+    # current session open and prove a NEW connection before you finish.
+    reemco_ssh_allow_from: ""
 
   tasks:
     - name: Refuse to provision on the wrong OS
@@ -223,6 +230,7 @@
         - { src: "scripts/backup.sh", dest: "/opt/reemco/scripts/backup.sh", mode: "0755" }
         - { src: "scripts/restore-drill.sh", dest: "/opt/reemco/scripts/restore-drill.sh", mode: "0755" }
         - { src: "scripts/assert-containers.sh", dest: "/opt/reemco/scripts/assert-containers.sh", mode: "0755" }
+        - { src: "scripts/docker-user-firewall.sh", dest: "/opt/reemco/scripts/docker-user-firewall.sh", mode: "0755" }
       notify: reconcile stack
 
     # Secrets are injected by the operator (or a secrets manager) into
@@ -250,7 +258,7 @@
           # Written by deploy.sh. Do not hand-edit.
           REEMCO_IMAGE_TAG=0000000000000000000000000000000000000000
 
-    - name: Health-check + backup timers (Observability-before-Launch)
+    - name: Health-check + backup timers and the DOCKER-USER firewall unit
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../systemd/{{ item }}"
         dest: "/etc/systemd/system/{{ item }}"
@@ -260,9 +268,10 @@
         - reemco-health.timer
         - reemco-backup.service
         - reemco-backup.timer
+        - reemco-docker-user-firewall.service
       notify: reload systemd
 
-    - name: Enable timers
+    - name: Enable timers and the DOCKER-USER firewall unit
       ansible.builtin.systemd:
         name: "{{ item }}"
         enabled: true
@@ -271,17 +280,47 @@
       loop:
         - reemco-health.timer
         - reemco-backup.timer
+        # REEA-1087 (F9) — applies the DOCKER-USER allow-list now and re-applies
+        # it on every docker restart (PartOf=docker.service).
+        - reemco-docker-user-firewall.service
 
-    - name: UFW default deny inbound, allow only 22/80/443
+    - name: UFW default deny inbound, allow only 80/443 (plus SSH below)
       ansible.builtin.command:
         cmd: "ufw {{ item }}"
       loop:
         - default deny incoming
         - default allow outgoing
-        - allow 22/tcp comment ssh
         - allow 80/tcp comment http
         - allow 443/tcp comment https
-        - --force enable
+      changed_when: false
+
+    # REEA-1087 (F9) — SSH source allowlist. With reemco_ssh_allow_from set, only
+    # that CIDR may reach 22 and the world-open rule is removed. Both commands are
+    # idempotent (ufw skips an existing rule; deleting an absent rule is tolerated
+    # by failed_when: false). Never leave 22 closed: the from-rule is added first.
+    - name: Allow SSH from the admin/office/VPN CIDR only (F9)
+      ansible.builtin.command:
+        cmd: "ufw allow from {{ reemco_ssh_allow_from }} to any port 22 proto tcp comment ssh"
+      when: reemco_ssh_allow_from | length > 0
+      changed_when: false
+
+    - name: Remove the world-open SSH rule once the allowlist is configured (F9)
+      ansible.builtin.command:
+        cmd: "ufw delete allow 22/tcp"
+      when: reemco_ssh_allow_from | length > 0
+      changed_when: false
+      failed_when: false
+
+    - name: SSH stays Anywhere until the CIDR is known (F9 explicit decision)
+      ansible.builtin.command:
+        cmd: "ufw allow 22/tcp comment ssh"
+      when: reemco_ssh_allow_from | length == 0
+      changed_when: false
+
+    - name: Enable UFW
+      ansible.builtin.command:
+        cmd: "ufw --force enable"
+      changed_when: false
       changed_when: false
 
     - name: Chrony is syncing (26.04 delta #3 — NTP must exist)
@@ -403,3 +442,37 @@
             fail_msg: >-
               /etc/reemco is {{ reemco_etc_stat.stat.mode }}, expected 0755;
               /etc/reemco/NOTES.md is unreadable to the ubuntu automation user.
+
+        # REEA-1087 (F9) — regression test for the enforced ingress surface. A
+        # green playbook run must mean the DOCKER-USER allow-list is live, not
+        # merely that the script and unit were copied.
+        - name: Read DOCKER-USER rules (v4)
+          ansible.builtin.command: iptables -S DOCKER-USER
+          register: reemco_du4
+          changed_when: false
+          check_mode: false
+
+        - name: Read DOCKER-USER rules (v6)
+          ansible.builtin.command: ip6tables -S DOCKER-USER
+          register: reemco_du6
+          changed_when: false
+          check_mode: false
+
+        - name: Read the firewall unit state
+          ansible.builtin.command: systemctl is-active reemco-docker-user-firewall.service
+          register: reemco_fw_unit
+          changed_when: false
+          failed_when: false
+          check_mode: false
+
+        - name: DOCKER-USER carries the ingress allow-list on v4 and v6
+          ansible.builtin.assert:
+            that:
+              - "'-j REEMCO-DOCKER-INGRESS' in reemco_du4.stdout"
+              - "'-j REEMCO-DOCKER-INGRESS' in reemco_du6.stdout"
+              - reemco_fw_unit.stdout | trim == 'active'
+            fail_msg: >-
+              DOCKER-USER does not carry the Reemco allow-list (published ports
+              would be UFW-exempt). v4: {{ reemco_du4.stdout_lines }};
+              v6: {{ reemco_du6.stdout_lines }};
+              unit: {{ reemco_fw_unit.stdout | trim }}.
