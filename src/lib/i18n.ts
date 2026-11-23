@@ -190,6 +190,22 @@ const en = {
   // input (FR-1.2), not in the heading.
   emptyTitle: "No match found",
   emptyBody: "Check the spelling or try a broader search term.",
+  // REEA-1114 AC1/AC2 — the filter-aware empty state. A zero visible set
+  // that an ACTIVE filter hid is not a no-match: name the filter, the count
+  // and the one-tap reveal instead of blaming the spelling. `{filter}` is the
+  // same label the chip carries ("In stock" / the market name).
+  emptyHiddenTitle: "{n} {unit} hidden by {filter}",
+  matchOne: "match",
+  matchMany: "matches",
+  emptyHiddenBody:
+    "We found them in the live results just now — the {filter} filter is hiding them. Your search stays as it is.",
+  emptyShowOutOfStock: "Show out-of-stock",
+  emptyShowAllCountries: "Show all countries",
+  // REEA-1114 AC3 — the chip count. The full phrase reads at desktop widths;
+  // at 375 the CSS keeps the count badge and drops the word so the 3-per-row
+  // 44px filter grid never clips (AC5).
+  chipHiddenWord: "hidden",
+  chipHiddenAria: "{n} hidden by this filter",
   // FR-1.1 — the three static example product queries (editorially chosen).
   emptyExample1: "iPhone",
   emptyExample2: "Dyson vacuum",
@@ -465,6 +481,18 @@ const ar: typeof en = {
   notFoundBody: "الصفحة التي تبحث عنها غير موجودة. جرّب إحدى عمليات البحث هذه:",
   emptyTitle: "لا توجد مطابقة",
   emptyBody: "تحقق من الإملاء أو جرّب مصطلح بحث أوسع.",
+  // REEA-1114 AC1/AC2 — AR side of the filter-aware empty state. The title
+  // follows the AC template "N نتيجة مخفية بسبب <filter>"; the unit is the
+  // shipped plural pair so 2+ reads naturally (نتائج).
+  emptyHiddenTitle: "{n} {unit} مخفية بسبب {filter}",
+  matchOne: "نتيجة",
+  matchMany: "نتائج",
+  emptyHiddenBody:
+    "وجدناها في النتائج الحية التي جلبناها الآن — فلتر {filter} يخفيها. يبقى بحثك كما هو.",
+  emptyShowOutOfStock: "أظهر غير المتوفر",
+  emptyShowAllCountries: "أظهر كل الدول",
+  chipHiddenWord: "مخفية",
+  chipHiddenAria: "{n} مخفية بسبب هذا الفلتر",
   emptyExample1: "آيفون",
   emptyExample2: "مكنسة دايسون",
   emptyExample3: "كيندل",

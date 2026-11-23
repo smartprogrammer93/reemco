@@ -133,6 +133,30 @@ describe("REEA-807 applySearchOutcome", () => {
     expect(Object.keys(w.offers_by_retailer)).toHaveLength(MAX_RETAILERS_PER_WEEK + 1);
     expect(w.offers_by_retailer["other"]).toBe(3);
   });
+
+  // REEA-1114 AC6 — the false-empty numerator. One aggregate integer per
+  // week, one bump per filtered-empty serve, never a per-query record.
+  it("counts a filtered-empty serve exactly once and leaves it at zero otherwise", () => {
+    const weeks: WeekCountersMap = {};
+    applySearchOutcome(weeks, "2026-W37", {
+      zeroOffers: true,
+      offersByRetailer: {},
+      serveOutcome: "full",
+      serveLatencyMs: 900,
+      filteredEmpty: true,
+    });
+    applySearchOutcome(weeks, "2026-W37", {
+      zeroOffers: true,
+      offersByRetailer: {},
+      serveOutcome: "full",
+      serveLatencyMs: 900,
+    });
+    const w = weeks["2026-W37"];
+    expect(w.filtered_empty_searches).toBe(1);
+    expect(w.searches).toBe(2);
+    // Invariant: the numerator can never exceed the served searches.
+    expect(w.filtered_empty_searches).toBeLessThanOrEqual(w.searches);
+  });
 });
 
 describe("REEA-807 applyLinkSmoke", () => {
@@ -352,6 +376,7 @@ describe("REEA-807 store round-trip", () => {
       "cold_serves_pending",
       "comparison_cards_multi_retailer",
       "comparison_cards_total",
+      "filtered_empty_searches",
       "latency_band_1_3s",
       "latency_band_3_10s",
       "latency_band_gt_10s",

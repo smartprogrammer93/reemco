@@ -20,6 +20,7 @@
  *   latency_warm_band_lt_1s, latency_warm_band_1_3s,
  *   latency_warm_band_3_10s, latency_warm_band_gt_10s,
  *   comparison_depth: { cards_total, cards_multi_retailer, ratio },
+ *   filtered_empty_searches,
  *   offer_link_clicks,
  *   link_smoke: { runs, checked, ok, dead, challenge, by_retailer,
  *                 dead_rate, challenge_rate,
@@ -168,6 +169,10 @@ export function weeklyResponse(
         cards_multi_retailer: w.comparison_cards_multi_retailer,
         ratio: w.comparison_cards_total > 0 ? w.comparison_cards_multi_retailer / w.comparison_cards_total : 0,
       },
+      // REEA-1114 AC6 — false-empty numerator: serves whose visible set was
+      // zero because an active filter hid matches. Aggregate integer only;
+      // the rate is filtered_empty_searches ÷ searches.
+      filtered_empty_searches: w.filtered_empty_searches,
       offer_link_clicks: clicks[week] ?? 0,
       // REEA-935 — per-outcome counts plus the derived dead/challenge rates;
       // the annotation fields ride verbatim when stamped.

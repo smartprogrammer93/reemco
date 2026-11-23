@@ -1497,6 +1497,27 @@ html[lang="ar"] .coupon-via {
   border-color: var(--rc-line);
 }
 
+/* REEA-1114 AC3 — hidden-match count on the filter chip that is hiding rows.
+   Desktop reads the full "· N hidden"; at ≤640 the separator + word drop and
+   the bare count rides a small tint badge, so the 3-per-row 44px grid at 375
+   never clips the label (AC5). Same tint/primary roles as the selected chip,
+   so it reads as part of the filter's state rather than a new control. */
+.rc-chip-count {
+  /* Inline (not flex) so the designed " · 4 hidden" word spacing renders
+     verbatim; `pre` keeps the separator's spaces from collapsing. */
+  display: inline-block;
+  white-space: pre;
+  color: var(--rc-primary-deep);
+  font-weight: 600;
+  flex: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .rc-chip-count {
+    color: var(--rc-dark-primary);
+  }
+}
+
 /* REEA-1095 AC12 — the selected filter chip kept the light #FFEDD5 tint in
    dark while --rc-ink flipped to #F5EFE6: ≈1.0:1, label invisible (only the
    check mark read). Dark selected state follows the shipped REEA-983/760
@@ -1528,6 +1549,22 @@ html[lang="ar"] .coupon-via {
     padding-inline: 6px;
     font-size: 12px;
     white-space: nowrap;
+  }
+  /* REEA-1114 AC5 — the count stays, the word goes. The chip label + a
+     compact badge fits the 3-per-row cell at 375; the full sentence rides the
+     empty-state heading below, so nothing is lost or truncated. */
+  .rc-chip-sep,
+  .rc-chip-hidden-suffix {
+    display: none;
+  }
+  .rc-chip-count {
+    margin-inline-start: 4px;
+    padding-inline: 5px;
+    border-radius: var(--rc-radius-pill);
+    background: var(--rc-primary-tint);
+    color: var(--rc-primary-deep);
+    font-size: 11px;
+    line-height: 1.3;
   }
 }
 

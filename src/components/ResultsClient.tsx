@@ -8,14 +8,20 @@ import { StatusLegend } from "@/components/OfferStatus";
 import ProductResultCard from "@/components/ProductResultCard";
 import { searchProducts } from "@/lib/search";
 import { sanitizePage, sanitizeSearchQuery } from "@/lib/search-params";
-import { bestBadgeIndex, recallShowOutOfStock, sanitizeShowOutOfStock } from "@/lib/stock";
+import { bestBadgeIndex, recallShowOutOfStock, rememberShowOutOfStock, sanitizeShowOutOfStock } from "@/lib/stock";
 import {
   buildResultsHref,
   countryFromAcceptLanguage,
   recallCountry,
+  rememberCountry,
   sanitizeCountry,
   type CountryCode,
 } from "@/lib/country";
+import {
+  emptyMatchCase,
+  hiddenMatchReport,
+  type HiddenFilter,
+} from "@/lib/hidden-matches";
 import { trackEvents } from "@/lib/telemetry";
 import {
   buildOfferRenderedEvents,
@@ -141,13 +147,20 @@ export function LoadingFallback({ locale }: { locale?: Locale }) {
    masquerade as an onward result.
    E6: when the run's notes show the merchants ERRORED (zero offers because
    the stores didn't answer), the card says so instead of implying a no-match
-   — honesty cuts both ways. */
+   — honesty cuts both ways.
+   REEA-1114 AC1/AC2 — filter-aware: a zero visible set that an ACTIVE filter
+   hid is case (b). It names the filter and the count and offers the one-tap
+   reveal; the spelling/broader-term copy is reserved for a genuine no-match
+   (a) and the outage copy for a failed collection (c). Never a dead end while
+   we hold the rows. */
 function EmptyState({
   query,
   unavailable,
   country,
   locale,
   tries,
+  hidden,
+  onReveal,
 }: {
   query: string;
   /** E6 — zero offers because the adapters failed, not an empty shelf. */
@@ -158,22 +171,57 @@ function EmptyState({
    *  empty (whole query, then the trimmed-token widening), named on the card
    *  so a zero answer states what was tried instead of just saying "none". */
   tries?: string[];
+  /** REEA-1114 AC1 — the active filter that hid ≥1 confident match. */
+  hidden?: { filter: HiddenFilter; count: number } | null;
+  /** REEA-1114 AC4 — reveal in place (client selection), query kept. */
+  onReveal?: () => void;
 }) {
   const t = getStrings(locale ?? clientLocale());
+  const filterLabel = hidden
+    ? hidden.filter === "stock"
+      ? t.inStock
+      : countryLabel(country, t)
+    : "";
   return (
-    <div className="result-card empty-state rc-empty mx-auto w-full max-w-xl" data-empty-state="true">
+    <div
+      className="result-card empty-state rc-empty mx-auto w-full max-w-xl"
+      data-empty-state="true"
+      data-empty-case={hidden ? "b" : unavailable ? "c" : "a"}
+    >
       <svg className="icon" width={34} height={34} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} aria-hidden>
         <path d="M3 9.5 5.5 4h13L21 9.5V20H3V9.5Z" />
         <path d="M3 9.5h18M8.5 13.5h7" />
       </svg>
-      {/* REEA-1096 D11 — one story per state. A genuine no-match says "No
-          match found" + the answered-every-retailer line; a collection failure
-          says "The stores didn't answer" and never claims a no-match. */}
-      <h2>{unavailable ? t.emptyUnavailableTitle : t.emptyTitle}</h2>
-      {unavailable ? (
-        <p style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>{t.emptyUnavailable}</p>
+      {hidden ? (
+        <>
+          {/* AC1 — the count and the filter are the story; the query is fine. */}
+          <h2 data-empty-hidden="true">
+            {fill(t.emptyHiddenTitle, {
+              n: hidden.count,
+              unit: hidden.count === 1 ? t.matchOne : t.matchMany,
+              filter: filterLabel,
+            })}
+          </h2>
+          <p>{fill(t.emptyHiddenBody, { filter: filterLabel })}</p>
+          <button
+            type="button"
+            className="btn-primary focusable min-h-11 px-4"
+            data-empty-reveal={hidden.filter}
+            onClick={onReveal}
+          >
+            {hidden.filter === "stock" ? t.emptyShowOutOfStock : t.emptyShowAllCountries}
+          </button>
+        </>
+      ) : unavailable ? (
+        <>
+          {/* REEA-1096 D11 — one story per state. A collection failure says
+              "The stores didn't answer" and never claims a no-match. */}
+          <h2>{t.emptyUnavailableTitle}</h2>
+          <p style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>{t.emptyUnavailable}</p>
+        </>
       ) : (
         <>
+          <h2>{t.emptyTitle}</h2>
           <p>{t.emptyBody}</p>
           <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>{t.emptyRetailersAsked}</p>
         </>
@@ -183,13 +231,18 @@ function EmptyState({
           {fill(t.triedForms, { tries: tries.join('”, “') })}
         </p>
       ) : null}
-      <div className="mt-4 flex flex-wrap gap-2">
-        {[t.emptyExample1, t.emptyExample2, t.emptyExample3].map((q) => (
-          <Link key={q} href={buildResultsHref(q, 1, country)} className="query-pill query-pill-on-light">
-            {q}
-          </Link>
-        ))}
-      </div>
+      {/* REEA-1114 — the example pills answer "what should I type instead?".
+          A filter-hidden zero does not ask that question, so case (b) drops
+          them; the reveal action is the onward path. */}
+      {hidden ? null : (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {[t.emptyExample1, t.emptyExample2, t.emptyExample3].map((q) => (
+            <Link key={q} href={buildResultsHref(q, 1, country)} className="query-pill query-pill-on-light">
+              {q}
+            </Link>
+          ))}
+        </div>
+      )}
       {/* FR-1.2 — the failed query pre-filled; retry is one keystroke away.
           mt-6 (REEA-983): 24px puts the retry form on the space scale as the
           terminal block of the card, one step past the pills. */}
@@ -395,6 +448,8 @@ function SelectionRow({
   onToggleStock,
   onRefresh,
   locale,
+  hiddenByStock,
+  hiddenByCountry,
 }: {
   country: CountryCode | null;
   showOutOfStock: boolean;
@@ -402,6 +457,9 @@ function SelectionRow({
   onToggleStock: (next: boolean) => void;
   onRefresh: () => void;
   locale?: Locale;
+  /** REEA-1114 AC3 — the active filter's hidden-match count for the chip. */
+  hiddenByStock?: number;
+  hiddenByCountry?: number;
 }) {
   // REEA-1069 — the Direction A filter/market bar: six 44px controls, two
   // rows at 375, selected state with a check glyph + aria-pressed. The
@@ -415,6 +473,8 @@ function SelectionRow({
       onToggleStock={onToggleStock}
       onRefresh={onRefresh}
       locale={locale}
+      hiddenByStock={hiddenByStock}
+      hiddenByCountry={hiddenByCountry}
     />
   );
 }
@@ -649,6 +709,11 @@ function ResultsHint({
   if (snap.settled === false) return null;
   const visible = stagedView(snap, query, page, country, showOutOfStock);
   if (visible.length > 0) return null;
+  // REEA-1114 AC2 — "try a shorter phrase" is only true for a genuine
+  // no-match (a). A filter-hidden zero (b) and an outage (c) have their own
+  // story in the empty state; the hint must not contradict it.
+  const hidden = hiddenMatchReport(snap.products, query, country, showOutOfStock);
+  if (emptyMatchCase(hidden, collectionFailed(snap.notes)).kind !== "a") return null;
   return <HintLine locale={locale} />;
 }
 
@@ -905,11 +970,27 @@ function StageEmptyState(props: {
   locale?: Locale;
   /** REEA-965 — per-query metrics id for the band's related_click events. */
   queryId?: string;
+  /** REEA-1114 AC4 — in-place reveal handlers from the results shell. */
+  onRevealOutOfStock?: () => void;
+  onRevealAllCountries?: () => void;
 }) {
   const snap = use(props.stages[props.stages.length - 1]);
   if (props.query.length === 0) return null;
   const sections = stagedSections(snap, props.query, props.country, props.showOutOfStock);
   if (sections.primary.length > 0) return null;
+  // REEA-1114 — the filter-aware classification reads the SAME final
+  // snapshot the section split just read, so the count on the card is
+  // exactly the rows this view hid.
+  const hidden = hiddenMatchReport(
+    snap.products,
+    props.query,
+    props.country,
+    props.showOutOfStock,
+  );
+  const emptyCase = emptyMatchCase(
+    hidden,
+    sections.related.length === 0 && collectionFailed(snap.notes),
+  );
   // E6 — zero offers because the collection FAILED (not a real empty shelf)
   // says so, instead of implying a no-match. Requires zero related rows too:
   // with related items the page is "near match", not an outage story.
@@ -917,10 +998,22 @@ function StageEmptyState(props: {
     <>
       <EmptyState
         query={props.query}
-        unavailable={sections.related.length === 0 && collectionFailed(snap.notes)}
+        unavailable={emptyCase.kind === "c"}
         country={props.country}
         locale={props.locale}
         tries={snap.attemptedQueries}
+        hidden={
+          emptyCase.kind === "b"
+            ? { filter: emptyCase.filter, count: emptyCase.count }
+            : null
+        }
+        onReveal={
+          emptyCase.kind === "b"
+            ? emptyCase.filter === "stock"
+              ? props.onRevealOutOfStock
+              : props.onRevealAllCountries
+            : undefined
+        }
       />
       <RelatedBand items={sections.related} locale={props.locale} queryId={props.queryId} />
     </>
@@ -1046,6 +1139,9 @@ function StagedResults(props: {
   queryId?: string;
   /** REEA-1078 AC9 — merchants the reachability record names as blocked. */
   unreachableLanes?: readonly string[];
+  /** REEA-1114 AC4 — in-place reveal handlers from the results shell. */
+  onRevealOutOfStock?: () => void;
+  onRevealAllCountries?: () => void;
 }) {
   const { stages, query, page, country, showOutOfStock, onSelectCountry, onToggleStock, onRefresh, locale } = props;
   const finalPromise = stages[stages.length - 1];
@@ -1112,6 +1208,23 @@ function StagedResults(props: {
   const products = finalSections
     ? finalSections.primary.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
     : null;
+  // REEA-1114 — the filter-aware count and the empty-state case are derived
+  // from the SAME converged snapshot the shelf renders (and the follow-up
+  // fold keeps them in step when late offers land). The chip carries the
+  // count before the shopper reaches the empty state (AC3); the empty state
+  // names the filter and the one-tap reveal (AC1).
+  const hiddenReport = finalSnap
+    ? hiddenMatchReport(finalSnap.products, query, country, showOutOfStock)
+    : null;
+  const emptyCase =
+    finalSnap && finalSections
+      ? emptyMatchCase(
+          hiddenReport ?? { stock: 0, country: 0 },
+          finalSections.related.length === 0 && collectionFailed(finalSnap.notes),
+        )
+      : null;
+  const hiddenByStock = hiddenReport?.stock ?? 0;
+  const hiddenByCountry = hiddenReport?.country ?? 0;
   const eventsKey = products
     ? `${query}|${page}|${products.length}|${showOutOfStock ? 1 : 0}`
     : "";
@@ -1153,7 +1266,7 @@ function StagedResults(props: {
     if (provisionalZero) {
       return (
         <ResultsErrorBoundary locale={locale}>
-          <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
+          <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} hiddenByStock={hiddenByStock} hiddenByCountry={hiddenByCountry} />
           <ResultsHead query={query} country={country} locale={locale}>
             <Suspense fallback={null}>
               <ResultsHint stage={finalPromise} query={query} page={page} country={country} showOutOfStock={showOutOfStock} locale={locale} />
@@ -1173,9 +1286,9 @@ function StagedResults(props: {
     }
     return (
       <ResultsErrorBoundary locale={locale}>
-        <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
+        <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} hiddenByStock={hiddenByStock} hiddenByCountry={hiddenByCountry} />
         <ResultsHead query={query} country={country} locale={locale}>
-          {products.length === 0 && query.length > 0 ? <HintLine locale={locale} /> : null}
+          {products.length === 0 && query.length > 0 && emptyCase?.kind === "a" ? <HintLine locale={locale} /> : null}
         </ResultsHead>
         <StatusLegend locale={locale} />
         <ResultsMeta products={products} query={query} renderStartMs={props.renderStartMs} locale={locale} />
@@ -1185,21 +1298,36 @@ function StagedResults(props: {
         {products.length === 0 && query.length > 0 ? (
           <>
             {/* REEA-964 — the honest empty state rides the primary position;
-                the related band renders BELOW it, clearly not a result. */}
+                the related band renders BELOW it, clearly not a result.
+                REEA-1114 — case (b) names the filter that hid the rows and
+                reveals them in place; the spelling copy is case (a) only. */}
             <EmptyState
               query={query}
-              unavailable={
-                finalSections.related.length === 0 && collectionFailed(finalSnap.notes)
-              }
+              unavailable={emptyCase?.kind === "c"}
               country={country}
               locale={locale}
               tries={finalSnap.attemptedQueries}
+              hidden={
+                emptyCase?.kind === "b"
+                  ? { filter: emptyCase.filter, count: emptyCase.count }
+                  : null
+              }
+              onReveal={
+                emptyCase?.kind === "b"
+                  ? emptyCase.filter === "stock"
+                    ? props.onRevealOutOfStock
+                    : props.onRevealAllCountries
+                  : undefined
+              }
             />
             <RelatedBand items={finalSections.related} locale={locale} queryId={props.queryId} />
             {/* REEA-1068 D1 — on a zero-row page the coverage sentence keeps
                 only its failure/empty half (the lanes that errored or
                 answered with nothing), so "No match found" is explained
-                instead of bare. AC9's unreachable names ride it too. */}
+                instead of bare. AC9's unreachable names ride it too.
+                REEA-1078 AC9 / REEA-1114 AC2(c) — the existing unreachable
+                sentence must still render on a zero-row page: it is the one
+                statement that explains why an empty shelf is not a no-match. */}
             <CoverageLine notes={finalSnap.notes} products={products} locale={locale} unreachableLanes={props.unreachableLanes} />
           </>
         ) : (
@@ -1239,7 +1367,7 @@ function StagedResults(props: {
   // flushes — late devices still stack above earlier accessories.
   return (
     <ResultsErrorBoundary locale={locale}>
-      <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
+      <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} hiddenByStock={hiddenByStock} hiddenByCountry={hiddenByCountry} />
       {/* REEA-1069 — the Direction A h1 renders IMMEDIATELY from the query
           (design loading state: heading on screen, only the shelf busy); the
           count/offers/age subline streams with the final snapshot in the SAME
@@ -1319,6 +1447,8 @@ function StagedResults(props: {
           showOutOfStock={showOutOfStock}
           locale={locale}
           queryId={props.queryId}
+          onRevealOutOfStock={props.onRevealOutOfStock}
+          onRevealAllCountries={props.onRevealAllCountries}
         />
       </Suspense>
     </ResultsErrorBoundary>
@@ -1401,6 +1531,18 @@ function ResultsInner(props: {
   };
   const onSelectCountry = (code: CountryCode | null) => applySelection(code, showOutOfStock);
   const onToggleStock = (next: boolean) => applySelection(country, next);
+  // REEA-1114 AC4 — the empty state's one-tap reveal. It rides the SAME
+  // in-place selection path as the chips (client state + URL echo, no
+  // navigation, no second collection), keeps the query, and records the
+  // choice for the next search exactly like the chip's own click.
+  const onRevealOutOfStock = () => {
+    rememberShowOutOfStock(true);
+    applySelection(country, true);
+  };
+  const onRevealAllCountries = () => {
+    rememberCountry(null);
+    applySelection(null, showOutOfStock);
+  };
   // REEA-291 AC4 — the ONLY full live re-fetch path: stamps the one-shot
   // refresh cookie, then re-runs the server collection for this query even
   // inside the ≤60 s memo window (AC5), so collection timestamps update while
@@ -1439,6 +1581,11 @@ function ResultsInner(props: {
   const products = plainSections.primary;
   const matchCount = products.length;
   const zero = query.length > 0 && matchCount === 0;
+  // REEA-1114 — the static-host fallback path obeys the same filter-aware
+  // empty state: a zero that a filter hid names the filter and reveals the
+  // rows in place instead of blaming the spelling.
+  const plainHidden = hiddenMatchReport(served, query, country, showOutOfStock);
+  const plainEmptyCase = emptyMatchCase(plainHidden, false);
   // REEA-37: funnel instrumentation — search_submitted (+ zero_results) and
   // result_impressed fire once per (query, page, result-set). Dedup key is
   // component-local memory only; nothing is persisted client-side. The stock
@@ -1482,21 +1629,39 @@ function ResultsInner(props: {
         renderStartMs={props.renderStartMs}
         queryId={props.queryId}
         unreachableLanes={props.unreachableLanes}
+        onRevealOutOfStock={onRevealOutOfStock}
+        onRevealAllCountries={onRevealAllCountries}
       />
     );
   }
 
   return (
     <ResultsErrorBoundary locale={locale}>
-      <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} />
+      <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} hiddenByStock={plainHidden.stock} hiddenByCountry={plainHidden.country} />
       <ResultsHead query={query} country={country} locale={locale}>
-        {zero ? <HintLine locale={locale} /> : null}
+        {zero && plainEmptyCase.kind === "a" ? <HintLine locale={locale} /> : null}
       </ResultsHead>
       <StatusLegend locale={locale} />
       <ResultsMeta products={products} query={query} renderStartMs={props.renderStartMs} locale={locale} />
       {zero ? (
         <>
-          <EmptyState query={query} country={country} locale={locale} />
+          <EmptyState
+            query={query}
+            country={country}
+            locale={locale}
+            hidden={
+              plainEmptyCase.kind === "b"
+                ? { filter: plainEmptyCase.filter, count: plainEmptyCase.count }
+                : null
+            }
+            onReveal={
+              plainEmptyCase.kind === "b"
+                ? plainEmptyCase.filter === "stock"
+                  ? onRevealOutOfStock
+                  : onRevealAllCountries
+                : undefined
+            }
+          />
           <RelatedBand items={plainSections.related} locale={locale} queryId={props.queryId} />
         </>
       ) : (

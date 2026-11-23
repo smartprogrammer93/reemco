@@ -219,6 +219,15 @@ export interface WeekCounters {
    *  construction. */
   comparison_cards_total: number;
   comparison_cards_multi_retailer: number;
+  /**
+   * REEA-1114 AC6 — served searches whose visible results were zero but an
+   * ACTIVE filter (the default In stock selection or the market selection)
+   * hid ≥1 confident match. The false-empty rate is this counter ÷ searches;
+   * it is the only measurement of the trust failure the W48 empty-state rate
+   * could not see (the search did have offers — they were filtered out).
+   * Aggregate integer only: no query text, no identifiers, no per-query row.
+   */
+  filtered_empty_searches: number;
   link_smoke: LinkSmokeCounters;
 }
 
@@ -252,6 +261,7 @@ export function emptyWeek(): WeekCounters {
     latency_warm_band_gt_10s: 0,
     comparison_cards_total: 0,
     comparison_cards_multi_retailer: 0,
+    filtered_empty_searches: 0,
     link_smoke: emptyLinkSmoke(),
   };
 }
@@ -328,6 +338,9 @@ function backfillWeek(week: WeekCounters): WeekCounters {
     "latency_warm_band_gt_10s",
     "comparison_cards_total",
     "comparison_cards_multi_retailer",
+    // REEA-1114 — the filter-aware empty-state counter. Weeks stored before
+    // this extension backfill 0, like every earlier aggregate addition.
+    "filtered_empty_searches",
   ] as const) {
     week[key] = clampCount(week[key]);
   }
@@ -438,6 +451,15 @@ export interface SearchOutcome extends SearchOutcomeBase {
   /** REEA-871 — adapters that returned an error / empty-due-to-error outcome;
    * folded clamped to the same retailer's attempts. */
   adapterFailures?: Record<string, number>;
+  /**
+   * REEA-1114 AC6 — true when the served page's visible result set was zero
+   * but an ACTIVE filter (default In stock, or the market selection) hid ≥1
+   * confident match: the false-empty the shopper saw. One boolean per serve
+   * folds into the aggregate `filtered_empty_searches` counter — no query
+   * text, no per-query row (Data Minimization). Absent = false, so every
+   * pre-change caller stays byte-identical.
+   */
+  filteredEmpty?: boolean;
 }
 
 /** Pure: fold one search outcome into the weekly buckets. */
@@ -468,6 +490,10 @@ export function applySearchOutcome(
   const cardsMulti = Math.min(clampCount(outcome.comparisonDepth?.cardsMultiRetailer), cardsTotal);
   w.comparison_cards_total += cardsTotal;
   w.comparison_cards_multi_retailer += cardsMulti;
+  // REEA-1114 AC6 — the false-empty rate numerator: one increment per serve
+  // whose visible set was zero because an active filter hid matches. Exactly
+  // one bump per serve, so filtered_empty_searches ≤ searches holds.
+  if (outcome.filteredEmpty === true) w.filtered_empty_searches += 1;
   for (const [merchant, hits] of Object.entries(outcome.offersByRetailer ?? {})) {
     const by = clampCount(hits);
     if (by > 0) bumpRetailer(w.offers_by_retailer, merchant, by);
@@ -810,6 +836,8 @@ const WEEKLY_SCALAR_FIELDS = [
   "latency_warm_band_gt_10s",
   "comparison_cards_total",
   "comparison_cards_multi_retailer",
+  // REEA-1114 — filter-aware empty-state counter (one integer per week).
+  "filtered_empty_searches",
 ] as const;
 type WeeklyScalarField = (typeof WEEKLY_SCALAR_FIELDS)[number];
 

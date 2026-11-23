@@ -2,7 +2,7 @@
 
 import { rememberCountry, type CountryCode } from "@/lib/country";
 import { rememberShowOutOfStock } from "@/lib/stock";
-import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
+import { clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
 
 /**
  * REEA-1069 — Direction A filter/market bar (REEA-1055 spec §3, AC3).
@@ -17,7 +17,29 @@ import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
  * (REEA-291 AC4): no navigation, no second collection. Refresh is the one
  * explicit action that re-runs the live collection. Offers always stay
  * live-collected; this only selects among what the last live fetch returned.
+ *
+ * REEA-1114 AC3 — an active filter that is hiding matches says so on its own
+ * chip ("In stock · 4 hidden" / "متوفر · 4 مخفية"), so the dead end is visible
+ * BEFORE the shopper reaches the empty state. The count is derived from the
+ * already-loaded payload by lib/hidden-matches.ts; no extra fetch, no server
+ * field. At ≤640 the word is dropped and only the count badge renders, so the
+ * 3-per-row grid never clips (AC5).
  */
+
+/** The chip's hidden-match count. The word is CSS-hidden at 375 (AC5). */
+function ChipHiddenCount({ count, locale }: { count: number; locale?: Locale }) {
+  const t = getStrings(locale ?? clientLocale());
+  return (
+    <span className="rc-chip-count">
+      <span aria-hidden className="rc-chip-sep">
+        {" · "}
+      </span>
+      <span>{count}</span>
+      <span className="rc-chip-hidden-suffix"> {t.chipHiddenWord}</span>
+    </span>
+  );
+}
+
 export default function FilterBar({
   country,
   showOutOfStock,
@@ -25,6 +47,8 @@ export default function FilterBar({
   onToggleStock,
   onRefresh,
   locale,
+  hiddenByStock = 0,
+  hiddenByCountry = 0,
 }: {
   country: CountryCode | null;
   showOutOfStock: boolean;
@@ -32,6 +56,10 @@ export default function FilterBar({
   onToggleStock: (next: boolean) => void;
   onRefresh: () => void;
   locale?: Locale;
+  /** REEA-1114 — matches the In stock selection currently hides. */
+  hiddenByStock?: number;
+  /** REEA-1114 — matches the selected market hides. */
+  hiddenByCountry?: number;
 }) {
   const t = getStrings(locale ?? clientLocale());
   const countries: { code: CountryCode | null; label: string; aria: string }[] = [
@@ -41,17 +69,23 @@ export default function FilterBar({
     { code: "EG", label: t.countryEG, aria: t.countryEG },
   ];
   const inStockPressed = !showOutOfStock;
+  const stockHidden = inStockPressed ? Math.max(0, hiddenByStock) : 0;
 
   return (
     <div className="rc-filter-bar" role="group" aria-label={t.filterAria}>
       {countries.map(({ code, label, aria }) => {
         const selected = code === country;
+        const countryHidden = selected ? Math.max(0, hiddenByCountry) : 0;
         return (
           <button
             key={code ?? "all"}
             type="button"
             aria-pressed={selected}
-            aria-label={aria}
+            aria-label={
+              countryHidden > 0
+                ? `${aria}, ${fill(t.chipHiddenAria, { n: countryHidden })}`
+                : aria
+            }
             className="rc-chip"
             onClick={() => {
               rememberCountry(code);
@@ -64,12 +98,18 @@ export default function FilterBar({
               </svg>
             ) : null}
             {label}
+            {countryHidden > 0 ? <ChipHiddenCount count={countryHidden} locale={locale} /> : null}
           </button>
         );
       })}
       <button
         type="button"
         aria-pressed={inStockPressed}
+        aria-label={
+          stockHidden > 0
+            ? `${t.inStock}, ${fill(t.chipHiddenAria, { n: stockHidden })}`
+            : undefined
+        }
         className="rc-chip"
         onClick={() => {
           // Pressed means "show in-stock only" (hide out-of-stock). Toggling
@@ -86,6 +126,7 @@ export default function FilterBar({
           </svg>
         ) : null}
         {t.inStock}
+        {stockHidden > 0 ? <ChipHiddenCount count={stockHidden} locale={locale} /> : null}
       </button>
       <button type="button" className="rc-chip is-action" onClick={onRefresh}>
         {t.refresh}

@@ -4,6 +4,9 @@ import { recordSearchOutcome, searchOutcomeFromSnapshot, serveOutcomeOf } from "
 // REEA-1099 — the ONE results-page shelf card definition the renderer uses;
 // the comparison-depth counter folds over this same set.
 import { resultsShelfCards } from "@/lib/results-shelf";
+// REEA-1114 AC6 — the false-empty numerator: the SAME filter-aware
+// classification the empty state renders, folded into one aggregate counter.
+import { hiddenMatchReport, hiddenMatchTotal } from "@/lib/hidden-matches";
 // REEA-1078 S2 — the serve path applies the persisted dead-lane retirement set
 // on top of the static retirement (see lib/collect/lane-health.ts).
 import { readRetiredLanes, recordLaneAttempts } from "@/lib/collect/lane-health";
@@ -238,6 +241,17 @@ export default async function ResultsPage({
       const shelfCards = pageSnap
         ? resultsShelfCards(pageSnap, query, 1, country, showOutOfStock)
         : [];
+      // REEA-1114 AC6 — a served page with zero visible cards while an ACTIVE
+      // filter hid ≥1 confident match is the false-empty the shopper saw. The
+      // classification is the renderer's own chain (lib/hidden-matches.ts), so
+      // the counter and the empty state can never disagree. One boolean per
+      // serve → one aggregate integer; no query text, no per-query record.
+      const filteredEmpty =
+        !!pageSnap &&
+        shelfCards.length === 0 &&
+        hiddenMatchTotal(
+          hiddenMatchReport(pageSnap.products, query, country, showOutOfStock),
+        ) > 0;
       // REEA-1078 — warm serves use the entry clock captured above (the serve
       // clock); cold serves use the post-allSettled clock (collection clock).
       // eslint-disable-next-line react-hooks/purity -- read in the deferred after() tail, never during render output.
@@ -253,6 +267,8 @@ export default async function ResultsPage({
         serveLatencyMs: Math.max(0, recordedMs - fanoutStartMs),
         adapterAttempts: adapterTelemetry.attempts,
         adapterFailures: adapterTelemetry.failures,
+        // REEA-1114 AC6 — aggregate false-empty numerator (see above).
+        filteredEmpty,
       });
       // REEA-1078 S2 — the same telemetry feeds the per-lane daily evidence
       // the 7-day auto-retire rule reads. Behind the response (deferred
