@@ -69,10 +69,18 @@ jump_present() {
   "$cmd" -C DOCKER-USER -j "$CHAIN" >/dev/null 2>&1
 }
 
+# Docker creates DOCKER-USER when the daemon starts. Create it if this runs
+# before that (boot ordering edge) or if it was removed, so the jump can land.
+ensure_docker_user() {
+  local cmd="$1"
+  "$cmd" -N DOCKER-USER 2>/dev/null || true
+}
+
 build_v4() {
   local wan
   wan=$(wan_if 4)
   [ -n "$wan" ] || die "no IPv4 default route; refusing to guess the WAN interface"
+  ensure_docker_user "$IPT"
   ensure_chain "$IPT"
   "$IPT" -A "$CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
   "$IPT" -A "$CHAIN" -p icmp -j RETURN
@@ -89,6 +97,7 @@ build_v4() {
 build_v6() {
   local wan
   wan=$(wan_if 6)
+  ensure_docker_user "$IPT6"
   ensure_chain "$IPT6"
   "$IPT6" -A "$CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
   "$IPT6" -A "$CHAIN" -p ipv6-icmp -j RETURN

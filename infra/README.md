@@ -211,8 +211,10 @@ families that allows ESTABLISHED/RELATED, ICMP, tcp 80, tcp 443 and udp 443
 (HTTP/3), and drops everything else **arriving on the WAN interface** — the `-i`
 scope is deliberate so container egress (the retailer adapters) is untouched.
 It is applied by `infra/systemd/reemco-docker-user-firewall.service`, installed
-and enabled by the playbook; `PartOf=docker.service` re-applies it after a
-docker restart (Docker recreates the chain, so rules are not self-persistent).
+and enabled by the playbook (`WantedBy=multi-user.target`, ordered after
+`docker.service`, so a reboot comes up with the rules); `PartOf=docker.service`
+re-applies it after a docker restart (Docker recreates the chain, so rules are
+not self-persistent).
 Rollback: `sudo /opt/reemco/scripts/docker-user-firewall.sh revert` then
 `sudo systemctl disable --now reemco-docker-user-firewall.service` — this
 restores Docker's default (published ports reachable), so it is fail-open.

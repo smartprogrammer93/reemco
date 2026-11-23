@@ -7,7 +7,7 @@
 # the versioned script after docker is up, and `PartOf=docker.service` re-runs it
 # whenever docker is restarted, so a restart cannot silently reopen the ports.
 # Reproducibility: installed and enabled by infra/ansible/playbook.yml.
-Description=Reemco DOCKER-USER ingress allow-list (REEa-1087 F9)
+Description=Reemco DOCKER-USER ingress allow-list (REEA-1087 F9)
 After=network-online.target docker.service
 Wants=network-online.target docker.service
 PartOf=docker.service
@@ -20,3 +20,10 @@ ExecStart=/opt/reemco/scripts/docker-user-firewall.sh apply
 # (Docker's default), rather than leaving the box unreachable.
 ExecStop=/opt/reemco/scripts/docker-user-firewall.sh revert
 TimeoutStartSec=30
+
+[Install]
+# Without [Install] the unit is `static`: `systemctl enable` is a no-op and the
+# rules would only be applied after an explicit start or a docker restart, so a
+# reboot would come up with an empty DOCKER-USER. WantedBy makes boot apply it;
+# After=docker.service above orders it after the daemon has created the chain.
+WantedBy=multi-user.target
