@@ -7,6 +7,10 @@ import "./test-cache-dir";
 import { describe, expect, it } from "vitest";
 import { PER_RETAILER_TIMEOUT_MS } from "@/lib/collect/types";
 import { COVERAGE_ORDER } from "@/lib/collect/coverage";
+
+// The live rotation the staged/finalize tests exercise: every KW-tagged
+// adapter (SA/EG lanes are country-scoped out of a country: "KW" run).
+const KW_ADAPTER_COUNT = COLLECTORS.filter((c) => c.country === "KW").length;
 import { jarirFallbackKey } from "@/lib/collect/search-fallback";
 import type { NormalizedProduct } from "@/types/product";
 import {
@@ -1705,9 +1709,8 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     resetDiscoveryCache();
     const staged = collectLiveResultsStaged("samsung", { fetchImpl: mixedSpeedFetch(), country: "KW" });
 
-    // One boundary per KW retailer in the run (twenty-two since the
-    // REEA-723 batch tail).
-    expect(staged.stages).toHaveLength(22);
+    // One boundary per KW retailer in the run (the full live rotation).
+    expect(staged.stages).toHaveLength(KW_ADAPTER_COUNT);
 
     const first = await firstPaintedFlush(staged);
     expect(first.products).toHaveLength(1);
@@ -1728,9 +1731,9 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     expect(finalSnap.products[0].offers.map((o) => o.price)).toEqual([379, 385, 390, 399]);
     expect(merchants.has("Eureka")).toBe(true);
     expect(merchants.has("Sultan Center")).toBe(true);
-    // Merchants whose mocks never answer are all reported as notes (twenty-three
-    // of the twenty-three retailers).
-    expect(finalSnap.notes).toHaveLength(22);
+    // Merchants whose mocks never answer are all reported as notes (every
+    // retailer in the run).
+    expect(finalSnap.notes).toHaveLength(KW_ADAPTER_COUNT);
   });
 
   // REEA-871 — the adapter attempts/failures counters read off the run's own
@@ -1741,10 +1744,10 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     const staged = collectLiveResultsStaged("samsung", { fetchImpl: mixedSpeedFetch(), country: "KW" });
     await staged.final;
     const telemetry = await staged.adapterTelemetry;
-    // One attempt per retailer in the fan-out — the same 23 merchants the
+    // One attempt per retailer in the fan-out — the same merchants the
     // coverage notes name.
-    expect(Object.values(telemetry.attempts).reduce((a, b) => a + b, 0)).toBe(22);
-    expect(Object.keys(telemetry.attempts)).toHaveLength(22);
+    expect(Object.values(telemetry.attempts).reduce((a, b) => a + b, 0)).toBe(KW_ADAPTER_COUNT);
+    expect(Object.keys(telemetry.attempts)).toHaveLength(KW_ADAPTER_COUNT);
     expect(Object.keys(telemetry.attempts)).toEqual(
       expect.arrayContaining(["Xcite", "Blink", "Eureka", "Sultan Center"]),
     );
@@ -1863,8 +1866,8 @@ describe("completion-budget finalize (REEA-398)", () => {
     expect(merchants.has("Eureka")).toBe(false);
     // …plus one honest budget note per still-silent merchant: the coverage
     // line of the FINALIZED page names every gap, with the budget as its
-    // reason — across all twenty-two KW retailers in the run.
-    expect(snap.notes).toHaveLength(22);
+    // reason — across every KW retailer in the run.
+    expect(snap.notes).toHaveLength(KW_ADAPTER_COUNT);
     expect(snap.notes.find((n) => n.merchant === "Eureka")?.error).toMatch(/completion budget/);
     expect(snap.notes.find((n) => n.merchant === "Sultan Center")?.error).toMatch(/completion budget/);
     // The page clock sits inside the REEA-693 item-1 first-paint bar: the
@@ -2245,8 +2248,8 @@ describe("whole-chain budget signal (REEA-224 F4)", () => {
     expect(elapsed).toBeGreaterThanOrEqual(LIVE_SEARCH_TIMEOUT_MS * 2 - 1_500);
     expect(elapsed).toBeLessThan(LIVE_SEARCH_BUDGET_MS + 2_000);
     // Graceful degradation: every silent retailer is still reported (all
-    // twenty-two KW collectors are stalled here, REEA-378 included).
-    expect(notes).toHaveLength(22);
+    // KW collectors are stalled here, REEA-378 included).
+    expect(notes).toHaveLength(KW_ADAPTER_COUNT);
   }, 25_000);
 });
 

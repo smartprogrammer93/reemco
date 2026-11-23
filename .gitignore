@@ -50,3 +50,6 @@ next-env.d.ts
 
 # REEA-1044 metrics test scratch dir
 .metrics-tests/
+
+# REEA-1051/1067 adapter-probe output (written by scripts/reea1051-adapter-probe.mjs)
+reea1051-adapter-probe.json

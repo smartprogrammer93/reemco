@@ -83,6 +83,41 @@ jobs:
           set -euo pipefail
           npm audit --omit=dev --audit-level=high
 
+      # REEA-1067 — BUILD GATE (lint + full test suite) before the artifact is
+      # built. The retired Vercel `buildCommand` ran `npm run lint` and the
+      # 1004-test suite before `next build`; after the REEA-1054 cutover the
+      # box build ran `next build` alone, so a push to main could reach
+      # production with no test gate (Blast Radius).
+      #
+      # This is the push-triggered CI gate, and it runs on the GitHub runner
+      # BEFORE any SSH or host build: a red gate never mutates the box, so
+      # there is nothing to roll back. The Dockerfile deliberately stays
+      # build-only instead of running the suite in-image:
+      #  - the box's CPU is production capacity; tests belong on the runner
+      #    (Cost-per-Environment), and the box already builds the artifact;
+      #  - `.dockerignore` excludes `.github`, but `src/ci-secrets.test.ts`
+      #    reads `.github/workflows/deploy.yml`, so an in-image `npm run test`
+      #    would need a widened build context to be meaningful.
+      #
+      # Rollback Path: unchanged (`deploy.sh`/`rollback.sh`, auto-rollback on
+      # a failed verify). A `workflow_dispatch` rollback run SKIPS lint/tests:
+      # it redeploys a previously verified artifact, and an emergency rollback
+      # must not be blocked by a gate that is red on main. The install stays
+      # unconditional because the funnel smoke step later needs node_modules.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies (gate + smoke)
+        run: npm ci
+
+      - name: Build gate — lint + full test suite (blocking)
+        if: github.event_name == 'push' || inputs.rollback_sha == ''
+        run: |
+          set -euo pipefail
+          npm run lint
+          NODE_ENV=test KV_REST_API_URL= KV_REST_API_TOKEN= npm run test
+
       - name: Resolve the tag to deploy
         id: tag
         run: |
@@ -173,11 +208,8 @@ jobs:
           done
           echo "stamp + 4/4 security headers verified"
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
+      # node_modules was installed by the build gate above (unconditionally,
+      # so a rollback run that skips lint/tests still has it for the smoke).
 
       # REEA-1059: the funnel smoke suite is BLOCKING again. It was advisory
       # only while REEA-75's 375px assertion failed deterministically on the
