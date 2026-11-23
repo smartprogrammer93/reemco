@@ -271,6 +271,29 @@ export function foldRetailerRows(
 }
 
 /**
+ * REEA-1122 — the absolute price base a variant chip rides: the card's
+ * cheapest listed offer after the same fold/sort the card renders, excluding
+ * flagged offers (REEA-963 FR-1.4). Shared by the results card and the
+ * product hero so both print the identical absolute figure. The hero used to
+ * print the raw `priceDelta`, so the cheapest variant read "Orange KD 0".
+ */
+export function cheapestListedKwd(product: NormalizedProduct): number | null {
+  const coupon = product.coupons[0] ?? null;
+  const offers = foldRetailerRows(sortOffers(product.offers, coupon), coupon);
+  const priced = offers.filter((o) => !offerFlagged(o));
+  return priced.length > 0
+    ? Math.min(
+        ...priced.map((o) =>
+          effectivePriceKwd(o.price, o.currency, {
+            wasPrice: o.wasPrice,
+            couponDiscount: coupon?.discount,
+          }),
+        ),
+      )
+    : null;
+}
+
+/**
  * REEA-787 — alternatives/pairs fold: duplicate cards for ONE matched product
  * (the REEA-167 canonicalKey title identity) with an IDENTICAL formatted
  * fromPrice collapse to the first entry.
@@ -465,19 +488,9 @@ export default function ProductResultCard({
     (kuwaitPendingStatus ||
       (best != null &&
         (country ? currencyForCountry(country) : best.currency).trim().toUpperCase() !== "KWD"));
-  const cheapestListed = (() => {
-    const priced = offers.filter((o) => !offerFlagged(o));
-    return priced.length > 0
-      ? Math.min(
-          ...priced.map((o) =>
-            effectivePriceKwd(o.price, o.currency, {
-              wasPrice: o.wasPrice,
-              couponDiscount: primaryCoupon?.discount,
-            }),
-          ),
-        )
-      : null;
-  })();
+  // REEA-1122 — one absolute-price base, shared with the product hero, so a
+  // variant chip never prints a bare delta ("KD 0").
+  const cheapestListed = cheapestListedKwd(product);
   const oos = best != null && !best.inStock;
   const couponRows = buildCouponRows(product.coupons, offers, country);
   // REEA-1096 D6 — the disclosure only renders when there is something behind

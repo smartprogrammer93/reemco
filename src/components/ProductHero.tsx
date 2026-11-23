@@ -27,7 +27,7 @@ import OfferStatusToken, { StatusLegend } from "@/components/OfferStatus";
 import ShareSummaryButton from "@/components/ShareSummaryButton";
 import { buildResultsHref } from "@/lib/country";
 import { cleanDisplayTitle, displayTitleChanged } from "@/lib/display-title";
-import { foldAlternativeRows } from "@/components/ProductResultCard";
+import { cheapestListedKwd, foldAlternativeRows } from "@/components/ProductResultCard";
 import { ageSeconds, localizedAgeFor, localizedAgeFromStamp } from "@/lib/relative-time";
 import { checkedAgeLabel, clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
 import { offerStatusForLiveOffer } from "@/lib/offer-status";
@@ -280,6 +280,16 @@ function ProductHeroBody({
   const heroSaved = best && best.wasPrice != null && best.wasPrice > best.price ? best.wasPrice - best.price : null;
   const heroPrice = best ? formatCountryPrice(best.price, best.currency, null) : null;
   const coupon = product.coupons[0];
+  // REEA-1122 — the variant chips ride the SAME price pass as the hero: the
+  // cheapest live offer's KWD-space figure. That keeps the selected chip equal
+  // to the hero price the shopper reads on this screen (never a chip from a
+  // different freshness pass). Before any live offer lands, fall back to the
+  // identity record's cheapest listed offer, so the chip still carries a real
+  // figure instead of the old raw delta ("Orange KD 0").
+  const liveBestKwd = best
+    ? effectivePriceKwd(best.price, best.currency, { wasPrice: best.wasPrice })
+    : null;
+  const variantBaseKwd = liveBestKwd ?? cheapestListedKwd(product);
 
   return (
     <div className="mx-auto w-full rc-product-wrap" style={{ maxWidth: "var(--rc-layout-max-w)", paddingInline: "var(--rc-gutter)", paddingBlock: "var(--rc-space-4)" }}>
@@ -433,25 +443,38 @@ function ProductHeroBody({
         <section aria-label={t.variationsLabel} style={{ marginBlockStart: "var(--rc-space-6)" }}>
           <h2 style={{ font: "var(--rc-text-h2)" }}>{t.variationsLabel}</h2>
           <div className="rc-variants" style={{ marginBlockStart: "var(--rc-space-3)" }}>
-            {product.variations.map((v, i) => (
-              <span
-                key={v.id}
-                className={`rc-variant${i === 0 ? " is-selected" : ""}`}
-                aria-pressed={i === 0 ? "true" : "false"}
-              >
-                {i === 0 ? (
-                  <svg className="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                    <path d="m4 12.5 5 5L20 6.5" />
-                  </svg>
-                ) : null}
-                {v.label}
-                {/* REEA-1096 D2/D3 — selected state keyed on aria-pressed; the
-                    chip is name + price, never a verification status token. */}
-                <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
-                  <bdi>{formatPrimaryPrice(v.priceDelta, "KWD").label}</bdi>
+            {product.variations.map((v, i) => {
+              // REEA-1122 — the results card prints the variant's ABSOLUTE
+              // price (base + delta); the hero used to print the raw delta, so
+              // the cheapest variant read "Orange KD 0" beside a paid product.
+              // Same convention here: name + absolute KWD figure. No base →
+              // name only, never an invented number.
+              const chipPrice =
+                variantBaseKwd != null
+                  ? formatCountryPrice(variantBaseKwd + v.priceDelta, "KWD", country).primary
+                  : null;
+              return (
+                <span
+                  key={v.id}
+                  className={`rc-variant${i === 0 ? " is-selected" : ""}`}
+                  aria-pressed={i === 0 ? "true" : "false"}
+                >
+                  {i === 0 ? (
+                    <svg className="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <path d="m4 12.5 5 5L20 6.5" />
+                    </svg>
+                  ) : null}
+                  {v.label}
+                  {/* REEA-1096 D2/D3 — selected state keyed on aria-pressed; the
+                      chip is name + price, never a verification status token. */}
+                  {chipPrice ? (
+                    <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
+                      <bdi>{chipPrice}</bdi>
+                    </span>
+                  ) : null}
                 </span>
-              </span>
-            ))}
+              );
+            })}
           </div>
         </section>
       )}
