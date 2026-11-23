@@ -20,7 +20,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const BASE = (process.env.SMOKE_BASE_URL || "https://reemco.vercel.app").replace(/\/$/, "");
+const BASE = (process.env.SMOKE_BASE_URL || "https://ns539626.ip-144-217-72.net").replace(/\/$/, "");
 const QUERIES = process.argv.slice(2).filter((a) => !/^\d+$/.test(a));
 const ROUNDS = Math.max(1, Math.min(10, Number(process.argv[2]) || 3));
 if (QUERIES.length === 0) QUERIES.push("iPhone 17 Pro", "samsung galaxy s25");

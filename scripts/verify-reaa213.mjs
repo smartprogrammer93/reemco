@@ -11,7 +11,7 @@
  * If query 2 or 3 shows only one merchant's inventory the caller re-runs
  * once (offers are fetched live; the script reports merchants per card set).
  *
- * Usage: QA_BASE_URL=https://reemco.vercel.app node scripts/verify-reaa213.mjs
+ * Usage: QA_BASE_URL=https://ns539626.ip-144-217-72.net node scripts/verify-reaa213.mjs
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { brotliDecompressSync } from "node:zlib";
@@ -19,7 +19,7 @@ import { execSync } from "node:child_process";
 import { chromium as pw } from "playwright-core";
 import chromium from "@sparticuz/chromium";
 
-const BASE = (process.env.QA_BASE_URL || "https://reemco.vercel.app").replace(/\/$/, "");
+const BASE = (process.env.QA_BASE_URL || "https://ns539626.ip-144-217-72.net").replace(/\/$/, "");
 const OUT = process.env.QA_EVIDENCE_DIR || "/work/task-b0e12d7b-5b94-49e9-bc14-8aa760165868";
 mkdirSync(OUT, { recursive: true });
 

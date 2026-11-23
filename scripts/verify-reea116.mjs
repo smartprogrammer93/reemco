@@ -7,7 +7,7 @@ import { execSync } from "node:child_process";
 import { chromium as pw } from "playwright-core";
 import chromium from "@sparticuz/chromium";
 
-const BASE = (process.env.BASE || "https://reemco.vercel.app").replace(/\/$/, "");
+const BASE = (process.env.BASE || "https://ns539626.ip-144-217-72.net").replace(/\/$/, "");
 
 const LIB_DIR = "/tmp/al2023/lib";
 const VENDOR_DIR = new URL("./vendor/", "file:///work/reemco-price-compare/scripts/");

@@ -18,12 +18,12 @@
  *    just implemented; distinct storage/colour variants counting as separate
  *    cards is expected and checked by the tuple fields themselves.
  *
- * Usage: QA_BASE_URL=https://reemco.vercel.app node scripts/reaa280-audit.mjs
+ * Usage: QA_BASE_URL=https://ns539626.ip-144-217-72.net node scripts/reaa280-audit.mjs
  * Extra CLI args replace the default 20-query top-market list.
  */
 import { canonicalFields, compatibleFields } from "../src/lib/collect/canonical-product.ts";
 
-const BASE = (process.env.QA_BASE_URL || "https://reemco.vercel.app").replace(/\/$/, "");
+const BASE = (process.env.QA_BASE_URL || "https://ns539626.ip-144-217-72.net").replace(/\/$/, "");
 
 const DEFAULT_QUERIES = [
   "iPhone 17 Pro Max",

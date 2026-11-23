@@ -7,7 +7,7 @@ import { execSync } from "node:child_process";
 import { chromium as pw } from "playwright-core";
 import chromium from "@sparticuz/chromium";
 
-const BASE = (process.env.SMOKE_BASE_URL || "https://reemco.vercel.app").replace(/\/$/, "");
+const BASE = (process.env.SMOKE_BASE_URL || "https://ns539626.ip-144-217-72.net").replace(/\/$/, "");
 const FIXTURE_QUERY = process.env.SMOKE_FIXTURE_QUERY || "sony";
 const N = Number(process.argv[2] || 20);
 

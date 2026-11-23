@@ -34,7 +34,7 @@ process.env.LD_LIBRARY_PATH = [LIB_DIR, "/tmp/sqlite-extract/usr/lib/x86_64-linu
   .filter(Boolean)
   .join(":");
 
-const BASE = "https://reemco.vercel.app";
+const BASE = "https://ns539626.ip-144-217-72.net";
 const Q = encodeURIComponent("iPhone 17 Pro Max"); // multi-color same-retailer rows -> chips present
 
 const browser = await pw.launch({

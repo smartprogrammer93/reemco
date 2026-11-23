@@ -32,5 +32,5 @@ Constraint from REEA-10/REEA-13: **F1 must land before the scraper pipeline goes
   if needed later, add an internal `/r?url=` redirect endpoint with domain allowlist.
 - CSP with static export (`output: "export"`) cannot inject per-request nonces from
   Next.js middleware on pure-static hosts; report-only + host-level headers are the
-  interim control. Full nonce CSP requires the Vercel (server) deploy path.
+  interim control. Full nonce CSP requires a server deploy path.
 - F4 (secrets/infra) remains owned by DevOps Engineer when infra exists.

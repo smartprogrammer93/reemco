@@ -18,7 +18,7 @@ import { execSync } from "node:child_process";
 import { chromium as pw } from "playwright-core";
 import chromium from "@sparticuz/chromium";
 
-const BASE = "https://reemco.vercel.app";
+const BASE = "https://ns539626.ip-144-217-72.net";
 const QUERIES = ["iPhone 17 Pro", "samsung galaxy s25 fe", "Scope II keyboard", "\u0622\u064a\u0641\u0648\u0646 17", "zzqx vbnt"];
 const SUFFIX = ["", ".", "..", "...", "...."];
 

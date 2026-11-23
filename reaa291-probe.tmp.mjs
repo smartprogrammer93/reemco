@@ -4,7 +4,7 @@ const browser = await pw.chromium.launch({ executablePath: await chrome.executab
 const page = await browser.newPage();
 const reqs = [];
 page.on('request', (r) => reqs.push(r.url()));
-await page.goto('https://reemco.vercel.app/results?q=jbl%20boombox%203', { waitUntil: 'load', timeout: 30000 });
+await page.goto('https://ns539626.ip-144-217-72.net/results?q=jbl%20boombox%203', { waitUntil: 'load', timeout: 30000 });
 await page.waitForTimeout(3000); // let staged flushes settle
 const loadReqs = reqs.length;
 const stampBefore = await page.evaluate(() => document.body.innerHTML.match(/scrapedAt\\":\\"([^\\"]*)/)?.[1]);

@@ -10,7 +10,7 @@
  * outcome to /api/metrics/link-smoke so it lands in the weekly PM snapshot.
  *
  * Usage: node scripts/dead-link-smoke.mjs
- *   SMOKE_BASE_URL   base to measure (default https://reemco.vercel.app)
+ *   SMOKE_BASE_URL   base to measure (default https://ns539626.ip-144-217-72.net)
  *   LINK_SMOKE_QUERIES  comma-separated fixture queries (default "sony,iphone")
  *   LINK_SMOKE_PER_RETAILER  max URLs checked per retailer (default 8)
  *   LINK_SMOKE_PAUSE_MS      min pause between same-host checks (default 300)
@@ -37,7 +37,7 @@
  */
 import { pathToFileURL } from "node:url";
 
-const BASE = (process.env.SMOKE_BASE_URL || "https://reemco.vercel.app").replace(/\/$/, "");
+const BASE = (process.env.SMOKE_BASE_URL || "https://ns539626.ip-144-217-72.net").replace(/\/$/, "");
 const QUERIES = (process.env.LINK_SMOKE_QUERIES || "sony,iphone")
   .split(",")
   .map((q) => q.trim())

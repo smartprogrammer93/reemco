@@ -26,7 +26,7 @@
  *
  * Usage: node scripts/reaa526-measure.mjs [rounds] [--quiet]
  */
-const BASE = "https://reemco.vercel.app";
+const BASE = "https://ns539626.ip-144-217-72.net";
 const QUERIES = ["iPhone 17 Pro", "Nescafe coffee", "dyson v15", "دوف صابون"];
 const TARGETS = ["Sultan Center", "Quadra Stores", "PC Kuwait", "Lulu Hypermarket"];
 const UA =

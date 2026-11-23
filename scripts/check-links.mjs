@@ -19,7 +19,7 @@ for (const h of internal) console.log(h);
 console.log("== external (rendered) links ==");
 for (const h of external) console.log(h);
 
-const BASE = "https://reemco.vercel.app";
+const BASE = "https://ns539626.ip-144-217-72.net";
 console.log("== live status codes ==");
 for (const h of internal) {
   const r = await fetch(BASE + h);

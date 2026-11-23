@@ -33,10 +33,7 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
-# vercel
-.vercel
-
-# build-time commit stamp (written by buildCommand from VERCEL_GIT_COMMIT_SHA)
+# build-time commit stamp (written by infra/Dockerfile from REEMCO_COMMIT)
 /public/__commit.txt
 
 # typescript

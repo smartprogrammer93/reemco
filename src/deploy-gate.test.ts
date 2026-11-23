@@ -11,9 +11,10 @@ import { describe, expect, it } from "vitest";
 // from silently dropping it (a dropped gate is invisible until a bad push).
 //
 // Note: the gate intentionally runs in CI, not in `infra/Dockerfile`, because
-// `.dockerignore` excludes `.github` while `src/ci-secrets.test.ts` reads
-// `.github/workflows/deploy.yml` — an in-image run would need a widened build
-// context to be meaningful. If that ever changes, move this pin with the gate.
+// `.dockerignore` excludes `.github` while `src/ci-secrets.test.ts` and this
+// pin read `.github/workflows/deploy-selfhosted.yml` — an in-image run would
+// need a widened build context to be meaningful. If that ever changes, move
+// this pin with the gate.
 describe("REEA-1067 deploy build gate", () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const workflow = readFileSync(

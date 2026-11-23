@@ -49,8 +49,8 @@ services:
       REEMCO_HEALTH_ORIGIN: http://127.0.0.1:3000
       # REEA-1051 — crawler-facing canonical origin (/sitemap.xml,
       # /robots.txt). Derived from the one address line in release.env so the
-      # live box advertises itself, never the Vercel rollback alias; flipping
-      # REEMCO_SITE_ADDRESS at DNS cutover flips this with it.
+      # live box advertises itself; changing REEMCO_SITE_ADDRESS changes this
+      # with it (the retired Vercel alias is no longer a fallback — REEA-1076).
       REEMCO_SITE_ORIGIN: https://${REEMCO_SITE_ADDRESS:-ns539626.ip-144-217-72.net}
       # REEA-1044 — shared store for collect jobs, metrics and rate limits.
       # The app speaks RESP directly to the local Valkey container (kv-redis.ts);

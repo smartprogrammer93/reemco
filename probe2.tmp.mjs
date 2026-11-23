@@ -13,7 +13,7 @@ const browser = await pw.launch({ executablePath: await chromium.executablePath(
 const page = await browser.newPage();
 page.setDefaultTimeout(30000);
 const t0 = Date.now();
-await page.goto("https://reemco.vercel.app/results?q=sony", { waitUntil: "load" });
+await page.goto("https://ns539626.ip-144-217-72.net/results?q=sony", { waitUntil: "load" });
 await page.waitForSelector(".result-card", { timeout: 25000 });
 console.log(`TIMING results load (incl. hydration): ${Date.now() - t0}ms`);
 await browser.close();

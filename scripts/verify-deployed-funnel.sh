@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # REEA-37 QA verification against the deployed URL (AC-1..AC-4, AC-6).
-# Usage: BASE=https://reemco.vercel.app bash scripts/verify-deployed-funnel.sh
+# Usage: BASE=https://ns539626.ip-144-217-72.net bash scripts/verify-deployed-funnel.sh
 set -u
-B="${BASE:-https://reemco.vercel.app}"
+B="${BASE:-https://ns539626.ip-144-217-72.net}"
 pass=0; fail=0
 ok(){ echo "PASS $1"; pass=$((pass+1)); }
 no(){ echo "FAIL $1"; fail=$((fail+1)); }

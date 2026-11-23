@@ -1,5 +1,6 @@
 [Unit]
-# REEA-1044 — replaces vercel.json's cron entry for /api/health (08:17 UTC).
+# REEA-1044 — scheduled /api/health probe (08:17 UTC), owned by the box since
+# the Vercel cron was decommissioned (REEA-1076).
 # Observability-before-Launch: the funnel's own health endpoint must be hit on
 # a schedule so a dead origin surfaces as a failed unit, not silence.
 Description=Reemco health probe (scheduled)

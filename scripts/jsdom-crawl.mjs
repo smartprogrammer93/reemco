@@ -1,7 +1,7 @@
 import jsdom from "jsdom";
 const { JSDOM } = jsdom;
 
-const BASE = "https://reemco.vercel.app";
+const BASE = "https://ns539626.ip-144-217-72.net";
 const pages = ["/", "/search", "/results?q=sony", "/results?q=asus", "/results?q=zzzqqq"];
 
 for (const p of pages) {

@@ -17,7 +17,7 @@
  *
  * Usage: node sc-tail-264.mjs [rounds] [--quiet]
  */
-const BASE = "https://reemco.vercel.app";
+const BASE = "https://ns539626.ip-144-217-72.net";
 const QUERIES = ["iPhone 17 Pro", "Nescafe coffee", "dyson v15", "دوف صابون", "laptop"];
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36";

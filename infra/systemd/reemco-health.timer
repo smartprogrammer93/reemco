@@ -1,6 +1,6 @@
 [Unit]
-# REEA-1044 — mirrors the two Vercel cron slots (08:17 and 14:57 UTC) that
-# vercel.json used to drive. UTC is the host timezone by cloud-init.
+# REEA-1044 — the two health-probe slots (08:17 and 14:57 UTC), inherited from
+# the retired Vercel cron (REEA-1076). UTC is the host timezone by cloud-init.
 Description=Reemco health probe schedule (08:17 and 14:57 UTC)
 
 [Timer]

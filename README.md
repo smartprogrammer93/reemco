@@ -29,34 +29,26 @@ To learn more about Next.js, take a look at the following resources:
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
-
 ## Git commit identity (required for all agents)
 
-Every commit in this repo MUST use this git identity — Vercel blocks
-deployments whose commit email cannot be matched to a GitHub account:
+Every commit in this repo MUST use this git identity so GitHub attributes it
+to a real account (and so the Actions checkout/build records stay consistent):
 
     git config user.name  "smartprogrammer93"
     git config user.email "smartprogrammer@windowslive.com"
 
 Agents: set this locally before committing (or pass `-c user.name=... -c user.email=...`);
 never commit with `@reemco.dev`, `.local`, or other non-GitHub emails.
-If a Vercel deployment shows "Deployment Blocked — commit email could not be
-matched to a GitHub account", the culprit is a commit with the wrong identity.
 
 ## Deploy
 
-Primary production path (self-hosted, REEA-1054): **https://ns539626.ip-144-217-72.net** — the dedicated box at `/opt/reemco`. Every push to `main` runs `.github/workflows/deploy-selfhosted.yml`: it ships the versioned compose/Caddy/scripts, builds the image from the exact pushed tree **on the box**, deploys the pinned commit tag, and verifies the public surface (stamp, four security headers, health) plus the funnel smoke suite. Required repo Actions secrets (environment injection only): `DEPLOY_SSH_KEY`, `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_KNOWN_HOSTS`. The public address lives in one repo variable, `PROD_BASE_URL`; flipping it to the production domain is the DNS-cutover action. Rollback: Actions > Deploy self-hosted > Run workflow with `rollback_sha` = previous known-good commit — the run redeploys the cached prior artifact (or rebuilds it from that exact commit if the cache was pruned) and passes the same verification gate.
+Production path (self-hosted, REEA-1054): **https://ns539626.ip-144-217-72.net** — the dedicated box at `/opt/reemco`. Every push to `main` runs `.github/workflows/deploy-selfhosted.yml`: it ships the versioned compose/Caddy/scripts, builds the image from the exact pushed tree **on the box**, deploys the pinned commit tag, and verifies the public surface (stamp, four security headers, health) plus the funnel smoke suite. Required repo Actions secrets (environment injection only): `DEPLOY_SSH_KEY`, `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_KNOWN_HOSTS`. The public address lives in one repo variable, `PROD_BASE_URL`. Rollback: Actions > Deploy self-hosted > Run workflow with `rollback_sha` = previous known-good commit — the run redeploys the cached prior artifact (or rebuilds it from that exact commit if the cache was pruned) and passes the same verification gate.
 
-Vercel is kept alive **only as the rollback path** until the board decides the DNS cutover and decommission: `.github/workflows/deploy.yml` is now manual-only and still deploys/rolls back https://reemco.vercel.app with `VERCEL_TOKEN`. `pickup.yml` is manual-only too (its push trigger was removed so a merge no longer produces two production deploys). `vercel.json` crons stay with Vercel and are inert once it stops taking traffic; the box's `reemco-health.timer` owns scheduled health checks. `keep-warm.yml` was deleted — the box has no serverless cold start.
+This is the **only** deploy path. Vercel was decommissioned in REEA-1076: the board confirmed `ns539626.ip-144-217-72.net` as production and `reemco.vercel.app` returned **402 `DEPLOYMENT_DISABLED`**, so it was no longer a usable rollback. `.github/workflows/deploy.yml`, `pickup.yml`, `vercel.json`, the `deploy:prod` npm script and the `VERCEL_TOKEN`/`VERCEL_TEAM_ID` repo secrets are gone. Scheduled health checks are owned by the box (`reemco-health.timer`, 08:17/14:57 UTC); `keep-warm.yml` was deleted earlier — the box has no serverless cold start. The `process.env.VERCEL` / `AWS_LAMBDA_FUNCTION_NAME` branches in the app are intentional fallbacks and stay (they are inert on the box, which sets `NODE_ENV=production` and no serverless vars).
 
 ### Deploy gate — lint + full test suite (REEA-1067)
 
-Every push to `main` runs `npm run lint` and `NODE_ENV=test KV_REST_API_URL= KV_REST_API_TOKEN= npm run test` in `.github/workflows/deploy-selfhosted.yml` **before** any SSH or on-box build — the same two commands the retired `vercel.json` `buildCommand` ran. Blast radius: a red gate fails on the GitHub runner and never touches the box, so there is nothing to roll back. Rollback Path: unchanged (`deploy.sh`/`rollback.sh`, auto-rollback on a failed verify); a `workflow_dispatch` rollback run deliberately skips lint/tests because it redeploys a previously verified artifact, and an emergency rollback must not be blocked by a gate that is red on main.
+Every push to `main` runs `npm run lint` and `NODE_ENV=test KV_REST_API_URL= KV_REST_API_TOKEN= npm run test` in `.github/workflows/deploy-selfhosted.yml` **before** any SSH or on-box build — the same two commands the retired `vercel.json` `buildCommand` used to run. Blast radius: a red gate fails on the GitHub runner and never touches the box, so there is nothing to roll back. Rollback Path: unchanged (`deploy.sh`/`rollback.sh`, auto-rollback on a failed verify); a `workflow_dispatch` rollback run deliberately skips lint/tests because it redeploys a previously verified artifact, and an emergency rollback must not be blocked by a gate that is red on main.
 
 The gate is CI-side, not in `infra/Dockerfile`: the box's CPU is production capacity and the Dockerfile stays build-only, and `.dockerignore` excludes `.github` while `src/ci-secrets.test.ts` reads `.github/workflows/deploy.yml` — an in-image suite would need a widened build context to mean anything. `src/deploy-gate.test.ts` pins the gate in place. The manual on-box build fallback (see Gotchas) bypasses CI and is therefore emergency-only: run the gate commands by hand before using it.
 
@@ -107,12 +99,10 @@ there are silently dropped.
 - Raw events are pruned after 90 days (Data Minimization); only aggregates outlive that.
 - Hardening: JSON-only, 16 KB cap, batch ≤ 20, schema-validated fields, 120 req/min rate limit
   (REEA-826: enforced per serverless instance, not deployment-wide).
-Deploy secrets: the self-hosted path uses `DEPLOY_SSH_KEY`/`DEPLOY_HOST`/`DEPLOY_USER`/`DEPLOY_KNOWN_HOSTS`; the Vercel rollback path still uses `VERCEL_TOKEN` (+ optional `VERCEL_TEAM_ID`). All are injected as environment secrets only — never committed or echoed.
-
-REEA-322 note: keep `vercel.json` limited to schema-approved keys (`additionalProperties: false` in Vercel's validator); a stray top-level `description` fails every build and freezes the alias at the last green artifact.
+Deploy secrets: the self-hosted path uses `DEPLOY_SSH_KEY`/`DEPLOY_HOST`/`DEPLOY_USER`/`DEPLOY_KNOWN_HOSTS`. All are injected as environment secrets only — never committed or echoed. There is no Vercel credential any more (REEA-1076).
 
 REEA-337 note: scheduled smoke check runs every 3h (`17 */3` / `47 */3` anchors, guard >=150min dedupe) to stay inside the Hobby Actions allowance; the tick also self-heals deploy parity (`__commit.txt` vs main HEAD, dispatches **Deploy self-hosted** on mismatch).
 
 REEA-371 keep-warm (**historical**): `.github/workflows/keep-warm.yml` pinged `GET /api/health` on a 5-minute cron plus once per push to `main` to keep the serverless alias warm. REEA-1054 deleted it: the self-hosted box runs a long-lived `next start`, so there is no cold-start penalty to pre-warm. The scheduled health tick now lives on the box (`reemco-health.timer`, 08:17/14:57 UTC), and the external uptime/smoke workflows own liveness alerting.
 
-Self-host config note (REEA-1051): the crawler-facing canonical origin used by `/sitemap.xml`, `/robots.txt` and the outbound `ReemcoBot` UA comes from `REEMCO_SITE_ORIGIN`; `infra/compose.prod.yml` derives it from the one `REEMCO_SITE_ADDRESS` line in `/etc/reemco/release.env`, so the live box advertises itself rather than the Vercel rollback alias (unset falls back to the historical Vercel origin). `/api/health` now resolves its `build` stamp from `public/__commit.txt` on the self-hosted image, where `VERCEL_GIT_COMMIT_SHA` exists only at build time.
+Self-host config note (REEA-1051): the crawler-facing canonical origin used by `/sitemap.xml`, `/robots.txt` and the outbound `ReemcoBot` UA comes from `REEMCO_SITE_ORIGIN`; `infra/compose.prod.yml` derives it from the one `REEMCO_SITE_ADDRESS` line in `/etc/reemco/release.env`, so the live box advertises itself. Since REEA-1076 the compiled-in fallback (env unset) is also the production host, `https://ns539626.ip-144-217-72.net`, not the retired Vercel alias. `/api/health` resolves its `build` stamp from `public/__commit.txt` on the self-hosted image, where `VERCEL_GIT_COMMIT_SHA` exists only at build time (set by `infra/Dockerfile` from `REEMCO_COMMIT`).

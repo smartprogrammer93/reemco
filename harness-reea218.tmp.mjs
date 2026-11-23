@@ -5,7 +5,7 @@ import { chromium as pw } from "playwright-core";
 import mod from "@sparticuz/chromium";
 const chromium = mod.default || mod;
 process.env.LD_LIBRARY_PATH = `/tmp/al2023/lib:${process.env.LD_LIBRARY_PATH || ""}`;
-const BASE = "https://reemco.vercel.app";
+const BASE = "https://ns539626.ip-144-217-72.net";
 const Q = process.argv[2] || "sony";
 const N = Number(process.argv[3] || 12);
 const browser = await pw.launch({ executablePath: await chromium.executablePath(), headless: true, args: chromium.args });

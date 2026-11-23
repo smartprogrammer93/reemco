@@ -12,7 +12,7 @@
  *    the left group carries the "Lowest listed price" chip vs not.
  * Writes PNG screenshots + evidence JSON next to QA_EVIDENCE.
  *
- * Usage: QA_BASE_URL=https://reemco.vercel.app node scripts/verify-reaa203.mjs
+ * Usage: QA_BASE_URL=https://ns539626.ip-144-217-72.net node scripts/verify-reaa203.mjs
  */
 import { existsSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { brotliDecompressSync } from "node:zlib";
@@ -20,7 +20,7 @@ import { execSync } from "node:child_process";
 import { chromium as pw } from "playwright-core";
 import chromium from "@sparticuz/chromium";
 
-const BASE = (process.env.QA_BASE_URL || "https://reemco.vercel.app").replace(/\/$/, "");
+const BASE = (process.env.QA_BASE_URL || "https://ns539626.ip-144-217-72.net").replace(/\/$/, "");
 const OUT = process.env.QA_EVIDENCE_DIR || "/work/task-ac898ff1-4b0c-4b2d-a461-6a962897b0ae/scratch";
 mkdirSync(OUT, { recursive: true });
 

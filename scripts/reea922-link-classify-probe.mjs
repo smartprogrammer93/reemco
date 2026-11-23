@@ -15,13 +15,13 @@
  * acted on. Re-run after any smoke-identity change to re-baseline.
  *
  * Usage: node scripts/reea922-link-classify-probe.mjs
- *   SMOKE_BASE_URL          base to measure (default https://reemco.vercel.app)
+ *   SMOKE_BASE_URL          base to measure (default https://ns539626.ip-144-217-72.net)
  *   LINK_PROBE_QUERIES      comma-separated fixture queries (default "sony,iphone")
  *   LINK_PROBE_PER_RETAILER max URLs sampled per retailer (default 12)
  *   LINK_PROBE_PAUSE_MS     pause between check requests (default 300)
  *   LINK_PROBE_UA_MODE      "all" (default) | "gbot" | "old" | "browse"
  */
-const BASE = (process.env.SMOKE_BASE_URL || "https://reemco.vercel.app").replace(/\/$/, "");
+const BASE = (process.env.SMOKE_BASE_URL || "https://ns539626.ip-144-217-72.net").replace(/\/$/, "");
 const QUERIES = (process.env.LINK_PROBE_QUERIES || "sony,iphone").split(",").map((q) => q.trim()).filter(Boolean).slice(0, 4);
 const PER_RETAILER = Math.max(1, Math.min(20, Number(process.env.LINK_PROBE_PER_RETAILER) || 12));
 const PAUSE_MS = Math.max(0, Number(process.env.LINK_PROBE_PAUSE_MS) || 300);

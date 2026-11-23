@@ -4,7 +4,7 @@ const browser = await pw.launch({ executablePath: await chromium.executablePath(
 const page = await browser.newPage();
 page.on("response", (r) => { const s = r.status(); if (s >= 400) console.log("HTTP", s, r.url()); });
 try {
-  await page.goto("https://reemco.vercel.app/product/asus-rog-strix-scope-ii", { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.goto("https://ns539626.ip-144-217-72.net/product/asus-rog-strix-scope-ii", { waitUntil: "domcontentloaded", timeout: 30000 });
   // Single long waitForFunction keeps the CDP session busy while hydration runs.
   const info = await page.waitForFunction(() => {
     const anchors = [...document.querySelectorAll("a")];

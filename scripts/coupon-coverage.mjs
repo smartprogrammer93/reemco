@@ -9,7 +9,7 @@
  *      seen on the FINAL snapshot.
  *  Print one JSON document to stdout — the weekly numbers are plain counts,
  *  no percentile games. */
-const BASE = "https://reemco.vercel.app";
+const BASE = "https://ns539626.ip-144-217-72.net";
 const QUERIES = ["iPhone 17 Pro","iPhone 17 Pro Max","Samsung Galaxy S25 Ultra","Samsung Galaxy S25","Xiaomi 15","Redmi Note","Sony WH-1000XM6","Sony WF","AirPods Pro 3","AirPods 4","JBL Tune","Samsung washing machine","LG refrigerator","Whirlpool microwave","Philips air fryer","Nutribullet","iphon 17 pro","reciever","samsng s25","whirpool microwave"];
 const HEADERS = { accept:"text/html,application/xhtml+xml","accept-language":"en","user-agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36" };
 

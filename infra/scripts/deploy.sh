@@ -111,7 +111,7 @@ if [ -n "$CURRENT" ]; then
   printf 'REEMCO_IMAGE_TAG=%s\n' "$CURRENT" > "$PREV_FILE"
   log "rollback target recorded: $CURRENT"
 else
-  log "no previous tag — this is the first deploy (rollback = DNS back to Vercel)"
+  log "no previous tag — first deploy on this host (no rollback target recorded yet)"
 fi
 
 # Pull first so the window where the old container is down is as short as

@@ -8,7 +8,7 @@ import { execSync } from "node:child_process";
 import { chromium as pw } from "playwright-core";
 import chromium from "@sparticuz/chromium";
 
-const BASE = "https://reemco.vercel.app";
+const BASE = "https://ns539626.ip-144-217-72.net";
 const LIB_DIR = "/tmp/al2023/lib";
 if (!existsSync(LIB_DIR)) {
   try {

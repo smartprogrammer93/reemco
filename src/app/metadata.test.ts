@@ -14,19 +14,19 @@ describe("robots route handler (/robots.txt)", () => {
   it("opens the site to all crawlers and references the sitemap", () => {
     const out = robots();
     expect(out.rules).toMatchObject({ userAgent: "*", allow: "/" });
-    expect(out.sitemap).toBe("https://reemco.vercel.app/sitemap.xml");
+    expect(out.sitemap).toBe("https://ns539626.ip-144-217-72.net/sitemap.xml");
   });
 });
 
 describe("sitemap route handler (/sitemap.xml)", () => {
   it("lists the core pages and top-query result pages as absolute URLs", () => {
     const urls = sitemap().map((entry) => entry.url);
-    expect(urls).toContain("https://reemco.vercel.app");
-    expect(urls).toContain("https://reemco.vercel.app/about");
-    expect(urls).toContain("https://reemco.vercel.app/privacy");
-    expect(urls).toContain("https://reemco.vercel.app/contact");
+    expect(urls).toContain("https://ns539626.ip-144-217-72.net");
+    expect(urls).toContain("https://ns539626.ip-144-217-72.net/about");
+    expect(urls).toContain("https://ns539626.ip-144-217-72.net/privacy");
+    expect(urls).toContain("https://ns539626.ip-144-217-72.net/contact");
     // Top-query result pages use the live /results?q= shape.
-    expect(urls.filter((u) => /^https:\/\/reemco\.vercel\.app\/results\?q=\S/.test(u)).length)
+    expect(urls.filter((u) => /^https:\/\/ns539626\.ip-144-217-72\.net\/results\?q=\S/.test(u)).length)
       .toBeGreaterThanOrEqual(3);
     // Every entry is absolute — relative URLs break XML sitemap validation.
     expect(urls.every((u) => /^https:\/\//.test(u))).toBe(true);

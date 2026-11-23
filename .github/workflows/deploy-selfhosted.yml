@@ -2,9 +2,11 @@ name: Deploy self-hosted (primary)
 
 # REEA-1054 — PRIMARY production deploy path for the self-hosted box.
 #
-# Every push to main deploys to the box at /opt/reemco. Vercel is kept alive
-# ONLY as the rollback path until the board decides the DNS cutover and the
-# decommission (REEA-1054 scope: do not decommission Vercel here).
+# Every push to main deploys to the box at /opt/reemco. Since REEA-1076 this is
+# the ONLY deploy path: the Vercel rollback plumbing (deploy.yml, pickup.yml,
+# vercel.json, VERCEL_TOKEN/VERCEL_TEAM_ID) was removed once the board confirmed
+# the box's hostname as production and `reemco.vercel.app` started returning
+# 402 DEPLOYMENT_DISABLED.
 #
 # Artifact decision (REE-1054): the box builds from /opt/reemco/src; GHCR gets
 # NO credentials on the box. Rationale and tradeoff are recorded in the
@@ -96,8 +98,8 @@ jobs:
       #  - the box's CPU is production capacity; tests belong on the runner
       #    (Cost-per-Environment), and the box already builds the artifact;
       #  - `.dockerignore` excludes `.github`, but `src/ci-secrets.test.ts`
-      #    reads `.github/workflows/deploy.yml`, so an in-image `npm run test`
-      #    would need a widened build context to be meaningful.
+      #    reads `.github/workflows/deploy-selfhosted.yml`, so an in-image
+      #    `npm run test` would need a widened build context to be meaningful.
       #
       # Rollback Path: unchanged (`deploy.sh`/`rollback.sh`, auto-rollback on
       # a failed verify). A `workflow_dispatch` rollback run SKIPS lint/tests:

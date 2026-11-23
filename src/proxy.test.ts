@@ -44,7 +44,7 @@ describe("REEA-74 Stage-1 enforce CSP policy", () => {
 
 const LEGACY_REPORT = {
   "csp-report": {
-    "document-uri": "https://reemco.vercel.app/results?q=shoes",
+    "document-uri": "https://ns539626.ip-144-217-72.net/results?q=shoes",
     referrer: "",
     "violated-directive": "script-src-elem",
     "effective-directive": "script-src-elem",
@@ -57,9 +57,9 @@ const LEGACY_REPORT = {
 const MODERN_REPORT = {
   type: "csp-violation",
   age: 12,
-  url: "https://reemco.vercel.app/",
+  url: "https://ns539626.ip-144-217-72.net/",
   body: {
-    documentURL: "https://reemco.vercel.app/",
+    documentURL: "https://ns539626.ip-144-217-72.net/",
     effectiveDirective: "img-src",
     blockedURL: "https://tracker.example/pixel",
     statusCode: 0,
@@ -139,7 +139,7 @@ describe("REEA-74 /api/csp-report sink", () => {
           format: "legacy",
           directive: "script-src",
           statusCode: 200,
-          documentOrigin: "https://reemco.vercel.app",
+          documentOrigin: "https://ns539626.ip-144-217-72.net",
           sourceFile: "https://evil.example/x.js",
         },
         store as never,
@@ -155,7 +155,7 @@ describe("REEA-74 /api/csp-report sink", () => {
 
 describe("REEA-447 shared cache window + query forwarding on results addresses", () => {
   it("sets the bounded window pair together on the served /results response", () => {
-    const res = proxy(new NextRequest("https://reemco.vercel.app/results?q=sony"));
+    const res = proxy(new NextRequest("https://ns539626.ip-144-217-72.net/results?q=sony"));
     const cc = res.headers.get("Cache-Control") ?? "";
     expect(cc).toContain("s-maxage=");
     expect(cc).not.toContain("no-store");
@@ -168,7 +168,7 @@ describe("REEA-447 shared cache window + query forwarding on results addresses",
     // render as x-middleware-request-* — that is the lane the layout reads
     // `x-query-text` from on a cold GET (decoded in src/lib/i18n-server.ts).
     const req = new NextRequest(
-      "https://reemco.vercel.app/results?q=" + encodeURIComponent("كيفيات"),
+      "https://ns539626.ip-144-217-72.net/results?q=" + encodeURIComponent("كيفيات"),
     );
     const res = proxy(req);
     const forwarded = res.headers.get("x-middleware-request-x-query-text");
@@ -178,7 +178,7 @@ describe("REEA-447 shared cache window + query forwarding on results addresses",
   });
 
   it("keeps the hardening CSP on non-results paths without the window pair", () => {
-    const res = proxy(new NextRequest("https://reemco.vercel.app/about"));
+    const res = proxy(new NextRequest("https://ns539626.ip-144-217-72.net/about"));
     expect(res.headers.get("Content-Security-Policy")).toContain("default-src 'self'");
     // The window belongs to the results addresses only (RESULTS_PATHS).
     expect(res.headers.get("Cache-Control") ?? "").toBe("");

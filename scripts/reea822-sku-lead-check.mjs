@@ -10,7 +10,7 @@ import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 
-const BASE = (process.env.SMOKE_BASE_URL || "https://reemco.vercel.app").replace(/\/$/, "");
+const BASE = (process.env.SMOKE_BASE_URL || "https://ns539626.ip-144-217-72.net").replace(/\/$/, "");
 
 async function launchBrowser() {
   const { chromium: pw } = await import("playwright-core");

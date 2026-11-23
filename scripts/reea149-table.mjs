@@ -2,8 +2,8 @@
 // One row per query: query string, distinct merchants whose offers actually
 // rendered in the served HTML, whether >=1 offer appeared, and the newest/
 // oldest scrapedAt ages from the live payload (AC4: within 24 h). Usage:
-//   BASE=https://reemco.vercel.app node scripts/reea149-table.mjs
-const BASE = (process.env.BASE || "https://reemco.vercel.app").replace(/\/$/, "");
+//   BASE=https://ns539626.ip-144-217-72.net node scripts/reea149-table.mjs
+const BASE = (process.env.BASE || "https://ns539626.ip-144-217-72.net").replace(/\/$/, "");
 const QUERIES = [
   "WH-1000XM6",
   "AirPods Pro",

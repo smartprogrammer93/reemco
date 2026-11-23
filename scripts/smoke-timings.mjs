@@ -24,7 +24,7 @@
  * Usage: node scripts/smoke-timings.mjs            (prints the report)
  *        import { measureResultsTimings } ...      (used by smoke-check.mjs)
  */
-const BASE = (process.env.SMOKE_BASE_URL || "https://reemco.vercel.app").replace(/\/$/, "");
+const BASE = (process.env.SMOKE_BASE_URL || "https://ns539626.ip-144-217-72.net").replace(/\/$/, "");
 
 // Fixed set from the REEA-255 benchmark doc (key: benchmark) — 16 normal rows
 // + 4 typo rows, verbatim. Do not edit without re-baselining REEA-255.

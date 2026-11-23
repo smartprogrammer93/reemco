@@ -51,7 +51,7 @@ const page = await browser.newPage();
 page.setDefaultTimeout(30000);
 
 await page.setViewportSize({ width: 1280, height: 900 });
-await page.goto(`https://reemco.vercel.app/results?q=${encodeURIComponent("iPhone 17 Pro Max")}`, { waitUntil: "load" });
+await page.goto(`https://ns539626.ip-144-217-72.net/results?q=${encodeURIComponent("iPhone 17 Pro Max")}`, { waitUntil: "load" });
 await page.waitForSelector('section[aria-label="Prices and availability by retailer"] li', { timeout: 15000 });
 console.log("WIDTH1280", JSON.stringify(await page.evaluate(probe), null, 1));
 

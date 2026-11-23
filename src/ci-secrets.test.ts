@@ -3,26 +3,41 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-// REEA-375 CI secrets hygiene. Two checks, both red on the pre-fix state:
-//  1. deploy.yml passed VERCEL_TOKEN both via step env AND the `--token` CLI
-//     arg. The arg is visible in ephemeral-runner process listings; env alone
-//     is sufficient (the Vercel CLI reads VERCEL_TOKEN from the environment).
-//     Old code contained `--token "$VERCEL_TOKEN"` -> this test fails.
+// REEA-375 / REEA-1076 CI secrets hygiene. Two checks:
+//  1. The self-hosted deploy injects its SSH key from repo secrets and never
+//     repeats it as a CLI argument (an arg is visible in ephemeral-runner
+//     process listings). The Vercel decommission (REEA-1076) removed the last
+//     workflow that read a Vercel credential, so no workflow may reference
+//     VERCEL_TOKEN any more.
 //  2. The shared checkout embedded the GitHub PAT in the git origin URL, so
 //     every `git remote -v` dumped the credential. Fixed by moving the PAT to
 //     a credential store (~/.git-credentials) with a clean origin URL.
-describe("REEA-375 CI secrets hygiene", () => {
+describe("REEA-375 / REEA-1076 CI secrets hygiene", () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const workflowsDir = path.join(repoRoot, ".github", "workflows");
 
-  it("injects VERCEL_TOKEN via env and never repeats it as a --token CLI arg", () => {
+  it("injects the deploy SSH key via env and never repeats it as a CLI arg", () => {
     const workflow = readFileSync(
-      path.join(repoRoot, ".github", "workflows", "deploy.yml"),
+      path.join(workflowsDir, "deploy-selfhosted.yml"),
       "utf8",
     );
-    // env injection must stay: step-level env blocks map secrets into env.
-    expect(workflow).toContain("VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}");
-    // the redundant CLI arg must be gone (old code failed here).
-    expect(workflow).not.toContain('--token "$VERCEL_TOKEN"');
+    // env/printf injection must stay: the key comes from repo secrets only.
+    expect(workflow).toContain("secrets.DEPLOY_SSH_KEY");
+    expect(workflow).not.toContain("--token");
+  });
+
+  it("has no Vercel credential left in any workflow", () => {
+    for (const file of ["deploy-selfhosted.yml", "smoke-scheduled.yml", "stamp-parity.yml", "timing-probe.yml", "uptime.yml"]) {
+      const workflow = readFileSync(path.join(workflowsDir, file), "utf8");
+      expect(workflow, `${file} still injects secrets.VERCEL_TOKEN`).not.toContain("secrets.VERCEL_TOKEN");
+      expect(workflow, `${file} still injects secrets.VERCEL_TEAM_ID`).not.toContain("secrets.VERCEL_TEAM_ID");
+    }
+  });
+
+  it("no longer ships a Vercel deploy path (REEA-1076)", () => {
+    expect(existsSync(path.join(workflowsDir, "deploy.yml"))).toBe(false);
+    expect(existsSync(path.join(workflowsDir, "pickup.yml"))).toBe(false);
+    expect(existsSync(path.join(repoRoot, "vercel.json"))).toBe(false);
   });
 
   it("keeps the checkout remote URL free of embedded credentials", () => {
@@ -44,12 +59,12 @@ describe("REEA-375 CI secrets hygiene", () => {
     // checkout embeds it as a `name:token@host` pair that every
     // `git remote -v` echoes. A bare username prefix (the scp notation's
     // `git@`) carries no secret and is fine. REEA-813: platform CI hosts
-    // (Vercel git integration among them) legitimately check out through
-    // ephemeral app identities like `x-access-token:<ephemeral>@github.com`
-    // — a short-lived, host-issued token that is not the durable PAT and
-    // never lands in the durable repo config. Rejecting every `user:pass@`
-    // pair made the deploy gate (`npm run test` inside the vercel.json
-    // buildCommand) red on exactly those checkouts while the CLI deploy
+    // (the retired Vercel git integration among them) legitimately check out
+    // through ephemeral app identities like
+    // `x-access-token:<ephemeral>@github.com` — a short-lived, host-issued
+    // token that is not the durable PAT and never lands in the durable repo
+    // config. Rejecting every `user:pass@` pair made the deploy gate
+    // (`npm run test`) red on exactly those checkouts while the CLI deploy
     // path (no `.git` uploaded, test skipped) stayed green — the "two
     // deployments per commit, one fails one passes" pattern. The check now
     // polices the credential-embedding shape itself: a `user:secret@` pair

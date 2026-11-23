@@ -8,7 +8,7 @@
  *
  *  Usage: node scripts/reaa408-counts.mjs [rounds] [--quiet]
  */
-const BASE = "https://reemco.vercel.app";
+const BASE = "https://ns539626.ip-144-217-72.net";
 const QUERIES = ["iPhone 17 Pro", "WH-1000XM6", "أرز بسمتي", "لابتوب ديل"];
 const HEADERS = {
   accept: "text/html,application/xhtml+xml",

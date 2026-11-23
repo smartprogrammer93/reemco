@@ -1,16 +1,18 @@
 /**
- * REEA-1051 — crawler-facing canonical origin must follow the serving host.
+ * REEA-1051 / REEA-1076 — crawler-facing canonical origin must follow the
+ * serving host.
  *
  * /sitemap.xml and /robots.txt used to name the Vercel alias literally, which
  * on the self-hosted box pointed every crawler-learned URL at the 402 rollback
- * host. The origin is now REEMCO_SITE_ORIGIN-driven with the historical value
- * as the default.
+ * host. The origin is now REEMCO_SITE_ORIGIN-driven; since the Vercel
+ * decommission the compiled-in fallback is the production host.
  */
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SITE_ORIGIN, siteOrigin } from "@/lib/site-origin";
 
 describe("siteOrigin (REEA-1051)", () => {
-  it("defaults to the historical Vercel origin when unset", () => {
+  it("defaults to the production host, never the retired Vercel alias", () => {
+    expect(DEFAULT_SITE_ORIGIN).toBe("https://ns539626.ip-144-217-72.net");
     expect(siteOrigin({})).toBe(DEFAULT_SITE_ORIGIN);
     expect(siteOrigin({ REEMCO_SITE_ORIGIN: "   " })).toBe(DEFAULT_SITE_ORIGIN);
   });

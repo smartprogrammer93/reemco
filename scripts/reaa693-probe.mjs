@@ -38,7 +38,7 @@
 import https from "node:https";
 import zlib from "node:zlib";
 
-const BASE = (process.env.SMOKE_BASE_URL || "https://reemco.vercel.app").replace(/\/$/, "");
+const BASE = (process.env.SMOKE_BASE_URL || "https://ns539626.ip-144-217-72.net").replace(/\/$/, "");
 const QUERIES = ["iPhone 17 Pro", "Samsung Galaxy S25 Ultra"];
 const FIRST_OFFER_RE = /<article class="result-card"(?! aria-hidden)/;
 const HEADING_COUNT_RE = /<span class="tabular">(\d+)<\/span>/g;

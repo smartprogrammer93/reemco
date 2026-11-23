@@ -25,7 +25,7 @@ does not exist on the host.
 | `scripts/assert-containers.sh` | Post-deploy `docker inspect` assertions on the running stack (called by `verify.sh`) |
 | `scripts/backup.sh` | Restic backup of the durable state (docker volumes + `/opt/reemco` + `/etc/reemco`) |
 | `scripts/restore-drill.sh` | Restore latest snapshot to a scratch dir and verify the sample against live volumes |
-| `systemd/` | `/api/health` probe timers (replaces `vercel.json` crons) + daily backup |
+| `systemd/` | `/api/health` probe timers (the scheduled health cadence) + daily backup |
 | `app.env.example` | Runtime **secrets** → `/etc/reemco/app.env` (0640) |
 | `release.env.example` | Non-secret site config → `/etc/reemco/release.env` (0640) |
 | `backup.env.example` | Backup target config → `/etc/reemco/backup.env` (0640); password file 0600, never committed |
@@ -58,8 +58,9 @@ Manual equivalent on the host: `sudo /opt/reemco/scripts/deploy.sh --tag <sha>`.
 Run the same workflow with `rollback_sha` = the previous known-good commit
 (no rebuild — it redeploys the existing artifact). On-host equivalent:
 `sudo /opt/reemco/scripts/rollback.sh` (uses `/etc/reemco/image-tag.prev.env`,
-written by every deploy). If the box itself is unreachable, the cutover
-rollback is the DNS A record back to Vercel while that deployment stays live.
+written by every deploy). This is the only rollback path since REEA-1076: the
+Vercel alias (402 `DEPLOYMENT_DISABLED`) is gone, so if the box itself is
+unreachable the recovery path is the host backup/restore drill, not a DNS flip.
 
 **No rollback path, no deploy.**
 
@@ -223,14 +224,14 @@ sudo docker compose -f /opt/reemco/compose.prod.yml --env-file /etc/reemco/relea
 ## Observability
 
 - `reemco-health.timer` hits `/api/health` at 08:17 and 14:57 UTC (the two
-  `vercel.json` cron slots) via loopback.
+  legacy cron slots) via loopback.
 - `reemco-backup.timer` runs nightly at 03:23 UTC when `/etc/reemco/backup.env`
   exists; without it the unit no-ops rather than failing red. The run is green
   and logged to `/var/log/reemco/backup.log` (snapshot id included).
 - Deploy/rollback output appends to `/var/log/reemco/deploy.log`; container logs
   are rotated by the daemon config (`20m × 5`).
-- External uptime probe (`uptime.yml`) is repointed at the new host during the
-  parallel run; keep it on Vercel until DNS cutover.
+- External uptime probe (`uptime.yml`) probes this box through `PROD_BASE_URL`.
+  It is the only production surface (REEA-1076 removed the Vercel alias).
 
 ## Still owned by the CEO (blocking cutover, not this commit)
 
@@ -274,8 +275,8 @@ a named volume, memory capped at 384 MB with `allkeys-lru`. The old
 `hiett/serverless-redis-http` gateway was removed: its `latest` image answered
 404 for the Upstash path-style commands the app issues, so every KV call
 degraded to the per-container `/data` store. `KV_REST_API_URL`/`KV_REST_API_TOKEN`
-remain supported for a Vercel deployment that binds a hosted store; with
-`REDIS_URL` present it wins (kv.ts selection order).
+remain supported for any deployment that binds a hosted KV store (the retired
+Vercel one included); with `REDIS_URL` present it wins (kv.ts selection order).
 
 `/api/health` is pinned to `REEMCO_HEALTH_ORIGIN=http://127.0.0.1:3000`: the
 public-surface hops (DNS/TLS/proxy) are asserted by `verify.sh` and the smoke

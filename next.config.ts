@@ -24,8 +24,8 @@ import { RESULTS_PATHS, sharedWindowHeaders } from "./src/proxy";
 const nextConfig: NextConfig = {
   // REEA-729 stamp parity — the RSC payload build id (`"b"` in the served
   // shell) and public/__commit.txt must name the same artifact with the same
-  // string. The buildCommand (vercel.json) stamps __commit.txt with
-  // ${VERCEL_GIT_COMMIT_SHA:-$(git rev-parse HEAD)}; mirror that exact chain
+  // string. infra/Dockerfile stamps __commit.txt with the REEMCO_COMMIT build
+  // arg and exports it as VERCEL_GIT_COMMIT_SHA; mirror that exact chain
   // here so the Next build id is that same SHA instead of an opaque random
   // id, and both verification lanes (commit endpoint vs payload) grade one value.
   generateBuildId: async () => {
@@ -48,8 +48,8 @@ const nextConfig: NextConfig = {
     }));
   },
   // STATIC_EXPORT=1 ships a static snapshot for offline checks. The default
-  // is the production server build (reemco.vercel.app on Vercel, or
-  // `next start`) so the REEA-37 funnel endpoints under /api/events are served.
+  // is the production server build (the self-hosted box, or `next start`) so
+  // the REEA-37 funnel endpoints under /api/events are served.
   ...(process.env.STATIC_EXPORT === "1" ? { output: "export" } : {}),
   // REEA-1044 — the self-hosted image (infra/Dockerfile) builds with
   // NEXT_OUTPUT=standalone so `node server.js` runs from a traced bundle

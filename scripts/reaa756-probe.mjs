@@ -39,7 +39,7 @@ import { existsSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const BASE = (process.env.SMOKE_BASE_URL || "https://reemco.vercel.app").replace(/\/$/, "");
+const BASE = (process.env.SMOKE_BASE_URL || "https://ns539626.ip-144-217-72.net").replace(/\/$/, "");
 const QUERIES = ["iPhone 17 Pro", "Samsung Galaxy S25 Ultra"];
 // First real offer card: the streamed card markup starts its class list with
 // `result-card` (cascade/stagger classes follow inside the quotes); skeleton
