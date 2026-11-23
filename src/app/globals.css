@@ -1207,6 +1207,19 @@ html[lang="ar"] .coupon-via {
   opacity: 0.85;
 }
 
+/* REEA-1091 — freshness-anchored offer-row CTA label. The anchors that carry
+   it are inline-flex buttons, so a fragment of text + spans would become
+   separate flex items and lose the authored whitespace ("Checked4s ago·Xcite").
+   The label is one flex item with normal inline flow inside: the spaces around
+   the age and the "·" separator render as authored, and long labels still wrap
+   between words (never inside the tabular age). White-space stays INHERITED so
+   the .offer-row .btn-primary no-wrap rule keeps its guarantee. */
+.offer-cta-label {
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+}
+
 /* Reduced motion: plain fades only — no transforms, no stagger, no sweep. */
 @media (prefers-reduced-motion: reduce) {
   .result-card,

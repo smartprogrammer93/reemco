@@ -97,11 +97,19 @@ export default function OfferCtaLabel({
     return <>{fallback}</>;
   }
   const t = getStrings(locale ?? clientLocale());
+  // REEA-1091 — the CTA anchors are inline-flex (.btn-primary/.btn-outline/
+  // .r2-btn), so returning a fragment here makes "Checked", the age, " · " and
+  // the merchant separate FLEX ITEMS: flex drops the whitespace-only text
+  // nodes and trims the separator's edges, rendering "Checked4s ago·Xcite".
+  // The label therefore ships as ONE flex item with normal inline flow inside
+  // (.offer-cta-label), keeping the authored spaces around the age and the
+  // separator ("Checked 4s ago · Xcite") while the anchor still owns the
+  // button layout.
   return (
-    <>
+    <span className="offer-cta-label">
       {t.ctaCheckedLead} <LiveAge collectedAt={collectedAt} initialSeconds={initialSeconds} locale={locale} />
       {" · "}
       <bdi>{merchant}</bdi>
-    </>
+    </span>
   );
 }

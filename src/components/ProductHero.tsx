@@ -195,6 +195,11 @@ export default function ProductHero(props: {
   country?: CountryCode | null;
   locale?: Locale;
   firstStage?: Promise<CollectJob | null>;
+  /** REEA-283/REEA-1091 — the product page's baked server render clock. Every
+   *  age / elapsed / status label on the first paint derives from it, so the
+   *  served HTML and the hydration pass agree (no Date.now() recompute → no
+   *  React #418); the live ticker only starts after mount. */
+  renderStartMs?: number;
 }) {
   return (
     <Suspense fallback={<PanelFallback locale={props.locale} />}>
@@ -208,17 +213,23 @@ function ProductHeroBody({
   country = null,
   locale,
   firstStage,
+  renderStartMs,
 }: {
   product: NormalizedProduct;
   country?: CountryCode | null;
   locale?: Locale;
   firstStage?: Promise<CollectJob | null>;
+  renderStartMs?: number;
 }) {
   const t = getStrings(locale ?? clientLocale());
   const snap = firstStage ? use(firstStage) : null;
   const { state, cachedNoticeAt, start, retryRetailer, attach } = useCollection(product.productId, snap);
   const [staleFallback, setStaleFallback] = useState<CollectJob | null>(null);
-  const [now, setNow] = useState(() => Date.now());
+  // REEA-283/REEA-1091 — the FIRST paint reuses the page's baked render clock
+  // instead of a fresh Date.now(), so the streamed hero/offer ages, status
+  // tokens and elapsed label are identical in the served HTML and the
+  // hydration pass. The interval takes over with the real clock after mount.
+  const [now, setNow] = useState(() => renderStartMs ?? Date.now());
   const phase = state as CollectionPhase;
   const collecting = phase.kind === "polling";
   useEffect(() => {

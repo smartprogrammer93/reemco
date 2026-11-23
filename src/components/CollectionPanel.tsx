@@ -21,11 +21,14 @@ import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import CollectionPulse, { PulseOfferCascade } from "@/components/CollectionPulse";
 import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
 
-function OfferRow({ offer, best, locale }: { offer: LiveOffer; best: boolean; locale?: Locale }) {
+function OfferRow({ offer, best, locale, now }: { offer: LiveOffer; best: boolean; locale?: Locale; now?: number }) {
   const l = locale ?? clientLocale();
   const t = getStrings(l);
   // REEA-1095 AC10/AC11 — humanised/localised, never a raw "0s ago".
-  const ago = localizedAgeFromStamp(l, offer.collectedAt);
+  // REEA-283/REEA-1091 — derive the age from the panel's one clock instead of
+  // reading Date.now() here, so the stale-fallback rows and the rest of the
+  // panel tell the same time story on the first client render.
+  const ago = localizedAgeFromStamp(l, offer.collectedAt, now);
   return (
     <li
       style={{
@@ -104,6 +107,11 @@ export default function CollectionPanel(props: {
    *  not start resolves to null, and the panel then takes the old
    *  client-initiated path (mount starts the run) instead of erroring. */
   firstStage?: Promise<CollectJob | null>;
+  /** REEA-283/REEA-1091 — the product page's baked server render clock. Every
+   *  age / elapsed label on the first paint derives from it, so the served
+   *  HTML and the hydration pass agree (no Date.now() recompute → no React
+   *  #418); the live ticker only starts after mount. */
+  renderStartMs?: number;
 }) {
   return (
     <Suspense fallback={<PanelFallback locale={props.locale} />}>
@@ -142,12 +150,14 @@ function CollectionPanelBody({
   country = null,
   locale,
   firstStage,
+  renderStartMs,
 }: {
   productId: string;
   currency: string;
   country?: CountryCode | null;
   locale?: Locale;
   firstStage?: Promise<CollectJob | null>;
+  renderStartMs?: number;
 }) {
   const t = getStrings(locale ?? clientLocale());
   // Server-started staged snapshot (REEA-248): the boundary flushes with the
@@ -157,7 +167,11 @@ function CollectionPanelBody({
   const { state, cachedNoticeAt, start, retryRetailer, attach } = useCollection(productId, snap);
   const [staleFallback, setStaleFallback] = useState<CollectJob | null>(null);
   // Ticking clock for the elapsed label — updates via interval, never during render.
-  const [now, setNow] = useState(() => Date.now());
+  // REEA-283/REEA-1091: the FIRST paint must reuse the page's baked render
+  // clock, not a fresh Date.now(), or the streamed elapsed label changes on
+  // hydration (React #418). The interval takes over with the real clock after
+  // mount.
+  const [now, setNow] = useState(() => renderStartMs ?? Date.now());
   const collecting = (state as CollectionPhase).kind === "polling";
   useEffect(() => {
     if (!collecting) return;
@@ -242,7 +256,11 @@ function CollectionPanelBody({
       )}
 
       {job && job.offers.length > 0 && (
-        <PulseOfferCascade offers={filterOffersByCountry(sortOffers(job.offers), country)} locale={locale} />
+        <PulseOfferCascade
+          offers={filterOffersByCountry(sortOffers(job.offers), country)}
+          locale={locale}
+          renderStartMs={renderStartMs}
+        />
       )}
 
       {/* Full-failure error state with retry CTA (AC6) — never a silent empty state. */}
@@ -285,6 +303,7 @@ function CollectionPanelBody({
                     offer={{ ...offer, method: "cache" }}
                     best={i === 0}
                     locale={locale}
+                    now={now}
                   />
                 ))}
               </ul>

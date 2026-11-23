@@ -75,9 +75,14 @@ function RetailerChip({
 export function PulseOfferCascade({
   offers,
   locale,
+  renderStartMs,
 }: {
   offers: (LiveOffer & { coupon?: Coupon })[];
   locale?: Locale;
+  /** REEA-283/REEA-1091 — baked server render clock from the product page,
+   *  forwarded to every offer card so the streamed CTA/freshness labels agree
+   *  with the hydration pass. */
+  renderStartMs?: number;
 }) {
   // REEA-604 — ONE normalized effective-price key (KWD-based, coupon/was-price
   // evidence folded) decides the best card and the savings gap across mixed
@@ -165,6 +170,7 @@ export function PulseOfferCascade({
                   : null
               }
               locale={locale}
+              renderStartMs={renderStartMs}
             />
           </li>
         );

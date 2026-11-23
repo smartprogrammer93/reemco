@@ -35,6 +35,14 @@ export default async function ProductPage({
   // offer set. No param → unchanged behavior.
   const { c } = await searchParams;
   const country = sanitizeCountry(c);
+  // REEA-283/REEA-1091 — one clock reading per server render, taken BEFORE the
+  // live fan-out starts. It is threaded into the hero card and the live panel
+  // (and down to every offer card), so the served HTML and the hydration pass
+  // derive the same "Checked Ns ago" / freshness / elapsed labels. Without a
+  // baked value the client components fall back to Date.now() DURING render,
+  // which recomputes on hydration and logs React #418 (text mismatch).
+  // eslint-disable-next-line react-hooks/purity -- intentional single clock read per server render (REEA-283); hydration reuses the serialized value.
+  const renderStartMs = Date.now();
   // REEA-279 — chrome locale for the detail card, the live panel and the
   // back link; cookie → Accept-Language hint → "en".
   const locale = await resolveRequestLocale();
@@ -94,6 +102,7 @@ export default async function ProductPage({
       country={country}
       locale={locale}
       firstStage={firstStage}
+      renderStartMs={renderStartMs}
     />
   );
 }
