@@ -3031,12 +3031,22 @@ export interface LiveSearchStages {
   adapterTelemetry: Promise<AdapterTelemetry>;
   /**
    * REEA-1078 — which clock this serve's weekly latency record measures.
-   * "warm" = a fresh query-memo hit: NO fan-out ran, so the page's after()
-   * wall clock is the serve clock (request → finalized response) and the
-   * weekly fold lands it in the warm band set. "cold" = a live fan-out ran
-   * (fresh, stale-while-revalidate, or the shared replay racing its hops),
-   * so the recorded wall clock is the cold collection clock. Set here, not
-   * guessed in the page: only this function knows whether the memo answered.
+   * "warm" = the shopper's first paint came from a cached live answer: a
+   * fresh memo hit (no fan-out ran) OR a stale-while-revalidate repeat (the
+   * cached snapshot led the page while the live run deepened behind it). In
+   * both cases the page's after() wall clock is the SERVE clock (request →
+   * finalized response) — what the repeat shopper actually experiences —
+   * and the weekly fold lands it in the warm band set.
+   * "cold" = no cached first paint existed, so the recorded wall clock is the
+   * cold collection clock (fan-out start → converged answer).
+   *
+   * Why SWR counts as warm: on the self-hosted box the completion budget
+   * closes before the slowest hops land, so the memo write is STALE almost
+   * every time and a repeat takes the SWR path. If that repeat were folded
+   * into the cold 3–10 s band, every serve would read as "3–10 s" and the
+   * counter could still not answer "what does a repeat shopper experience"
+   * (the REEA-1074 F4 defect this AC names). Set here, not guessed in the
+   * page: only this function knows whether a cached answer led the paint.
    */
   serveKind: ServeKind;
 }
@@ -3673,6 +3683,11 @@ export function collectLiveResultsStaged(
   const hit = cache.read<LiveSearchResult>(cacheKey);
   const cached: QueryCacheHit<LiveSearchResult> | null =
     hit && opts.refresh && !hit.stale ? { ...hit, stale: true } : hit;
+  // REEA-1078 — ANY cache hit means a cached live answer led the first paint
+  // (fresh memo hit, or the SWR repeat below). The serve kind is stamped from
+  // that fact so the weekly fold records the shopper's serve clock instead of
+  // a cold collection clock.
+  const serveKind: ServeKind = cached ? "warm" : "cold";
   if (cached && !cached.stale) {
     // REEA-743 — the memo hit bypasses the fresh ranking chain entirely:
     // re-head the stored snapshot with the exact-SKU guard at serve time.
@@ -3886,18 +3901,20 @@ export function collectLiveResultsStaged(
 
   if (cached) {
     // Stale window only reaches here (fresh returns above): cache-first flush,
-    // live stages behind it, converged full-ranked final. REEA-1078 — a live
-    // fan-out DID run behind the response, so this is a cold serve.
+    // live stages behind it, converged full-ranked final. REEA-1078 — the
+    // shopper's FIRST PAINT is the cached live answer, so this is a warm
+    // serve: the recorded clock is the serve clock (request → finalized
+    // response), not the collection clock of the fan-out deepening behind it.
     return {
       stages: [Promise.resolve(skuLeadSnap(q, cached.value)), ...stages],
       final,
       allSettled,
       converged,
       adapterTelemetry,
-      serveKind: "cold",
+      serveKind: "warm",
     };
   }
-  return { stages, final, allSettled, converged, adapterTelemetry, serveKind: "cold" };
+  return { stages, final, allSettled, converged, adapterTelemetry, serveKind };
 }
 
 /**

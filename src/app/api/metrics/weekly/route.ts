@@ -64,9 +64,12 @@
  * cards_multi_retailer and the derived ratio over the served card sets, the
  * core comparison promise that was previously unmeasured — and (b) a warm
  * serve latency band set (`latency_warm_band_*`) disjoint from the cold
- * collection bands (`latency_band_*`). A fresh memo hit ran no fan-out, so
- * its recorded wall clock is the serve clock; without the split every warm
- * serve read as 3–10 s cold. Cold + warm bands sum to searches, and
+ * collection bands (`latency_band_*`). A warm serve is one where a cached
+ * live answer led the shopper's first paint (a fresh memo hit, or the
+ * stale-while-revalidate repeat that is the normal repeat on the self-hosted
+ * box because the completion budget closes before the slowest hops land), so
+ * its recorded wall clock is the serve clock; without the split every repeat
+ * read as 3–10 s cold. Cold + warm bands sum to searches, and
  * cards_multi_retailer ≤ cards_total by construction. Aggregate integers
  * only — still no per-user, per-query or per-card data.
  */

@@ -154,12 +154,13 @@ export function warmLatencyBandOf(latencyMs: number): WarmLatencyBand {
 }
 
 /**
- * REEA-1078 — which clock a serve's latency belongs to. "warm" = a fresh
- * query-memo hit: no fan-out ran, so the recorded wall clock is the serve
- * clock. "cold" = a live fan-out ran (fresh, stale-while-revalidate, or the
- * shared-layer replay racing its own hops), so the recorded wall clock is the
- * cold collection clock. Default "cold" keeps every pre-change caller/tests
- * byte-identical.
+ * REEA-1078 — which clock a serve's latency belongs to. "warm" = a cached
+ * live answer led the shopper's first paint (a fresh memo hit, or a
+ * stale-while-revalidate repeat whose cached snapshot served first while the
+ * live run deepened behind it), so the recorded wall clock is the SERVE clock
+ * — what a repeat shopper actually experiences. "cold" = no cached first
+ * paint existed, so the recorded wall clock is the cold collection clock.
+ * Default "cold" keeps every pre-change caller/tests byte-identical.
  */
 export type ServeKind = "cold" | "warm";
 
@@ -412,10 +413,14 @@ export interface SearchOutcome extends SearchOutcomeBase {
   /** REEA-871 — wall-clock ms from fan-out start to the after() recording;
    *  folded into exactly one latency band (see latencyBandOf). REEA-1078 —
    *  for a warm serve this is the SERVE clock (request start → finalized
-   *  response) because no fan-out ran; the band set is chosen by serveKind. */
+   *  response) because a cached live answer led the first paint; the band set
+   *  is chosen by serveKind. */
   serveLatencyMs: number;
   /** REEA-1078 — which clock serveLatencyMs measures (see ServeKind).
-   *  Absent = "cold" (pre-change callers stay byte-identical). */
+   *  "warm" = a cached live answer led the first paint (fresh memo hit or an
+   *  SWR repeat): the value is the serve clock. "cold" = no cached first
+   *  paint: the value is the collection clock. Absent = "cold" (pre-change
+   *  callers stay byte-identical). */
   serveKind?: ServeKind;
   /** REEA-1078 — aggregate comparison depth of the served card set (see
    *  ComparisonDepth). Absent = 0 cards (e.g. a snapshot-less serve). */
