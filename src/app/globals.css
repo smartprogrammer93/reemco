@@ -1992,6 +1992,12 @@ html[lang="ar"] .coupon-via {
   min-block-size: 36px;
   padding-inline: 12px;
   flex: none;
+  /* REEA-1129 — the token's 44px hit band is taller than the 4px line gap, so
+     its bottom edge can reach the action's top edge. The action is the row's
+     primary target, so it must win every shared pixel: stacking it above the
+     paint-free band keeps the full action clickable. No layout effect. */
+  position: relative;
+  z-index: 1;
 }
 
 .rc-offer-row.is-out {
@@ -2083,9 +2089,16 @@ html[lang="ar"] .coupon-via {
     block-size: var(--rc-image-card-mobile);
   }
   .rc-offer-row {
-    gap: 6px;
+    /* REEA-1129 — at 375 the token's 44px hit band needs 11px of clear space
+       below the 22px chip to reach the action without covering it. The old
+       6px line gap only gave 6px, so the band clipped 5px off the action's top
+       edge. Moving 6px from the row's block padding into the line gap
+       (10/6/10 -> 7/12/7) keeps the 26px of total block spacing identical, so
+       the row, card and legend heights cannot shift; the two lines move 3px
+       within the row and the band now stops 1px above the action. */
+    gap: 12px;
     min-block-size: var(--rc-row-h-mobile);
-    padding-block: 10px;
+    padding-block: 7px;
   }
   .rc-offer-row .rc-status {
     max-inline-size: 40%;
@@ -2137,6 +2150,22 @@ html[lang="ar"] .coupon-via {
    keyboard focus (the token is focusable), never colour-only. */
 .rc-status[data-tip] {
   position: relative;
+}
+
+/* REEA-1129 — the 22px visual token keeps its exact chip box, but the pointer
+   hit area is raised to the 44px AC12 floor with a non-visual pseudo-element.
+   The absolute containing block is the token's PADDING box (20px: the 22px
+   border-box chip less its 1px border), so -12px top and bottom yields the
+   required 44px hit height. The PM's -11px draft measured 42px because it
+   counted the border as part of the containing block; -12px is the same
+   intent, measured. It paints nothing (no background, no border), so padding,
+   icon, gap, label and the rendered 22px height are untouched and the row
+   geometry cannot shift. */
+.rc-status[data-tip]::before {
+  content: "";
+  position: absolute;
+  inset-block: -12px;
+  inset-inline: 0;
 }
 
 .rc-status[data-tip]:hover::after,
@@ -2955,6 +2984,14 @@ html[lang="ar"] .coupon-via {
     gap: 6px;
     overflow-x: auto;
     scrollbar-width: none;
+    /* REEA-1129 — overflow-x:auto computes overflow-y:auto, which clipped the
+       token's 44px ::before hit band to the 22px row. 12px block padding grows
+       the scrollport to 46px; the paired negative block margins keep the
+       legend's flow height and the visible token row at exactly the old
+       position, so no content moves. */
+    padding-block: 12px;
+    margin-block-start: calc(var(--rc-space-2) - 12px);
+    margin-block-end: -12px;
   }
   .rc-legend::-webkit-scrollbar {
     display: none;
