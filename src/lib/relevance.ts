@@ -161,6 +161,100 @@ export function queryMatchTokens(query: string): string[] {
   );
 }
 
+/** REEA-1068 — compact model-number spellings. Retailer indexes carry the
+ *  same model both ways ("Fold7" in one, "Fold 7" in another) and shoppers
+ *  type either; a Latin word immediately followed by a SHORT digit run (a
+ *  model number — 1–2 digits) folds into one token ("fold 7" → "fold7",
+ *  "iphone 16" → "iphone16") so both spellings meet. Longer runs are spec
+ *  quantities, not model numbers ("Pro 256 GB" must stay "pro" + "256"), and
+ *  Arabic words never fold — the REEA-195 brand-alias bridge keys on the
+ *  un-compacted spelling. */
+function compactAdjacent(words: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    const next = words[i + 1];
+    if (/^[a-z]+$/i.test(word) && next !== undefined && /^\d{1,2}$/.test(next)) {
+      out.push(`${word.toLowerCase()}${next}`);
+      i += 1;
+      continue;
+    }
+    out.push(word);
+  }
+  return out;
+}
+
+/** Query-side model tokens: whitespace chunks with punctuation trimmed (so
+ *  "fold, 7" folds too), compacted, Arabic-folded (so "غسّالة"/"غسالة" and
+ *  "أبل"/"ابل" still meet), and deduped. Single characters survive only
+ *  inside a compact form ("fold7"); a bare "7" or "z" still carries no
+ *  signal on its own, exactly like queryMatchTokens. */
+export function compactQueryTokens(query: string): string[] {
+  const chunks = query
+    .toLowerCase()
+    .split(/\s+/)
+    .map((t) => t.replace(/^[^a-z0-9\u0600-\u06FF]+|[^a-z0-9\u0600-\u06FF]+$/g, ""))
+    .filter(Boolean);
+  return Array.from(
+    new Set(
+      compactAdjacent(chunks)
+        .map((t) => normalizeArabicText(t))
+        .filter((t) => t.length >= 2),
+    ),
+  );
+}
+
+/** Title-side model words: the tier scorer and the coverage gate compare the
+ *  same compacted shape, so "Samsung Z Fold 7" answers the token "fold7". */
+function compactTitleWords(title: string): string[] {
+  return compactAdjacent(titleWords(title));
+}
+
+/** Separator-folded form of a digit-bearing token ("fold-7" → "fold7",
+ *  "WH-1000XM6" → "wh1000xm6"); equality on this form keeps hyphenated
+ *  storefront spellings meeting the compact one. */
+function foldModelToken(token: string): string {
+  return token.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/** REEA-1068 — the compact spelling a spaced model query is dispatched under:
+ *  when the WHOLE query is one Latin word plus one digit run ("fold 7",
+ *  "Fold 7", "pixel 9"), retailer indexes answer "fold7" directly, so the
+ *  shopper's spelling and the compact one collect the same payload. Longer
+ *  phrases keep their spelling — the matcher folds their compact tokens, so
+ *  dispatch recall is never narrowed on a guess. */
+export function compactDispatchQuery(query: string): string {
+  const chunks = query
+    .toLowerCase()
+    .split(/\s+/)
+    .map((t) => t.replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, ""))
+    .filter(Boolean);
+  if (chunks.length !== 2) return query;
+  const [word, digits] = chunks;
+  if (!/^[a-z]+$/.test(word) || !/^\d{1,2}$/.test(digits)) return query;
+  return `${word}${digits}`;
+}
+
+/** REEA-1068 — gate-side token match. Plain words and Arabic tokens keep the
+ *  historical path (substring / alias bridge: descriptive retailer titles and
+ *  Arabic morphology still answer). A digit-bearing token is a model code, so
+ *  it must meet a real compacted title word — "fold7" no longer accepts
+ *  "Foldable" merely because it starts with "fold". Model containment stays
+ *  available ("xm6" answers "WH-1000XM6"), mirroring titleMatchScore's G4. */
+export function matchesCompactQueryToken(titleLower: string, token: string): boolean {
+  const folded = normalizeArabicText(token);
+  if (folded === "" || /[\u0600-\u06FF]/.test(folded)) {
+    return matchesQueryToken(titleLower, token);
+  }
+  if (!/\d/.test(folded)) return matchesQueryToken(titleLower, token);
+  const target = foldModelToken(folded);
+  const words = compactTitleWords(titleLower).map((w) => normalizeArabicText(w));
+  return (
+    words.some((w) => foldModelToken(w) === target) ||
+    words.some((w) => /\d/.test(w) && foldModelToken(w).endsWith(target))
+  );
+}
+
 /** REEA-721 follow-up — SKU-shaped query intent. Tokens that mix letters and
  *  digits at real length (`ps931cbegww`, `1000xm6`) are the exact part-number
  *  shape a shopper pastes when they want one precise item: every retailer
@@ -487,9 +581,11 @@ export function tierQueryTokens(query: string): string[] {
 /** True when one folded title word answers one folded query token: Arabic
  *  tokens match by word-containment (morphology makes exact equality
  *  brittle) with the REEA-195 alias bridge applied per word; Latin tokens
- *  match whole words only, per the brief's matching definition. The alias
- *  check is deliberately word-scoped — a whole-title substring would let a
- *  buried Arabic mention pass the head-position check in tier 1. */
+ *  match whole words only, per the brief's matching definition. A
+ *  digit-bearing token is a model code, so its separator-folded form must
+ *  equal the word's ("fold-7" meets "fold7"; "fold" never meets "Foldable").
+ *  The alias check is deliberately word-scoped — a whole-title substring
+ *  would let a buried Arabic mention pass the head-position check in tier 1. */
 function tokenHitsWord(wordFolded: string, token: string): boolean {
   if (/[\u0600-\u06FF]/.test(token)) {
     if (wordFolded === "") return false;
@@ -497,6 +593,7 @@ function tokenHitsWord(wordFolded: string, token: string): boolean {
     const entry = ARABIC_BRAND_ALIASES.get(token);
     return entry !== undefined && entry.toLowerCase().includes(wordFolded);
   }
+  if (/\d/.test(token)) return foldModelToken(wordFolded) === foldModelToken(token);
   return wordFolded === token;
 }
 
@@ -522,14 +619,19 @@ function leadingBrandOffset(firstWordFolded: string, metadataFolded: string): nu
  *  0 — zero token matches: ranked below every matched tier (never blended
  *      into the lead block — REEA-222).
  * An empty query treats everything as tier 1 so untouched ordering holds.
+ *
+ * REEA-1068 — tokens and title words are compared in their compact model form
+ * ("fold 7" and "Fold7" both become the token "fold7"), so the spaced spelling
+ * of a model no longer collapses into the loose single word "fold" while its
+ * compact spelling matches exactly.
  */
 export function relevanceTier(query: string, title: string, metadata = ""): number {
-  const tokens = tierQueryTokens(query);
+  const tokens = compactQueryTokens(query);
   if (tokens.length === 0) return 1;
-  const wordsFolded = titleWords(title).map((w) => normalizeArabicText(w));
+  const rawWords = compactTitleWords(title);
+  const wordsFolded = rawWords.map((w) => normalizeArabicText(w));
   const matched = tokens.filter((t) => wordsFolded.some((w) => tokenHitsWord(w, t)));
   if (matched.length === tokens.length) {
-    const rawWords = titleWords(title);
     const metadataFolded = normalizeArabicText(metadata).toLowerCase();
     const offset = leadingBrandOffset(
       rawWords.length > 0 ? normalizeArabicText(rawWords[0]) : "",
@@ -561,9 +663,9 @@ const MODEL_SUFFIX_RE = /^(max|plus|mini|ultra|lite|neo|turbo|one|pro|gt|xr)$/i;
  */
 export function isModelExtended(query: string, title: string): boolean {
   if (!/\p{Nd}/u.test(query)) return false;
-  const tokens = tierQueryTokens(query);
+  const tokens = compactQueryTokens(query);
   if (tokens.length === 0) return false;
-  const rawWords = titleWords(title);
+  const rawWords = compactTitleWords(title);
   const wordsFolded = rawWords.map((w) => normalizeArabicText(w));
   // Greedy scan to the position of the last token the phrase consumes.
   let k = 0;

@@ -62,15 +62,14 @@ import {
   arabicBrandIntent,
   brandIsNamed,
   classifyAlternativeMatch,
+  compactDispatchQuery,
   isAccessoryTitle,
   isModelExtended,
   latinBridgeDispatch,
   latinQueryForms,
-  matchesQueryToken,
   narrowDeviceLead,
   narrowSkuLead,
   normalizedTitle,
-  queryMatchTokens,
   relevanceTier,
   resolveBrand,
   skuCodeTokens,
@@ -577,7 +576,6 @@ export function jarirHits(payload: unknown, query: string): SearchHit[] {
 /** amazon.eg `/s?k=` cards → hits (also exported for the single-best parser). */
 export function amazonEgHits(html: string, query: string): SearchHit[] {
   const out: SearchHit[] = [];
-  const wanted = queryMatchTokens(query);
   for (const seg of html.split('data-component-type="s-search-result"').slice(1)) {
     const asin = seg.match(/\/dp\/([A-Z0-9-]{6,12})/)?.[1];
     const priceRaw = (seg.match(/class="a-offscreen">[^<]*?([\d٠-٩][٠-٩\d.,٫٬]*)/)?.[1] ?? "")
@@ -593,12 +591,10 @@ export function amazonEgHits(html: string, query: string): SearchHit[] {
       .replace(/\s+/g, " ")
       .trim();
     if (!title) continue;
-    if (wanted.length > 0) {
-      const lower = title.toLowerCase();
-      let matched = 0;
-      for (const t of wanted) if (matchesQueryToken(lower, t)) matched++;
-      if (matched / wanted.length < MIN_SCORE) continue;
-    }
+    // REEA-1068 — the shared gate (same compact-model matching every other
+    // adapter uses) instead of a private substring loop, so amazon.eg cannot
+    // drift from the adapter contract on spaced model spellings.
+    if (!queryGatePasses(title, query, MIN_SCORE)) continue;
     out.push({
       title,
       merchant: "Amazon.eg",
@@ -3171,7 +3167,11 @@ export async function collectSettled(
   // behind an empty whole-query round. Purely-Latin queries pass through
   // unchanged; relevance scoring on the settled rows still runs against the
   // shopper's original query downstream.
-  const dq = latinBridgeDispatch(q);
+  // REEA-1068 — a spaced model query ("fold 7") dispatches under its compact
+  // spelling ("fold7"), the form the storefront indexes answer exactly, so
+  // both shopper spellings collect the identical live payload. Longer phrases
+  // keep their spelling; only a whole word+digit query folds here.
+  const dq = compactDispatchQuery(latinBridgeDispatch(q));
   try {
     return { merchant: c.merchant, hits: stampCollected(await c.collect(dq, fetchImpl)) };
   } catch (err) {
@@ -4083,8 +4083,14 @@ export function enrichedQuery(hits: SearchHit[], query: string): string {
  * single-token query keeps its exact form — for model codes the widening is
  * the retry itself, the second bounded attempt behind warm hop caches. Shared
  * by the converged retry and its tests.
+ *
+ * REEA-1068 — a spaced model query widens to its compact spelling ("fold 7" →
+ * "fold7") instead of dropping the digit ("fold"), which would re-open the
+ * loose word the defect was about.
  */
 export function widerQuery(query: string): string {
+  const compact = compactDispatchQuery(query);
+  if (compact !== query) return compact;
   const tokens = query.split(/\s+/).filter(Boolean);
   if (tokens.length <= 1) return query.trim();
   return tokens.slice(0, -1).join(" ");

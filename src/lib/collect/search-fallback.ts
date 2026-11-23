@@ -35,7 +35,7 @@
  * Search endpoints only — small page sizes, one call per retailer per run.
  */
 
-import { arabicBrandIntent, matchesQueryToken, queryMatchTokens } from "@/lib/relevance";
+import { arabicBrandIntent, compactQueryTokens, matchesCompactQueryToken } from "@/lib/relevance";
 import type { FetchImpl } from "@/lib/collect/scraper";
 import { getSharedKv } from "@/lib/collect/kv";
 import { readCappedResponse } from "@/lib/collect/read-body";
@@ -499,13 +499,18 @@ export function tokenCoverage(hitTitle: string, productTitle: string): number {
  * waits ~5 s for the few Arabic-script listings that survive — the timing gap
  * REEA-195 measured. Non-brand tokens and Latin queries take the identical
  * plain-substring path, so their behavior is untouched.
+ *
+ * REEA-1068 — the wanted tokens are the compact model form ("fold 7" →
+ * "fold7"), and a digit-bearing token must meet a real compacted title word
+ * instead of a bare substring: the loose "fold" token used to accept
+ * "Foldable" and collapse the spaced spelling into noise.
  */
 export function brandAwareCoverage(hitTitle: string, query: string): number {
   const hitTokens = hitTitle.toLowerCase();
-  const wanted = queryMatchTokens(query);
+  const wanted = compactQueryTokens(query);
   if (wanted.length === 0) return 0;
   let matched = 0;
-  for (const t of wanted) if (matchesQueryToken(hitTokens, t)) matched += 1;
+  for (const t of wanted) if (matchesCompactQueryToken(hitTokens, t)) matched += 1;
   return matched / wanted.length;
 }
 
