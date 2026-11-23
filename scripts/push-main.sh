@@ -73,23 +73,25 @@ esac
 SLUG=${ORIGIN#https://github.com/}
 SLUG=${SLUG%.git}
 
+# --- run context ------------------------------------------------------------
+# The run env file holds the Paperclip run JWT. It is used both to fetch the
+# secret on demand and to attach the fallback bundle to the current issue.
+if [ -z "${PAPERCLIP_API_KEY:-}" ] && [ -f /tmp/paperclip/env ]; then
+  # shellcheck disable=SC1091
+  . /tmp/paperclip/env
+fi
+
 # --- token resolution -------------------------------------------------------
 # Prefer the adapter env binding; fall back to the run-scoped Paperclip secret API
 # (the documented on-demand path when a secret_ref is not exported to the shell).
 TOKEN="${DEV_GITHUB_PAT:-}"
-if [ -z "$TOKEN" ]; then
-  if [ -z "${PAPERCLIP_API_KEY:-}" ] && [ -f /tmp/paperclip/env ]; then
-    # shellcheck disable=SC1091
-    . /tmp/paperclip/env
-  fi
-  if [ -n "${PAPERCLIP_API_KEY:-}" ]; then
-    API_BASE="${PAPERCLIP_API_URL%/}"
-    TOKEN=$(curl -fsS -X POST \
-      -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
-      -H "X-Paperclip-Run-Id: ${PAPERCLIP_RUN_ID:-}" \
-      "$API_BASE/api/agents/me/secrets/dev-github-pat/value" 2>/dev/null |
-      node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).value||"")}catch{process.stdout.write("")}})' || true)
-  fi
+if [ -z "$TOKEN" ] && [ -n "${PAPERCLIP_API_KEY:-}" ]; then
+  API_BASE="${PAPERCLIP_API_URL%/}"
+  TOKEN=$(curl -fsS -X POST \
+    -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
+    -H "X-Paperclip-Run-Id: ${PAPERCLIP_RUN_ID:-}" \
+    "$API_BASE/api/agents/me/secrets/dev-github-pat/value" 2>/dev/null |
+    node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).value||"")}catch{process.stdout.write("")}})' || true)
 fi
 
 # The credential helper below runs in a child shell, so the token must be
@@ -97,22 +99,39 @@ fi
 export DEV_GITHUB_PAT="$TOKEN"
 
 fallback_bundle() {
-  local base bundle sha256 comment
-  base=$(git rev-parse --verify --quiet "${REMOTE:-origin/main}" 2>/dev/null ||
-    git rev-parse --verify --quiet origin/main 2>/dev/null || true)
+  local base remote bundle sha256 comment tmp_ref created
+  # A bundle prerequisite must be an ancestor of the head, so use the merge-base
+  # with the current remote tip — the remote tip itself may be ahead (non-FF).
+  remote="${REMOTE:-}"
+  if [ -z "$remote" ]; then
+    remote=$(git rev-parse --verify --quiet origin/main 2>/dev/null || true)
+  fi
+  base=""
+  if [ -n "$remote" ]; then
+    base=$(git merge-base "$remote" "$SHA" 2>/dev/null || true)
+  fi
   bundle="/tmp/reemco-$(git rev-parse --short "$SHA").bundle"
+  # git bundle refuses a range built from bare object names (it records no ref
+  # and calls the bundle "empty"), so export the head through a throwaway ref.
+  tmp_ref="refs/push-main-export"
+  git update-ref "$tmp_ref" "$SHA"
+  created=0
   if [ -n "$base" ]; then
-    git bundle create "$bundle" "$base..$SHA" >/dev/null 2>&1 || {
-      echo "push-main: could not create a bundle from $base" >&2
-      return 0
-    }
-  else
-    git bundle create "$bundle" "$SHA" >/dev/null 2>&1 || return 0
+    git bundle create "$bundle" "$base..$tmp_ref" >/dev/null 2>&1 && created=1
+  fi
+  if [ "$created" = 0 ]; then
+    git bundle create "$bundle" "$tmp_ref" >/dev/null 2>&1 && created=1
+  fi
+  git update-ref -d "$tmp_ref" 2>/dev/null || true
+  if [ "$created" = 0 ]; then
+    echo "push-main: could not create a bundle for $SHA" >&2
+    return 0
   fi
   sha256=$(sha256sum "$bundle" | cut -d' ' -f1)
   echo "push-main: fallback bundle written to $bundle (sha256 $sha256)" >&2
   echo "push-main: base $base, head $SHA" >&2
 
+  local attached="the bundle file"
   if [ -n "${PAPERCLIP_API_KEY:-}" ] && [ -n "${PAPERCLIP_COMPANY_ID:-}" ] &&
     [ -n "${PAPERCLIP_TASK_ID:-}" ]; then
     if curl -fsS -X POST \
@@ -121,14 +140,17 @@ fallback_bundle() {
       -F "file=@$bundle" \
       "${PAPERCLIP_API_URL%/}/api/companies/$PAPERCLIP_COMPANY_ID/issues/$PAPERCLIP_TASK_ID/attachments" >/dev/null; then
       echo "push-main: bundle attached to the current Paperclip issue" >&2
+      attached="the issue attachment"
     else
       echo "push-main: bundle upload FAILED — attach $bundle by hand" >&2
+      attached="$bundle (upload failed, attach it by hand)"
     fi
   else
     echo "push-main: no Paperclip run context; attach $bundle to the issue by hand" >&2
+    attached="$bundle (attach it to the issue by hand)"
   fi
 
-  comment="Commit $SHA is not on origin/main. Bundle $bundle (sha256 $sha256, base $base) is attached. DevOps: \`git fetch /tmp/<bundle> $SHA:refs/heads/main && scripts/push-main.sh --ref $SHA\`."
+  comment="Commit $SHA is not on origin/main. Fallback bundle: $attached (sha256 $sha256, base $base). DevOps: \`git fetch <bundle> $SHA:refs/heads/main && scripts/push-main.sh --ref $SHA\`."
   echo "push-main: pickup request — $comment" >&2
 }
 
