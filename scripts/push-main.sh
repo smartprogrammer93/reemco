@@ -73,6 +73,36 @@ esac
 SLUG=${ORIGIN#https://github.com/}
 SLUG=${SLUG%.git}
 
+# --- idempotency pre-check --------------------------------------------------
+# No-op detection must not depend on a readable token: a lane whose secret is not
+# accessible still gets a clean exit 0 when the commit is already on origin/main.
+# Read origin/main without credentials first (the remote is public); if that read
+# is unavailable, fall back to the local origin/main ref. A local ref equal to
+# $SHA is safe evidence: origin only ever fast-forwards, so a commit that was on
+# origin/main stays there.
+remote_main_tip() {
+  GIT_TERMINAL_PROMPT=0 git ls-remote --heads "$ORIGIN" refs/heads/main 2>/dev/null | cut -f1
+}
+
+already_landed() {
+  local tip
+  tip=$(remote_main_tip || true)
+  if [ -z "$tip" ]; then
+    tip=$(git rev-parse --verify --quiet origin/main 2>/dev/null || true)
+  fi
+  [ -n "$tip" ] || return 1
+  [ "$tip" = "$SHA" ] && return 0
+  # A commit already contained in origin/main is landed too; pushing it would be
+  # a backwards non-fast-forward, so the no-op outcome is correct.
+  git merge-base --is-ancestor "$SHA" "$tip" 2>/dev/null && return 0
+  return 1
+}
+
+if already_landed; then
+  echo "push-main: origin/main already contains $SHA — nothing to push"
+  exit 0
+fi
+
 # --- run context ------------------------------------------------------------
 # The run env file holds the Paperclip run JWT. It is used both to fetch the
 # secret on demand and to attach the fallback bundle to the current issue.
@@ -109,6 +139,12 @@ fallback_bundle() {
   base=""
   if [ -n "$remote" ]; then
     base=$(git merge-base "$remote" "$SHA" 2>/dev/null || true)
+  fi
+  # An empty range (base == head) is not a failure: there is nothing to hand off
+  # because origin/main already contains this commit.
+  if [ -n "$base" ] && [ "$base" = "$SHA" ]; then
+    echo "push-main: nothing to bundle — origin/main already contains $SHA" >&2
+    return 1
   fi
   bundle="/tmp/reemco-$(git rev-parse --short "$SHA").bundle"
   # git bundle refuses a range built from bare object names (it records no ref
@@ -155,9 +191,20 @@ fallback_bundle() {
 }
 
 fail_push() {
+  # Any failure path is still a no-op success if the commit is already on
+  # origin/main (e.g. a push that landed but could not be read back).
+  if already_landed; then
+    echo "push-main: $1" >&2
+    echo "push-main: origin/main already contains $SHA — nothing to push (no-op)" >&2
+    exit 0
+  fi
   echo "push-main: $1" >&2
-  fallback_bundle
-  exit 1
+  if fallback_bundle; then
+    exit 1
+  fi
+  # fallback_bundle found an empty range (base == head): already landed.
+  echo "push-main: origin/main already contains $SHA — nothing to push (no-op)" >&2
+  exit 0
 }
 
 if [ -z "$TOKEN" ]; then
