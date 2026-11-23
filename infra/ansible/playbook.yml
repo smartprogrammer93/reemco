@@ -321,7 +321,6 @@
       ansible.builtin.command:
         cmd: "ufw --force enable"
       changed_when: false
-      changed_when: false
 
     - name: Chrony is syncing (26.04 delta #3 — NTP must exist)
       ansible.builtin.command: chronyc tracking
