@@ -136,7 +136,9 @@ describe("coverageLine — REEA-1078 AC9: a blocked lane is unreachable, not emp
       { merchant: "Lulu Hypermarket", hits: 0 },
     ];
     const line = coverageLine(notes, "ar", [product("Xcite")], ["Lulu Hypermarket"]);
-    expect(line).toBe("تعذّر الوصول إلى Lulu Hypermarket. أسعار من Xcite.");
+    // REEA-1069 — the signed AR/RTL checklist names the responder sentence
+    // verbatim ("الأسعار من …"); the earlier REEA-1078 expectation predates it.
+    expect(line).toBe("تعذّر الوصول إلى Lulu Hypermarket. الأسعار من Xcite.");
     expect(line).not.toMatch(/40\d|timeout|abort/i);
   });
 

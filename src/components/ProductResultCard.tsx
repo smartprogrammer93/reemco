@@ -638,6 +638,7 @@ export default function ProductResultCard({
                   color: isBest ? "var(--rc-savings)" : "var(--rc-ink)",
                 }}
               >
+                {(locale ?? "en") === "ar" ? <span className="price-from">{t.fromWord} </span> : null}
                 <bdi>{heroPrice.primary}</bdi>
               </span>
             )}
@@ -662,7 +663,7 @@ export default function ProductResultCard({
               ) : null
             ) : null}
           </div>
-          {saved && !primaryCoupon && heroSavedAmount && (
+          {saved && heroSavedAmount && (
             <p className="flex flex-wrap items-center gap-2">
               <span className="rc-savings">
                 <bdi>{`${t.saveLead} ${heroSavedAmount}`}</bdi>

@@ -2120,7 +2120,7 @@ html[lang="ar"] .coupon-via {
 .rc-hero {
   background: var(--rc-hero);
   color: var(--rc-dark-ink);
-  padding-block: clamp(40px, 6vw, 72px);
+  padding-block: clamp(28px, 4vw, 56px);
 }
 
 .rc-hero-inner {
@@ -2132,7 +2132,10 @@ html[lang="ar"] .coupon-via {
 
 .rc-hero h1 {
   color: var(--rc-dark-ink);
-  font: 700 clamp(34px, 4.2vw, 52px)/1.06 var(--rc-font-display);
+  /* Token-diff §1: the display scale is the ONE type source (no per-component
+     font guess). 28px at 375 / 40px at 1280 keeps the query echo below the
+     price hierarchy on the shopper surfaces. */
+  font: var(--rc-text-display);
   letter-spacing: -0.025em;
   max-inline-size: 17ch;
 }
@@ -2145,13 +2148,13 @@ html[lang="ar"] .coupon-via {
   color: var(--rc-dark-body-text);
   font: var(--rc-text-body);
   max-inline-size: 52ch;
-  margin-block-start: var(--rc-space-3);
+  margin-block-start: var(--rc-space-2);
 }
 
 .rc-hero-search {
   display: flex;
   gap: var(--rc-space-2);
-  margin-block-start: var(--rc-space-6);
+  margin-block-start: var(--rc-space-4);
   max-inline-size: 680px;
 }
 
@@ -2167,11 +2170,34 @@ html[lang="ar"] .coupon-via {
 }
 
 @media (max-width: 640px) {
+  /* One row at 375: the input keeps ≥200px (AC2's floor is the header search;
+     this hero field measures 240px+) and the submit stays a 44px target, so
+     the hero does not eat the first discovery module's fold position. */
   .rc-hero-search {
-    flex-direction: column;
+    flex-direction: row;
+    align-items: stretch;
+  }
+  .rc-hero-search .rc-search-field {
+    flex: 1 1 auto;
+    min-inline-size: 0;
   }
   .rc-hero-search .btn-primary {
-    inline-size: 100%;
+    inline-size: auto;
+    padding-inline: 16px;
+  }
+  .rc-suggestions {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .rc-suggestions::-webkit-scrollbar {
+    display: none;
+  }
+  .rc-suggestion {
+    flex: none;
+  }
+  .rc-home-caption {
+    margin-block-start: var(--rc-space-2);
   }
 }
 
@@ -2179,7 +2205,7 @@ html[lang="ar"] .coupon-via {
   display: flex;
   flex-wrap: wrap;
   gap: var(--rc-space-2);
-  margin-block-start: var(--rc-space-4);
+  margin-block-start: var(--rc-space-3);
 }
 
 .rc-suggestion {
@@ -2345,12 +2371,13 @@ html[lang="ar"] .coupon-via {
 }
 
 @media (max-width: 640px) {
+  /* Spec §3 home price-drop card: 96px image at every width. */
   .rc-drop-card {
-    grid-template-columns: 88px minmax(0, 1fr);
+    grid-template-columns: 96px minmax(0, 1fr);
   }
   .rc-drop-thumb {
-    inline-size: 88px;
-    block-size: 88px;
+    inline-size: 96px;
+    block-size: 96px;
   }
 }
 
@@ -2665,5 +2692,334 @@ html[lang="ar"] .coupon-via {
   .selection-row {
     overflow-x: visible;
     flex-wrap: wrap;
+  }
+}
+
+/* ---------- REEA-1069 home discovery polish + AR price lead ---------- */
+.rc-home-caption {
+  margin-block-start: var(--rc-space-4);
+  font: var(--rc-text-small);
+  color: var(--rc-muted);
+}
+
+.rc-home-live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-block-start: var(--rc-space-4);
+  font: var(--rc-text-meta);
+  color: var(--rc-muted);
+}
+
+.rc-home-partial {
+  margin-block-start: var(--rc-space-2);
+}
+
+.rc-cat-count {
+  margin-inline-start: 8px;
+  font: var(--rc-text-label);
+  color: var(--rc-muted);
+}
+
+.rc-drop-baseline {
+  margin-block-start: 4px;
+  font: var(--rc-text-small);
+  color: var(--rc-muted);
+}
+
+.rc-drop-baseline s {
+  text-decoration: line-through;
+}
+
+.rc-drop-checked {
+  margin-block-start: 6px;
+}
+
+.rc-method-provenance {
+  margin-block-start: var(--rc-space-2);
+  font: var(--rc-text-meta);
+  /* --rc-muted on --rc-surface-sunken measures 4.21:1 (token-diff §5
+     caution); body text carries the 12px line at 9.13:1. */
+  color: var(--rc-body-text);
+}
+
+.price-from {
+  font: var(--rc-text-label);
+  font-weight: 600;
+  color: var(--rc-body-text);
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  /* AC15: the legend stays one 22px row so it cannot push the first price
+     below the fold; each token keeps its own tooltip/aria-label. */
+  .rc-legend {
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .rc-legend::-webkit-scrollbar {
+    display: none;
+  }
+  .rc-legend-title {
+    display: none;
+  }
+  /* First price above y=620 at 375: tighten the shelf entry rhythm without
+     shrinking the 100px recognition image or the 44px tap targets. */
+  .rc-shelf {
+    padding-block-start: 4px;
+  }
+  .rc-card {
+    gap: 12px;
+  }
+  .rc-card .rc-card-title {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+}
+
+/* AC5/AC6 375 refinements: fixed two-line anatomy and a status token that
+   stays inside 40% of the 319px row (EN "Needs verification" must not clip
+   and must not push the price out of its fixed slot). */
+@media (max-width: 640px) {
+  .rc-card .rc-offer-row .label-token,
+  .rc-card .rc-offer-row .label-token[class] {
+    flex: 1 1 0;
+    min-inline-size: 0;
+    max-inline-size: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .rc-card .rc-offer-row .rc-offer-line.line-a {
+    flex-wrap: nowrap;
+  }
+  .rc-card .rc-offer-row .rc-offer-line.line-b {
+    flex-wrap: nowrap;
+    min-block-size: var(--rc-tap);
+  }
+  .rc-offer-row .rc-status {
+    padding-inline: 4px;
+    gap: 2px;
+  }
+  .rc-offer-row .rc-status svg {
+    inline-size: 10px;
+    block-size: 10px;
+  }
+  .rc-offer-row .rc-status .label {
+    letter-spacing: -0.03em;
+  }
+}
+
+@media (min-width: 641px) {
+  /* Uniform row anatomy inside a comparison card: every line B reserves the
+     action slot, so a row without a rendered CTA cannot shrink the card's
+     row set below its neighbours. */
+  .rc-card .rc-offer-row .rc-offer-line.line-b {
+    min-block-size: 36px;
+  }
+}
+
+.rc-retailer-more {
+  color: var(--rc-muted);
+  font: var(--rc-text-meta);
+  justify-content: center;
+}
+
+/* Mobile suggestion rail: one 44px row (the base rule above would otherwise
+   win on source order). */
+@media (max-width: 640px) {
+  .rc-suggestions {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .rc-suggestions::-webkit-scrollbar {
+    display: none;
+  }
+  .rc-suggestion {
+    flex: none;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Card anatomy (spec §3 item 1) is category + best-effective-price. The
+     legacy freshness chip is redundant with the row's checked line; hiding
+     it keeps the first price above y=620 at 375 (AC4/AC15). */
+  .rc-card-top {
+    flex-wrap: nowrap;
+  }
+  .rc-card-top .fresh-chip {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  /* The legend carries the same three tokens; keep its geometry inside the
+     375 content width and the 40%-of-row budget (AC6). */
+  .rc-legend .rc-status {
+    padding-inline: 4px;
+    gap: 2px;
+  }
+  .rc-legend .rc-status svg {
+    inline-size: 10px;
+    block-size: 10px;
+  }
+  .rc-legend .rc-status .label {
+    letter-spacing: -0.03em;
+  }
+}
+
+@media (max-width: 640px) {
+  /* AC12: every interactive target at 375 is >=44x44. Inline text links get
+     the floor on their own surface; the card gap/padding is tightened by the
+     same amount so the first price stays above y=620 (AC4). */
+  .rc-card-title a {
+    display: flex;
+    align-items: center;
+    min-block-size: var(--rc-tap);
+  }
+  .rc-card {
+    padding: 8px;
+    gap: 8px;
+  }
+  .rc-alt .name {
+    display: flex;
+    align-items: center;
+    min-block-size: var(--rc-tap);
+  }
+  .rc-product-wrap {
+    padding-block: 8px;
+  }
+  .rc-product-wrap > .rc-results-meta a {
+    display: inline-flex;
+    align-items: center;
+    min-block-size: var(--rc-tap);
+  }
+  .rc-footer-links a,
+  .rc-footer-grid nav a {
+    display: inline-flex;
+    align-items: center;
+    min-block-size: var(--rc-tap);
+    min-inline-size: var(--rc-tap);
+  }
+}
+
+@media (max-width: 640px) {
+  /* Alternatives / pairs rows already reserve a 48px list item; the anchor
+     itself must carry the 44px floor (AC12). */
+  .rc-card li > a,
+  .rc-card section[aria-label] li > a {
+    display: inline-flex;
+    align-items: center;
+    min-block-size: var(--rc-tap);
+  }
+}
+
+@media (max-width: 640px) {
+  /* AC8: keep a real margin under the first-offer y=600 ceiling even when a
+     title wraps or a savings line is present. */
+  .rc-product-hero {
+    padding-block: 8px;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Spec §3 card anatomy item 6: variant chips are 44px at 375. */
+  .rc-variant {
+    min-block-size: var(--rc-tap);
+  }
+}
+
+/* REEA-1069 AC4 — at 375 the full responder sentence sits below the primary
+   shelf so the first price stays above y=620; at 641+ it stays under the
+   heading. ONE coverage element, reordered only, never duplicated. */
+@media (max-width: 640px) {
+  .results-viewport-reserve {
+    display: flex;
+    flex-direction: column;
+  }
+  .results-viewport-reserve > .rc-coverage-top {
+    order: 9;
+  }
+  .results-viewport-reserve > section[data-primary-section="true"],
+  .results-viewport-reserve > .rc-results-grid {
+    order: 8;
+  }
+  .results-viewport-reserve > section:not([data-primary-section="true"]) {
+    order: 10;
+  }
+}
+
+@media (max-width: 640px) {
+  /* AC12: the module-head action link is a real 44px target at 375. */
+  a.rc-live-note {
+    display: inline-flex;
+    align-items: center;
+    min-block-size: var(--rc-tap);
+  }
+}
+
+@media (max-width: 640px) {
+  /* AC8: a product with a savings + named-baseline line must still put the
+     first offer above y=600 at 375. Tighten only the hero's vertical rhythm;
+     the 200px image, 22px h1 and 44px price are untouched. */
+  .rc-product-hero {
+    padding-block: 4px;
+  }
+  .rc-product-best {
+    margin-block-start: 8px;
+  }
+  .rc-product-basis,
+  .rc-product-coupon {
+    margin-block-start: 2px;
+  }
+  .rc-hero-offer {
+    margin-block-start: 8px;
+  }
+}
+
+@media (max-width: 640px) {
+  /* AC8 AR parity: a three-line Arabic product title plus the savings and
+     named-baseline lines must still put the first offer above y=600. */
+  .rc-product-hero h1 {
+    margin-block-start: 2px;
+  }
+  .rc-product-best {
+    margin-block-start: 0;
+  }
+  .rc-product-basis,
+  .rc-product-coupon {
+    margin-block-start: 0;
+  }
+  .rc-hero-offer {
+    margin-block-start: 0;
+  }
+  .rc-product-hero {
+    padding-block: 0;
+  }
+  /* AC12: inline collection actions are real 44px targets at 375. */
+  .rc-inline-action {
+    display: inline-flex;
+    align-items: center;
+    min-block-size: var(--rc-tap);
+  }
+}
+
+@media (max-width: 640px) {
+  /* AC8: the share utility rides the hero's top-inline-end corner at 375
+     instead of taking a 44px row above the h1; the first offer keeps real
+     headroom even when a coupon line is present. */
+  .rc-product-hero {
+    position: relative;
+  }
+  .rc-product-share {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline-end: 0;
+    z-index: 2;
   }
 }

@@ -712,7 +712,7 @@ function ResultsSubline({
   return (
     <p className="rc-results-meta">
       {fill(before, values)}
-      <bdi>{query || t.allProducts}</bdi>
+      {locale === "ar" ? <bdi>{query || t.allProducts}</bdi> : query || t.allProducts}
       {fill(after ?? "", values)}
     </p>
   );
@@ -750,7 +750,7 @@ function ResultsMeta({
   return (
     <p className="rc-results-meta">
       {fill(before, values)}
-      <bdi>{query || t.allProducts}</bdi>
+      {locale === "ar" ? <bdi>{query || t.allProducts}</bdi> : query || t.allProducts}
       {fill(after ?? "", values)}
     </p>
   );
@@ -773,6 +773,7 @@ function CoverageLine({
   pendingStatus,
   onRefresh,
   unreachableLanes,
+  className,
 }: {
   notes: LiveSearchResult["notes"];
   products: NormalizedProduct[];
@@ -781,6 +782,7 @@ function CoverageLine({
   onRefresh?: () => void;
   /** REEA-1078 AC9 — merchants the reachability record names as blocked. */
   unreachableLanes?: readonly string[];
+  className?: string;
 }) {
   const text = coverageLine(notes, locale, products, unreachableLanes);
   if (!text && !pendingStatus) return null;
@@ -795,7 +797,7 @@ function CoverageLine({
   const l = locale ?? clientLocale();
   return (
     <p
-      className={`meta-stamp coverage-line${pendingStatus ? " has-status" : ""}`}
+      className={`meta-stamp coverage-line${pendingStatus ? " has-status" : ""}${className ? " " + className : ""}`}
       style={{ color: "var(--rc-muted)", minHeight: `${coverageLhTier(locale)}lh` }}
     >
       {text ? (
@@ -965,7 +967,9 @@ function StageCoverage(props: {
   showOutOfStock: boolean;
   locale?: Locale;
   onRefresh?: () => void;
+  /** REEA-1078 AC9 — merchants the reachability record names as blocked. */
   unreachableLanes?: readonly string[];
+  className?: string;
 }) {
   const snap = use(props.stages[props.stages.length - 1]);
   const products = use(
@@ -987,6 +991,7 @@ function StageCoverage(props: {
       pendingStatus={snap.kuwaitPendingStatus}
       onRefresh={props.onRefresh}
       unreachableLanes={props.unreachableLanes}
+      className={props.className}
     />
   );
 }
@@ -1161,7 +1166,7 @@ function StagedResults(props: {
           </>
         ) : (
           <>
-            <CoverageLine notes={finalSnap.notes} products={products} locale={locale} pendingStatus={finalSnap.kuwaitPendingStatus} onRefresh={onRefresh} unreachableLanes={props.unreachableLanes} />
+            <CoverageLine notes={finalSnap.notes} products={products} locale={locale} pendingStatus={finalSnap.kuwaitPendingStatus} onRefresh={onRefresh} unreachableLanes={props.unreachableLanes} className="rc-coverage-top" />
             <ResultsGrid
               products={products}
               query={query}
@@ -1242,9 +1247,10 @@ function StagedResults(props: {
           locale={locale}
           onRefresh={onRefresh}
           unreachableLanes={props.unreachableLanes}
+          className="rc-coverage-top"
         />
       </Suspense>
-      <div className="flex min-w-0 flex-col items-stretch gap-4" style={{ marginTop: "var(--rc-space-8)" }}>
+      <div className="rc-results-grid flex min-w-0 flex-col items-stretch gap-4" style={{ marginTop: "var(--rc-space-8)" }}>
         {/* REEA-970 — the first-flush boundary now carries the named-slot
             ghost: while stage 0 is in flight the card region paints the
             retailers' named skeleton slots (StagedGridGhost) instead of the

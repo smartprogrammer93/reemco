@@ -18,18 +18,18 @@ import { Suspense, useEffect, useState, use } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useCollection, type CollectionPhase } from "@/lib/collect/useCollection";
-import type { CollectJob, LiveOffer } from "@/lib/collect/types";
 import { collectedAgoLabel } from "@/lib/collect/types";
+import type { CollectJob, LiveOffer } from "@/lib/collect/types";
 import { filterOffersByCountry, type CountryCode } from "@/lib/country";
 import { effectivePriceKwd, formatCountryPrice, formatPrimaryPrice } from "@/lib/format";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import CollectionPulse from "@/components/CollectionPulse";
-import OfferStatusToken from "@/components/OfferStatus";
+import OfferStatusToken, { StatusLegend } from "@/components/OfferStatus";
 import ShareSummaryButton from "@/components/ShareSummaryButton";
 import { buildResultsHref } from "@/lib/country";
 import { cleanDisplayTitle, displayTitleChanged } from "@/lib/display-title";
 import { foldAlternativeRows } from "@/components/ProductResultCard";
-import { ageSeconds } from "@/lib/relative-time";
+import { ageSeconds, localizedAgeFor } from "@/lib/relative-time";
 import { checkedAgeLabel, clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
 import { offerStatusForLiveOffer } from "@/lib/offer-status";
 import type { NormalizedProduct } from "@/types/product";
@@ -124,6 +124,10 @@ function OfferTable({
   return (
     <div className="rc-offers-table">
       <h2>{fill(t.offersTableTitle, { n: offers.length })}</h2>
+      {/* Spec §3: the status legend appears once on the product page too. It
+          sits with the offers table (below the hero) so it never pushes the
+          first offer past the AC8 y=600 ceiling at 375. */}
+      <StatusLegend locale={locale} />
       <div className="rc-table-head" aria-hidden>
         <span>{t.tableRetailer}</span>
         <span>{t.tablePrice}</span>
@@ -166,7 +170,7 @@ function PanelFallback({ locale }: { locale?: Locale }) {
     <div className="rc-offers-table" aria-busy="true" aria-label={t.liveCollectionAria}>
       <p style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
         {t.startingLive}{" "}
-        <button type="button" onClick={() => window.location.reload()} className="hover:underline" style={{ color: "var(--rc-primary)" }}>
+        <button type="button" onClick={() => window.location.reload()} className="rc-inline-action hover:underline" style={{ color: "var(--rc-primary)" }}>
           {t.collectNow}
         </button>
       </p>
@@ -255,14 +259,14 @@ function ProductHeroBody({
   const coupon = product.coupons[0];
 
   return (
-    <div className="mx-auto w-full" style={{ maxWidth: "var(--rc-layout-max-w)", paddingInline: "var(--rc-gutter)", paddingBlock: "var(--rc-space-4)" }}>
+    <div className="mx-auto w-full rc-product-wrap" style={{ maxWidth: "var(--rc-layout-max-w)", paddingInline: "var(--rc-gutter)", paddingBlock: "var(--rc-space-4)" }}>
       <nav className="rc-results-meta" aria-label={t.allOffersLead}>
         <Link href={buildResultsHref(product.title, 1, country)}>{t.allOffersLead}</Link>
       </nav>
       <div className="rc-product-hero">
         <ProductMedia product={product} />
         <div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="rc-product-share flex flex-wrap items-center gap-2">
             <ShareSummaryButton product={product} country={country} locale={locale} />
           </div>
           <h1 style={{ marginBlockStart: "var(--rc-space-2)" }}>
@@ -280,6 +284,7 @@ function ProductHeroBody({
             <>
               <div className="rc-product-best">
                 <span className="rc-product-price tabular price-cur">
+                  {(locale ?? "en") === "ar" ? <span className="price-from">{t.fromWord} </span> : null}
                   <bdi>{heroPrice.primary}</bdi>
                 </span>
                 {heroPrice.alt && <span className="price-alt">· <bdi>{heroPrice.alt}</bdi></span>}
@@ -306,8 +311,14 @@ function ProductHeroBody({
                 <HeroOfferRow offer={best} locale={locale} nowMs={now} primary />
               </div>
               <p className="rc-product-meta">
-                {fill(t.productCollected, {
-                  age: collectedAgoLabel(best.collectedAt, now) ?? t.justNow,
+                {fill(answered === 1 ? t.productCollectedOne : t.productCollected, {
+                  age:
+                    best.collectedAtEpochMs != null
+                      ? localizedAgeFor(locale ?? "en", best.collectedAtEpochMs, now)
+                      : (() => {
+                          const secs = ageSeconds(best.collectedAt, now);
+                          return secs == null ? t.dateUnknown : checkedAgeLabel(locale ?? "en", secs);
+                        })(),
                   n: answered,
                 })}
               </p>
@@ -381,7 +392,7 @@ function ProductHeroBody({
         <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)", marginBlockStart: 8 }}>
           {t.liveResultsLead}{" "}
           {collectedAgoLabel(job.finishedAt ?? job.startedAt, now) ?? t.justNow} ·{" "}
-          <button type="button" onClick={() => void start({ force: true })} className="hover:underline" style={{ color: "var(--rc-primary)" }}>
+          <button type="button" onClick={() => void start({ force: true })} className="rc-inline-action hover:underline" style={{ color: "var(--rc-primary)" }}>
             {t.collectAgain}
           </button>
         </p>

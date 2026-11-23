@@ -291,7 +291,11 @@ export function coverageLine(
 /** Plain-text name list: "Xcite" / "Xcite and Blink" / "Xcite, Blink and Eureka". */
 function joinNames(names: string[], ar = false): string {
   if (names.length <= 1) return names.join("");
-  return `${names.slice(0, -1).join(", ")}${ar ? " و" : " and "}${names[names.length - 1]}`;
+  // REEA-1069 / signed AR checklist A5: the Arabic sentence joins every name
+  // with " و" (no Latin commas), matching the designed
+  // "الأسعار من Xcite وEureka وWibi." verbatim. English keeps its list comma.
+  if (ar) return names.join(" و");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 /**

@@ -43,13 +43,18 @@ export default function FreshnessBadge({
   const mins = Math.max(0, Math.round((nowMs - stampMs) / 60000));
   const stale = mins >= 7 * 24 * 60;
   const late = mins >= 10;
+  // REEA-1069 AC10: sub-minute reads "just now", never "Updated 0 minutes
+  // ago"; one minute keeps the singular. The absolute minute figure still
+  // ships in the first render (REEA-283 determinism).
+  const ageLabel =
+    mins === 0 ? t.freshJustNow : mins === 1 ? t.freshUpdatedMinute : fill(t.freshUpdatedMinutes, { n: mins });
   return (
     <span
       className="fresh-chip"
       title={stale ? t.staleTitle : undefined}
     >
       <span className={`fresh-dot${late ? " is-late" : ""}`} aria-hidden />
-      {fill(t.freshUpdatedMinutes, { n: mins })}
+      {ageLabel}
       {stale ? t.staleSuffix : ""}
     </span>
   );

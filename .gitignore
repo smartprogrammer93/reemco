@@ -60,3 +60,6 @@ reea1051-adapter-probe.json
 /probe2-1069.tmp.mjs
 /probe-product.tmp.mjs
 /probe-y.tmp.mjs
+
+# REEA-1069 local verification probes (scratch, not shipped)
+/probe*.tmp.mjs

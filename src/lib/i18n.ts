@@ -162,6 +162,8 @@ const en = {
   cachedWord: "cached",
   updatedWord: "updated",
   freshUpdatedMinutes: "Updated {n} minutes ago",
+  freshUpdatedMinute: "Updated 1 minute ago",
+  freshJustNow: "Updated just now",
   freshUnknown: "Updated date unknown",
   staleSuffix: " · may be outdated",
   staleTitle: "Last verified more than 7 days ago — the price may be outdated.",
@@ -287,12 +289,14 @@ const en = {
   tableStatus: "Status",
   tableChecked: "Checked",
   productCollected: "Collected live {age} · {n} retailers answered",
+  productCollectedOne: "Collected live {age} · 1 retailer answered",
   productRetailersAnswered: "{n} retailers answered",
   couponApplied: "{x} coupon applied at checkout",
   homeRetailersTitle: "Retailers collecting now",
   homeLiveNote: "live per-query collection · last answer {age}",
   retailerLive: "live",
   retailerNoResponse: "no response",
+  retailersMore: "+{n} more checked",
   homeDropsTitle: "Price drops right now",
   homeDropsNote: "Live · updated in the last minute",
   homeAllDrops: "All price drops",
@@ -315,6 +319,7 @@ const en = {
   homeModuleLoading: "Checking retailers live…",
   homeModuleNoResponse: "No retailer answered just now.",
   homeChecked: "Checked",
+  homePartialNote: "Some retailers are still answering — showing the live prices that arrived.",
   emptyRetailersAsked: "We asked every retailer just now.",
   errorRetailersTitle: "We couldn’t reach the retailers",
   errorRetailersBody:
@@ -430,6 +435,8 @@ const ar: typeof en = {
   cachedWord: "مخزَّن",
   updatedWord: "حُدِّث",
   freshUpdatedMinutes: "حُدِّث قبل {n} دقيقة",
+  freshUpdatedMinute: "حُدِّث قبل دقيقة",
+  freshJustNow: "حُدِّث الآن",
   freshUnknown: "تاريخ التحديث غير معروف",
   staleSuffix: " · قد يكون غير محدَّث",
   staleTitle: "آخر تحقق قبل أكثر من 7 أيام — قد يكون السعر غير محدَّث.",
@@ -536,13 +543,15 @@ const ar: typeof en = {
   tableStock: "التوافر",
   tableStatus: "الحالة",
   tableChecked: "وقت الجمع",
-  productCollected: "جُمع مباشرةً {age} · استجاب {n} متاجر",
-  productRetailersAnswered: "استجاب {n} متاجر",
+  productCollected: "جُمع مباشرةً {age} · استجاب {n} من المتاجر",
+  productCollectedOne: "جُمع مباشرةً {age} · استجاب متجر واحد",
+  productRetailersAnswered: "استجاب {n} من المتاجر",
   couponApplied: "كوبون {x} يُطبَّق عند الدفع",
   homeRetailersTitle: "متاجر تجمع الآن",
   homeLiveNote: "جمع مباشر لكل بحث · آخر إجابة {age}",
   retailerLive: "مباشر",
   retailerNoResponse: "لا استجابة",
+  retailersMore: "+{n} أخرى تم فحصها",
   homeDropsTitle: "انخفاضات الأسعار الآن",
   homeDropsNote: "مباشر · حُدِّث خلال الدقيقة الأخيرة",
   homeAllDrops: "كل انخفاضات الأسعار",
@@ -565,6 +574,7 @@ const ar: typeof en = {
   homeModuleLoading: "جارٍ التحقق من المتاجر مباشرة…",
   homeModuleNoResponse: "لم يستجب أي متجر الآن.",
   homeChecked: "تم التحقق",
+  homePartialNote: "بعض المتاجر لا تزال تستجيب — تُعرض الأسعار المباشرة التي وصلت.",
   emptyRetailersAsked: "سألنا كل متجر الآن.",
   errorRetailersTitle: "تعذّر الوصول إلى المتاجر",
   errorRetailersBody: "لا نعرض أسعارًا بدلًا من عرض لقطة قديمة. حاول مرة أخرى بعد قليل.",
@@ -628,7 +638,7 @@ export function checkedAgeLabel(locale: Locale, seconds: number): string {
     : s < 3600 ? ["دقيقة", "دقيقة", "دقيقتين", "دقائق", "دقيقة"]
     : s < 86400 ? ["ساعة", "ساعة", "ساعتين", "ساعات", "ساعة"]
     : ["يوم", "يوم", "يومين", "أيام", "يوم"];
-  if (s < 60 && s <= 5) return `${t.checkedLead} ${unit[0]}`;
+  if (s < 60 && s <= 5) return t.checkedJustNow;
   const n = s < 60 ? s : s < 3600 ? Math.floor(s / 60) : s < 86400 ? Math.floor(s / 3600) : Math.floor(s / 86400);
   if (n === 1) return `${t.checkedLead} ${unit[1]}`;
   if (n === 2) return `${t.checkedLead} ${unit[2]}`;
