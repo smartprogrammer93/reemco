@@ -147,4 +147,20 @@ describe("query cache keys (REEA-291 AC5)", () => {
     expect(queryCacheKey("sony", "KW")).not.toBe(queryCacheKey("sony", "EG"));
     expect(queryCacheKey(" Sony ", null)).toBe(queryCacheKey("sony"));
   });
+
+  it("REEA-1068 D4 — model spellings share the dispatch identity, one live answer", () => {
+    // The fan-out dispatches `fold 7`, `fold7` and `Fold 7` as the same
+    // compact query, so they must hit the SAME memo entry: three keys ran
+    // three separate fan-outs and served three different snapshots (QA
+    // measured 5/7/3 results for one product).
+    expect(queryCacheKey("fold 7")).toBe("fold7");
+    expect(queryCacheKey("Fold 7")).toBe(queryCacheKey("fold7"));
+    expect(queryCacheKey("  fold   7 ")).toBe("fold7");
+    // The Arabic transliteration bridges to the same Latin identity.
+    expect(queryCacheKey("فولد 7")).toBe("fold7");
+    // Longer phrases keep their own identity — only a whole word+digit query
+    // folds at dispatch.
+    expect(queryCacheKey("galaxy z fold 7")).toBe("galaxy z fold 7");
+    expect(queryCacheKey("foldable table")).toBe("foldable table");
+  });
 });

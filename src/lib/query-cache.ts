@@ -43,6 +43,8 @@
  * runs the live path. Nothing is persisted or bundled.
  */
 
+import { compactDispatchQuery, latinBridgeDispatch } from "@/lib/relevance";
+
 /** Memoization window (REEA-291 AC5): entries this young serve immediately.
  *  REEA-439 tightened it to the 30–60 s band so the whole repeat path
  *  (shared edge entry + this memo) stays under ~60 s of served age. */
@@ -200,7 +202,15 @@ export const defaultQueryCache = createQueryCache();
  * cold render of one query: `curl -b 'rc_refresh=1' <same-url>`.
  */
 export function queryCacheKey(query: string, country?: string | null, locale?: "en" | "ar"): string {
-  const folded = query.trim().toLowerCase();
+  // REEA-1068 D4 — the memo identity is the DISPATCH identity, not the raw
+  // shopper spelling. `fold 7`, `fold7` and `Fold 7` all reach the retailers
+  // as the same compact query (collectSettled applies the same two folds), so
+  // they must share one live answer. Keying on the raw spelling ran three
+  // separate fan-outs and served three different snapshots (QA measured 5/7/3
+  // results for one product), which read as non-equivalent results and paid
+  // three times for the same data. Arabic script folds through the same
+  // Latin bridge the dispatch uses, so a bridged query cannot fork either.
+  const folded = compactDispatchQuery(latinBridgeDispatch(query)).trim().toLowerCase();
   // Country scopes the LIVE fan-out itself (REEA-170 — COLLECTORS are
   // filtered to the adapters tagged for the selection), so the collected
   // payload really differs per selection and its identity must too. Callers
