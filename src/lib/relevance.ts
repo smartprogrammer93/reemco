@@ -47,9 +47,15 @@ const BRAND_STOP_VALUES: readonly string[] = [
    normalized lowercase title. REEA-1068 — "bundle" and "protection" join the
    list: an add-on pack or a protection ring/pack is an accessory class, not a
    device, so a cheap bundle/lens ring cannot outrank the phone set it
-   complements. */
+   complements. REEA-1068 D2 — "camera glass" and "lens" join too: the QA pass
+   caught a Wibi "Smartix Ultraguard Camera Glass … for Samsung Galaxy Z
+   Fold7" lens cover merging into the device card (it repeats the full device
+   identity in its title), where its KD 5.50 then set the phone card's Best
+   price. A bare "glass" stays OUT of the list so a glass-topped table
+   ("Wansa Glass Heater Foldable Table") remains a device-class row. */
 const ACCESSORY_MARKERS: readonly string[] = [
-  "case", "cover", "protector", "protection", "tempered glass", "film", "skin",
+  "case", "cover", "protector", "protection", "tempered glass", "camera glass",
+  "film", "skin", "lens",
   "adapter", "adaptor", "charger", "dock", "holder", "hanger", "rack",
   "eartips", "ear tips", "sleeve", "bundle",
   "كفر", "جراب", "واقي", "غطاء", "شاحن", "كابل", "وصلة", "حامل",

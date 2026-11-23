@@ -156,6 +156,32 @@ describe("REEA-1068 — compact model spelling", () => {
     expect(isAccessoryTitle(FOLD7_PHONE)).toBe(false);
   });
 
+  it("D2 — a camera-glass lens cover that repeats the device identity stays off the phone card", () => {
+    // QA live repro: Wibi's "Smartix Ultraguard Camera Glass for Samsung
+    // Galaxy Z Fold7" carried the full device identity in its title, so the
+    // canonical tuple merged it into the phone card and its KD 5.50 became
+    // the card's Best price (product page: KD 385/379.90). "camera glass" is
+    // an accessory marker now, so the lens cover forms its own class.
+    const cameraGlass = "Smartix Ultraguard Camera Glass for Samsung Galaxy Z Fold7 - Clear";
+    expect(isAccessoryTitle(cameraGlass)).toBe(true);
+    expect(isAccessoryTitle("Wansa Glass Heater Foldable Table")).toBe(false); // bare "glass" is not a marker
+    const hits: SearchHit[] = [
+      hit({ title: FOLD7_PHONE, merchant: "Xcite", price: 379.9, url: "https://xcite.example/f7" }),
+      hit({ title: "Samsung Galaxy Z Fold7, 5G, 12 GB RAM", merchant: "Blink", price: 385, url: "https://blink.example/f7" }),
+      hit({ title: "Samsung Galaxy Z Fold7, 5G, 12 GB RAM", merchant: "Eureka", price: 494.9, url: "https://eureka.example/f7" }),
+      hit({ title: cameraGlass, merchant: "Wibi", price: 5.5, url: "https://wibi.example/f7-glass" }),
+    ];
+    const products = groupHits("fold7", hits);
+    const phone = products.find((p) => p.title.includes("Fold7") && !isAccessoryTitle(p.title));
+    expect(phone).toBeDefined();
+    // The KD 5.50 lens cover is not one of the phone card's offers…
+    expect(phone!.offers.map((o) => o.merchant)).not.toContain("Wibi");
+    // …so the lead figure is a matched-phone price, never the accessory's.
+    expect(phone!.offers[0].price).toBeGreaterThan(5.5);
+    // The accessory still reaches its own card (nothing is hidden).
+    expect(products.some((p) => p.title === cameraGlass)).toBe(true);
+  });
+
   it("grouping+ranking produces the same card set for fold7 / fold 7 / Fold 7", () => {
     // The measured fold7 payload, plus the noise rows the broken gate used to
     // admit for `fold 7`. Each spelling runs through the same adapter gate the
