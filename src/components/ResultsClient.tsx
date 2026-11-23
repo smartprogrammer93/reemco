@@ -883,9 +883,11 @@ function StagePendingRow(props: {
 /* REEA-964 — streamed empty-state + related band. Resolves with the FINAL
    stage (the only snapshot where every hop has settled), so the honest empty
    state and the capped related band land in the SERVED document when the run
-   settled at zero confident matches — not only after hydration. A
-   finalized-at-budget zero stays provisional (null here; the REEA-437 heading
-   ghost covers the gap until the follow-up feed answers). */
+   settled at zero confident matches. REEA-1068 — a finalized-at-budget zero
+   (settled === false) renders it too: every stage that flushed was empty, so
+   the served document must not leave the results area blank while the
+   follow-up feed is still pending. If late offers arrive, hydration replaces
+   the empty state with the cards. */
 function StageEmptyState(props: {
   stages: readonly Promise<LiveSearchResult>[];
   query: string;
@@ -897,7 +899,7 @@ function StageEmptyState(props: {
   queryId?: string;
 }) {
   const snap = use(props.stages[props.stages.length - 1]);
-  if (props.query.length === 0 || snap.settled === false) return null;
+  if (props.query.length === 0) return null;
   const sections = stagedSections(snap, props.query, props.country, props.showOutOfStock);
   if (sections.primary.length > 0) return null;
   // E6 — zero offers because the collection FAILED (not a real empty shelf)

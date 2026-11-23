@@ -1434,6 +1434,35 @@ describe("R2: honest empty state + relevance hierarchy (REEA-964)", () => {
     expect(html).not.toContain("result-card pulse-cascade");
   });
 
+  it("REEA-1068: a finalized-at-budget zero still serves the honest empty state", async () => {
+    // Live defect: `zzzzqqq` served a blank results area — the final stage
+    // closed the stream before every hop settled, and the old guard dropped
+    // the empty state for settled === false. The served document must say
+    // "No match found" instead of leaving skeletons only.
+    searchParams.set("q", "zzzzqqq");
+    searchParams.delete("oos");
+    searchParams.delete("c");
+    const zeroSnap: LiveSearchResult = {
+      products: cases(0),
+      notes: [{ merchant: "Xcite", hits: 0 }, { merchant: "Nahdi", hits: 0 }],
+      suggestions: [],
+      settled: false,
+    };
+    const stream = await renderToReadableStream(
+      <ResultsClient query="zzzzqqq" page={1} country={null} locale="en" stages={[Promise.resolve(zeroSnap), Promise.resolve(zeroSnap)]} />,
+    );
+    let html = "";
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      html += decoder.decode(value, { stream: true });
+    }
+    expect(html).toContain("No match found");
+    expect(html).toContain('data-empty-state="true"');
+  });
+
   it("AC-4/E3: accessory-only matches render the empty state in the primary position plus the band", async () => {
     searchParams.set("q", "iphone 17 pro");
     searchParams.delete("oos");
