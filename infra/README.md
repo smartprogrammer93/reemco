@@ -16,11 +16,11 @@ does not exist on the host.
 | `ansible/playbook.yml` | Idempotent host convergence: pinned Docker, `/opt/reemco` config, timers, firewall |
 | `ansible/inventory.example.yml` | Copy to `inventory.yml`, set `ansible_host` |
 | `compose.prod.yml` | app + local Valkey (native RESP KV) + Caddy |
-| `Caddyfile` | TLS + HSTS; app owns CSP/CTO/Referrer-Policy (do not duplicate them) |
+| `Caddyfile` | TLS + HSTS; app owns CSP/CTO/Referrer-Policy (do not duplicate them); strips `Via` (REEA-1085) |
 | `Dockerfile` | Production image, tag = commit sha, standalone Next output |
 | `scripts/deploy.sh` | Deploy a pinned tag, auto-rollback on failed verify |
 | `scripts/rollback.sh` | Redeploy the recorded previous tag, same verify gate |
-| `scripts/verify.sh` | Commit stamp + 4 security headers + health + container hardening assertions |
+| `scripts/verify.sh` | Commit stamp + 4 security headers + no `Via` leak + health + container hardening assertions |
 | `scripts/assert-compose-hardening.sh` | CI gate: renders the compose file and asserts the hardening invariants |
 | `scripts/assert-containers.sh` | Post-deploy `docker inspect` assertions on the running stack (called by `verify.sh`) |
 | `scripts/backup.sh` | Restic backup of the durable state (docker volumes + `/opt/reemco` + `/etc/reemco`) |
@@ -165,6 +165,18 @@ record the new digest in the deploy comment, update the `image:` line, run
 suppresses `Server: Caddy` on the HTTP→HTTPS 308. It is only valid while the
 site address is a DNS name; a bare-IP standup address would define the site
 twice and Caddy would refuse to start — comment the block out in that case.
+
+**`Via` suppression (REEA-1085).** `reverse_proxy` appends `Via: 1.1 Caddy` to
+forwarded responses after `header`/`header_down` run, so the only working
+pattern on the pinned Caddy 2.11.9 is a `handle_response { header -Via;
+copy_response }` block inside `reverse_proxy` (caddyserver/caddy#7643).
+`omit_via_header` does not exist in 2.11.9. `verify.sh` step 2 fails the deploy
+if `Via` is served, and the funnel smoke steps 1–8 (incl. `/results` and
+`/search`) prove the wrapper did not change streaming/RSC behaviour. Validate a
+Caddyfile edit before deploying:
+`docker run --rm -e REEMCO_SITE_ADDRESS=<host> -v $PWD/infra/Caddyfile:/etc/caddy/Caddyfile:ro <pinned-caddy-digest> caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile`.
+Rollback: redeploy the previous commit via the workflow `rollback_sha`; the
+`handle_response` block simply disappears with that ref.
 
 **Rolling back this change.** Compose/Caddy changes are versioned: redeploy the
 previous commit through the deploy workflow with `rollback_sha` (it re-syncs

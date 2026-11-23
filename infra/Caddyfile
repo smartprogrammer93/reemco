@@ -38,7 +38,22 @@
 
 	# The deploy verification gate (infra/scripts/verify.sh + CI) expects the
 	# app to answer on these paths through the proxy, unchanged from Vercel.
+	#
+	# REEA-1085 (F7b) — drop the proxy fingerprint. reverse_proxy adds
+	# `Via: 1.1 Caddy` to every forwarded response AFTER the header/header_down
+	# directives run, so `header -Via` / `header_down -Via` cannot remove it and
+	# `omit_via_header` does not exist in the pinned Caddy 2.11.9. The documented
+	# workaround is to intercept the response, strip Via, then copy it through
+	# (caddyserver/caddy#7643). RFC 9110 §7.6.3 makes response-side Via a MAY, so
+	# this only removes recon signal; nothing functional depends on the header.
+	# verify.sh step 2 fails the deploy if Via leaks again, and smoke steps 1-8
+	# (incl. /results and /search, streaming/RSC) gate that handle_response did
+	# not change proxied behaviour.
 	reverse_proxy app:3000 {
+		handle_response {
+			header -Via
+			copy_response
+		}
 		health_uri /__commit.txt
 		health_interval 30s
 		health_timeout 5s

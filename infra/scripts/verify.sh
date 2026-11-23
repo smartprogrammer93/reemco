@@ -61,6 +61,9 @@ for H in content-security-policy x-content-type-options referrer-policy strict-t
   printf '%s\n' "$HEADERS" | grep -iq "^$H:" || fail "missing security header: $H"
 done
 echo "security headers OK (4/4)"
+# REEA-1085 (F7b): reverse_proxy must not fingerprint the proxy. The Caddyfile
+# strips Via with handle_response; if it leaks again the edge config regressed.
+printf '%s\n' "$HEADERS" | grep -iq "^via:" && fail "Via leaked"
 
 # 3. Health through the proxy — proves Caddy→app routing, not just loopback.
 # REEA-1044: this endpoint walks the live shopper funnel (home → results →
