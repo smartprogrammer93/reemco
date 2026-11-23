@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+# scripts/push-main.sh — REEA-1108: push a coder commit to origin/main in one command.
+#
+# Why this exists: the remote is https, the repo has no credential helper, and git
+# never reads $DEV_GITHUB_PAT on its own. A bare `git push` therefore asks for a
+# username and dies in a non-interactive shell with
+#   fatal: could not read Username for 'https://github.com'
+# The token is resolved at run time (the DEV_GITHUB_PAT env binding when the lane
+# has one, otherwise the Paperclip Secrets API for this agent) and handed to git
+# through a one-shot credential helper: it is never written to .git/config and
+# never echoed into the output.
+#
+# Usage:
+#   scripts/push-main.sh              # push the current HEAD to origin/main
+#   scripts/push-main.sh --ref <sha>  # push a specific commit
+#   scripts/push-main.sh --dry-run    # check auth + fast-forward, do not push
+#
+# Guarantees:
+#   * fast-forward only — refuses if origin/main is not an ancestor (no force-push,
+#     landed history is never rewritten)
+#   * idempotent — no-op when origin/main already equals the commit
+#   * verifies the push by reading origin/main back; a non-zero exit means it did
+#     not land
+#   * on failure it writes a git bundle and attaches it to the current Paperclip
+#     issue, so the bundle + pickup fallback cannot be forgotten
+set -euo pipefail
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  echo "push-main: not inside a git repository" >&2
+  exit 2
+}
+cd "$REPO_ROOT"
+
+REF="HEAD"
+DRY_RUN=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --ref)
+      REF="${2:?--ref needs a commit}"
+      shift 2
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    -h | --help)
+      sed -n '2,28p' "$0"
+      exit 0
+      ;;
+    *)
+      echo "push-main: unknown argument '$1' (see --help)" >&2
+      exit 2
+      ;;
+  esac
+done
+
+SHA=$(git rev-parse --verify --quiet "$REF^{commit}") || {
+  echo "push-main: cannot resolve '$REF' to a commit" >&2
+  exit 2
+}
+
+ORIGIN=$(git remote get-url origin 2>/dev/null) || {
+  echo "push-main: no 'origin' remote" >&2
+  exit 2
+}
+case "$ORIGIN" in
+  https://github.com/*) ;;
+  *)
+    echo "push-main: origin is '$ORIGIN'; expected an https://github.com/... remote" >&2
+    exit 2
+    ;;
+esac
+SLUG=${ORIGIN#https://github.com/}
+SLUG=${SLUG%.git}
+
+# --- token resolution -------------------------------------------------------
+# Prefer the adapter env binding; fall back to the run-scoped Paperclip secret API
+# (the documented on-demand path when a secret_ref is not exported to the shell).
+TOKEN="${DEV_GITHUB_PAT:-}"
+if [ -z "$TOKEN" ]; then
+  if [ -z "${PAPERCLIP_API_KEY:-}" ] && [ -f /tmp/paperclip/env ]; then
+    # shellcheck disable=SC1091
+    . /tmp/paperclip/env
+  fi
+  if [ -n "${PAPERCLIP_API_KEY:-}" ]; then
+    API_BASE="${PAPERCLIP_API_URL%/}"
+    TOKEN=$(curl -fsS -X POST \
+      -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
+      -H "X-Paperclip-Run-Id: ${PAPERCLIP_RUN_ID:-}" \
+      "$API_BASE/api/agents/me/secrets/dev-github-pat/value" 2>/dev/null |
+      node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).value||"")}catch{process.stdout.write("")}})' || true)
+  fi
+fi
+
+# The credential helper below runs in a child shell, so the token must be
+# exported for it. It is still never printed.
+export DEV_GITHUB_PAT="$TOKEN"
+
+fallback_bundle() {
+  local base bundle sha256 comment
+  base=$(git rev-parse --verify --quiet "${REMOTE:-origin/main}" 2>/dev/null ||
+    git rev-parse --verify --quiet origin/main 2>/dev/null || true)
+  bundle="/tmp/reemco-$(git rev-parse --short "$SHA").bundle"
+  if [ -n "$base" ]; then
+    git bundle create "$bundle" "$base..$SHA" >/dev/null 2>&1 || {
+      echo "push-main: could not create a bundle from $base" >&2
+      return 0
+    }
+  else
+    git bundle create "$bundle" "$SHA" >/dev/null 2>&1 || return 0
+  fi
+  sha256=$(sha256sum "$bundle" | cut -d' ' -f1)
+  echo "push-main: fallback bundle written to $bundle (sha256 $sha256)" >&2
+  echo "push-main: base $base, head $SHA" >&2
+
+  if [ -n "${PAPERCLIP_API_KEY:-}" ] && [ -n "${PAPERCLIP_COMPANY_ID:-}" ] &&
+    [ -n "${PAPERCLIP_TASK_ID:-}" ]; then
+    if curl -fsS -X POST \
+      -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
+      -H "X-Paperclip-Run-Id: ${PAPERCLIP_RUN_ID:-}" \
+      -F "file=@$bundle" \
+      "${PAPERCLIP_API_URL%/}/api/companies/$PAPERCLIP_COMPANY_ID/issues/$PAPERCLIP_TASK_ID/attachments" >/dev/null; then
+      echo "push-main: bundle attached to the current Paperclip issue" >&2
+    else
+      echo "push-main: bundle upload FAILED — attach $bundle by hand" >&2
+    fi
+  else
+    echo "push-main: no Paperclip run context; attach $bundle to the issue by hand" >&2
+  fi
+
+  comment="Commit $SHA is not on origin/main. Bundle $bundle (sha256 $sha256, base $base) is attached. DevOps: \`git fetch /tmp/<bundle> $SHA:refs/heads/main && scripts/push-main.sh --ref $SHA\`."
+  echo "push-main: pickup request — $comment" >&2
+}
+
+fail_push() {
+  echo "push-main: $1" >&2
+  fallback_bundle
+  exit 1
+}
+
+if [ -z "$TOKEN" ]; then
+  fail_push "no DEV_GITHUB_PAT (env binding empty and the Paperclip secret is not readable for this agent)"
+fi
+
+# --- fast-forward pre-flight ------------------------------------------------
+AUTH_URL="https://x-access-token:$TOKEN@github.com/$SLUG.git"
+GIT_TERMINAL_PROMPT=0 git fetch --no-tags --quiet "$AUTH_URL" refs/heads/main 2>/dev/null ||
+  fail_push "could not fetch origin/main (auth rejected or network down)"
+REMOTE=$(git rev-parse FETCH_HEAD)
+
+if [ "$REMOTE" = "$SHA" ]; then
+  echo "push-main: origin/main already equals $SHA — nothing to push"
+  exit 0
+fi
+
+if ! git merge-base --is-ancestor "$REMOTE" "$SHA"; then
+  fail_push "not a fast-forward: origin/main ($REMOTE) is not an ancestor of $SHA — rebase, do not force-push"
+fi
+
+if [ "$DRY_RUN" = 1 ]; then
+  echo "push-main: dry run OK — $REMOTE..$SHA is a fast-forward; nothing pushed"
+  exit 0
+fi
+
+# --- push -------------------------------------------------------------------
+# One-shot credential helper: keeps the remote URL clean in git's output and the
+# token out of .git/config (Least Privilege, no secret on disk).
+GIT_TERMINAL_PROMPT=0 git \
+  -c credential.helper='!f() { echo username=x-access-token; echo "password=$DEV_GITHUB_PAT"; }; f' \
+  push --quiet origin "$SHA:refs/heads/main" ||
+  fail_push "git push failed (see the message above)"
+
+PUSHED=$(GIT_TERMINAL_PROMPT=0 git ls-remote --heads "$AUTH_URL" refs/heads/main | cut -f1)
+if [ "$PUSHED" != "$SHA" ]; then
+  fail_push "push did not land: origin/main is $PUSHED, expected $SHA"
+fi
+
+echo "push-main: origin/main = $SHA — deploy-selfhosted.yml runs on this push"

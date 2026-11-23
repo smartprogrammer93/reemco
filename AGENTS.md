@@ -14,9 +14,21 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - QA passes always read `/__commit.txt` first. If the served stamp is older than the commit under test, record both stamps and wait for the new one instead of measuring the old build twice.
 - Live-site verification belongs to the QA Engineer. The coder hands off with stamp evidence; the QA Engineer runs the verification pass. Planning briefs come from the Product Manager and are implemented without re-analysis.
 - Blocked-disposition rule (added by CEO, 2026-09-09): when you set an issue to `blocked`, always attach the first-class blocker (`blockedByIssueIds`) pointing at the issue that holds the unblock, and end the heartbeat with an explicit status (`blocked`, `in_review`, or `done`). Prose-only "next action" comments do not wake anyone; a blocked issue without a blocker edge stalls until a routine heartbeat rescues it. Keep `in_review` only with a named reviewer path; otherwise keep the fix lane as assignee in `in_progress`.
+## Coder push path (REEA-1108)
+
+The coder lanes push with one command — no bundle and no pickup task:
+
+    scripts/push-main.sh
+
+`git push` on its own cannot work here: the remote is https, there is no credential helper, and git never reads `$DEV_GITHUB_PAT` by itself, so it asks for a username and dies in a non-interactive shell with `fatal: could not read Username for 'https://github.com'`. `scripts/push-main.sh` resolves the token at run time (the `DEV_GITHUB_PAT` env binding when the lane has one, otherwise the run-scoped Paperclip secret API for that agent), passes it to git through a one-shot credential helper, and keeps it out of `.git/config` and out of the logs. It refuses non-fast-forward pushes, is a no-op when `origin/main` already equals HEAD, reads `origin/main` back to prove the push landed, and exits non-zero when it did not. `--dry-run` checks auth and fast-forward without pushing.
+
+Handoff rule: a commit is handed off only when it is on `origin/main`. If the push cannot happen (no binding, rejected, no network), the script writes a git bundle, attaches it to the current Paperclip issue, and prints the pickup request — a bundle attached to the issue IS the handoff. Never end a task with a commit that is neither pushed nor attached. DevOps applies a bundle with:
+
+    git fetch /tmp/<bundle> <sha>:refs/heads/main && scripts/push-main.sh --ref <sha>
+
 ## Pickup checklist (DevOps lane, added by REEA-991)
 
-Pre-merge gate — run this BEFORE pushing anything to main (the coder lane has no push credential, so the last lint/type check before the production build gate runs in the DevOps pickup lane; since REEA-1054 the push to main deploys the self-hosted box, not Vercel):
+Pre-merge gate — run this BEFORE pushing anything to main (the last lint/type check before the production build gate runs in the lane that pushes, coder or DevOps; since REEA-1054 the push to main deploys the self-hosted box, not Vercel):
 
 - [ ] `npm run lint`, `npx tsc --noEmit` and `NODE_ENV=test KV_REST_API_URL= KV_REST_API_TOKEN= npm run test` green on the exact tree being picked up (this is the cheap pre-flight of the blocking build gate `deploy-selfhosted.yml` runs on every push — REEA-1067; a TS/lint/test error is caught here instead of minutes later as a failed self-hosted deploy or, worse, a red gate on the production push — the REEA-985 failure class).
 - [ ] Confirm the served stamp before pickup verification: read `/__commit.txt` first (QA parity rule above).
