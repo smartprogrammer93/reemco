@@ -1,6 +1,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { formatPrimaryPrice } from "@/lib/format";
+import { proxiedImageSrc } from "@/lib/image-proxy";
 import { localizedAgeFor } from "@/lib/relative-time";
 import { fill, getStrings, type Locale } from "@/lib/i18n";
 import {
@@ -105,17 +106,21 @@ function PriceDrops({
         const saved = formatPrimaryPrice(d.savings.amount, d.savings.currency).label;
         const checked =
           d.checkedAtEpochMs != null ? localizedAgeFor(locale, d.checkedAtEpochMs, nowMs) : null;
+        // REEA-1128 — the drop thumbnail follows the same proxied-source
+        // policy as the results card (Shopify photos go through our origin).
+        const thumb = proxiedImageSrc(d.image);
         return (
           <article className="rc-drop-card" key={`${d.productId}-${d.merchant}`}>
             <Link href={d.href} className="rc-drop-thumb" aria-label={d.title}>
-              {d.image ? (
+              {thumb ? (
                 <Image
-                  src={d.image}
+                  src={thumb}
                   alt={`${d.title} — product image`}
                   width={96}
                   height={96}
                   sizes="96px"
                   unoptimized
+                  referrerPolicy="no-referrer"
                 />
               ) : (
                 <span className="rc-media-glyph" aria-hidden>

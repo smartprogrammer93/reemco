@@ -12,6 +12,7 @@ import { LiveAge } from "@/components/OfferCtaLabel";
 import { resolveOfferUrl } from "@/lib/links";
 import { formatSeenRangeLabel } from "@/lib/seen-range";
 import { cleanDisplayTitle, displayTitleChanged } from "@/lib/display-title";
+import { proxiedImageSrc } from "@/lib/image-proxy";
 import { clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
 import FreshnessBadge from "@/components/FreshnessBadge";
 import OfferStatusToken from "@/components/OfferStatus";
@@ -104,9 +105,16 @@ function CategoryGlyph() {
 
 /** Card media: the retailer's real product image at recognition scale. The
  *  frame reserves its geometry and shows the category glyph when no image
- *  exists — never a broken icon, never an invented placeholder product. */
+ *  exists — never a broken icon, never an invented placeholder product.
+ *
+ *  REEA-1128 — the source goes through proxiedImageSrc(): a `cdn.shopify.com`
+ *  product photo is rendered as the same-origin `/api/image?u=…` URL, so the
+ *  shopper's browser never eats Shopify's intermittent cold-miss 403 (empty
+ *  frame + console error). Every other retailer image keeps its direct URL, and
+ *  `referrerPolicy="no-referrer"` keeps our origin off the retailer CDN's
+ *  logs. */
 function CardMedia({ product, locale, query, country }: { product: NormalizedProduct; locale?: Locale; query?: string; country?: CountryCode | null }) {
-  const src = product.image ?? product.offers.find((o) => o.image)?.image;
+  const src = proxiedImageSrc(product.image ?? product.offers.find((o) => o.image)?.image);
   const displayTitle = cleanDisplayTitle(product.title);
   if (!src) {
     return (
@@ -129,6 +137,7 @@ function CardMedia({ product, locale, query, country }: { product: NormalizedPro
         height={160}
         sizes="(max-width: 640px) 100px, 160px"
         unoptimized
+        referrerPolicy="no-referrer"
       />
       <div className="rc-card-share">
         <ShareSummaryButton product={product} query={query} country={country} locale={locale} iconOnly />
@@ -137,12 +146,15 @@ function CardMedia({ product, locale, query, country }: { product: NormalizedPro
   );
 }
 
-/** Detail-variant thumbnail pair (identity surface only). */
+/** Detail-variant thumbnail pair (identity surface only). Same REEA-1128
+ *  proxy policy as the shelf card, so the product page cannot show a broken
+ *  Shopify thumbnail either. */
 function ThumbRow({ product }: { product: NormalizedProduct }) {
   const urls: string[] = [];
   const add = (src?: string) => {
-    if (src && src.trim() && !urls.includes(src.trim()) && urls.length < 2) {
-      urls.push(src.trim());
+    const proxied = proxiedImageSrc(src);
+    if (proxied && !urls.includes(proxied) && urls.length < 2) {
+      urls.push(proxied);
     }
   };
   add(product.image);
@@ -159,6 +171,7 @@ function ThumbRow({ product }: { product: NormalizedProduct }) {
           height={64}
           sizes="64px"
           unoptimized
+          referrerPolicy="no-referrer"
           className="h-16 w-16 rounded object-contain"
           style={{ background: "var(--rc-canvas)" }}
         />

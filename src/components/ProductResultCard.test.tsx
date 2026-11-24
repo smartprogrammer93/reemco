@@ -812,3 +812,59 @@ describe("REEA-1094 — 375 offer-row containment anatomy (AC5/AC6/AC13)", () =>
     expect(row.querySelector(".price-alt-sep")).toBeTruthy();
   });
 });
+
+/**
+ * REEA-1128 — broken results thumbnails.
+ *
+ * QA's live repro: `cdn.shopify.com` answered HTTP 403 to the BROWSER's hotlink
+ * fetch on the results page, leaving an empty frame and a console error. The
+ * card must therefore hand the browser a SAME-ORIGIN proxied URL for those
+ * hosts (see src/lib/image-proxy.ts), while every other retailer image keeps
+ * its direct URL. `referrerPolicy="no-referrer"` keeps our origin off the
+ * retailer CDN's logs on the images that are still fetched directly.
+ */
+describe("REEA-1128 — card media never hotlinks a measured-failing host", () => {
+  const shopifyProduct = (): NormalizedProduct => {
+    const src =
+      "https://cdn.shopify.com/s/files/1/0677/2470/6005/files/JBL_Tune_780NC.jpg?v=1776607449";
+    return {
+      ...product(false),
+      image: src,
+      offers: [
+        { merchant: "Switch", price: 29.9, currency: "KWD", url: "https://switch.example/p", inStock: true, image: src },
+      ],
+    };
+  };
+
+  it("renders the Shopify photo through /api/image, losslessly", () => {
+    const { container } = render(<ProductResultCard product={shopifyProduct()} query="headphones" rank={0} />);
+    const imgs = Array.from(container.querySelectorAll("img"));
+    expect(imgs).toHaveLength(1);
+    const src = imgs[0].getAttribute("src") ?? "";
+    expect(src.startsWith("/api/image?u=")).toBe(true);
+    const upstream = decodeURIComponent(src.split("?u=")[1] ?? "");
+    expect(upstream).toBe(
+      "https://cdn.shopify.com/s/files/1/0677/2470/6005/files/JBL_Tune_780NC.jpg?v=1776607449",
+    );
+    // Belt and braces on the referrer hypothesis: the retailer CDN sees no
+    // referrer from our origin on any image, proxied or direct.
+    expect(imgs[0].getAttribute("referrerpolicy")).toBe("no-referrer");
+  });
+
+  it("keeps the direct URL for a retailer CDN that already answers", () => {
+    const { container } = render(<ProductResultCard product={product(true)} query="headphones" rank={0} />);
+    const img = container.querySelector("img") as HTMLImageElement;
+    expect(img.getAttribute("src")).toBe("https://cdn.example/1.png");
+    expect(img.getAttribute("referrerpolicy")).toBe("no-referrer");
+  });
+
+  it("the detail-variant thumbnails follow the same policy", () => {
+    const { container } = render(<ProductResultCard product={shopifyProduct()} variant="detail" />);
+    const imgs = Array.from(container.querySelectorAll("img"));
+    expect(imgs.length).toBeGreaterThan(0);
+    for (const img of imgs) {
+      expect(img.getAttribute("src")?.startsWith("/api/image?u=")).toBe(true);
+      expect(img.getAttribute("referrerpolicy")).toBe("no-referrer");
+    }
+  });
+});

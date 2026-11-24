@@ -27,6 +27,7 @@ import OfferStatusToken, { StatusLegend } from "@/components/OfferStatus";
 import ShareSummaryButton from "@/components/ShareSummaryButton";
 import { buildResultsHref } from "@/lib/country";
 import { cleanDisplayTitle, displayTitleChanged } from "@/lib/display-title";
+import { proxiedImageSrc } from "@/lib/image-proxy";
 import { cheapestListedKwd, foldAlternativeRows } from "@/components/ProductResultCard";
 import { ageSeconds, localizedAgeFor, localizedAgeFromStamp } from "@/lib/relative-time";
 import { checkedAgeLabel, clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
@@ -39,11 +40,15 @@ function sortLiveOffers(offers: LiveOffer[]): LiveOffer[] {
 }
 
 function ProductMedia({ product }: { product: NormalizedProduct }) {
-  const src = product.image ?? product.offers.find((o) => o.image)?.image;
+  // REEA-1128 — same proxied-source policy as the results card: a Shopify
+  // product photo is fetched through our own origin, so the hero cannot show
+  // a broken thumbnail (or log a console 403) when the retailer CDN refuses
+  // the browser's cold hotlink fetch.
+  const src = proxiedImageSrc(product.image ?? product.offers.find((o) => o.image)?.image);
   return (
     <div className="rc-product-media">
       {src ? (
-        <Image src={src} alt={`${cleanDisplayTitle(product.title)} — product image`} width={320} height={320} unoptimized />
+        <Image src={src} alt={`${cleanDisplayTitle(product.title)} — product image`} width={320} height={320} unoptimized referrerPolicy="no-referrer" />
       ) : (
         <span className="rc-media-glyph" aria-hidden>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.4} width={56} height={56}>
