@@ -109,8 +109,11 @@ function HeroOfferRow({
           <bdi className="logo lat">{offer.merchant}</bdi>
         </span>
         {cross && market ? (
+          // REEA-1161 — full market qualifier on the hero row too, with the
+          // same title fallback the shelf card uses.
           <span
-            className="label-token shrink-0 whitespace-nowrap rounded px-2 py-0.5"
+            className="label-token rc-market-badge rounded px-2 py-0.5"
+            title={marketPriceLabel(market, locale)}
             style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px solid var(--rc-line)" }}
           >
             <bdi>{marketPriceLabel(market, locale)}</bdi>
@@ -122,7 +125,8 @@ function HeroOfferRow({
         </span>
         {cross && market ? (
           <span
-            className="label-token shrink-0 whitespace-nowrap rounded px-2 py-0.5"
+            className="label-token rc-market-badge rounded px-2 py-0.5"
+            title={marketStockLabel(market, locale)}
             style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px solid var(--rc-line)" }}
           >
             <bdi>{marketStockLabel(market, locale)}</bdi>

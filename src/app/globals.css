@@ -3102,6 +3102,26 @@ html[lang="ar"] .coupon-via {
     flex-wrap: nowrap;
     min-block-size: var(--rc-tap);
   }
+  /* REEA-1161 — the market qualifier ("Saudi price" / "KSA stock", and the
+     Arabic equivalents) is the trust signal for a non-KWD row. The REEA-1096
+     single-line rule above squeezed every .label-token with flex:1 1 0 +
+     ellipsis, so at 375 it cut them to "Saudi ..." / "KSA st...". A row that
+     carries a market badge lets line-a wrap and the badge keeps its full
+     text (it may wrap internally on a very long locale) while the retailer
+     name, stock dot and price keep their own slots. */
+  .rc-card .rc-offer-row.has-market .rc-offer-line.line-a {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+  .rc-card .rc-offer-row .rc-market-badge,
+  .rc-card .rc-offer-row .rc-market-badge[class] {
+    flex: 0 0 auto;
+    min-inline-size: auto;
+    max-inline-size: 100%;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
   /* REEA-1096 D4 — no component-level status squeeze: the token keeps its
      designed geometry (padding-inline 8px, icon 14px, gap 4px). The 40% row
      cap above still keeps "Needs verification" inside the 375 row. */

@@ -195,8 +195,11 @@ export default function OfferCard({
           {inStock ? t.inStock : t.outOfStock}
         </span>
         {marketBadge ? (
+          // REEA-1161 — the detail card's market badge keeps its full text and
+          // carries a title fallback, matching the shelf row's marker.
           <span
-            className="label-token shrink-0 whitespace-nowrap rounded px-2 py-0.5"
+            className="label-token rc-market-badge rounded px-2 py-0.5"
+            title={marketBadge}
             style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px solid var(--rc-line)" }}
           >
             <bdi>{marketBadge}</bdi>

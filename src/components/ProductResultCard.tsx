@@ -423,14 +423,21 @@ function ShelfOfferRow({
   // eslint-disable-next-line react-hooks/purity -- fallback clock only when the server did not bake renderStartMs (REEA-283 pattern).
   const status = offerStatusForOffer(offer, renderStartMs ?? Date.now());
   return (
-    <li className={`offer-row rc-offer-row${offer.inStock ? "" : " is-out"}`}>
+    <li
+      className={`offer-row rc-offer-row${cross && market ? " has-market" : ""}${offer.inStock ? "" : " is-out"}`}
+    >
       <div className="rc-offer-line line-a">
         <span className="rc-retailer-name">
           <bdi className="logo lat">{offer.merchant}</bdi>
         </span>
         {cross && market ? (
+          // REEA-1161 — the market qualifier is the trust signal for a
+          // non-KWD row, so it carries its full text: `rc-market-badge` opts
+          // it out of the 375 single-line ellipsis rule (globals.css) and the
+          // title is a fallback for any environment that still truncates.
           <span
-            className="label-token shrink-0 whitespace-nowrap rounded px-2 py-0.5"
+            className="label-token rc-market-badge rounded px-2 py-0.5"
+            title={marketPriceLabel(market, locale)}
             style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px solid var(--rc-line)" }}
           >
             <bdi>{marketPriceLabel(market, locale)}</bdi>
@@ -461,8 +468,10 @@ function ShelfOfferRow({
         {cross && market ? (
           // REEA-1142 — never "Verified" for Kuwait on a foreign listing: the
           // badge names the market the stock actually belongs to ("KSA stock").
+          // REEA-1161 — full text at 375 (rc-market-badge) + title fallback.
           <span
-            className="label-token shrink-0 whitespace-nowrap rounded px-2 py-0.5"
+            className="label-token rc-market-badge rounded px-2 py-0.5"
+            title={marketStockLabel(market, locale)}
             style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px solid var(--rc-line)" }}
           >
             <bdi>{marketStockLabel(market, locale)}</bdi>
