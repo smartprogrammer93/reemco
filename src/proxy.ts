@@ -57,6 +57,91 @@ export function buildCsp(nonce: string, mode: string = CSP_MODE): string {
  */
 export const RESULTS_PATHS = ["/results", "/search"] as const;
 
+/**
+ * REEA-1133 — page-level per-IP budget for the addresses that run the live
+ * retailer fan-out (F1/REEA-1121). REEA-1121 measured 20 parallel distinct
+ * /results?q= renders on the live box answering 20×200 with zero 429s; every
+ * one of them fans out ~15 retailer lanes. This gate is the first line of
+ * defence and it is deliberately cheap: a sliding window over request
+ * timestamps, no I/O.
+ *
+ * Semantics, stated honestly:
+ *  - per PROCESS, exactly like the REEA-37 ingestion limiter: the self-hosted
+ *    box runs one Next server process today, so this is a real per-IP budget
+ *    there; a future multi-worker deployment would enforce it per worker
+ *    (the admission cap in lib/collect/inflight.ts remains the fleet-wide
+ *    bound on actual fan-out).
+ *  - the key is the client IP taken from the trusted proxy hop, never stored
+ *    or logged (no PII leaves the process).
+ *  - 60 requests/minute covers a shopper paging through results (each page
+ *    view is one document GET) with generous headroom; a crawler or a scripted
+ *    burst hits it immediately and gets a 429 with Retry-After instead of a
+ *    fresh fan-out.
+ *  - prefetch/RSC requests are counted too: they still render the page on the
+ *    server and can still start a fan-out.
+ */
+export const PAGE_RATE_LIMIT = { limit: 60, windowMs: 60_000 } as const;
+
+const pageBuckets = new Map<string, number[]>();
+
+/** Test helper: clear the page bucket store. */
+export function resetPageRateLimiter(): void {
+  pageBuckets.clear();
+}
+
+/** True for the page addresses whose render runs the live retailer fan-out. */
+export function isLiveFanoutPage(pathname: string): boolean {
+  return (
+    (RESULTS_PATHS as readonly string[]).includes(pathname) ||
+    pathname === "/product" ||
+    pathname.startsWith("/product/")
+  );
+}
+
+/**
+ * The client address behind our own reverse proxy. Caddy APPENDS the peer
+ * address to any client-supplied X-Forwarded-For, so the LAST entry is the one
+ * our edge observed — the first entry is client-controlled and spoofable. A
+ * direct (loopback) request has no forwarding headers and keys as "unknown",
+ * which is the conservative shared-bucket choice.
+ */
+export function clientAddressOf(request: NextRequest): string {
+  const forwarded = request.headers.get("x-forwarded-for");
+  if (forwarded) {
+    const hops = forwarded.split(",").map((hop) => hop.trim()).filter(Boolean);
+    if (hops.length > 0) return hops[hops.length - 1];
+  }
+  const realIp = request.headers.get("x-real-ip")?.trim();
+  return realIp || "unknown";
+}
+
+/**
+ * Sliding-window per-IP gate for the live fan-out pages. Mirrors the REEA-37
+ * limiter's semantics (bounded memory, oldest-hit expiry) but keeps its OWN
+ * store: proxy code runs in its own module instance and must not depend on
+ * state shared with render code.
+ */
+export function checkPageRateLimit(
+  key: string,
+  now: number,
+  opts: { limit: number; windowMs: number } = PAGE_RATE_LIMIT,
+  store: Map<string, number[]> = pageBuckets,
+): { allowed: boolean; remaining: number; retryAfterMs?: number } {
+  const hits = (store.get(key) ?? []).filter((t) => now - t < opts.windowMs);
+  if (hits.length >= opts.limit) {
+    store.set(key, hits);
+    return { allowed: false, remaining: 0, retryAfterMs: Math.max(1, hits[0] + opts.windowMs - now) };
+  }
+  hits.push(now);
+  store.set(key, hits);
+  if (store.size > 10_000) {
+    for (const [k, v] of store) {
+      if (v.every((t) => now - t >= opts.windowMs)) store.delete(k);
+    }
+  }
+  return { allowed: true, remaining: opts.limit - hits.length };
+}
+
 export function sharedWindowHeaders(): { "Cache-Control": string; Vary: string } {
   return {
     "Cache-Control": "public, max-age=0, s-maxage=45, stale-while-revalidate=15",
@@ -67,11 +152,46 @@ export function sharedWindowHeaders(): { "Cache-Control": string; Vary: string }
   };
 }
 
+/** Shared hardening headers for every response this proxy returns. */
+function hardeningHeaders(): Record<string, string> {
+  return {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "X-Frame-Options": "DENY", // legacy complement to frame-ancestors
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+  };
+}
+
 export function proxy(request: NextRequest) {
   const nonce = crypto.randomUUID().replace(/-/g, "");
   const csp = buildCsp(nonce);
   const enforce = CSP_MODE === "enforce";
   const cspHeader = enforce ? "Content-Security-Policy" : "Content-Security-Policy-Report-Only";
+  const path = request.nextUrl.pathname;
+  let pageBudget: { limit: number; remaining: number } | null = null;
+
+  // REEA-1133 — per-IP page gate BEFORE any render work. A 429 here means the
+  // request never starts a fan-out; Retry-After tells the crawler/script when
+  // the window frees. The response still carries the hardening CSP.
+  if (isLiveFanoutPage(path)) {
+    const gate = checkPageRateLimit(clientAddressOf(request), Date.now());
+    if (!gate.allowed) {
+      const limited = new NextResponse("Too many requests — please retry shortly.", {
+        status: 429,
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store",
+          "Retry-After": String(Math.max(1, Math.ceil((gate.retryAfterMs ?? PAGE_RATE_LIMIT.windowMs) / 1000))),
+          "X-RateLimit-Limit": String(PAGE_RATE_LIMIT.limit),
+          "X-RateLimit-Remaining": "0",
+          ...hardeningHeaders(),
+        },
+      });
+      limited.headers.set(cspHeader, csp);
+      return limited;
+    }
+    pageBudget = { limit: PAGE_RATE_LIMIT.limit, remaining: gate.remaining };
+  }
 
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);
@@ -97,14 +217,16 @@ export function proxy(request: NextRequest) {
 
   const response = NextResponse.next({ request: { headers: requestHeaders } });
   response.headers.set(cspHeader, csp);
-  response.headers.set("X-Content-Type-Options", "nosniff");
-  response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
-  response.headers.set("X-Frame-Options", "DENY"); // legacy complement to frame-ancestors
-  response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  for (const [key, value] of Object.entries(hardeningHeaders())) {
+    response.headers.set(key, value);
+  }
+  if (pageBudget) {
+    response.headers.set("X-RateLimit-Limit", String(pageBudget.limit));
+    response.headers.set("X-RateLimit-Remaining", String(pageBudget.remaining));
+  }
   // REEA-439 — bounded shared window + locale Vary ride together on both
   // results addresses (sharedWindowHeaders above); middleware-set headers
   // merge with the framework's own list instead of being overwritten.
-  const path = request.nextUrl.pathname;
   if (RESULTS_PATHS.some((source) => path === source)) {
     for (const [key, value] of Object.entries(sharedWindowHeaders())) {
       response.headers.set(key, value);

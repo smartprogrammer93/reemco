@@ -6,9 +6,18 @@
  * (b) POST /api/csp-report with a well-formed report → 2xx
  * (c) malformed / oversized / GET → 4xx
  */
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { NextRequest } from "next/server";
-import { buildCsp, proxy } from "./proxy";
+import {
+  buildCsp,
+  proxy,
+  // REEA-1133 — per-IP page budget on the live fan-out addresses.
+  PAGE_RATE_LIMIT,
+  checkPageRateLimit,
+  clientAddressOf,
+  isLiveFanoutPage,
+  resetPageRateLimiter,
+} from "./proxy";
 import {
   MAX_REPORT_BODY_BYTES,
   parseCspReport,
@@ -237,3 +246,98 @@ describe("REEA-447 shared cache window + query forwarding on results addresses",
   });
 });
 
+
+/**
+ * REEA-1133 — F1 remediation of REEA-1121: the live fan-out pages must carry a
+ * per-IP budget at the proxy so an unauthenticated burst of distinct queries is
+ * answered 429 instead of each starting a ~15-lane retailer fan-out. These pins
+ * fail on eba496ca, where 20 parallel /results renders answered 20×200.
+ */
+describe("REEA-1133 per-IP page budget on live fan-out addresses", () => {
+  const BASE = "https://ns539626.ip-144-217-72.net";
+
+  /** One request from `ip` as our own Caddy hop would present it. */
+  function reqFrom(path: string, ip: string): NextRequest {
+    return new NextRequest(BASE + path, { headers: { "x-forwarded-for": ip } });
+  }
+
+  beforeEach(() => {
+    resetPageRateLimiter();
+  });
+  afterEach(() => {
+    resetPageRateLimiter();
+  });
+
+  it("covers exactly the addresses that run the live retailer fan-out", () => {
+    expect(isLiveFanoutPage("/results")).toBe(true);
+    expect(isLiveFanoutPage("/search")).toBe(true);
+    expect(isLiveFanoutPage("/product")).toBe(true);
+    expect(isLiveFanoutPage("/product/abc123")).toBe(true);
+    // No fan-out behind these: the budget must not throttle them.
+    expect(isLiveFanoutPage("/")).toBe(false);
+    expect(isLiveFanoutPage("/about")).toBe(false);
+    expect(isLiveFanoutPage("/api/health")).toBe(false);
+    expect(isLiveFanoutPage("/api/results-followup")).toBe(false);
+  });
+
+  it("answers 429 with Retry-After once a client exceeds the page budget", () => {
+    const ip = "198.51.100.10";
+    for (let i = 0; i < PAGE_RATE_LIMIT.limit; i += 1) {
+      const res = proxy(reqFrom("/results?q=query-" + i, ip));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("X-RateLimit-Remaining")).toBe(
+        String(PAGE_RATE_LIMIT.limit - i - 1),
+      );
+    }
+    // Request N+1 never starts a render (and therefore never fans out).
+    const limited = proxy(reqFrom("/results?q=query-over", ip));
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("Retry-After")).toBeTruthy();
+    expect(Number(limited.headers.get("Retry-After"))).toBeGreaterThan(0);
+    expect(limited.headers.get("X-RateLimit-Remaining")).toBe("0");
+    expect(limited.headers.get("Cache-Control")).toContain("no-store");
+    // The limited response still carries the hardening policy.
+    expect(limited.headers.get("Content-Security-Policy")).toContain("default-src 'self'");
+    expect(limited.headers.get("X-Content-Type-Options")).toBe("nosniff");
+  });
+
+  it("budgets per client address: one exhausted IP does not throttle another", () => {
+    const noisy = "198.51.100.11";
+    for (let i = 0; i < PAGE_RATE_LIMIT.limit; i += 1) proxy(reqFrom("/results", noisy));
+    expect(proxy(reqFrom("/results", noisy)).status).toBe(429);
+    // A different shopper keeps their own bucket.
+    expect(proxy(reqFrom("/results", "198.51.100.12")).status).toBe(200);
+  });
+
+  it("keys on the edge-observed hop, not the client-supplied first entry", () => {
+    const peer = "198.51.100.13";
+    for (let i = 0; i < PAGE_RATE_LIMIT.limit; i += 1) proxy(reqFrom("/product/x", peer));
+    // Caddy APPENDS the peer, so the LAST hop is ours; the first is spoofable.
+    // A fresh spoofed prefix must not buy a new budget.
+    const spoofed = new NextRequest(BASE + "/product/x", {
+      headers: { "x-forwarded-for": "10.9.9.9, " + peer },
+    });
+    expect(clientAddressOf(spoofed)).toBe(peer);
+    expect(proxy(spoofed).status).toBe(429);
+  });
+
+  it("does not throttle non-fan-out paths from the same exhausted IP", () => {
+    const ip = "198.51.100.14";
+    for (let i = 0; i < PAGE_RATE_LIMIT.limit; i += 1) proxy(reqFrom("/results", ip));
+    expect(proxy(reqFrom("/results", ip)).status).toBe(429);
+    expect(proxy(reqFrom("/", ip)).status).toBe(200);
+    expect(proxy(reqFrom("/api/health", ip)).status).toBe(200);
+  });
+
+  it("checkPageRateLimit refuses over the window and reports the wait", () => {
+    const store = new Map<string, number[]>();
+    const opts = { limit: 2, windowMs: 1000 };
+    expect(checkPageRateLimit("k", 0, opts, store).allowed).toBe(true);
+    expect(checkPageRateLimit("k", 1, opts, store).allowed).toBe(true);
+    const denied = checkPageRateLimit("k", 2, opts, store);
+    expect(denied.allowed).toBe(false);
+    expect(denied.retryAfterMs).toBe(998); // oldest hit at t=0 + window - now
+    // Window rolls forward: the oldest hit expires and capacity returns.
+    expect(checkPageRateLimit("k", 1001, opts, store).allowed).toBe(true);
+  });
+});
