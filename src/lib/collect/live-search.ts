@@ -61,12 +61,15 @@ import { canonicalFields, compatibleFields, listingLabel, type CanonicalFields }
 import {
   arabicBrandIntent,
   brandIsNamed,
+  categoryIntent,
+  categoryRowClass,
   classifyAlternativeMatch,
   compactDispatchQuery,
   isAccessoryTitle,
   isModelExtended,
   latinBridgeDispatch,
   latinQueryForms,
+  narrowCategoryLead,
   narrowDeviceLead,
   narrowSkuLead,
   normalizedTitle,
@@ -2298,6 +2301,13 @@ function rankByRelevance(query: string, groups: HitGroup[]): HitGroup[] {
             [...g.titles].some((t) => titleCarriesCode(t, codes)) ||
             titleCarriesCode(canonicalGroupTitle(g), codes),
         );
+  // REEA-1143 — category-intent class. A query that names a product CLASS
+  // ("air fryer", "ps5", "laptop", "headphones") is about the product itself;
+  // its complement aisle (liners, cooking spray, cases, chargers, games, food,
+  // toys, bags) must rank below every class product, however the complements
+  // answer the phrase. Exact-model queries return null here and keep the
+  // untouched ladder (a case can be the right answer for "fold 7 case").
+  const intent = categoryIntent(query);
   type Ranked = {
     group: HitGroup;
     arrival: number;
@@ -2306,6 +2316,9 @@ function rankByRelevance(query: string, groups: HitGroup[]): HitGroup[] {
     named: boolean;
     stocked: boolean;
     cheapest: number;
+    /** 0 = class product, 1 = neutral, 2 = complement (only meaningful when
+     *  the query is category-intent; otherwise every row is 1). */
+    categoryClass: number;
   };
   const ranked: Ranked[] = kept.map((group, arrival) => {
     // A merged card qualifies through ANY of its member titles; the visible
@@ -2315,6 +2328,7 @@ function rankByRelevance(query: string, groups: HitGroup[]): HitGroup[] {
     let tier = Infinity;
     for (const t of group.titles) tier = Math.min(tier, relevanceTier(query, t, metadata));
     if (!Number.isFinite(tier)) tier = relevanceTier(query, canonical, metadata);
+    const rowClass = intent ? categoryRowClass(intent, canonical) : "neutral";
     return {
       group,
       arrival,
@@ -2325,9 +2339,13 @@ function rankByRelevance(query: string, groups: HitGroup[]): HitGroup[] {
       // REEA-254 item B/D + REEA-604: best EFFECTIVE price of the card, on the
       // one normalized KWD-based key — mixed-currency cards rank comparable.
       cheapest: Math.min(...group.offers.map((o) => effectiveKeyOf(o))),
+      categoryClass: rowClass === "product" ? 0 : rowClass === "complement" ? 2 : 1,
     };
   });
   const insideTier = (a: Ranked, b: Ranked): number =>
+    // REEA-1143 — inside a class block the category class still leads, so a
+    // product always sorts ahead of a complement that shares its tier.
+    a.categoryClass - b.categoryClass ||
     // REEA-721 — family-match first inside every tier block: a queried family
     // (phones under `iPhone 17 Pro`, tablets under `iPad Air`) leads its tier
     // even when a cheaper accessory answers the SAME phrase at the head
@@ -2344,22 +2362,38 @@ function rankByRelevance(query: string, groups: HitGroup[]): HitGroup[] {
     a.cheapest - b.cheapest ||
     a.arrival - b.arrival;
 
-  const buckets: Ranked[][] = [];
-  for (const r of ranked) {
-    // REEA-222: a tier-0 group (zero query-token coverage) is the WEAKEST
-    // match and joins the bottom bucket. Clamping it into the lead bucket
-    // let a cheap cross-category card (an Instax camera at KWD 44 under
-    // `iPhone 17 Pro Max`) outrank every phone on the inside-tier price
-    // tiebreak and steal the single Best-price badge. Unknown/absent tiers
-    // (Infinity) keep their old home — the last matched block.
+  // One bucket per (class, tier). The class axis exists only for a
+  // category-intent query: class products are emitted first, then neutral
+  // rows, then the complement aisle — each block keeps the untouched 1→4 tier
+  // ladder and its retailer round-robin, so nothing inside a block is
+  // re-tiered. For every other query the class axis is a single value and the
+  // block order is byte-for-byte the pre-1143 tier ladder.
+  const bucketKey = (r: Ranked): string => {
     const idx = r.tier >= 1 && r.tier <= 4 ? r.tier - 1 : 4;
-    (buckets[idx] ??= []).push(r);
+    return `${r.categoryClass}:${idx}`;
+  };
+  const byKey = new Map<string, Ranked[]>();
+  for (const r of ranked) {
+    const k = bucketKey(r);
+    const bucket = byKey.get(k);
+    if (bucket) bucket.push(r);
+    else byKey.set(k, [r]);
   }
+  // REEA-222: a tier-0 group (zero query-token coverage) is the WEAKEST match
+  // and joins the bottom bucket. Clamping it into the lead bucket let a cheap
+  // cross-category card (an Instax camera at KWD 44 under `iPhone 17 Pro Max`)
+  // outrank every phone on the inside-tier price tiebreak and steal the single
+  // Best-price badge. Unknown/absent tiers (Infinity) keep their old home —
+  // the last matched block.
+  const blockOrder = intent
+    ? [0, 1, 2].flatMap((cls) => [0, 1, 2, 3, 4].map((idx) => `${cls}:${idx}`))
+    : [0, 1, 2, 3, 4].map((idx) => `1:${idx}`);
   const out: HitGroup[] = [];
-  for (const bucket of buckets) {
-    // Empty tier blocks are holes in the buckets array — skip them, the
-    // later blocks still contribute while the slice budget lasts.
-    if (!bucket) continue;
+  for (const key of blockOrder) {
+    const bucket = byKey.get(key);
+    // Empty blocks are holes — skip them, the later blocks still contribute
+    // while the slice budget lasts.
+    if (!bucket || bucket.length === 0) continue;
     if (out.length >= LIVE_SEARCH_MAX_PRODUCTS) break;
     bucket.sort(insideTier);
     const block = bucket.map((r) => r.group);
@@ -3666,9 +3700,20 @@ function skuLeadSnap(q: string, snap: LiveSearchResult): LiveSearchResult {
   // pending flag below carries that state instead of a fake device lead).
   // Pure and idempotent, so re-serving a narrowed snapshot cannot drift.
   const isDeviceRow = (p: { title: string }) => !isAccessoryTitle(p.title);
-  const products = narrowDeviceLead(q, narrowSkuLead(q, snap.products), isDeviceRow);
+  // REEA-1143 — category-intent queries get the same serve-time treatment: a
+  // stored snapshot written before the category class existed still leads with
+  // its complement aisle, so class products re-head it here (neutral rows keep
+  // stored order, complements trail). Exact-model queries pass through
+  // untouched; pure and idempotent like the other two guards.
+  const products = narrowCategoryLead(
+    q,
+    narrowDeviceLead(q, narrowSkuLead(q, snap.products), isDeviceRow),
+  );
   const suggestions = snap.suggestions
-    ? narrowDeviceLead(q, narrowSkuLead(q, snap.suggestions), isDeviceRow)
+    ? narrowCategoryLead(
+        q,
+        narrowDeviceLead(q, narrowSkuLead(q, snap.suggestions), isDeviceRow),
+      )
     : undefined;
   // REEA-793 B1/B2 — the honesty flags derive from the SAME narrowed set the
   // page renders, so the pending markup can never disagree with the rows.

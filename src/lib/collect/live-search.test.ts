@@ -2401,23 +2401,34 @@ describe("REA-290 — retry once with backoff + per-query coverage line", () => 
         { merchant: "Jarir", hits: 0, error: "HTTP 403" },
         { merchant: "Xcite", hits: 2 },
       ]),
-    ).toBe("No response from Jarir. Prices from Xcite and Blink.");
+    ).toBe(
+      // REEA-1143 — every page now leads with the aggregate run scale, then
+      // the named lane detail. Counts only in the aggregate (no per-store
+      // identifiers); the names stay in the shipped sentences.
+      "3 stores checked · 2 carry this · 1 failed. No response from Jarir. Prices from Xcite and Blink.",
+    );
     // REEA-574 R1 — a success-but-empty answer renders no offer row, so the
     // merchant is named NOWHERE: not a contributor, not a gap. Kept offers
-    // (hits ≥ 1) still ride the sentence in fixed adapter order.
-    expect(coverageLine([{ merchant: "Eureka", hits: 0 }])).toBe("");
-    expect(coverageLine([{ merchant: "Eureka", hits: 1 }])).toBe("Prices from Eureka.");
+    // (hits ≥ 1) still ride the sentence in fixed adapter order. REEA-1143:
+    // the aggregate still states the scale ("1 store checked · none carry
+    // this") — counts are not the lane noise R1 forbids.
+    expect(coverageLine([{ merchant: "Eureka", hits: 0 }])).toBe(
+      "1 store checked · none carry this.",
+    );
+    expect(coverageLine([{ merchant: "Eureka", hits: 1 }])).toBe(
+      "1 store checked · 1 carries this. Prices from Eureka.",
+    );
     expect(coverageLine([{ merchant: "Xcite", hits: 2 }, { merchant: "Blink", hits: 1 }])).toBe(
-      "Prices from Xcite and Blink.",
+      "2 stores checked · 2 carry this. Prices from Xcite and Blink.",
     );
     expect(coverageLine([{ merchant: "Blink", hits: 0, error: "timeout" }, { merchant: "Xcite", hits: 0, error: "timeout" }])).toBe(
-      "No response from Xcite and Blink.",
+      "2 stores checked · none carry this · 2 failed. No response from Xcite and Blink.",
     );
     // Empty contributor set hides the contributor sentence — an empty page
     // shows no phantom merchant list (R1/R3). Errored adapters keep their own
     // truthful half with unchanged semantics.
     expect(coverageLine([{ merchant: "Blink", hits: 0, error: "timeout" }, { merchant: "Xcite", hits: 0 }])).toBe(
-      "No response from Blink.",
+      "2 stores checked · none carry this · 1 failed · 1 empty. No response from Blink.",
     );
     // Nothing collected yet: no line, no flicker.
     expect(coverageLine([])).toBe("");
@@ -2442,19 +2453,19 @@ describe("REA-290 — retry once with backoff + per-query coverage line", () => 
     // filtered away by the country selection): Eureka ranks first in adapter
     // order even though Xcite answered more elsewhere.
     expect(coverageLine(notes, "en", [product("p", ["Sultan Center", "Eureka"])])).toBe(
-      "Prices from Eureka and Sultan Center.",
+      "3 stores checked · 3 carry this. Prices from Eureka and Sultan Center.",
     );
     // AR: same helper, Arabic connective before the last name, half-width commas.
     expect(coverageLine(notes, "ar", [product("p", ["Sultan Center", "Eureka"])]).trim()).toBe(
-      "الأسعار من Eureka وSultan Center.",
+      "تم فحص 3 متاجر · 3 متاجر توفّر هذا. الأسعار من Eureka وSultan Center.",
     );
     // A merchant that answered rows but also logged an error stays a contributor.
     expect(coverageLine([...notes, { merchant: "Jarir", hits: 0, error: "timeout" }], "en", [product("p", ["Jarir"])])).toBe(
-      "Prices from Jarir.",
+      "4 stores checked · 3 carry this · 1 failed. Prices from Jarir.",
     );
-    // Zero rendered rows, no failures, no empty answers → nothing to vouch
-    // for: sentence hidden entirely (REEA-574 R1, unchanged).
-    expect(coverageLine(notes, "en", [])).toBe("");
+    // Zero rendered rows, no failures, no empty answers → the contributor
+    // half stays hidden (REEA-574 R1); REEA-1143 keeps the aggregate scale.
+    expect(coverageLine(notes, "en", [])).toBe("3 stores checked · 3 carry this.");
   });
 
   it("REEA-1068 D1 — a zero-row page names the lanes that failed or answered empty", () => {
@@ -2472,19 +2483,22 @@ describe("REA-290 — retry once with backoff + per-query coverage line", () => 
       { merchant: "Danube Home", hits: 4 },
     ];
     expect(coverageLine(notes, "en", [])).toBe(
-      "No response from Aster Pharmacy and BinSina. No match at Nahdi.",
+      // REEA-1143 — the thin/zero page states the aggregate scale first, then
+      // names the lanes: 4 checked, 1 carried it, 2 failed, 1 empty.
+      "4 stores checked · 1 carries this · 2 failed · 1 empty. No response from Aster Pharmacy and BinSina. No match at Nahdi.",
     );
     expect(coverageLine(notes, "en", [])).not.toContain("Prices from");
     // AR/RTL — same facts, Arabic sentence shapes, isolated Latin names.
     expect(coverageLine(notes, "ar", []).trim()).toBe(
-      "لم تستجب Aster Pharmacy وBinSina هذه المرة. لا توجد مطابقة لدى Nahdi.",
+      "تم فحص 4 متاجر · متجر واحد يوفّر هذا · لم يستجب 2 · 1 بلا مطابقة. لم تستجب Aster Pharmacy وBinSina هذه المرة. لا توجد مطابقة لدى Nahdi.",
     );
     // One statement per lane: an unreachable lane is not also "no response".
     expect(coverageLine(notes, "en", [], ["Aster Pharmacy"])).toBe(
-      "Unreachable: Aster Pharmacy. No response from BinSina. No match at Nahdi.",
+      "4 stores checked · 1 carries this · 2 failed · 1 empty. Unreachable: Aster Pharmacy. No response from BinSina. No match at Nahdi.",
     );
-    // A GENUINE zero (every lane answered, all with nothing) keeps the old
-    // quiet page — naming twenty empty lanes would just be noise.
+    // A GENUINE zero (every lane answered, all with nothing) keeps the lane
+    // list quiet — naming twenty empty lanes would just be noise — but the
+    // aggregate scale still states the check was thorough (REEA-1143).
     expect(
       coverageLine(
         [
@@ -2495,7 +2509,7 @@ describe("REA-290 — retry once with backoff + per-query coverage line", () => 
         "en",
         [],
       ),
-    ).toBe("");
+    ).toBe("3 stores checked · none carry this.");
   });
 });
 

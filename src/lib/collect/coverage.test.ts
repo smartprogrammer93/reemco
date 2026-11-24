@@ -126,7 +126,9 @@ describe("coverageLine — REEA-1078 AC9: a blocked lane is unreachable, not emp
       { merchant: "Lulu Hypermarket", hits: 0 },
     ];
     expect(coverageLine(notes, "en", [product("Xcite")], ["Lulu Hypermarket"])).toBe(
-      "Unreachable: Lulu Hypermarket. Prices from Xcite.",
+      // REEA-1143 — aggregate scale first (the blocked lane counts as failed),
+      // then the named unreachable + contributor sentences.
+      "2 stores checked · 1 carries this · 1 failed. Unreachable: Lulu Hypermarket. Prices from Xcite.",
     );
   });
 
@@ -138,7 +140,9 @@ describe("coverageLine — REEA-1078 AC9: a blocked lane is unreachable, not emp
     const line = coverageLine(notes, "ar", [product("Xcite")], ["Lulu Hypermarket"]);
     // REEA-1069 — the signed AR/RTL checklist names the responder sentence
     // verbatim ("الأسعار من …"); the earlier REEA-1078 expectation predates it.
-    expect(line).toBe("تعذّر الوصول إلى Lulu Hypermarket. الأسعار من Xcite.");
+    expect(line).toBe(
+      "تم فحص متجرين · متجر واحد يوفّر هذا · لم يستجب 1. تعذّر الوصول إلى Lulu Hypermarket. الأسعار من Xcite.",
+    );
     expect(line).not.toMatch(/40\d|timeout|abort/i);
   });
 
@@ -148,7 +152,7 @@ describe("coverageLine — REEA-1078 AC9: a blocked lane is unreachable, not emp
       { merchant: "Lulu Hypermarket", hits: 0, error: "HTTP 403" },
     ];
     expect(coverageLine(notes, "en", [product("Xcite")], ["Lulu Hypermarket"])).toBe(
-      "Unreachable: Lulu Hypermarket. Prices from Xcite.",
+      "2 stores checked · 1 carries this · 1 failed. Unreachable: Lulu Hypermarket. Prices from Xcite.",
     );
   });
 
@@ -169,7 +173,7 @@ describe("coverageLine — REEA-1078 AC9: a blocked lane is unreachable, not emp
       { merchant: "Blink", hits: 0, error: "timeout" },
     ];
     expect(coverageLine(notes, "en", [product("Xcite")], undefined)).toBe(
-      "No response from Blink. Prices from Xcite.",
+      "2 stores checked · 1 carries this · 1 failed. No response from Blink. Prices from Xcite.",
     );
   });
 });

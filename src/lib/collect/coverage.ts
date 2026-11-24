@@ -2,6 +2,7 @@ import type { NormalizedProduct } from "@/types/product";
 import {
   curatedBrandInTitle,
   isAccessoryTitle,
+  modelIdentityTokens,
   narrowDeviceLead,
   titleHasDeviceIntent,
 } from "@/lib/relevance";
@@ -210,6 +211,81 @@ export type CoveragePart =
   | { kind: "text"; value: string }
   | { kind: "names"; names: string[]; ar: boolean };
 
+/**
+ * REEA-1143 — aggregate coverage statement: how much work the live run did,
+ * in counts only. No retailer names (AC4 Data Minimization): the named
+ * sentences below still carry the lane detail, this line carries the scale —
+ * "22 stores checked · 1 carries this · 2 failed · 19 empty" is what tells a
+ * shopper a thin page is a thorough check, not a shallow one. Counts come from
+ * the same run notes the rest of the sentence reads; nothing is invented, no
+ * new identifiers, no per-store records.
+ */
+function coverageAggregateText(
+  notes: LiveSearchResult["notes"],
+  blocked: readonly string[],
+  ar: boolean,
+  query?: string,
+): string {
+  if (notes.length === 0) return "";
+  const blockedSet = new Set(blocked);
+  let answered = 0;
+  let empty = 0;
+  let failed = 0;
+  for (const n of notes) {
+    if (blockedSet.has(n.merchant)) {
+      failed += 1;
+      continue;
+    }
+    if (n.error) failed += 1;
+    else if (n.hits > 0) answered += 1;
+    else empty += 1;
+  }
+  const checked = notes.length;
+  // "carries this exact model" only when the query names one (a model-number
+  // identity token); a plain class query says "carries this".
+  const exact = modelIdentityTokens(query ?? "").length > 0;
+  if (ar) {
+    // Arabic count agreement: 1/2 take their own forms, 3–10 take the plural
+    // (متاجر), 11–99 the singular accusative (متجرًا). Same rule on the
+    // answering side so the line reads as Arabic, not as a number stamp.
+    const head =
+      checked === 1
+        ? "تم فحص متجر واحد"
+        : checked === 2
+          ? "تم فحص متجرين"
+          : checked <= 10
+            ? `تم فحص ${checked} متاجر`
+            : `تم فحص ${checked} متجرًا`;
+    const target = exact ? "هذا الطراز بالتحديد" : "هذا";
+    const carries =
+      answered === 0
+        ? `لا أحد يوفّر ${target}`
+        : answered === 1
+          ? `متجر واحد يوفّر ${target}`
+          : answered === 2
+            ? `متجران يوفّران ${target}`
+            : answered <= 10
+              ? `${answered} متاجر توفّر ${target}`
+              : `${answered} متجر يوفّر ${target}`;
+    const parts = [head, carries];
+    if (failed > 0) parts.push(`لم يستجب ${failed}`);
+    if (empty > 0 && (answered > 0 || failed > 0)) parts.push(`${empty} بلا مطابقة`);
+    return `${parts.join(" · ")}.`;
+  }
+  const head = checked === 1 ? "1 store checked" : `${checked} stores checked`;
+  const carryBase = exact ? "this exact model" : "this";
+  const carries =
+    answered === 0
+      ? `none carry ${carryBase}`
+      : answered === 1
+        ? `1 carries ${carryBase}`
+        : `${answered} carry ${carryBase}`;
+  const parts = [head, carries];
+  if (failed > 0) parts.push(`${failed} failed`);
+  if (empty > 0 && (answered > 0 || failed > 0)) parts.push(`${empty} empty`);
+  return `${parts.join(" · ")}.`;
+}
+
 export function coverageParts(
   notes: LiveSearchResult["notes"],
   locale?: "en" | "ar",
@@ -220,6 +296,12 @@ export function coverageParts(
    * byte for byte.
    */
   unreachable?: readonly string[],
+  /**
+   * REEA-1143 — the shopper's query, used ONLY to pick the aggregate wording
+   * ("carries this exact model" vs "carries this"). Absent = the generic
+   * wording; no query text ever appears in the sentence.
+   */
+  query?: string,
 ): CoveragePart[] {
   const ordered = [...notes].sort(
     (a, b) => coverageRank(a.merchant) - coverageRank(b.merchant),
@@ -249,6 +331,12 @@ export function coverageParts(
     blocked.push(n.merchant);
   }
   const parts: CoveragePart[] = [];
+  // REEA-1143 — the aggregate statement leads every results page: the scale
+  // of the live run first (counts only), then the named lane detail. A thin
+  // page can no longer hide that twenty-two stores were checked for one
+  // carrier; a zero page can no longer read as a shallow miss.
+  const aggregate = coverageAggregateText(ordered, blocked, ar, query);
+  if (aggregate !== "") parts.push({ kind: "text", value: aggregate });
   const sentence = (next: CoveragePart[]) => {
     if (parts.length > 0) parts.push({ kind: "text", value: " " });
     parts.push(...next);
@@ -364,8 +452,9 @@ export function coverageLine(
   locale?: "en" | "ar",
   rendered?: readonly NormalizedProduct[],
   unreachable?: readonly string[],
+  query?: string,
 ): string {
-  return coverageParts(notes, locale, rendered, unreachable)
+  return coverageParts(notes, locale, rendered, unreachable, query)
     .map((p) => (p.kind === "text" ? p.value : summarizeNames(p.names, p.ar)))
     .join("");
 }

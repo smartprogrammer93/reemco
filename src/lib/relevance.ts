@@ -716,6 +716,14 @@ export function relevanceTier(query: string, title: string, metadata = ""): numb
   if (matched.length * 2 >= tokens.length) return 3;
   const metaFolded = normalizeArabicText(metadata).toLowerCase();
   if (metaFolded !== "" && tokens.some((t) => metaFolded.includes(t))) return 4;
+  // REEA-1143 — category-synonym bridge: a category-intent query ("air
+  // fryer", "ps5") is answered by a title that names the class product even
+  // when the storefront spells the class as one compound word ("Airfryer")
+  // or as the platform name ("PlayStation 5") the tokenizer cannot fold into
+  // the shopper's token. Only tier 0 is rescued: every higher rung keeps the
+  // ladder it earned, so a buried full match stays buried.
+  const intent = categoryIntent(query);
+  if (intent && categoryRowClass(intent, title) === "product") return 1;
   return 0;
 }
 
@@ -857,6 +865,180 @@ export function narrowDeviceLead<T>(
   for (const p of products) (isDeviceRow(p) ? lead : rest).push(p);
   if (lead.length === 0) return [...products];
   return [...lead, ...rest];
+}
+
+/* ---- REEA-1143 — category-intent ranking class. ----
+ *
+ * A category-intent query names a product CLASS ("air fryer", "laptop",
+ * "headphones", "ps5"), not a specific model. On that surface the shopper is
+ * buying the product itself; the complement aisle (liners, cooking spray,
+ * cases, chargers, games, food, toys, bags) is what they buy AFTER the
+ * product, so it must never lead the shelf. Exact-model queries ("fold 7",
+ * "iPhone 17 Pro") keep the untouched ladder: a case can be the correct
+ * answer for "fold 7 case", and a model query is about THAT item.
+ *
+ * The class is derived from the query alone (never a bundled catalogue): a
+ * curated class noun matches AND the query carries no model-identity token of
+ * its own (modelIdentityTokens). "ps5"/"playStation 5" are platform names,
+ * so their compact form counts as the class noun itself. Everything here is
+ * pure and locale-independent — EN and AR serve the same order for the same
+ * snapshot.
+ */
+export interface CategoryIntent {
+  id: string;
+  /** Title regex that names the queried class product (compound spellings
+   *  included: "Airfryer" answers "air fryer"). */
+  product: RegExp;
+  /** Compact spellings that ARE the class noun itself (the model-token
+   *  exception: "ps5" is a platform, not a specific model). */
+  nouns: readonly string[];
+  /** Arabic class nouns on the title side. */
+  ar: readonly string[];
+}
+
+const CATEGORY_INTENTS: readonly (CategoryIntent & { query: RegExp })[] = [
+  {
+    id: "air-fryer",
+    query: /\bair ?fryers?\b|\bairfryers?\b/i,
+    product: /\bair ?fryers?\b|\bairfryers?\b/i,
+    nouns: ["airfryer"],
+    ar: ["قلاية"],
+  },
+  {
+    id: "laptop",
+    query: /\blaptops?\b|\bnotebooks?\b|\bmacbooks?\b/i,
+    product: /\blaptops?\b|\bnotebooks?\b|\bmacbooks?\b/i,
+    nouns: ["laptop", "notebook", "macbook"],
+    ar: ["لابتوب", "حاسوب", "كمبيوتر"],
+  },
+  {
+    id: "headphones",
+    query: /\bheadphones?\b|\bearphones?\b|\bear ?buds?\b|\bheadsets?\b/i,
+    product: /\bheadphones?\b|\bearphones?\b|\bear ?buds?\b|\bheadsets?\b/i,
+    nouns: ["headphone", "headphones", "earphone", "earbud", "headset"],
+    ar: ["سماع", "سماعة", "سماعات"],
+  },
+  {
+    id: "gaming-console",
+    query: /\bps ?5\b|\bps5\b|\bplaystation ?5\b/i,
+    product: /\bps ?5\b|\bps5\b|\bplaystation ?5\b|\bdualsense\b|\bconsole\b|\bcontroller\b/i,
+    nouns: ["ps5", "playstation5"],
+    ar: ["بلايستيشن", "يد تحكم"],
+  },
+  {
+    id: "phones-tablets",
+    query: /\biphones?\b|\bipads?\b|\bsmartphones?\b|\bphones?\b|\btablets?\b/i,
+    product: /\biphones?\b|\bipads?\b|\bsmartphones?\b|\bphones?\b|\btablets?\b/i,
+    nouns: ["iphone", "ipad", "smartphone", "phone", "tablet"],
+    ar: ["جوال", "هاتف", "ايفون", "آيفون", "ايباد", "تابلت"],
+  },
+  {
+    id: "tv",
+    query: /\btelevisions?\b|\bsmart ?tvs?\b|\btvs?\b/i,
+    product: /\btelevisions?\b|\bsmart ?tvs?\b|\btvs?\b/i,
+    nouns: ["tv", "television", "smarttv"],
+    ar: ["تلفاز", "تلفزيون"],
+  },
+  {
+    id: "washing-machine",
+    query: /\bwashing machines?\b|\bwashers?\b/i,
+    product: /\bwashing machines?\b|\bwashers?\b/i,
+    nouns: ["washingmachine", "washer"],
+    ar: ["غسالة"],
+  },
+];
+
+/* The complement aisle of a category query: goods that complement, extend,
+ * feed, decorate or entertain the product. Matched as whole words so
+ * "Discovery" never fires on "disc"; Arabic rides substring containment like
+ * the accessory markers do. Kept in one table so a new complement class is
+ * one entry, not a scatter of special cases. */
+const CATEGORY_COMPLEMENT_RE =
+  /\b(games?|cartridge|backpacks?|bags?|totes?|pouches?|liners?|papers?|parchment|baking|sprays?|popcorn|chicken|snacks?|food|toys?|play ?sets?|carrying case|cookbooks?|recipes?|books?)\b/i;
+/* "X for PlayStation 5" is the media/software shape (games name the platform
+ * as a compatibility suffix), and "disc"/"blu-ray" is the physical media
+ * format. A hardware row that ALSO names the platform or a disc drive
+ * ("PlayStation 5 Console Disc Edition", "DualSense Controller for PS5") is
+ * not media — the hardware noun wins. */
+const CATEGORY_MEDIA_RE =
+  /\b(discs?|blu-?ray|for (?:playstation|ps ?[345]|xbox|nintendo|switch))\b/i;
+const CATEGORY_HARDWARE_RE = /\b(console|controller|dualsense|gamepad|handheld)\b/i;
+const CATEGORY_COMPLEMENT_AR = [
+  "لعبة", "ألعاب", "لعبه", "حقيبة", "شنطة", "شنط", "ورق", "أكياس", "اكياس",
+  "طعام", "وجبة", "وجبات", "كتاب",
+];
+
+/** Query class: a curated category noun with no model identity of its own.
+ *  Returns null for exact-model queries ("fold 7", "iPhone 17 Pro"), for
+ *  unknown phrases, and for an empty query. Pure and deterministic. */
+export function categoryIntent(query: string): CategoryIntent | null {
+  const q = normalizedTitle(query).toLowerCase();
+  if (q === "") return null;
+  for (const c of CATEGORY_INTENTS) {
+    if (!c.query.test(q)) continue;
+    const modelTokens = modelIdentityTokens(query);
+    if (modelTokens.length === 0) return c;
+    // A model-bearing query inside the class ("iPhone 17 Pro") is an
+    // exact-model query — unless the model token IS the class noun ("ps5").
+    if (modelTokens.every((t) => c.nouns.includes(t))) return c;
+    return null;
+  }
+  return null;
+}
+
+/** True when a title names a complement of the queried class (accessory
+ *  markers, media/software, food, toys, bags, paper/liners). */
+export function isCategoryComplementTitle(title: string): boolean {
+  const lower = normalizedTitle(title).toLowerCase();
+  if (isAccessoryTitle(title)) return true;
+  if (CATEGORY_COMPLEMENT_RE.test(lower)) return true;
+  if (CATEGORY_MEDIA_RE.test(lower) && !CATEGORY_HARDWARE_RE.test(lower)) return true;
+  return CATEGORY_COMPLEMENT_AR.some((w) => lower.includes(w));
+}
+
+/** One row's role under a category intent: the class product itself, a
+ *  neutral row (another product / no class signal), or a complement. */
+export type CategoryRowClass = "product" | "neutral" | "complement";
+
+export function categoryRowClass(
+  intent: CategoryIntent,
+  title: string,
+): CategoryRowClass {
+  const lower = normalizedTitle(title).toLowerCase();
+  if (isCategoryComplementTitle(lower)) return "complement";
+  if (intent.product.test(lower) || intent.ar.some((w) => lower.includes(w))) {
+    return "product";
+  }
+  return "neutral";
+}
+
+/** REEA-1143 — serve-time category head guard, the narrowSkuLead /
+ *  narrowDeviceLead pattern applied to the category class. Stored snapshots
+ *  (memo hits, stale cache-first flushes, KV replays) were ranked by the chain
+ *  that wrote them; some predate this ranking. Re-head such a snapshot at
+ *  serve time: class products lead, neutral rows keep their stored order, and
+ *  complements trail — never a re-tier, never a fabricated lead (an
+ *  accessory-only answer set keeps its stored order). Pure and idempotent (a
+ *  stable three-pass partition), locale-independent. Queries without a
+ *  category intent pass through unchanged, so exact-model snapshots are
+ *  untouched. */
+export function narrowCategoryLead<T extends { title: string }>(
+  query: string,
+  products: readonly T[],
+): T[] {
+  const intent = categoryIntent(query);
+  if (!intent) return [...products];
+  const productRows: T[] = [];
+  const neutral: T[] = [];
+  const complement: T[] = [];
+  for (const p of products) {
+    const cls = categoryRowClass(intent, p.title);
+    (cls === "product" ? productRows : cls === "complement" ? complement : neutral).push(p);
+  }
+  // No class product in the stored set: the stored order is already the
+  // honest answer (accessory-only / empty) — pass it through as-is.
+  if (productRows.length === 0) return [...products];
+  return [...productRows, ...neutral, ...complement];
 }
 
 /** REEA-743 — the exact-SKU head guard re-applied at SERVE time. The fresh

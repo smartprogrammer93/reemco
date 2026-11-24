@@ -849,6 +849,7 @@ function CoverageNames({ names, ar }: { names: string[]; ar: boolean }) {
 function CoverageLine({
   notes,
   products,
+  query,
   locale,
   pendingStatus,
   onRefresh,
@@ -857,6 +858,9 @@ function CoverageLine({
 }: {
   notes: LiveSearchResult["notes"];
   products: NormalizedProduct[];
+  /** REEA-1143 — query shape only ("carries this exact model" wording); the
+   *  sentence itself is counts + retailer names, never the query text. */
+  query?: string;
   locale?: Locale;
   pendingStatus?: boolean;
   onRefresh?: () => void;
@@ -864,7 +868,7 @@ function CoverageLine({
   unreachableLanes?: readonly string[];
   className?: string;
 }) {
-  const parts = coverageParts(notes, locale, products, unreachableLanes);
+  const parts = coverageParts(notes, locale, products, unreachableLanes, query);
   if (parts.length === 0 && !pendingStatus) return null;
   // REEA-778 — the settled sentence rides the SAME lh-tier box as its
   // StampGhost reserve (one shared deterministic box per locale tier): the
@@ -1115,6 +1119,7 @@ function StageCoverage(props: {
     <CoverageLine
       notes={snap.notes}
       products={products}
+      query={props.query}
       locale={props.locale}
       pendingStatus={snap.kuwaitPendingStatus}
       onRefresh={props.onRefresh}
@@ -1280,7 +1285,7 @@ function StagedResults(props: {
           <Suspense fallback={null}>
             <StagePendingRow stages={stages} locale={locale} />
           </Suspense>
-          <CoverageLine notes={finalSnap.notes} products={products} locale={locale} unreachableLanes={props.unreachableLanes} />
+          <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} unreachableLanes={props.unreachableLanes} />
         </ResultsErrorBoundary>
       );
     }
@@ -1328,11 +1333,11 @@ function StagedResults(props: {
                 REEA-1078 AC9 / REEA-1114 AC2(c) — the existing unreachable
                 sentence must still render on a zero-row page: it is the one
                 statement that explains why an empty shelf is not a no-match. */}
-            <CoverageLine notes={finalSnap.notes} products={products} locale={locale} unreachableLanes={props.unreachableLanes} />
+            <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} unreachableLanes={props.unreachableLanes} />
           </>
         ) : (
           <>
-            <CoverageLine notes={finalSnap.notes} products={products} locale={locale} pendingStatus={finalSnap.kuwaitPendingStatus} onRefresh={onRefresh} unreachableLanes={props.unreachableLanes} className="rc-coverage-top" />
+            <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} pendingStatus={finalSnap.kuwaitPendingStatus} onRefresh={onRefresh} unreachableLanes={props.unreachableLanes} className="rc-coverage-top" />
             <ResultsGrid
               products={products}
               query={query}
