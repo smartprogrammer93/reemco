@@ -154,6 +154,52 @@ export function duplicateCardsOf(cards: readonly NormalizedProduct[]): number {
   return duplicates;
 }
 
+/* ---------------------------------------------------------------------------
+ * REEA-1162 — the late-answer fold's richness test.
+ *
+ * Root cause of the non-deterministic merged card (QA: base PS5 DualSense card
+ * present 3/6 collections): the follow-up feed replaced the finalized shelf
+ * only when the converged answer carried MORE PRODUCTS. But the merge pass
+ * folds colourways into ONE card, so the converged answer is exactly the one
+ * that carries MORE OFFERS while carrying FEWER products. The fold rejected it
+ * and kept the stale forked shelf — sometimes (3/6), depending on how many
+ * colourway cards the finalized snapshot had painted.
+ *
+ * Richness is therefore measured on the comparison evidence the shopper can
+ * act on — offer rows — not on card count. A converged answer with more offers
+ * always wins; an equal-offer answer wins when it is at least as merged
+ * (fewer/equal cards), so the settled, deduped shelf replaces the provisional
+ * one. A poorer answer never replaces what is already rendered.
+ * ------------------------------------------------------------------------- */
+
+/** Total offer rows a snapshot's products carry — the comparison evidence. */
+export function snapshotOfferTotal(products: readonly NormalizedProduct[]): number {
+  let total = 0;
+  for (const p of products) total += p.offers?.length ?? 0;
+  return total;
+}
+
+/**
+ * Pick the snapshot to render when a late/converged answer arrives: the one
+ * with more offer evidence, else the equally-rich answer that is at least as
+ * merged (fewer cards), else the already-rendered one. Pure and client-safe:
+ * same pair of snapshots, same choice, every render.
+ */
+export function preferRicherSnapshot<T extends { products: readonly NormalizedProduct[] }>(
+  current: T | null | undefined,
+  incoming: T | null | undefined,
+): T | null {
+  if (!incoming || !Array.isArray(incoming.products)) return current ?? null;
+  if (!current || !Array.isArray(current.products)) return incoming;
+  const incomingOffers = snapshotOfferTotal(incoming.products);
+  const currentOffers = snapshotOfferTotal(current.products);
+  if (incomingOffers > currentOffers) return incoming;
+  if (incomingOffers === currentOffers && incoming.products.length <= current.products.length) {
+    return incoming;
+  }
+  return current;
+}
+
 /**
  * Async mirror of the streamed paint chain over a run's stage promises: the
  * exact card sequence the served document paints (see StageAppend). Used by

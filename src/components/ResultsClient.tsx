@@ -31,7 +31,7 @@ import {
 } from "@/lib/metrics-events";
 import { HeadingGhost, SkeletonCard, StampGhost, coverageLhTier } from "@/components/SkeletonSlots";
 import { PRODUCTS } from "@/lib/feed";
-import { resultsShelfCards, resultsShelfSections, shelfSectionsFromProducts, RESULTS_PAGE_SIZE, freshCardsForFlush, paintedIdsAfter } from "@/lib/results-shelf";
+import { resultsShelfCards, resultsShelfSections, shelfSectionsFromProducts, RESULTS_PAGE_SIZE, freshCardsForFlush, paintedIdsAfter, preferRicherSnapshot } from "@/lib/results-shelf";
 import { formatPrice, sortOffers } from "@/lib/format";
 import {
   marketName,
@@ -1198,7 +1198,10 @@ function StagedResults(props: {
     let alive = true;
     finalPromise.then(
       (snap) => {
-        if (alive) setFinalSnap(snap);
+        // REEA-1162 — never downgrade a richer snapshot already folded in
+        // (e.g. the follow-up feed's converged answer landed first): the
+        // richness test reads offer evidence, not card count.
+        if (alive) setFinalSnap((current) => preferRicherSnapshot(current, snap));
       },
       () => {
         /* staged boundaries failed — keep whatever streamed; the served
@@ -1215,10 +1218,15 @@ function StagedResults(props: {
   // answer after that keep running behind the response and are handed to the
   // open page by the follow-up feed (/api/results-followup — the SAME run's
   // converged chain, not a second fan-out). One bounded fetch per view: a
-  // richer live snapshot replaces the finalized one; an equal, older, or
-  // absent answer keeps what is already rendered. The coverage line re-renders
-  // from the merged notes, so a merchant named as "no answer within budget"
-  // moves to the answered side exactly when its offers appear.
+  // richer live snapshot replaces the finalized one; a poorer, or absent
+  // answer keeps what is already rendered. REEA-1162 — "richer" is measured on
+  // the offer evidence the shopper can act on, because the merge pass folds
+  // colourways into ONE card: the converged answer legitimately carries FEWER
+  // products while carrying MORE offers, and the old products.length test
+  // rejected it (the stale forked shelf stayed — the 3/6 merged-card defect).
+  // The coverage line re-renders from the merged notes, so a merchant named as
+  // "no answer within budget" moves to the answered side exactly when its
+  // offers appear.
   const followedQueryRef = useRef<string | null>(null);
   useEffect(() => {
     if (followedQueryRef.current === query) return;
@@ -1228,9 +1236,7 @@ function StagedResults(props: {
       .then((res) => (res.ok ? (res.json() as Promise<LiveSearchResult | null>) : null))
       .then((late) => {
         if (!late || !Array.isArray(late.products)) return;
-        setFinalSnap((current) =>
-          late.products.length >= (current?.products.length ?? 0) ? late : current,
-        );
+        setFinalSnap((current) => preferRicherSnapshot(current, late));
       })
       .catch(() => {
         /* feed unavailable — the finalized document already carries every
