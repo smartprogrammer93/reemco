@@ -2529,6 +2529,10 @@ function buildGroups(query: string, hits: SearchHit[]): HitGroup[] {
       // still missing that field keep joining through the partial-match rule.
       const f = chosen.fields;
       if (f.modelLine === "") f.modelLine = fields.modelLine;
+      // REEA-1162 — same seed rule for the platform role: a member spelling
+      // that names the console fills the group's identity so the card's slug
+      // is the same whichever title arrived first.
+      if (f.platform === "") f.platform = fields.platform;
       if (f.storage === "") f.storage = fields.storage;
       if (f.color === "") f.color = fields.color;
       // REEA-189: same seed rule for the retailer brand field — first non-empty
@@ -2611,6 +2615,7 @@ function canonicalGroupTitle(group: HitGroup, locale?: "en" | "ar"): string {
 function canonicalGroupIdentity(group: HitGroup): CanonicalFields {
   let brand = "";
   let modelLine = "";
+  let platform = "";
   let storage = "";
   let color = "";
   let grade = "new";
@@ -2618,6 +2623,10 @@ function canonicalGroupIdentity(group: HitGroup): CanonicalFields {
   for (const title of group.titles) {
     const f = canonicalFields(title);
     if (!brand && f.brand) brand = f.brand;
+    // REEA-1162 — a group can only ever hold ONE platform value (two different
+    // platforms never merge), so the first non-empty is the group's platform,
+    // independent of which member title the shortest-title rule picked.
+    if (!platform && f.platform) platform = f.platform;
     if (f.modelLine) {
       if (modelLine === "") {
         modelLine = f.modelLine;
@@ -2642,7 +2651,7 @@ function canonicalGroupIdentity(group: HitGroup): CanonicalFields {
       }
     }
   }
-  return { brand, modelLine, storage, color, grade };
+  return { brand, modelLine, platform, storage, color, grade };
 }
 
 /** REEA-1140 — the ONE slug per merged SKU. Shared by the results card's

@@ -33,6 +33,15 @@ import { normalizeArabicText } from "@/lib/relevance";
 export interface CanonicalFields {
   brand: string;
   modelLine: string;
+  /** REEA-1162 — the console/platform the SKU is sold for (`ps5`, `ps4`, …),
+   *  extracted separately from the model line. Retailers disagree on where
+   *  they spell it ("Sony PS5 DualSense Wireless Controller" vs "Sony
+   *  DualSense PS5 Controller"); leaving it in the model line at whatever
+   *  position the retailer chose forked one controller into several cards.
+   *  As its own field the partial-match rule still folds a spelling that omits
+   *  it, while two DIFFERENT platforms ("EA FC 27 PS5" vs "EA FC 27 PS4")
+   *  never blend. Empty when the title names no platform. */
+  platform: string;
   storage: string;
   color: string;
   /** Always present: absent grade means `new` (spec §1 step 2). */
@@ -69,6 +78,11 @@ const COLORS = new Set([
   // must not fork into its own card. They stay out of COLOR_PREFIXES because
   // they are base colours, not modifiers of another colour word.
   "lavender", "graphite", "obsidian", "sage", "coral", "mint", "sand",
+  // REEA-1162 — DualSense official colourways QA sampled live that were
+  // still forking their own card: "… Controller Emerald (Pre-Order)" and
+  // "Chroma Indigo" (the modifier pair kept "chroma" in the model line when
+  // the base word was unknown). They are base colours, not modifiers.
+  "emerald", "indigo",
 ]);
 
 /** Modifier words that open a two-word official colour name (§1 step 2):
@@ -100,10 +114,64 @@ const COLOR_PREFIXES = new Set([
   // current fixes the class instead of the one reported instance.
   "alpine", "sierra", "ultramarine", "seafoam",
   "storm", "ocean", "forest",
+  // REEA-1162 — the remaining DualSense official-name modifiers the live
+  // shelf carried ("Volcanic Red", "Flare Orange", "Techno Red", "Nova Pink",
+  // "Sterling Silver"). Same modifier + base class as the entries above: an
+  // unrecognized modifier rode in the model line and forked the controller
+  // into a standalone single-retailer card. "nova"/"sterling" only collapse
+  // when a known base colour follows, so a model word ("Nova 5T") is safe.
+  "volcanic", "flare", "techno", "nova", "sterling",
+  // REEA-1162 — the live ps5 shelf also carried a "… Controller PS5 - Remix
+  // Green" colourway. Same modifier + base class; "remix" only collapses when
+  // a known base colour follows, so a "Remix" model word is safe.
+  "remix",
 ]);
 
 const GRADE_WORDS = new Set(["new", "renewed", "refurbished", "opened"]);
 const GRADE_LETTERS = new Set(["a", "b", "c", "d"]);
+
+/** REEA-1162 — platform/console names. These are IDENTITY when they
+ *  discriminate a SKU ("EA FC 27 PS5" ≠ "EA FC 27 PS4"), but the position
+ *  inside the title is retailer chrome: "Sony PS5 DualSense Wireless
+ *  Controller", "Sony DualSense PS5 Controller" and "Sony PlayStation 5
+ *  DualSense Wireless Controller" are one controller. The head-position
+ *  shelf-code skip already dropped a leading `ps5`; the same token mid-title
+ *  stayed in the model line and forked the merged card (live QA: the base
+ *  card present only 3/6 collections, colourways rendered as their own
+ *  cards). Extracting the platform into its own field makes the token
+ *  position-independent without inventing identity: the partial-match rule
+ *  folds a spelling that omits it, and two different platforms never merge. */
+const PLATFORM_TOKENS = new Set([
+  "ps3", "ps4", "ps5",
+  "playstation", "playstation3", "playstation4", "playstation5",
+  "xbox", "xboxone",
+]);
+
+/** The platform role for a token, canonicalised so `ps5` and `playstation5`
+ *  agree (the tokenizer joins "PlayStation 5" → `playstation5`). Empty when
+ *  the token is not a platform name. */
+function platformOfToken(token: string): string {
+  if (!PLATFORM_TOKENS.has(token)) return "";
+  if (token === "playstation") return "playstation";
+  if (token.startsWith("playstation")) return `ps${token.slice("playstation".length)}`;
+  return token;
+}
+
+/** The platform a raw title names. A bare "PlayStation"/"Xbox" is the weak
+ *  form of the role ("PlayStation (PS5)" arrives as two tokens); a numbered
+ *  console token is the specific one and wins, so the same console spelled
+ *  either way lands on the same platform value. Deterministic: first specific
+ *  token in title order, else the first weak one. */
+function platformOfTokens(tokens: readonly string[]): string {
+  let weak = "";
+  for (const token of tokens) {
+    const platform = platformOfToken(token);
+    if (!platform) continue;
+    if (platform !== "playstation" && platform !== "xbox") return platform;
+    if (!weak) weak = platform;
+  }
+  return weak;
+}
 
 /** Ignored tokens (§1 step 3): device-type nouns, connectivity suffixes,
  *  spec restatements, marketing tails. Accessory nouns (case / cover /
@@ -364,7 +432,15 @@ function identityTokens(tokens: string[]): string[] {
 
 /** Compute the spec §1 tuple from any live title (or slug-decoded query). */
 function computeCanonicalFields(title: string): CanonicalFields {
-  const tokens = identityTokens(canonicalTokens(title));
+  // REEA-1162 — the platform role is read off the RAW token stream, before the
+  // head-position shelf-code skip can drop a leading `ps5`, and its tokens are
+  // then removed from the model-line scan so the same controller spelled
+  // "Sony PS5 DualSense…" / "Sony DualSense PS5…" / "Sony PlayStation 5
+  // DualSense…" lands on ONE model line. The field itself still discriminates
+  // a real platform split (PS5 vs PS4 game) through compatibleFields.
+  const rawTokens = canonicalTokens(title);
+  const platform = platformOfTokens(rawTokens);
+  const tokens = identityTokens(rawTokens.filter((t) => !PLATFORM_TOKENS.has(t)));
 
   // REEA-254 — the brand ROLE is evidence only when a known-brand word
   // actually appears. The old fallback consumed the first token as brand even
@@ -487,6 +563,7 @@ function computeCanonicalFields(title: string): CanonicalFields {
   return {
     brand,
     modelLine: line.join(" "),
+    platform,
     storage,
     color: color || pendingColorWord,
     grade: gradeParts.join("-") || "new",
@@ -528,7 +605,10 @@ export function canonicalFields(title: string): CanonicalFields {
  */
 export function canonicalKey(title: string): string {
   const f = canonicalFields(title);
-  return [f.brand, f.modelLine, f.storage, f.color, f.grade === "new" ? "" : f.grade]
+  // REEA-1162 — the platform slot rides after the model line when the title
+  // names one; an empty platform is dropped exactly like every other missing
+  // field, so the pinned spec examples keep their key shape.
+  return [f.brand, f.modelLine, f.platform, f.storage, f.color, f.grade === "new" ? "" : f.grade]
     .filter((v) => v !== "")
     .join("|");
 }
@@ -599,6 +679,10 @@ function lineCompatible(a: string, b: string): boolean {
 export function compatibleFields(a: CanonicalFields, b: CanonicalFields): boolean {
   const pairs: [string, string][] = [
     [a.brand, b.brand],
+    // REEA-1162 — a platform named on BOTH sides must agree ("EA FC 27 PS5" ≠
+    // "EA FC 27 PS4"); a spelling that omits it still joins through the
+    // partial-match rule, exactly like a missing storage/colour.
+    [a.platform, b.platform],
     [a.storage, b.storage],
     [a.color, b.color],
     [a.grade, b.grade],
@@ -830,6 +914,14 @@ function slugifyIdentity(text: string): string {
  * title only says "12 GB RAM".
  *
  * Pure: same identity + URLs → same slug, every render, both locales.
+ *
+ * REEA-1162 — the platform slot is part of the slug when the SKU names one:
+ * "EA FC 27 PS5" and "EA FC 27 PS4" are two cards and must keep two slugs, so
+ * a platform-free slug would collide their productIds. For a SKU whose every
+ * live spelling names the platform (the DualSense feed always says PS5) the
+ * slug is still a pure function of the fetched identity — same slug every
+ * collection — and a spelling that omits the platform resolves through the
+ * partial-match fallback (product-identity.ts).
  */
 export function productSlugFor(
   fields: CanonicalFields,
@@ -849,6 +941,7 @@ export function productSlugFor(
   const parts: string[] = [];
   if (fields.brand) parts.push(fields.brand);
   if (fields.modelLine) parts.push(fields.modelLine);
+  if (fields.platform) parts.push(fields.platform);
   if (storage) parts.push(storage);
   if (fields.grade && fields.grade !== "new") parts.push(fields.grade);
   if (!fields.modelLine && !storage && fields.color) parts.push(fields.color);

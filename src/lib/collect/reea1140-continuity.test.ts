@@ -55,7 +55,10 @@ describe("REEA-1140 — Alpine Green folds into the DualSense card", () => {
       "Wibi",
     ]);
     // One canonical slug for the merged controller, colour-independent.
-    expect(products[0].productId).toBe("sony-dualsense-controller");
+    // REEA-1162 — the platform now rides the identity as its own slot, so the
+    // slug names the console the SKU is sold for; the colour still does not
+    // fork it (Alpine Green and the base spelling share this slug).
+    expect(products[0].productId).toBe("sony-dualsense-controller-ps5");
   });
 
   it("keeps a genuinely different controller model separate", () => {
@@ -75,8 +78,8 @@ describe("REEA-1140 — Alpine Green folds into the DualSense card", () => {
     ]);
     expect(products).toHaveLength(2);
     expect(products.map((p) => p.productId).sort()).toEqual([
-      "sony-dualsense-controller",
-      "sony-dualsense-edge-controller",
+      "sony-dualsense-controller-ps5",
+      "sony-dualsense-edge-controller-ps5",
     ]);
   });
 });

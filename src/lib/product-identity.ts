@@ -108,6 +108,10 @@ function bestCanonicalMatch(
     const fields = candidateFields(product);
     if (!compatibleFields(want, fields)) continue;
     let score = 0;
+    // REEA-1162 — a requested slug that names the platform prefers the live
+    // group whose own titles name the SAME platform, so a PS4/PS5 sibling
+    // never wins the resolution for the other tier.
+    if (want.platform && fields.platform === want.platform) score += 6;
     if (want.storage && fields.storage === want.storage) score += 8;
     else if (want.storage && fields.storage === "") score -= 1;
     else if (!want.storage && fields.storage === "") score += 3;
