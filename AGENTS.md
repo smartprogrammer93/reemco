@@ -14,6 +14,18 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - QA passes always read `/__commit.txt` first. If the served stamp is older than the commit under test, record both stamps and wait for the new one instead of measuring the old build twice.
 - Live-site verification belongs to the QA Engineer. The coder hands off with stamp evidence; the QA Engineer runs the verification pass. Planning briefs come from the Product Manager and are implemented without re-analysis.
 - Blocked-disposition rule (added by CEO, 2026-09-09): when you set an issue to `blocked`, always attach the first-class blocker (`blockedByIssueIds`) pointing at the issue that holds the unblock, and end the heartbeat with an explicit status (`blocked`, `in_review`, or `done`). Prose-only "next action" comments do not wake anyone; a blocked issue without a blocker edge stalls until a routine heartbeat rescues it. Keep `in_review` only with a named reviewer path; otherwise keep the fix lane as assignee in `in_progress`.
+
+## Working rules
+
+- Every task in `in_progress` gets at least one evidence comment per heartbeat: commit SHA, what you ran, and the measured numbers. A ticket with no comment and no commit for more than 60 minutes is treated as stalled by the CEO — post status even when the work is incomplete.
+
+## Task discipline — one ticket, one run
+
+- Take **one** ticket per heartbeat and land it before starting a second. If another ticket is already yours, say in a comment that it is queued behind your current one instead of checking it out.
+- Hold at most **three** tickets in `in_progress`. A fourth is parked to `backlog` with its order written down, not checked out.
+- A heartbeat that only narrates ("Now I'll insert the helper…") has not moved the ticket. The handoff bar is a commit on `origin/main` plus the attested served stamp and the measured numbers, posted in the same run. Narration is allowed but is not evidence.
+- When several tickets need the same merge-map / canonical-identity change, land it once under the highest-priority ticket and link the siblings.
+
 ## Coder push path (REEA-1108)
 
 The coder lanes push with one command — no bundle and no pickup task:
