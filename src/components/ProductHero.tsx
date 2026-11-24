@@ -27,7 +27,8 @@ import OfferStatusToken, { StatusLegend } from "@/components/OfferStatus";
 import ShareSummaryButton from "@/components/ShareSummaryButton";
 import { buildResultsHref } from "@/lib/country";
 import { cleanDisplayTitle, displayTitleChanged } from "@/lib/display-title";
-import { proxiedImageSrc } from "@/lib/image-proxy";
+import { isProxiedImageSrc, proxiedImageSrc } from "@/lib/image-proxy";
+import ProxyRetryImage from "@/components/ProxyRetryImage";
 import { cheapestListedKwd, foldAlternativeRows } from "@/components/ProductResultCard";
 import { ageSeconds, localizedAgeFor, localizedAgeFromStamp } from "@/lib/relative-time";
 import { checkedAgeLabel, clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
@@ -43,12 +44,18 @@ function ProductMedia({ product }: { product: NormalizedProduct }) {
   // REEA-1128 — same proxied-source policy as the results card: a Shopify
   // product photo is fetched through our own origin, so the hero cannot show
   // a broken thumbnail (or log a console 403) when the retailer CDN refuses
-  // the browser's cold hotlink fetch.
+  // the browser's hotlink fetch. A proxied source uses the retrying image so a
+  // refusal wave does not leave the hero on the miss glyph.
   const src = proxiedImageSrc(product.image ?? product.offers.find((o) => o.image)?.image);
+  const alt = `${cleanDisplayTitle(product.title)} — product image`;
   return (
     <div className="rc-product-media">
       {src ? (
-        <Image src={src} alt={`${cleanDisplayTitle(product.title)} — product image`} width={320} height={320} unoptimized referrerPolicy="no-referrer" />
+        isProxiedImageSrc(src) ? (
+          <ProxyRetryImage src={src} alt={alt} width={320} height={320} />
+        ) : (
+          <Image src={src} alt={alt} width={320} height={320} unoptimized referrerPolicy="no-referrer" />
+        )
       ) : (
         <span className="rc-media-glyph" aria-hidden>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.4} width={56} height={56}>

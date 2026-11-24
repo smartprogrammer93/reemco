@@ -1,7 +1,8 @@
 import Link from "next/link";
 import Image from "next/image";
 import { formatPrimaryPrice } from "@/lib/format";
-import { proxiedImageSrc } from "@/lib/image-proxy";
+import { isProxiedImageSrc, proxiedImageSrc } from "@/lib/image-proxy";
+import ProxyRetryImage from "@/components/ProxyRetryImage";
 import { localizedAgeFor } from "@/lib/relative-time";
 import { fill, getStrings, type Locale } from "@/lib/i18n";
 import {
@@ -113,15 +114,19 @@ function PriceDrops({
           <article className="rc-drop-card" key={`${d.productId}-${d.merchant}`}>
             <Link href={d.href} className="rc-drop-thumb" aria-label={d.title}>
               {thumb ? (
-                <Image
-                  src={thumb}
-                  alt={`${d.title} — product image`}
-                  width={96}
-                  height={96}
-                  sizes="96px"
-                  unoptimized
-                  referrerPolicy="no-referrer"
-                />
+                isProxiedImageSrc(thumb) ? (
+                  <ProxyRetryImage src={thumb} alt={`${d.title} — product image`} width={96} height={96} />
+                ) : (
+                  <Image
+                    src={thumb}
+                    alt={`${d.title} — product image`}
+                    width={96}
+                    height={96}
+                    sizes="96px"
+                    unoptimized
+                    referrerPolicy="no-referrer"
+                  />
+                )
               ) : (
                 <span className="rc-media-glyph" aria-hidden>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.4} width={34} height={34}>

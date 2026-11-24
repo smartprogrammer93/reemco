@@ -42,6 +42,8 @@ describe("REEA-1128 — a resolved upstream image is served from our origin", ()
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/png");
     expect(res.headers.get("cache-control")).toContain("immutable");
+    // A real photo is not a miss: ProxyRetryImage must not re-request it.
+    expect(res.headers.get("x-reea-image")).toBeNull();
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(PNG_BYTES);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     // The browser identity the retailer CDN expects, never a bare fetch default.
@@ -86,7 +88,13 @@ describe("REEA-1128 — the measured cold-miss 403 is retried, then degrades to 
     expect(res.headers.get("content-type")).toContain("image/svg+xml");
     // Short TTL: the next page load retries instead of pinning the miss.
     expect(res.headers.get("cache-control")).toContain("max-age=30");
-    expect(await res.text()).toContain("<svg");
+    // ProxyRetryImage's miss contract: a 1x1-intrinsic SVG is the only signal
+    // an <img> can read (it cannot see the content-type or the header).
+    expect(res.headers.get("x-reea-image")).toBe("miss");
+    const body = await res.text();
+    expect(body).toContain("<svg");
+    expect(body).toContain('width="1"');
+    expect(body).toContain('height="1"');
   });
 
   it("a network throw is retried and degrades to the glyph, still 200", async () => {

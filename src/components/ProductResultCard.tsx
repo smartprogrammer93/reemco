@@ -12,7 +12,8 @@ import { LiveAge } from "@/components/OfferCtaLabel";
 import { resolveOfferUrl } from "@/lib/links";
 import { formatSeenRangeLabel } from "@/lib/seen-range";
 import { cleanDisplayTitle, displayTitleChanged } from "@/lib/display-title";
-import { proxiedImageSrc } from "@/lib/image-proxy";
+import { isProxiedImageSrc, proxiedImageSrc } from "@/lib/image-proxy";
+import ProxyRetryImage from "@/components/ProxyRetryImage";
 import { clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
 import FreshnessBadge from "@/components/FreshnessBadge";
 import OfferStatusToken from "@/components/OfferStatus";
@@ -109,13 +110,16 @@ function CategoryGlyph() {
  *
  *  REEA-1128 — the source goes through proxiedImageSrc(): a `cdn.shopify.com`
  *  product photo is rendered as the same-origin `/api/image?u=…` URL, so the
- *  shopper's browser never eats Shopify's intermittent cold-miss 403 (empty
- *  frame + console error). Every other retailer image keeps its direct URL, and
+ *  shopper's browser never eats Shopify's intermittent 403 (empty frame +
+ *  console error). A proxied source renders through ProxyRetryImage, which
+ *  re-requests the photo if the proxy had to answer with its miss glyph;
+ *  every other retailer image keeps its direct URL, and
  *  `referrerPolicy="no-referrer"` keeps our origin off the retailer CDN's
  *  logs. */
 function CardMedia({ product, locale, query, country }: { product: NormalizedProduct; locale?: Locale; query?: string; country?: CountryCode | null }) {
   const src = proxiedImageSrc(product.image ?? product.offers.find((o) => o.image)?.image);
   const displayTitle = cleanDisplayTitle(product.title);
+  const alt = `${displayTitle} — ${locale === "ar" ? "صورة المنتج" : "product image"}`;
   if (!src) {
     return (
       <div className="rc-card-media">
@@ -130,15 +134,19 @@ function CardMedia({ product, locale, query, country }: { product: NormalizedPro
   }
   return (
     <div className="rc-card-media">
-      <Image
-        src={src}
-        alt={`${displayTitle} — ${locale === "ar" ? "صورة المنتج" : "product image"}`}
-        width={160}
-        height={160}
-        sizes="(max-width: 640px) 100px, 160px"
-        unoptimized
-        referrerPolicy="no-referrer"
-      />
+      {isProxiedImageSrc(src) ? (
+        <ProxyRetryImage src={src} alt={alt} width={160} height={160} />
+      ) : (
+        <Image
+          src={src}
+          alt={alt}
+          width={160}
+          height={160}
+          sizes="(max-width: 640px) 100px, 160px"
+          unoptimized
+          referrerPolicy="no-referrer"
+        />
+      )}
       <div className="rc-card-share">
         <ShareSummaryButton product={product} query={query} country={country} locale={locale} iconOnly />
       </div>
@@ -162,20 +170,32 @@ function ThumbRow({ product }: { product: NormalizedProduct }) {
   if (urls.length === 0) return null;
   return (
     <div className="flex shrink-0 items-center gap-2">
-      {urls.map((src) => (
-        <Image
-          key={src}
-          src={src}
-          alt=""
-          width={64}
-          height={64}
-          sizes="64px"
-          unoptimized
-          referrerPolicy="no-referrer"
-          className="h-16 w-16 rounded object-contain"
-          style={{ background: "var(--rc-canvas)" }}
-        />
-      ))}
+      {urls.map((src) =>
+        isProxiedImageSrc(src) ? (
+          <ProxyRetryImage
+            key={src}
+            src={src}
+            alt=""
+            width={64}
+            height={64}
+            className="h-16 w-16 rounded object-contain"
+            style={{ background: "var(--rc-canvas)" }}
+          />
+        ) : (
+          <Image
+            key={src}
+            src={src}
+            alt=""
+            width={64}
+            height={64}
+            sizes="64px"
+            unoptimized
+            referrerPolicy="no-referrer"
+            className="h-16 w-16 rounded object-contain"
+            style={{ background: "var(--rc-canvas)" }}
+          />
+        ),
+      )}
     </div>
   );
 }

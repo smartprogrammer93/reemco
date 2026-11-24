@@ -15,7 +15,10 @@
  *  - ALWAYS answers 200. A shopper never sees a broken-image icon, and Chrome
  *    never logs a failed resource. When the upstream refuses, the body is a
  *    neutral category glyph in the design's own visual language instead of a
- *    transparent hole, and the short cache TTL makes the next page load retry.
+ *    transparent hole; the glyph is a 1x1-intrinsic SVG so the client
+ *    component (ProxyRetryImage) can detect the miss and re-request the URL
+ *    after a backoff, which is what turns a refusal WAVE (the measured
+ *    behaviour on the live box) back into the real product photo.
  *  - Success bodies are cached in-process (bounded LRU) with single-flight
  *    de-duplication, so one cold miss warms the URL for every following
  *    shopper on this instance and a burst of cards cannot fan out a burst of
@@ -40,11 +43,14 @@ export const dynamic = "force-dynamic";
 
 /** Per-attempt upstream budget. A retailer image hop that has not answered in
  *  this window is a miss, not something to make the shopper wait for. */
-const UPSTREAM_TIMEOUT_MS = 4000;
+const UPSTREAM_TIMEOUT_MS = 1800;
 /** Overall budget for one shopper's image request. The card frame reserves its
  *  geometry, so a miss never shifts layout — but the frame must not stay blank
- *  for long either: past this deadline the request degrades to the glyph. */
-const UPSTREAM_BUDGET_MS = 6000;
+ *  for long either: past this deadline the request degrades to the glyph and
+ *  the client-side retry (ProxyRetryImage) re-attempts when the refusal wave
+ *  has moved on. Measured on the live box: a refused cold entry answers 403 in
+ *  ~200 ms, so the three-attempt miss lands in ~1.5 s, not at this cap. */
+const UPSTREAM_BUDGET_MS = 2400;
 /** Hard body cap — a product image far above this is a broken upstream answer,
  *  not a thumbnail. */
 const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
@@ -53,10 +59,12 @@ const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
  *  long tail of distinct products grow the heap unbounded. */
 const CACHE_MAX_ENTRIES = 256;
 const CACHE_MAX_BYTES = 48 * 1024 * 1024;
-/** Backoff between attempts. Shopify's cold imagery miss clears on a warm
- *  entry, so the retry is short and sequential rather than a fan-out; three
- *  attempts cost ~0.75 s of sleep on a host that refuses instantly. */
-const RETRY_DELAYS_MS = [150, 600] as const;
+/** Backoff between attempts. The live 403s arrive in short refusal waves (see
+ *  the policy note in src/lib/image-proxy.ts), so the retry is short and
+ *  sequential rather than a fan-out; a refused entry answers in ~200 ms, so
+ *  three attempts cost ~1.2 s including the sleeps. The client-side retry
+ *  covers the longer waves. */
+const RETRY_DELAYS_MS = [250, 800] as const;
 /** Placeholder freshness: short, so the very next page load re-attempts the
  *  upstream instead of pinning a miss for a day. */
 const PLACEHOLDER_MAX_AGE_S = 30;
@@ -181,8 +189,15 @@ function loadImage(url: string): Promise<{ body: Buffer; type: string } | null> 
  * broken-image icon or an empty box. `prefers-color-scheme` picks the dark
  * token value where the image document honours it; the base grey is legible on
  * both surfaces.
+ *
+ * The intrinsic size is deliberately 1x1 with a 160-unit viewBox: the SVG
+ * scales to the frame, and the client component (ProxyRetryImage) can tell a
+ * miss from a real photo by `naturalWidth === 1` — an `<img>` cannot read the
+ * response's content-type — and re-request the URL once the refusal wave has
+ * passed. A miss still arrives as HTTP 200, so nothing reaches the browser
+ * console as a failed resource.
  */
-const PLACEHOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160" role="img" aria-label="product image unavailable">
+const PLACEHOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" viewBox="0 0 160 160" role="img" aria-label="product image unavailable">
 <style>.g{stroke:#8F8375}@media (prefers-color-scheme:dark){.g{stroke:#A79783}}</style>
 <g class="g" fill="none" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" transform="translate(48 48) scale(2.667)">
 <path d="M3 9.5 5.5 4h13L21 9.5V20H3V9.5Z"/><path d="M3 9.5h18M8.5 13.5h7"/>
@@ -196,6 +211,9 @@ function placeholderResponse(): Response {
       "content-type": "image/svg+xml; charset=utf-8",
       "cache-control": `public, max-age=${PLACEHOLDER_MAX_AGE_S}`,
       "x-content-type-options": "nosniff",
+      // Observability only: ProxyRetryImage keys off the 1x1 intrinsic size,
+      // not this header, because an <img> cannot read response headers.
+      "x-reea-image": "miss",
     },
   });
 }

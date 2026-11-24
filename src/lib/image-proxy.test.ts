@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   IMAGE_PROXY_ROUTE,
   isFetchableImageUrl,
+  isProxiedImageSrc,
   proxiedImageSrc,
   shouldProxyImage,
 } from "@/lib/image-proxy";
@@ -53,6 +54,14 @@ describe("REEA-1128 — proxy policy for the measured cold-miss host", () => {
     expect(proxiedImageSrc(undefined)).toBeUndefined();
     expect(proxiedImageSrc(null)).toBeUndefined();
     expect(proxiedImageSrc("   ")).toBeUndefined();
+  });
+
+  it("identifies the proxied URL so the card can pick the retrying image", () => {
+    const shopify = "https://cdn.shopify.com/s/files/1/a.jpg?v=1";
+    expect(isProxiedImageSrc(proxiedImageSrc(shopify))).toBe(true);
+    expect(isProxiedImageSrc(proxiedImageSrc("https://cdn.example/1.png"))).toBe(false);
+    expect(isProxiedImageSrc(undefined)).toBe(false);
+    expect(isProxiedImageSrc("/api/image")).toBe(false);
   });
 });
 

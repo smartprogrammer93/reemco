@@ -79,6 +79,16 @@ export function proxiedImageSrc(src: string | null | undefined): string | undefi
 }
 
 /**
+ * True when a media `src` is already the same-origin proxy URL this module
+ * built. Call sites use it to choose the retrying <img> (ProxyRetryImage) for
+ * proxied sources while every other retailer image keeps next/image exactly as
+ * before.
+ */
+export function isProxiedImageSrc(src: string | null | undefined): boolean {
+  return typeof src === "string" && src.startsWith(`${IMAGE_PROXY_ROUTE}?`);
+}
+
+/**
  * SSRF guard for the proxy route: only absolute https URLs, only hostnames
  * that resolve on the public internet. `u` is rendered by us, but it is a
  * public query parameter — anyone can make the box fetch a URL, so it must not
