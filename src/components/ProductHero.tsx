@@ -206,6 +206,9 @@ export default function ProductHero(props: {
   product: NormalizedProduct;
   country?: CountryCode | null;
   locale?: Locale;
+  /** REEA-1140 — the results query this product was reached from, carried on
+   *  the link so client-started collections resolve the same merged group. */
+  query?: string;
   firstStage?: Promise<CollectJob | null>;
   /** REEA-283/REEA-1091 — the product page's baked server render clock. Every
    *  age / elapsed / status label on the first paint derives from it, so the
@@ -224,18 +227,27 @@ function ProductHeroBody({
   product,
   country = null,
   locale,
+  query = "",
   firstStage,
   renderStartMs,
 }: {
   product: NormalizedProduct;
   country?: CountryCode | null;
   locale?: Locale;
+  query?: string;
   firstStage?: Promise<CollectJob | null>;
   renderStartMs?: number;
 }) {
   const t = getStrings(locale ?? clientLocale());
   const snap = firstStage ? use(firstStage) : null;
-  const { state, cachedNoticeAt, start, retryRetailer, attach } = useCollection(product.productId, snap);
+  // REEA-1140 — a client restart (or 404 recovery) carries the results query
+  // and market, so the server resolves the same merged group the page did.
+  const { state, cachedNoticeAt, start, retryRetailer, attach } = useCollection(
+    product.productId,
+    snap,
+    query,
+    country,
+  );
   const [staleFallback, setStaleFallback] = useState<CollectJob | null>(null);
   // REEA-283/REEA-1091 — the FIRST paint reuses the page's baked render clock
   // instead of a fresh Date.now(), so the streamed hero/offer ages, status
@@ -306,7 +318,9 @@ function ProductHeroBody({
   return (
     <div className="mx-auto w-full rc-product-wrap" style={{ maxWidth: "var(--rc-layout-max-w)", paddingInline: "var(--rc-gutter)", paddingBlock: "var(--rc-space-4)" }}>
       <nav className="rc-results-meta" aria-label={t.allOffersLead}>
-        <Link href={buildResultsHref(product.title, 1, country)}>{t.allOffersLead}</Link>
+        {/* REEA-1140 — the back link returns to the query the shopper came
+            from when it is carried; a shared-link visit keeps the title. */}
+        <Link href={buildResultsHref(query || product.title, 1, country)}>{t.allOffersLead}</Link>
       </nav>
       <div className="rc-product-hero">
         <ProductMedia product={product} />

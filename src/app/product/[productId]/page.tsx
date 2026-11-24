@@ -7,6 +7,7 @@ import { PRODUCTS } from "@/lib/feed";
 import { resolveProductIdentity } from "@/lib/product-identity";
 import { filterProductsByCountry, sanitizeCountry } from "@/lib/country";
 import { resolveRequestLocale } from "@/lib/i18n-server";
+import { sanitizeSearchQuery } from "@/lib/search-params";
 
 export const metadata = {
   title: "Product — Reemco",
@@ -33,8 +34,12 @@ export default async function ProductPage({
   // REEA-170: the country selection rides the link from the results list, so
   // the detail view derives its prices/alternatives from the same filtered
   // offer set. No param → unchanged behavior.
-  const { c } = await searchParams;
+  const { c, q } = await searchParams;
   const country = sanitizeCountry(c);
+  // REEA-1140 — the results card carries the query it was collected for, so
+  // the detail page re-runs the SAME live fan-out and merge map. A slug-only
+  // visit (shared link, sitemap) keeps the decode-from-slug path.
+  const carriedQuery = sanitizeSearchQuery(q);
   // REEA-283/REEA-1091 — one clock reading per server render, taken BEFORE the
   // live fan-out starts. It is threaded into the hero card and the live panel
   // (and down to every offer card), so the served HTML and the hydration pass
@@ -46,7 +51,7 @@ export default async function ProductPage({
   // REEA-279 — chrome locale for the detail card, the live panel and the
   // back link; cookie → Accept-Language hint → "en".
   const locale = await resolveRequestLocale();
-  const product = await resolveProductIdentity(productId, country);
+  const product = await resolveProductIdentity(productId, country, carriedQuery);
   if (!product) notFound();
   // Catalog identities carry bundled offers — apply the same selection the
   // live path applies before grouping (idempotent on live-resolved products).
@@ -101,6 +106,7 @@ export default async function ProductPage({
       product={shown}
       country={country}
       locale={locale}
+      query={carriedQuery ?? ""}
       firstStage={firstStage}
       renderStartMs={renderStartMs}
     />

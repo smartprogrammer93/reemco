@@ -21,6 +21,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CollectJob } from "@/lib/collect/types";
+import type { CountryCode } from "@/lib/country";
 
 const POLL_INTERVAL_MS = 400;
 
@@ -38,7 +39,27 @@ export type CollectionPhase =
   | { kind: "polling"; job: CollectJob }
   | { kind: "terminal"; job: CollectJob };
 
-export function useCollection(productId: string, initialJob?: CollectJob | null) {
+export function useCollection(
+  productId: string,
+  initialJob?: CollectJob | null,
+  // REEA-1140 — a client-started (or 404-restarted) collection must resolve
+  // the same merged group the page did. The results query and market ride the
+  // POST so the server does not decode the slug into a different search.
+  query = "",
+  country: CountryCode | null = null,
+) {
+  const collectHref = useCallback(
+    (extra?: Record<string, string>) => {
+      const params = new URLSearchParams();
+      if (query) params.set("q", query);
+      if (country) params.set("c", country);
+      if (extra) for (const [key, value] of Object.entries(extra)) params.set(key, value);
+      const qs = params.toString();
+      return `/api/products/${encodeURIComponent(productId)}/collect${qs ? `?${qs}` : ""}`;
+    },
+    [productId, query, country],
+  );
+
   // Same-tab repeat: render the previous completed snapshot immediately, with
   // a visible cache label that clears once fresh data lands. Without a same-tab
   // snapshot, the server-started staged snapshot (REEA-248) seeds the first
@@ -108,7 +129,7 @@ export function useCollection(productId: string, initialJob?: CollectJob | null)
           // states (AC2) — bounded by the 25s budget.
           if (mountedRef.current) {
             try {
-              const waitRes = await fetch(`/api/products/${productId}/collect?wait=1`, {
+              const waitRes = await fetch(collectHref({ wait: "1" }), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: "{}",
@@ -151,7 +172,7 @@ export function useCollection(productId: string, initialJob?: CollectJob | null)
       }
     };
     void tick();
-  }, [productId]);
+  }, [productId, collectHref]);
 
   // Internal start used by both the user-facing entry point and the poll-loop
   // 404 restart. Only the user-facing path resets the restart budget, so a
@@ -164,7 +185,7 @@ export function useCollection(productId: string, initialJob?: CollectJob | null)
       // only a cold mount shows the starting state.
       setState((prev) => (prev.kind === "idle" ? { kind: "starting" } : prev));
       try {
-        const res = await fetch(`/api/products/${productId}/collect`, {
+        const res = await fetch(collectHref(), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(opts.force ? { force: true } : {}),
@@ -181,7 +202,7 @@ export function useCollection(productId: string, initialJob?: CollectJob | null)
         if (mountedRef.current) setState({ kind: "idle" });
       }
     },
-    [productId, poll],
+    [poll, collectHref],
   );
 
   const start = useCallback(

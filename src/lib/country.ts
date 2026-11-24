@@ -203,6 +203,26 @@ export function buildResultsHref(
   return qs ? `/results?${qs}` : "/results";
 }
 
+/**
+ * REEA-1140 — the product link carries the query it was collected for, so the
+ * detail page re-runs the SAME live fan-out and the SAME merge map instead of
+ * decoding the slug into a different search phrase (which is how a 5-offer
+ * card landed on a 1-retailer PDP). Country rides along for the same reason:
+ * the detail view must derive its figures from the filtered offer set the
+ * shopper was looking at.
+ */
+export function buildProductHref(
+  productId: string,
+  query: string,
+  country: CountryCode | null,
+): string {
+  const params = new URLSearchParams();
+  if (query) params.set("q", query);
+  if (country) params.set("c", country);
+  const qs = params.toString();
+  return `/product/${encodeURIComponent(productId)}${qs ? `?${qs}` : ""}`;
+}
+
 /* ---- Remembered selection: same-tab slot + the one preference cookie. ---- */
 
 let rememberedCountry: CountryCode | null = null;

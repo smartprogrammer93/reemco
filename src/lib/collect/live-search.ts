@@ -57,7 +57,14 @@ import {
   logSanitySummary,
   type CohortSanity,
 } from "@/lib/collect/price-sanity";
-import { canonicalFields, compatibleFields, listingLabel, type CanonicalFields } from "@/lib/collect/canonical-product";
+import {
+  canonicalFields,
+  compatibleFields,
+  listingLabel,
+  productSlugFor,
+  storageFromListingUrl,
+  type CanonicalFields,
+} from "@/lib/collect/canonical-product";
 import {
   arabicBrandIntent,
   brandIsNamed,
@@ -2473,7 +2480,16 @@ function buildGroups(query: string, hits: SearchHit[]): HitGroup[] {
   for (const hit of orderByAdapter(hits)) {
     const title = hit.title.trim();
     if (!title) continue;
-    const fields = canonicalFields(title);
+    const titleFields = canonicalFields(title);
+    // REEA-1140 — a title that omits the capacity is not a storage-less SKU:
+    // the retailer's own listing URL names the tier the title left out
+    // (`…-5g-256gb-phone-silver` for "Samsung Galaxy Z Fold7, 5G, 12 GB RAM").
+    // Seeding it into the merge tuple keeps the 256 GB and 512 GB tiers apart
+    // even when only one of the two spellings carries a capacity, so a 512 GB
+    // listing can no longer absorb the 256 GB group through the partial-match
+    // rule. The cached title tuple is copied, never mutated.
+    const urlStorage = titleFields.storage ? "" : storageFromListingUrl(hit.url);
+    const fields = urlStorage ? { ...titleFields, storage: urlStorage } : titleFields;
     // REEA-192 — product-class gate: an accessory-class title (case / cover /
     // protector / tempered glass / film / skin; كفر، جراب، واقي، غطاء) never
     // folds into the device's card. Accessory nouns often sit BEFORE the brand
@@ -2569,6 +2585,67 @@ function canonicalGroupTitle(group: HitGroup, locale?: "en" | "ar"): string {
   }
   for (const t of group.titles) consider(t);
   return title;
+}
+
+/**
+ * REEA-1140 — the merge identity of a group, computed independently of the
+ * arrival order and of which member title the shortest-title rule happened to
+ * pick. The results card and the PDP aggregation both need ONE canonical slug
+ * per merged SKU; a title-derived slug forked `/product/...` between two
+ * spellings of the same 256 GB phone and let the PDP pick a different model.
+ *
+ * Field values come from the group's own live titles (the same canonical
+ * vocabulary every other pass uses). Where the titles omit a capacity, the
+ * live listing URLs the group already carries name the tier — Xcite's
+ * `…-5g-256gb-phone-silver` URL is the same fetched listing whose title only
+ * says "12 GB RAM". Missing stays missing: nothing is invented.
+ */
+function canonicalGroupIdentity(group: HitGroup): CanonicalFields {
+  let brand = "";
+  let modelLine = "";
+  let storage = "";
+  let color = "";
+  let grade = "new";
+  const lineTokens = (line: string): number => line.split(" ").filter(Boolean).length;
+  for (const title of group.titles) {
+    const f = canonicalFields(title);
+    if (!brand && f.brand) brand = f.brand;
+    if (f.modelLine) {
+      if (modelLine === "") {
+        modelLine = f.modelLine;
+      } else {
+        const incoming = lineTokens(f.modelLine);
+        const current = lineTokens(modelLine);
+        if (incoming < current || (incoming === current && f.modelLine < modelLine)) {
+          modelLine = f.modelLine;
+        }
+      }
+    }
+    if (!storage && f.storage) storage = f.storage;
+    if (grade === "new" && f.grade !== "new") grade = f.grade;
+    if (!color && f.color) color = f.color;
+  }
+  if (!storage) {
+    for (const offer of group.offers) {
+      const fromUrl = storageFromListingUrl(offer.url);
+      if (fromUrl) {
+        storage = fromUrl;
+        break;
+      }
+    }
+  }
+  return { brand, modelLine, storage, color, grade };
+}
+
+/** REEA-1140 — the ONE slug per merged SKU. Shared by the results card's
+ *  product link and the PDP's exact-match resolution, so the same merge map
+ *  produces both surfaces. */
+function slugOfGroup(group: HitGroup, fallbackTitle: string): string {
+  return productSlugFor(
+    canonicalGroupIdentity(group),
+    group.offers.map((o) => o.url),
+    fallbackTitle,
+  );
 }
 
 /** REEA-254 color swatches — when a merged card's offers carry more than one
@@ -2735,7 +2812,10 @@ function finalizeGroups(
       if (fromPrice == null) return null; // E2 — no price claim from all-flagged offers
       const otherTitle = canonicalGroupTitle(g, locale);
       m = {
-        productId: slugify(otherTitle),
+        // REEA-1140 — the alternative links to the SAME canonical slug the
+        // product card uses for that merged SKU, so a click-through lands on
+        // the merged group instead of a title-spelling fork.
+        productId: slugOfGroup(g, otherTitle),
         title: otherTitle,
         // KWD-space numeric (REEA-254 item B): alternatives rows render this
         // through formatPrimaryPrice(x, "KWD"), so mixed-currency groups show
@@ -2955,7 +3035,11 @@ function finalizeGroups(
         couponSeen.set(key, { code: signal.code ?? null, description: signal.discount, discount: signal.discount, expiresAt: null, merchant: o.merchant });
     }
     return {
-      productId: slugify(title) || `live-${idx}`,
+      // REEA-1140 — canonical SKU slug from the MERGE IDENTITY, not the
+      // shortest member title: the same merged SKU resolves to the same
+      // `/product/<slug>` across collections, and the PDP can match it back
+      // to this exact group instead of a raw-identity neighbour.
+      productId: slugOfGroup(group, title) || `live-${idx}`,
       title,
       brand: resolveBrand(group.brandRaw, title),
       ...(photo ? { image: photo } : {}),

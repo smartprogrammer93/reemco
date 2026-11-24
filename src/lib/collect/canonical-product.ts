@@ -64,6 +64,11 @@ const COLORS = new Set([
   // identity (REEA-254 merges on model+storage), so recognizing it here is
   // what lets the merge pass fold the colours inside one card.
   "teal", "amber", "apricot", "pearl",
+  // REEA-1140 — official colour names that also stand alone (no modifier):
+  // a "… Lavender" or "… Graphite" spelling is a colourway of the same SKU and
+  // must not fork into its own card. They stay out of COLOR_PREFIXES because
+  // they are base colours, not modifiers of another colour word.
+  "lavender", "graphite", "obsidian", "sage", "coral", "mint", "sand",
 ]);
 
 /** Modifier words that open a two-word official colour name (§1 step 2):
@@ -87,6 +92,14 @@ const COLOR_PREFIXES = new Set([
   // stays in the model line and the same DualSense/Dyson SKU forks per colour
   // (live 9c66a12: three PS5 controller cards, none comparison-ready).
   "chroma", "galactic", "ceramic",
+  // REEA-1140 — "Alpine Green" (Eureka's DualSense spelling) is the same
+  // modifier + base pair: "alpine" stayed in the model line and forked one
+  // controller into a standalone single-retailer card in every collection.
+  // The rest are the same official-name class retailers spell live
+  // ("Sierra Blue", "Graphite Black", "Storm Blue"); keeping the vocabulary
+  // current fixes the class instead of the one reported instance.
+  "alpine", "sierra", "ultramarine", "seafoam",
+  "storm", "ocean", "forest",
 ]);
 
 const GRADE_WORDS = new Set(["new", "renewed", "refurbished", "opened"]);
@@ -759,4 +772,86 @@ export function gradeBadgeLabel(grade: string): string | null {  if (!grade || g
     .split("-")
     .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
     .join(" ");
+}
+
+/* ---- REEA-1140: one canonical slug per merged SKU ---------------------- */
+
+/**
+ * The storage tier a retailer's own listing URL names. Retailer PDP slugs are
+ * generated from the listing title, so a live URL like
+ * `…/samsung-galaxy-z-fold7-5g-256gb-phone-silver/p` carries the capacity even
+ * when the scraped title omits it ("Samsung Galaxy Z Fold7, 5G, 12 GB RAM").
+ * The URL is fetched live with the same listing, so this is still query-time
+ * retailer evidence — not a bundled alias table. A quantity qualified as RAM
+ * ("12-gb-ram") is restated memory, never storage, exactly like the title
+ * rule in `computeCanonicalFields`.
+ */
+export function storageFromListingUrl(url: string): string {
+  if (!url) return "";
+  const path = url.split(/[?#]/, 1)[0].toLowerCase();
+  // 1–4 digits: a 1 TB tier is spelled `1-tb` in several retailer slugs.
+  // A slug can name RAM and storage together ("…-12gb-256gb"); RAM quantities
+  // are smaller (4–24 GB) and a TB is always storage, so the largest capacity
+  // the slug names is the storage tier, never the memory figure.
+  let best = "";
+  let bestRank = -1;
+  for (const match of path.matchAll(/(\d{1,4})[\s_-]?(gb|tb)(?![\s_-]?ram)/g)) {
+    const value = Number(match[1]);
+    const rank = match[2] === "tb" ? 1_000_000 + value : value;
+    if (rank > bestRank) {
+      best = `${match[1]}${match[2]}`;
+      bestRank = rank;
+    }
+  }
+  return best;
+}
+
+function slugifyIdentity(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * REEA-1140 — the canonical SKU slug shared by the results card and the PDP
+ * aggregation. It is derived from the MERGE IDENTITY (brand + model line +
+ * storage + grade), never from whichever retailer title happened to arrive
+ * first: two collections of one SKU therefore land on the same slug even when
+ * their member titles (and the shortest-title pick) differ. That is what makes
+ * `/product/<slug>` resolvable back to the SAME merged group instead of a
+ * different model.
+ *
+ * Colour is identity only for a tuple with neither model line nor storage
+ * (REEA-254: colourways ride inside one device card, so colour must not fork
+ * the slug). When the title omits the capacity, the listing URLs the group
+ * already carries are the tier evidence — a fold 7 256 GB card stays
+ * `…-256gb` instead of flipping to a storage-less slug on a collection whose
+ * title only says "12 GB RAM".
+ *
+ * Pure: same identity + URLs → same slug, every render, both locales.
+ */
+export function productSlugFor(
+  fields: CanonicalFields,
+  offerUrls: readonly string[] = [],
+  fallbackTitle = "",
+): string {
+  let storage = fields.storage;
+  if (!storage) {
+    for (const url of offerUrls) {
+      const fromUrl = storageFromListingUrl(url);
+      if (fromUrl) {
+        storage = fromUrl;
+        break;
+      }
+    }
+  }
+  const parts: string[] = [];
+  if (fields.brand) parts.push(fields.brand);
+  if (fields.modelLine) parts.push(fields.modelLine);
+  if (storage) parts.push(storage);
+  if (fields.grade && fields.grade !== "new") parts.push(fields.grade);
+  if (!fields.modelLine && !storage && fields.color) parts.push(fields.color);
+  const slug = slugifyIdentity(parts.join(" "));
+  return slug || slugifyIdentity(fallbackTitle);
 }

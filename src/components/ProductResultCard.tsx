@@ -1,7 +1,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import type { NormalizedProduct, PriceOffer, ProductAlternative } from "@/types/product";
-import { buildResultsHref, currencyForCountry, type CountryCode } from "@/lib/country";
+import { buildProductHref, buildResultsHref, currencyForCountry, type CountryCode } from "@/lib/country";
 import { effectivePriceKwd, formatCountryPrice, formatKWD, formatPrimaryPrice, sortOffers } from "@/lib/format";
 import { canonicalKey, dedupVariantKey, gradeBadgeLabel } from "@/lib/collect/canonical-product";
 import { ageSeconds, collectedClock, localizedAgeFromStamp } from "@/lib/relative-time";
@@ -685,7 +685,7 @@ export default function ProductResultCard({
       <CardMedia product={product} locale={locale} query={query} country={country} />
 
       <h2 className="rc-card-title" title={titleChanged ? product.title : undefined}>
-        <Link href={`/product/${encodeURIComponent(product.productId)}`} className="hover:underline">
+        <Link href={buildProductHref(product.productId, query, country)} className="hover:underline">
           <bdi>{displayTitle}</bdi>
         </Link>
       </h2>
@@ -806,7 +806,7 @@ export default function ProductResultCard({
             ))}
           </div>
           {offers.length > MAX_SHELF_OFFERS && (
-            <Link href={`/product/${encodeURIComponent(product.productId)}`} className="rc-view-all">
+            <Link href={buildProductHref(product.productId, query, country)} className="rc-view-all">
               {fill(t.viewAllOffers, { n: offers.length })}
             </Link>
           )}

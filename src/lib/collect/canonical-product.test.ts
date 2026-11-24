@@ -242,8 +242,9 @@ describe("REEA-486 merge gate — one card per model identity", () => {
     expect(listingLabel("Samsung Galaxy A16, Chip,48 Space, 5000mAh", "Samsung Galaxy A16")).toBe(
       "Chip 48 Space 5000mAh",
     );
-    // Dangling punctuation trims off BOTH ends of a fragment.
-    expect(listingLabel("Sony WH-1000XM6 Lavender,", "Sony WH-1000XM6")).toBe("Lavender");
+    // Dangling punctuation trims off BOTH ends of a fragment. ("Studio" is a
+    // plain qualifier; colour words now ride the swatch slot instead.)
+    expect(listingLabel("Sony WH-1000XM6 Studio,", "Sony WH-1000XM6")).toBe("Studio");
     // Whole fragments past the budget drop from the tail; what survives ends
     // on a word boundary, never a mid-word cut.
     expect(

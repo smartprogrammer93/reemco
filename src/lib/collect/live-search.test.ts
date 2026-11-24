@@ -635,9 +635,11 @@ describe("groupHits", () => {
     // offer — Xcite's two listings fold into its cheapest one.
     expect(fold.offers.map((o) => o.price)).toEqual([429.9, 7699]);
     expect(fold.offers.map((o) => o.merchant)).toEqual(["Xcite", "Jarir"]);
-    // Canonical title = member title with the fewest tokens → stable slug.
+    // Canonical title = member title with the fewest tokens; the product slug
+    // is derived from the MERGE IDENTITY (REEA-1140), not that title, so every
+    // collection of this SKU resolves to the same `/product/...`.
     expect(fold.title).toBe("Samsung Galaxy Z Fold7 Phone - Silver");
-    expect(fold.productId).toBe("samsung-galaxy-z-fold7-phone-silver");
+    expect(fold.productId).toBe("samsung-galaxy-z-fold7-256gb");
   });
 
   it("REEA-280: retailer-titled and Apple-store-titled spellings of one SKU share a card", () => {

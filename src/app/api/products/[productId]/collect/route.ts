@@ -19,6 +19,8 @@ import { resolveProductIdentity } from "@/lib/product-identity";
 import { runCollection, startCollection } from "@/lib/collect/runner";
 import { checkRateLimitShared } from "@/lib/rate-limit-kv";
 import { rateLimitHeaders } from "@/lib/rate-limit";
+import { sanitizeCountry } from "@/lib/country";
+import { sanitizeSearchQuery } from "@/lib/search-params";
 
 export const dynamic = "force-dynamic";
 // Headroom only — the 25 s overall budget in the runner enforces the 30 s
@@ -54,7 +56,14 @@ export async function POST(
   const gateHeaders = rateLimitHeaders(gate);
 
   const { productId } = await ctx.params;
-  const product = await resolveProductIdentity(productId);
+  const requestUrl = new URL(request.url);
+  // REEA-1140 — the client restart must resolve the SAME merged group the
+  // product page resolved: carry the results query (and market) through the
+  // POST. Without them a repeat collection re-decodes the slug into a
+  // different search phrase and starts a job from the wrong offer set.
+  const carriedQuery = sanitizeSearchQuery(requestUrl.searchParams.get("q"));
+  const country = sanitizeCountry(requestUrl.searchParams.get("c"));
+  const product = await resolveProductIdentity(productId, country, carriedQuery);
   if (!product) {
     return Response.json({ error: "Unknown product" }, { status: 404, headers: gateHeaders });
   }
@@ -76,7 +85,7 @@ export async function POST(
   // mode when polling misses; the run happens inside this invocation and the
   // terminal snapshot — with real per-retailer subtask states (AC2) — is
   // returned directly. The 25s overall budget keeps this inside maxDuration.
-  const wait = new URL(request.url).searchParams.get("wait") === "1";
+  const wait = requestUrl.searchParams.get("wait") === "1";
 
   if (wait && !servedFromCache && !deduped) {
     const final = await runCollection(job, product);
