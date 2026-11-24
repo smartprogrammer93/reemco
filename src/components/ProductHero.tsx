@@ -44,6 +44,10 @@ import { cheapestListedKwd, foldAlternativeRows } from "@/components/ProductResu
 import { ageSeconds, localizedAgeFor, localizedAgeFromStamp } from "@/lib/relative-time";
 import { checkedAgeLabel, clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
 import { offerStatusForLiveOffer } from "@/lib/offer-status";
+// REEA-1162 — one row per distinct retailer offer and a distinct-retailer
+// count line: the collect run scrapes one listing per merged-card row, so a
+// retailer's same-price colourway listings arrived as duplicate rows.
+import { dedupeRetailerOfferRows, distinctRetailerCount } from "@/lib/offer-rows";
 import type { NormalizedProduct } from "@/types/product";
 
 /** REEA-1142 — market-scoped order: the selected market's offers lead, the
@@ -193,7 +197,7 @@ function OfferTable({
   const t = getStrings(locale ?? clientLocale());
   return (
     <div className="rc-offers-table">
-      <h2>{fill(t.offersTableTitle, { n: offers.length })}</h2>
+      <h2>{fill(t.offersTableTitle, { n: distinctRetailerCount(offers) })}</h2>
       {/* Spec §3: the status legend appears once on the product page too. It
           sits with the offers table (below the hero) so it never pushes the
           first offer past the AC8 y=600 ceiling at 375. */}
@@ -350,7 +354,11 @@ function ProductHeroBody({
   // cheapest in-stock offer; a cross-market-only product shows the honest
   // "No Kuwait offer · Saudi price from KD X" line instead of claiming one.
   const scope = marketScope(country);
-  const offers = job ? sortLiveOffers(job.offers, scope) : [];
+  // REEA-1162 — the table is a retailer comparison: fold the same-price
+  // duplicate rows one retailer's colourway listings produced, so the rows and
+  // the "N retailers" count line describe distinct retailers. The cheapest
+  // row of each retailer still leads, so the hero price is unchanged.
+  const offers = job ? dedupeRetailerOfferRows(sortLiveOffers(job.offers, scope)) : [];
   const localBest = headlineOfferFor(offers, scope);
   const crossBest = cheapestCrossMarketOffer(offers, scope);
   const best = localBest ?? crossBest ?? offers[0] ?? null;
@@ -358,9 +366,19 @@ function ProductHeroBody({
   const headline = hasLocalOffer ? null : crossMarketHeadline(offers, scope, locale);
   const displayTitle = cleanDisplayTitle(product.title);
   const titleChanged = displayTitleChanged(product.title, displayTitle);
-  const answered = job ? job.subtasks.filter((s) => s.status === "done").length : 0;
+  // REEA-1162 — the answered line is a RETAILER count too: one subtask per
+  // listing meant "5 retailers answered" for two retailers with five listings.
+  const answered = job
+    ? distinctRetailerCount(
+        job.subtasks.filter((s) => s.status === "done").map((s) => ({ merchant: s.retailer })),
+      )
+    : 0;
   const failedRetailers = job
-    ? job.subtasks.filter((s) => s.status === "failed" || s.status === "timeout").map((s) => s.retailer)
+    ? [...new Set(
+        job.subtasks
+          .filter((s) => s.status === "failed" || s.status === "timeout")
+          .map((s) => s.retailer),
+      )]
     : [];
   const heroSaved = best && best.wasPrice != null && best.wasPrice > best.price ? best.wasPrice - best.price : null;
   const heroPrice = best
@@ -516,7 +534,7 @@ function ProductHeroBody({
               t.dateUnknown}{" "}
             {t.staleNote}
           </p>
-          <OfferTable offers={sortLiveOffers(staleFallback.offers, scope)} locale={locale} nowMs={now} scope={scope} />
+          <OfferTable offers={dedupeRetailerOfferRows(sortLiveOffers(staleFallback.offers, scope))} locale={locale} nowMs={now} scope={scope} />
         </div>
       ) : null}
 
