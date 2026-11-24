@@ -42,6 +42,9 @@ export interface OfferCardProps {
   currency?: string;
   /** REEA-279 chrome locale resolved server-side; client chain otherwise. */
   locale?: Locale;
+  /** REEA-1142 — a cross-market listing's market-specific stock badge
+   *  ("KSA stock"), rendered instead of letting the row read as Kuwait stock. */
+  marketBadge?: string;
   /** REEA-283/REEA-1091 — the product page's baked server render clock. The
    *  streamed card derives its CTA age / freshness chip from it, so the
    *  served HTML and the hydration pass agree; without it the card falls back
@@ -166,6 +169,7 @@ export default function OfferCard({
   isBest,
   savings,
   locale,
+  marketBadge,
   renderStartMs,
 }: OfferCardProps) {
   // REEA-224 F2 — same render-time sanitization ProductResultCard applies via
@@ -190,6 +194,14 @@ export default function OfferCard({
         <span className="savings-pill" style={!inStock ? { background: "var(--rc-error-bg)", color: "var(--rc-error)" } : undefined}>
           {inStock ? t.inStock : t.outOfStock}
         </span>
+        {marketBadge ? (
+          <span
+            className="label-token shrink-0 whitespace-nowrap rounded px-2 py-0.5"
+            style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px solid var(--rc-line)" }}
+          >
+            <bdi>{marketBadge}</bdi>
+          </span>
+        ) : null}
       </p>
 
       {/* Price block: effective price is the loudest element (P1 / AC-6) */}

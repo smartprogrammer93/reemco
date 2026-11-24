@@ -19,7 +19,18 @@ import Link from "next/link";
 import Image from "next/image";
 import { useCollection, type CollectionPhase } from "@/lib/collect/useCollection";
 import type { CollectJob, LiveOffer } from "@/lib/collect/types";
-import { filterOffersByCountry, type CountryCode } from "@/lib/country";
+import type { CountryCode } from "@/lib/country";
+import {
+  cheapestCrossMarketOffer,
+  crossMarketHeadline,
+  headlineOfferFor,
+  isCrossMarketOffer,
+  marketPriceLabel,
+  marketScope,
+  marketStockLabel,
+  offerMarket,
+  sortOffersByMarket,
+} from "@/lib/market";
 import { effectivePriceKwd, formatCountryPrice, formatPrimaryPrice } from "@/lib/format";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import CollectionPulse from "@/components/CollectionPulse";
@@ -35,9 +46,10 @@ import { checkedAgeLabel, clientLocale, fill, getStrings, type Locale } from "@/
 import { offerStatusForLiveOffer } from "@/lib/offer-status";
 import type { NormalizedProduct } from "@/types/product";
 
-function sortLiveOffers(offers: LiveOffer[]): LiveOffer[] {
-  const key = (o: LiveOffer) => effectivePriceKwd(o.price, o.currency, { wasPrice: o.wasPrice });
-  return [...offers].sort((a, b) => key(a) - key(b));
+/** REEA-1142 — market-scoped order: the selected market's offers lead, the
+ *  cross-market ones follow as a labeled group (same ladder inside each). */
+function sortLiveOffers(offers: LiveOffer[], scope: CountryCode): LiveOffer[] {
+  return sortOffersByMarket(offers, null, scope);
 }
 
 function ProductMedia({ product }: { product: NormalizedProduct }) {
@@ -73,15 +85,22 @@ function HeroOfferRow({
   locale,
   nowMs,
   primary,
+  scope,
 }: {
   offer: LiveOffer;
   locale?: Locale;
   nowMs: number;
   primary: boolean;
+  /** REEA-1142 — the market this surface speaks for. */
+  scope: CountryCode;
 }) {
   const t = getStrings(locale ?? clientLocale());
   const status = offerStatusForLiveOffer(offer, nowMs);
   const age = ageSeconds(offer.collectedAt, nowMs);
+  // AC1 — a cross-market row keeps its own currency and carries the ≈KD
+  // reference behind it, so a Saudi price never reads as a Kuwait price.
+  const cross = isCrossMarketOffer(offer, scope);
+  const market = offerMarket(offer.currency);
   const price = formatCountryPrice(offer.price, offer.currency, null);
   return (
     <div className={`rc-offer-row${offer.inStock ? "" : " is-out"}`}>
@@ -89,11 +108,32 @@ function HeroOfferRow({
         <span className="rc-retailer-name">
           <bdi className="logo lat">{offer.merchant}</bdi>
         </span>
+        {cross && market ? (
+          <span
+            className="label-token shrink-0 whitespace-nowrap rounded px-2 py-0.5"
+            style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px solid var(--rc-line)" }}
+          >
+            <bdi>{marketPriceLabel(market, locale)}</bdi>
+          </span>
+        ) : null}
         <span className={`rc-stock${offer.inStock ? "" : " is-out"}`}>
           <span className="dot" aria-hidden />
           {offer.inStock ? t.inStock : t.outOfStock}
         </span>
-        <OfferStatusToken status={status} locale={locale} />
+        {cross && market ? (
+          <span
+            className="label-token shrink-0 whitespace-nowrap rounded px-2 py-0.5"
+            style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px solid var(--rc-line)" }}
+          >
+            <bdi>{marketStockLabel(market, locale)}</bdi>
+          </span>
+        ) : null}
+        {/* REEA-963 — a flagged/cached cross-market row keeps its one
+            verification token; only the unqualified "Verified" is replaced by
+            the market badge above. */}
+        {!cross || status !== "verified" ? (
+          <OfferStatusToken status={status} locale={locale} />
+        ) : null}
       </div>
       <div className="rc-offer-line line-b">
         {/* REEA-1096 D10 — the conversion stays inside the price block, and at
@@ -139,10 +179,12 @@ function OfferTable({
   offers,
   locale,
   nowMs,
+  scope,
 }: {
   offers: LiveOffer[];
   locale?: Locale;
   nowMs: number;
+  scope: CountryCode;
 }) {
   const t = getStrings(locale ?? clientLocale());
   return (
@@ -161,7 +203,14 @@ function OfferTable({
         <span />
       </div>
       {offers.map((offer, i) => (
-        <HeroOfferRow key={`${offer.merchant}-${offer.url}`} offer={offer} locale={locale} nowMs={nowMs} primary={i === 0} />
+        <HeroOfferRow
+          key={`${offer.merchant}-${offer.url}`}
+          offer={offer}
+          locale={locale}
+          nowMs={nowMs}
+          primary={i === 0}
+          scope={scope}
+        />
       ))}
     </div>
   );
@@ -293,8 +342,16 @@ function ProductHeroBody({
   }, [state]);
 
   const job = phase.kind === "polling" || phase.kind === "terminal" ? phase.job : null;
-  const offers = job ? filterOffersByCountry(sortLiveOffers(job.offers), country) : [];
-  const best = offers[0] ?? null;
+  // REEA-1142 AC2 — the product hero's headline is the selected market's
+  // cheapest in-stock offer; a cross-market-only product shows the honest
+  // "No Kuwait offer · Saudi price from KD X" line instead of claiming one.
+  const scope = marketScope(country);
+  const offers = job ? sortLiveOffers(job.offers, scope) : [];
+  const localBest = headlineOfferFor(offers, scope);
+  const crossBest = cheapestCrossMarketOffer(offers, scope);
+  const best = localBest ?? crossBest ?? offers[0] ?? null;
+  const hasLocalOffer = localBest !== null;
+  const headline = hasLocalOffer ? null : crossMarketHeadline(offers, scope, locale);
   const displayTitle = cleanDisplayTitle(product.title);
   const titleChanged = displayTitleChanged(product.title, displayTitle);
   const answered = job ? job.subtasks.filter((s) => s.status === "done").length : 0;
@@ -302,7 +359,9 @@ function ProductHeroBody({
     ? job.subtasks.filter((s) => s.status === "failed" || s.status === "timeout").map((s) => s.retailer)
     : [];
   const heroSaved = best && best.wasPrice != null && best.wasPrice > best.price ? best.wasPrice - best.price : null;
-  const heroPrice = best ? formatCountryPrice(best.price, best.currency, null) : null;
+  const heroPrice = best
+    ? formatCountryPrice(best.price, best.currency, hasLocalOffer ? country : null)
+    : null;
   const coupon = product.coupons[0];
   // REEA-1122 — the variant chips ride the SAME price pass as the hero: the
   // cheapest live offer's KWD-space figure. That keeps the selected chip equal
@@ -313,7 +372,7 @@ function ProductHeroBody({
   const liveBestKwd = best
     ? effectivePriceKwd(best.price, best.currency, { wasPrice: best.wasPrice })
     : null;
-  const variantBaseKwd = liveBestKwd ?? cheapestListedKwd(product);
+  const variantBaseKwd = liveBestKwd ?? cheapestListedKwd(product, scope);
 
   return (
     <div className="mx-auto w-full rc-product-wrap" style={{ maxWidth: "var(--rc-layout-max-w)", paddingInline: "var(--rc-gutter)", paddingBlock: "var(--rc-space-4)" }}>
@@ -341,6 +400,15 @@ function ProductHeroBody({
           )}
           {best && heroPrice ? (
             <>
+              {headline && (
+                <p
+                  className="rc-market-headline"
+                  role="status"
+                  style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)", marginBlock: "0 4px" }}
+                >
+                  <bdi>{headline}</bdi>
+                </p>
+              )}
               <div className="rc-product-best">
                 <span className="rc-product-price tabular price-cur">
                   {(locale ?? "en") === "ar" ? <span className="price-from">{t.fromWord} </span> : null}
@@ -367,7 +435,7 @@ function ProductHeroBody({
                 </p>
               )}
               <div className="rc-hero-offer">
-                <HeroOfferRow offer={best} locale={locale} nowMs={now} primary />
+                <HeroOfferRow offer={best} locale={locale} nowMs={now} primary scope={scope} />
               </div>
               <p className="rc-product-meta">
                 {fill(answered === 1 ? t.productCollectedOne : t.productCollected, {
@@ -433,7 +501,7 @@ function ProductHeroBody({
       )}
 
       {offers.length > 0 ? (
-        <OfferTable offers={offers} locale={locale} nowMs={now} />
+        <OfferTable offers={offers} locale={locale} nowMs={now} scope={scope} />
       ) : phase.kind === "polling" || phase.kind === "starting" || phase.kind === "idle" ? (
         <TableSkeleton locale={locale} />
       ) : job?.status === "failed" && staleFallback && staleFallback.offers.length > 0 ? (
@@ -444,7 +512,7 @@ function ProductHeroBody({
               t.dateUnknown}{" "}
             {t.staleNote}
           </p>
-          <OfferTable offers={filterOffersByCountry(sortLiveOffers(staleFallback.offers), country)} locale={locale} nowMs={now} />
+          <OfferTable offers={sortLiveOffers(staleFallback.offers, scope)} locale={locale} nowMs={now} scope={scope} />
         </div>
       ) : null}
 

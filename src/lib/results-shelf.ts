@@ -14,7 +14,8 @@
  * second definition to drift. Pure and client-safe: no React, no I/O, no
  * store.
  */
-import { filterProductsByCountry, type CountryCode } from "@/lib/country";
+import type { CountryCode } from "@/lib/country";
+import { marketScope, scopeProductsByMarket } from "@/lib/market";
 import { filterProductsByStock } from "@/lib/stock";
 import { exactSkuKeep } from "@/lib/relevance";
 import { partitionByConfidence } from "@/lib/confidence";
@@ -39,8 +40,13 @@ export function shelfSectionsFromProducts(
   country: CountryCode | null,
   showOutOfStock: boolean,
 ): { primary: NormalizedProduct[]; related: NormalizedProduct[] } {
+  // REEA-1142 AC1/AC3 — the market selection no longer DROPS other-market
+  // offers (that emptied the only lane on panadol/cucumber/air fryer). Every
+  // offer stays on the shelf, tagged to its market, and the card renderer
+  // labels the cross-market rows and keeps them out of the headline claim.
+  // The stock selection still filters exactly as before.
   const filtered = filterProductsByStock(
-    filterProductsByCountry([...products], country),
+    scopeProductsByMarket([...products], marketScope(country)),
     showOutOfStock,
     exactSkuKeep(query),
   );

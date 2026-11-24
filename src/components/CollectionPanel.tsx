@@ -15,7 +15,8 @@ import { Suspense, useEffect, useState, use } from "react";
 import { useCollection, type CollectionPhase } from "@/lib/collect/useCollection";
 import type { CollectJob, LiveOffer } from "@/lib/collect/types";
 import { absoluteStamp, localizedAgeFromStamp } from "@/lib/relative-time";
-import { filterOffersByCountry, type CountryCode } from "@/lib/country";
+import type { CountryCode } from "@/lib/country";
+import { marketScope, sortOffersByMarket } from "@/lib/market";
 import { effectivePriceKwd, formatPrimaryPrice } from "@/lib/format";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import CollectionPulse, { PulseOfferCascade } from "@/components/CollectionPulse";
@@ -257,7 +258,8 @@ function CollectionPanelBody({
 
       {job && job.offers.length > 0 && (
         <PulseOfferCascade
-          offers={filterOffersByCountry(sortOffers(job.offers), country)}
+          offers={sortOffersByMarket(job.offers, null, marketScope(country))}
+          country={country}
           locale={locale}
           renderStartMs={renderStartMs}
         />
@@ -297,7 +299,7 @@ function CollectionPanelBody({
                 {t.staleNote}
               </p>
               <ul style={{ listStyle: "none", padding: 0 }}>
-                {filterOffersByCountry(sortOffers(staleFallback.offers), country).map((offer, i) => (
+                {sortOffersByMarket(staleFallback.offers, null, marketScope(country)).map((offer, i) => (
                   <OfferRow
                     key={`${offer.merchant}-stale`}
                     offer={{ ...offer, method: "cache" }}

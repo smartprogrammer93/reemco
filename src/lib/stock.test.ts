@@ -188,12 +188,23 @@ describe("Best-price badge index (REEA-213)", () => {
     alternatives: [],
   });
 
-  it("rides the first card that has any in-stock offer", () => {
+  it("rides the first card that has an in-stock offer IN THE SELECTED MARKET", () => {
     const list = [
       withOffers("oos-head", [{ merchant: "Xcite", price: 5, currency: "KWD", url: "u", inStock: false }]),
-      withOffers("stocked-next", [{ merchant: "Jarir", price: 9, currency: "SAR", url: "u", inStock: true }]),
+      withOffers("stocked-next", [{ merchant: "Eureka", price: 9, currency: "KWD", url: "u", inStock: true }]),
     ];
-    expect(bestBadgeIndex(list)).toBe(1);
+    expect(bestBadgeIndex(list, "KW")).toBe(1);
+  });
+
+  it("REEA-1142 AC2: a cross-market-only stocked card owns the slot but the card withholds the claim", () => {
+    const list = [
+      withOffers("oos-head", [{ merchant: "Xcite", price: 5, currency: "KWD", url: "u", inStock: false }]),
+      withOffers("saudi-only", [{ merchant: "Jarir", price: 9, currency: "SAR", url: "u", inStock: true }]),
+    ];
+    // The stocked card owns the single flag slot (so the pending "Checking
+    // Kuwait stores…" state has an owner); ProductResultCard withholds the
+    // "Best price" label itself because it has no local offer.
+    expect(bestBadgeIndex(list, "KW")).toBe(1);
   });
 
   it("falls back to the first card when nothing is stocked; -1 on an empty list", () => {

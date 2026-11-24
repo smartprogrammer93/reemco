@@ -78,21 +78,23 @@ describe("hiddenMatchReport — stock-hidden matches", () => {
   });
 });
 
-describe("hiddenMatchReport — market-hidden matches", () => {
-  it("counts a match whose offers are all outside the selected market", () => {
+describe("hiddenMatchReport — market no longer hides (REEA-1142)", () => {
+  it("keeps a cross-market card visible, so it is not counted as hidden", () => {
     // The live `panadol` case: 4 confident Panadol products, all SAR offers,
-    // default market Kuwait. The stock filter is not the cause; clearing the
-    // market reveals real prices.
+    // default market Kuwait. REEA-1142 keeps those rows visible with their
+    // market label ("Saudi price · ≈KD X") and renders the honest
+    // "No Kuwait offer · Saudi price from KD X" headline — nothing is hidden,
+    // so the empty state must not blame the market selection.
     expect(hiddenMatchReport([PANADOL_SAR], "panadol", "KW", false)).toEqual({
       stock: 0,
-      country: 1,
+      country: 0,
     });
   });
 
-  it("keeps counting a market-hidden match with out-of-stock shown", () => {
+  it("keeps the same zero with out-of-stock shown", () => {
     expect(hiddenMatchReport([PANADOL_SAR], "panadol", "KW", true)).toEqual({
       stock: 0,
-      country: 1,
+      country: 0,
     });
   });
 

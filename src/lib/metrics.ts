@@ -238,6 +238,14 @@ export interface WeekCounters {
    * card ids, no per-query row (Data Minimization).
    */
   duplicate_cards: number;
+  /**
+   * REEA-1142 AC5 — served offers whose market differs from the surface's
+   * selected market (a danube.sa SAR row on a Kuwait search). The counter
+   * makes the cross-market share of the served shelf measurable without
+   * storing anything per offer: aggregate integer only, no query text, no
+   * identifiers.
+   */
+  cross_market_offers: number;
   link_smoke: LinkSmokeCounters;
 }
 
@@ -273,6 +281,7 @@ export function emptyWeek(): WeekCounters {
     comparison_cards_multi_retailer: 0,
     filtered_empty_searches: 0,
     duplicate_cards: 0,
+    cross_market_offers: 0,
     link_smoke: emptyLinkSmoke(),
   };
 }
@@ -355,6 +364,8 @@ function backfillWeek(week: WeekCounters): WeekCounters {
     // REEA-1141 — duplicate cards painted by the streamed shelf. Weeks stored
     // before this extension backfill 0 (the healthy read).
     "duplicate_cards",
+    // REEA-1142 — cross-market offer aggregate (integer, no identifiers).
+    "cross_market_offers",
   ] as const) {
     week[key] = clampCount(week[key]);
   }
@@ -478,6 +489,11 @@ export interface SearchOutcome extends SearchOutcomeBase {
    * pre-change caller stays byte-identical.
    */
   filteredEmpty?: boolean;
+  /**
+   * REEA-1142 AC5 — offers on the served shelf whose market differs from the
+   * selected market. One aggregate integer per serve; no per-offer record.
+   */
+  crossMarketOffers?: number;
 }
 
 /** Pure: fold one search outcome into the weekly buckets. */
@@ -516,6 +532,9 @@ export function applySearchOutcome(
   // whose visible set was zero because an active filter hid matches. Exactly
   // one bump per serve, so filtered_empty_searches ≤ searches holds.
   if (outcome.filteredEmpty === true) w.filtered_empty_searches += 1;
+  // REEA-1142 AC5 — cross-market offer aggregate. Clamped like every counter;
+  // no upper invariant beyond the served offer count.
+  w.cross_market_offers += clampCount(outcome.crossMarketOffers);
   for (const [merchant, hits] of Object.entries(outcome.offersByRetailer ?? {})) {
     const by = clampCount(hits);
     if (by > 0) bumpRetailer(w.offers_by_retailer, merchant, by);
@@ -860,6 +879,10 @@ const WEEKLY_SCALAR_FIELDS = [
   "comparison_cards_multi_retailer",
   // REEA-1114 — filter-aware empty-state counter (one integer per week).
   "filtered_empty_searches",
+  // REEA-1141 — duplicate-card aggregate (one integer per week).
+  "duplicate_cards",
+  // REEA-1142 — cross-market offer aggregate (one integer per week).
+  "cross_market_offers",
 ] as const;
 type WeeklyScalarField = (typeof WEEKLY_SCALAR_FIELDS)[number];
 

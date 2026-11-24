@@ -154,6 +154,24 @@ export const COVERAGE_ORDER = [
   "YasO",
 ] as const;
 
+/**
+ * REEA-1142 AC4 — the storefront market of the lanes that are NOT Kuwait-
+ * primary. The coverage sentence appends the market for these names, so a
+ * Saudi lane's rows never read as Kuwait coverage. Kuwait-primary lanes need
+ * no entry (home market); the map is presentation metadata over the adapter
+ * country tags in live-search.ts, never a second catalog.
+ */
+const MERCHANT_MARKET: Readonly<Record<string, "KW" | "SA" | "EG">> = {
+  Jarir: "SA",
+  Nahdi: "SA",
+  "Danube Home": "SA",
+  "Amazon.eg": "EG",
+};
+
+export function merchantMarketCode(name: string): "KW" | "SA" | "EG" | null {
+  return MERCHANT_MARKET[name] ?? null;
+}
+
 function coverageRank(merchant: string): number {
   const i = COVERAGE_ORDER.indexOf(merchant as (typeof COVERAGE_ORDER)[number]);
   return i < 0 ? COVERAGE_ORDER.length : i;

@@ -30,6 +30,14 @@ export interface PriceOffer {
   merchant: string;
   price: number;
   currency: string; // ISO 4217, e.g. "USD"
+  /**
+   * REEA-1142 AC3 — the market the listing's own storefront serves, derived
+   * from its currency by the adapter tag (KW→KWD, SA→SAR, EG→EGP). Every
+   * live offer carries this tag so the renderer can mark a cross-market row
+   * explicitly instead of silently treating it as local stock. Absent on
+   * feeds that predate the tag; the renderer then derives it from currency.
+   */
+  market?: string;
   url: string;
   inStock: boolean;
   wasPrice?: number; // optional was-price for the F2 savings pill

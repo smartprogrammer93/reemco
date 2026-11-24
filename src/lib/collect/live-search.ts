@@ -43,7 +43,7 @@ import {
   type QueryCacheHit,
 } from "@/lib/query-cache";
 import type { FetchImpl } from "@/lib/collect/scraper";
-import type { CountryCode } from "@/lib/country";
+import { countryForCurrency, type CountryCode } from "@/lib/country";
 import { fillSilentFromLastSeen, readSeenObservations, rememberRound } from "@/lib/collect/last-seen";
 import { readCappedResponse } from "@/lib/collect/read-body";
 import { mirrorSharedQuerySnapshot, replaySharedQuerySnapshot } from "@/lib/collect/query-layer";
@@ -1033,7 +1033,15 @@ export function danubeHomeHits(payload: unknown, query: string): SearchHit[] {
     out.push({
       title,
       merchant: "Danube Home",
-      country: "KW",
+      // REEA-1142 AC3/AC4 — danube.sa is a SAUDI storefront; its records are
+      // stamped SAR and the renderer now names the market on the row. The
+      // Kuwait storefront (www.danubehome.com/kw/en) exists but its scripted
+      // GETs answer HTTP 404 with an empty SSR product list from this egress
+      // (measured 2026-11-24: /kw/en/catalogsearch?query=panadol → 404,
+      // totalProductsFromServer 0) and it does not carry the grocery/health
+      // items this lane uniquely covers, so the measured SA hop stays — with
+      // the honest SA tag instead of the old silent KW one.
+      country: "SA",
       price,
       currency: "SAR",
       url: `https://danube.sa${urlPath}`,
@@ -2957,6 +2965,10 @@ function finalizeGroups(
           merchant: o.merchant,
           price: o.price,
           currency: o.currency,
+          // REEA-1142 AC3 — every rendered offer carries the market tag its
+          // storefront serves, so the surface can mark cross-market rows
+          // explicitly (no SAR offer silently treated as Kuwait stock).
+          ...(countryForCurrency(o.currency) ? { market: countryForCurrency(o.currency) as string } : {}),
           url: o.url,
           inStock: o.inStock,
           ...(o.wasPrice != null ? { wasPrice: o.wasPrice } : {}),
@@ -3435,6 +3447,7 @@ export function nearMatchSuggestions(
           merchant: hit.merchant,
           price: hit.price,
           currency: hit.currency,
+          ...(countryForCurrency(hit.currency) ? { market: countryForCurrency(hit.currency) as string } : {}),
           url: hit.url,
           inStock: hit.inStock,
         },

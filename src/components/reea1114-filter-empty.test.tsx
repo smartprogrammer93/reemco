@@ -200,8 +200,12 @@ describe("REEA-1114 AC1/AC3 — the In stock filter hid the matches", () => {
   });
 });
 
-describe("REEA-1114 AC1/AC2 — the market filter hid the matches", () => {
-  it("names the market filter and reveals the priced rows with 'Show all countries'", async () => {
+describe("REEA-1142 supersedes the market-hidden empty state", () => {
+  it("keeps the cross-market card visible and labeled instead of an empty shelf", async () => {
+    // The live `panadol` case: every offer is a danube.sa SAR listing. The
+    // accepted policy keeps the lane, labels the row ("Saudi price") and
+    // renders the honest "No Kuwait offer" headline — the page is no longer
+    // empty, so the market filter has nothing to reveal.
     searchParams.set("q", "panadol");
     await act(async () => {
       render(
@@ -213,21 +217,15 @@ describe("REEA-1114 AC1/AC2 — the market filter hid the matches", () => {
         />,
       );
     });
-    const card = emptyState() as HTMLElement;
-    expect(card.getAttribute("data-empty-case")).toBe("b");
-    expect(card.textContent).toContain("1 match hidden by Kuwait");
-    expect(card.textContent).not.toContain("Check the spelling");
-    const reveal = card.querySelector('[data-empty-reveal="country"]') as HTMLElement;
-    expect(reveal.textContent).toBe("Show all countries");
-    await act(async () => {
-      fireEvent.click(reveal);
-    });
-    expect(document.body.textContent).toContain("Panadol Pain Relief Tablets 24Tablets");
-    // The revealed row carries its real price (formatting may use a
+    expect(emptyState()).toBeNull();
+    const body = document.body.textContent ?? "";
+    expect(body).toContain("Panadol Pain Relief Tablets 24Tablets");
+    expect(body).toContain("Saudi price");
+    expect(body).toContain("No Kuwait offer");
+    // The row still carries its real price (formatting may use a
     // non-breaking space, so pin the figure).
-    expect(document.body.textContent).toContain("5.80");
+    expect(body).toContain("5.80");
     expect(window.location.search).toContain("q=panadol");
-    expect(window.location.search).not.toContain("c=KW");
   });
 });
 
@@ -297,7 +295,7 @@ describe("REEA-1114 AC5 — Arabic parity", () => {
     expect(inStock.textContent).toContain("مخفية");
   });
 
-  it("renders the AR market-hidden title and action", async () => {
+  it("renders the AR cross-market label and no-local-offer headline", async () => {
     searchParams.set("q", "panadol");
     await act(async () => {
       render(
@@ -310,11 +308,10 @@ describe("REEA-1114 AC5 — Arabic parity", () => {
         />,
       );
     });
-    const card = emptyState() as HTMLElement;
-    expect(card.textContent).toContain("1 نتيجة مخفية بسبب الكويت");
-    expect(card.querySelector('[data-empty-reveal="country"]')?.textContent).toBe(
-      "أظهر كل الدول",
-    );
+    expect(emptyState()).toBeNull();
+    const body = document.body.textContent ?? "";
+    expect(body).toContain("سعر السعودية");
+    expect(body).toContain("لا يوجد عرض في الكويت");
   });
 });
 

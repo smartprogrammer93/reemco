@@ -377,6 +377,7 @@ describe("REEA-807 store round-trip", () => {
       "comparison_cards_multi_retailer",
       "comparison_cards_total",
       // REEA-1141 AC-4 — duplicate-card aggregate, integer only.
+      "cross_market_offers",
       "duplicate_cards",
       "filtered_empty_searches",
       "latency_band_1_3s",

@@ -26,7 +26,7 @@
  * already holds. The only server addition is the aggregate
  * `filtered_empty_searches` counter (REEA-1114 AC6).
  */
-import { filterOffersByCountry, type CountryCode } from "@/lib/country";
+import type { CountryCode } from "@/lib/country";
 import { offerIsVisible } from "@/lib/stock";
 import { exactSkuKeep } from "@/lib/relevance";
 import { partitionByConfidence } from "@/lib/confidence";
@@ -57,21 +57,20 @@ export function hiddenMatchReport(
   const primary = partitionByConfidence(query, [...products]).primary;
   const keep = exactSkuKeep(query);
   let stock = 0;
-  let countryHidden = 0;
+  const countryHidden = 0;
+  void country;
   for (const p of primary) {
     // Nothing for a filter to remove: the card simply carries no offer.
     if (p.offers.length === 0) continue;
-    const inMarket = filterOffersByCountry([...p.offers], country);
-    // Country runs first in the renderer's chain: no in-market offer at all
-    // is a market-hidden match, not a stock-hidden one.
-    if (country !== null && inMarket.length === 0) {
-      countryHidden += 1;
-      continue;
-    }
+    // REEA-1142 AC1 — the market selection no longer hides a card: every
+    // offer stays visible and cross-market rows render with their market
+    // label. The market-hidden count therefore stays 0 (the honest
+    // "No Kuwait offer · Saudi price from KD X" headline replaces the old
+    // empty state), and only the stock selection can hide a match.
     if (showOutOfStock) continue;
     // The stock filter keeps an exact-SKU card even when every offer is out
     // of stock (REEA-822): it renders honestly, so it is not hidden.
-    if (inMarket.some(offerIsVisible)) continue;
+    if (p.offers.some(offerIsVisible)) continue;
     if (keep?.(p)) continue;
     stock += 1;
   }

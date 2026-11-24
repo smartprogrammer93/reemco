@@ -11,6 +11,14 @@ import { effectivePrice, effectivePriceKwd, formatPrimaryPrice } from "@/lib/for
 import type { Coupon } from "@/types/product";
 import OfferCard from "@/components/OfferCard";
 import { clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
+import type { CountryCode } from "@/lib/country";
+import {
+  isCrossMarketOffer,
+  marketPriceLabel,
+  marketScope,
+  marketStockLabel,
+  offerMarket,
+} from "@/lib/market";
 
 /**
  * Design v3 "Aurora" collection-progress moment (design-v3 §5.6 paired with
@@ -76,9 +84,12 @@ export function PulseOfferCascade({
   offers,
   locale,
   renderStartMs,
+  country = null,
 }: {
   offers: (LiveOffer & { coupon?: Coupon })[];
   locale?: Locale;
+  /** REEA-1142 — market scope of the surface (default home market). */
+  country?: CountryCode | null;
   /** REEA-283/REEA-1091 — baked server render clock from the product page,
    *  forwarded to every offer card so the streamed CTA/freshness labels agree
    *  with the hydration pass. */
@@ -124,12 +135,20 @@ export function PulseOfferCascade({
   // lowest figure goes to the card that sorts first in the rendered list —
   // the badge index is picked once here, never per-card, so tied duplicates
   // of the same figure can never paint two badges.
-  const stocked = unique.filter((k) => k.offer.inStock);
-  const badgePool = stocked.length > 0 ? stocked : unique;
-  const best = Math.min(...badgePool.map((k) => k.effKey));
-  const bestIndex = unique.findIndex(
-    (k) => k.effKey === best && (k.offer.inStock || stocked.length === 0),
+  // REEA-1142 AC2 — the single "Best price" badge is a LOCAL claim: only the
+  // selected market's in-stock offers compete for it. Cross-market cards keep
+  // their own market label and never win an unqualified Kuwait best claim.
+  const scope = marketScope(country);
+  const localStocked = unique.filter(
+    (k) => k.offer.inStock && !isCrossMarketOffer(k.offer, scope),
   );
+  // REEA-908 spec §2 — an all-out-of-stock page still badges exactly one card;
+  // the fallback pool stays inside the selected market, so a cross-market-only
+  // page carries no unqualified claim.
+  const localAll = unique.filter((k) => !isCrossMarketOffer(k.offer, scope));
+  const badgePool = localStocked.length > 0 ? localStocked : localAll;
+  const best = badgePool.length > 0 ? Math.min(...badgePool.map((k) => k.effKey)) : Number.POSITIVE_INFINITY;
+  const bestIndex = unique.findIndex((k) => k.effKey === best && !isCrossMarketOffer(k.offer, scope));
   const worst = Math.max(...effs);
   return (
     <ul className="mt-4 grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 xl:grid-cols-[repeat(2,minmax(0,1fr))]">
@@ -138,6 +157,14 @@ export function PulseOfferCascade({
         // REEA-195 AC-4: KWD-primary labels on the cascade cards too; the
         // count-up animates in the same KWD space it lands on.
         const hero = formatPrimaryPrice(offer.price, offer.currency);
+        // REEA-1142 AC1 — a cross-market listing names its market on the row
+        // and carries the market-specific stock badge instead of "Verified".
+        const cross = isCrossMarketOffer(offer, scope);
+        const market = offerMarket(offer.currency);
+        const t = getStrings(locale ?? clientLocale());
+        const crossLabel = cross && market
+          ? `${marketPriceLabel(market, locale)} · ${hero.label}`
+          : hero.label;
         return (
           <li
             key={`${offer.merchant}-${offer.url}`}
@@ -149,7 +176,8 @@ export function PulseOfferCascade({
               domain={offer.domain}
               price={hero.value}
               currency="KWD"
-              priceLabel={hero.label}
+              priceLabel={crossLabel}
+              marketBadge={cross && market ? marketStockLabel(market, locale) : undefined}
               effectivePriceLabel={eff !== null ? formatPrimaryPrice(eff, offer.currency).label : undefined}
               compareAtLabel={
                 offer.wasPrice != null && offer.wasPrice > offer.price
@@ -161,7 +189,7 @@ export function PulseOfferCascade({
               url={offer.url}
               collectedAt={offer.collectedAt}
               method={offer.method}
-              isBest={i === bestIndex}
+              isBest={i === bestIndex && !cross}
               savings={
                 // Both ends of the gap are KWD-space numbers — the pill prints
                 // in the same KWD space the ranking uses.

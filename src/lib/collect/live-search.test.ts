@@ -2288,7 +2288,9 @@ describe("relevance-first ranking (REEA-213 Bet 1, REEA-211 acceptance)", () => 
       "Case for iPhone 17 Pro Silicone Cover Black",
       "Apple iPhone 17 Pro Max, 256 GB Black",
     ]);
-    expect(bestBadgeIndex(products)).toBe(0);
+    // REEA-1142 — the badge is market-scoped: the EG case card is the local
+    // lead under an Egypt surface.
+    expect(bestBadgeIndex(products, "EG")).toBe(0);
   });
 
   it("query `غسّالة` with shadda returns the identical order of `غسالة`", () => {
@@ -2739,7 +2741,7 @@ describe("REEA-270 — Kuwait batch two adapters", () => {
     expect(hits[0]).toMatchObject({
       title: "Apple iPhone 17 Pro Max Cosmic Orange",
       merchant: "Danube Home",
-      country: "KW",
+      country: "SA",
       price: 6699,
       wasPrice: 6899,
       currency: "SAR",

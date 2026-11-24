@@ -2,7 +2,20 @@ import Link from "next/link";
 import Image from "next/image";
 import type { NormalizedProduct, PriceOffer, ProductAlternative } from "@/types/product";
 import { buildProductHref, buildResultsHref, currencyForCountry, type CountryCode } from "@/lib/country";
-import { effectivePriceKwd, formatCountryPrice, formatKWD, formatPrimaryPrice, sortOffers } from "@/lib/format";
+import { effectivePriceKwd, formatCountryPrice, formatKWD, formatPrimaryPrice } from "@/lib/format";
+import {
+  HOME_MARKET,
+  cheapestCrossMarketOffer,
+  crossMarketHeadline,
+  crossMarketLeadLabel,
+  headlineOfferFor,
+  isCrossMarketOffer,
+  marketPriceLabel,
+  marketScope,
+  marketStockLabel,
+  offerMarket,
+  sortOffersByMarket,
+} from "@/lib/market";
 import { canonicalKey, dedupVariantKey, gradeBadgeLabel } from "@/lib/collect/canonical-product";
 import { ageSeconds, collectedClock, localizedAgeFromStamp } from "@/lib/relative-time";
 import CouponLine, { buildCouponRows } from "@/components/CouponLine";
@@ -215,6 +228,7 @@ function LeadOfferCta({
   merchant,
   href,
   effectiveLabel,
+  crossMarket = false,
   couponed,
   pending,
   collectedAt,
@@ -228,6 +242,9 @@ function LeadOfferCta({
   merchant: string;
   href: string;
   effectiveLabel: string;
+  /** REEA-1142 — the lead is a cross-market offer, so the sentence names its
+   *  market instead of claiming an unqualified Kuwait "best" price. */
+  crossMarket?: boolean;
   couponed: boolean;
   pending: boolean;
   collectedAt?: string;
@@ -255,7 +272,7 @@ function LeadOfferCta({
             <span role="status">{t.kuwaitChecking}</span>
           ) : (
             <>
-              <span>{t.ctaBestLead}</span>
+              {crossMarket ? null : <span>{t.ctaBestLead}</span>}
               <bdi className="tabular">{effectiveLabel}</bdi>
               {couponed && <span>{t.effectiveTail}</span>}
               <span aria-hidden>{t.ctaArrow}</span>
@@ -310,10 +327,17 @@ export function foldRetailerRows(
  * product hero so both print the identical absolute figure. The hero used to
  * print the raw `priceDelta`, so the cheapest variant read "Orange KD 0".
  */
-export function cheapestListedKwd(product: NormalizedProduct): number | null {
+export function cheapestListedKwd(
+  product: NormalizedProduct,
+  scope: CountryCode = HOME_MARKET,
+): number | null {
   const coupon = product.coupons[0] ?? null;
-  const offers = foldRetailerRows(sortOffers(product.offers, coupon), coupon);
-  const priced = offers.filter((o) => !offerFlagged(o));
+  const offers = foldRetailerRows(
+    sortOffersByMarket(product.offers, coupon, scope),
+    coupon,
+  );
+  // REEA-1142 — the base is a local figure; cross-market offers never set it.
+  const priced = offers.filter((o) => !offerFlagged(o) && !isCrossMarketOffer(o, scope));
   return priced.length > 0
     ? Math.min(
         ...priced.map((o) =>
@@ -357,6 +381,7 @@ function ShelfOfferRow({
   query,
   rank,
   country,
+  scope,
   renderStartMs,
   locale,
   queryId,
@@ -366,13 +391,21 @@ function ShelfOfferRow({
   query: string;
   rank: number;
   country: CountryCode | null;
+  /** REEA-1142 — the market this card speaks for; a cross-market listing is
+   *  labeled with its own market and never reads as local verified stock. */
+  scope: CountryCode;
   renderStartMs?: number;
   locale?: Locale;
   queryId?: string;
 }) {
   const t = getStrings(locale ?? clientLocale());
   const href = resolveOfferUrl(offer, product.title);
-  const row = formatCountryPrice(offer.price, offer.currency, country);
+  // REEA-1142 AC1 — a cross-market row keeps its own currency on the row and
+  // carries the ≈KD reference behind it (native-first), so the shopper sees
+  // "SAR 5.80 · ≈KD 0.47" and never a bare Kuwait price for a Saudi listing.
+  const cross = isCrossMarketOffer(offer, scope);
+  const row = formatCountryPrice(offer.price, offer.currency, cross ? null : country);
+  const market = offerMarket(offer.currency);
   const rowReason = offerFlagged(offer) ? offer.sanity?.reason : undefined;
   const rowUnavailable = rowReason === "price_unavailable";
   // REEA-1100 — the legacy offer-row age rides the same localized age helper
@@ -395,6 +428,14 @@ function ShelfOfferRow({
         <span className="rc-retailer-name">
           <bdi className="logo lat">{offer.merchant}</bdi>
         </span>
+        {cross && market ? (
+          <span
+            className="label-token shrink-0 whitespace-nowrap rounded px-2 py-0.5"
+            style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px solid var(--rc-line)" }}
+          >
+            <bdi>{marketPriceLabel(market, locale)}</bdi>
+          </span>
+        ) : null}
         {offer.label ? (
           <span
             dir="auto"
@@ -417,11 +458,26 @@ function ShelfOfferRow({
           <span className="dot" aria-hidden />
           {offer.inStock ? t.inStock : t.outOfStock}
         </span>
-        <OfferStatusToken
-          status={status}
-          locale={locale}
-          title={rowReason && !rowUnavailable ? verifyTitleFor(rowReason, t) : undefined}
-        />
+        {cross && market ? (
+          // REEA-1142 — never "Verified" for Kuwait on a foreign listing: the
+          // badge names the market the stock actually belongs to ("KSA stock").
+          <span
+            className="label-token shrink-0 whitespace-nowrap rounded px-2 py-0.5"
+            style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px solid var(--rc-line)" }}
+          >
+            <bdi>{marketStockLabel(market, locale)}</bdi>
+          </span>
+        ) : null}
+        {/* REEA-963 keeps ONE verification surface: a flagged cross-market row
+            still carries its warning token; only the unqualified "Verified"
+            is replaced by the market badge above. */}
+        {!cross || status !== "verified" ? (
+          <OfferStatusToken
+            status={status}
+            locale={locale}
+            title={rowReason && !rowUnavailable ? verifyTitleFor(rowReason, t) : undefined}
+          />
+        ) : null}
       </div>
       <div className="rc-offer-line line-b">
         {/* REEA-1094 — line B keeps the price as the largest figure and the
@@ -511,19 +567,34 @@ export default function ProductResultCard({
   const displayTitle = cleanDisplayTitle(product.title);
   const titleChanged = displayTitleChanged(product.title, displayTitle);
   const primaryCoupon = product.coupons[0];
+  // REEA-1142 — the market this surface speaks for (explicit selection, else
+  // the home market Kuwait the served chrome names). Local offers lead; every
+  // cross-market offer follows as a labeled group.
+  const scope = marketScope(country);
   const offers = foldRetailerRows(
-    sortOffers(product.offers, primaryCoupon ?? null),
+    sortOffersByMarket(product.offers, primaryCoupon ?? null, scope),
     primaryCoupon ?? null,
   );
-  const best = offers[0];
+  // AC2 — the headline offer is the cheapest in-stock offer OF THE SELECTED
+  // MARKET. A converted non-KWD offer can never lead it; when the card has no
+  // local offer at all the honest no-local-offer line renders instead.
+  const localBest = headlineOfferFor(offers, scope);
+  const crossBest = cheapestCrossMarketOffer(offers, scope);
+  // Display fallback: when every offer is flagged the headline claim is
+  // suppressed, but the card must still render a price (with its warning) —
+  // never a blank hero.
+  const best = localBest ?? crossBest ?? offers[0] ?? null;
+  const hasLocalOffer = localBest !== null;
+  const headline = hasLocalOffer ? null : crossMarketHeadline(offers, scope, locale);
   const kuwaitChecking =
     kuwaitBatchPending &&
     (kuwaitPendingStatus ||
-      (best != null &&
-        (country ? currencyForCountry(country) : best.currency).trim().toUpperCase() !== "KWD"));
+      !hasLocalOffer ||
+      (best != null && best.currency.trim().toUpperCase() !== "KWD"));
   // REEA-1122 — one absolute-price base, shared with the product hero, so a
-  // variant chip never prints a bare delta ("KD 0").
-  const cheapestListed = cheapestListedKwd(product);
+  // variant chip never prints a bare delta ("KD 0"). REEA-1142 scopes it to
+  // the selected market so a cross-market conversion never becomes the base.
+  const cheapestListed = cheapestListedKwd(product, scope);
   const oos = best != null && !best.inStock;
   const couponRows = buildCouponRows(product.coupons, offers, country);
   // REEA-1096 D6 — the disclosure only renders when there is something behind
@@ -556,14 +627,20 @@ export default function ProductResultCard({
     (primaryCoupon != null && leadEff != null && leadEffPlain != null && leadEff < leadEffPlain) ||
     leadCompareAtCouponed;
   const leadEffLabel =
-    leadEff != null
-      ? formatCountryPrice(leadEff, "KWD", country).primary.replace(/\u00A0/g, " ")
-      : null;
+    leadEff == null
+      ? null
+      : hasLocalOffer
+        ? formatCountryPrice(leadEff, "KWD", country).primary.replace(/\u00A0/g, " ")
+        : best != null
+          ? crossMarketLeadLabel(best, scope, locale)
+          : null;
   const leadAgeSecs = best != null ? ageSeconds(best.collectedAt, renderStartMs) : null;
 
   const heroReason = best && offerFlagged(best) ? best.sanity?.reason : undefined;
   const heroUnavailable = heroReason === "price_unavailable";
-  const heroPrice = best ? formatCountryPrice(best.price, best.currency, country) : null;
+  const heroPrice = best
+    ? formatCountryPrice(best.price, best.currency, hasLocalOffer ? country : null)
+    : null;
   const saved =
     best != null && !heroUnavailable && best.wasPrice != null && best.wasPrice > best.price;
   const heroSavedAmount =
@@ -678,7 +755,13 @@ export default function ProductResultCard({
         <span className="rc-card-cat">{product.brand || t.allProducts}</span>
         <span className="flex min-w-0 flex-wrap items-center justify-end gap-2">
           <FreshnessBadge scrapedAt={product.scrapedAt} renderStartMs={renderStartMs} locale={locale} />
-          <span className="rc-card-basis">{t.bestEffectiveLabel}</span>
+          <span className="rc-card-basis">
+            {hasLocalOffer
+              ? t.bestEffectiveLabel
+              : best && offerMarket(best.currency)
+                ? marketPriceLabel(offerMarket(best.currency) as CountryCode, locale)
+                : t.bestEffectiveLabel}
+          </span>
         </span>
       </div>
 
@@ -706,7 +789,24 @@ export default function ProductResultCard({
 
       {best && heroPrice && (
         <>
+          {headline && (
+            <p
+              className="rc-market-headline"
+              role="status"
+              style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)", marginBlock: "0 4px" }}
+            >
+              <bdi>{headline}</bdi>
+            </p>
+          )}
           <div className="rc-price-line flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+            {!hasLocalOffer && best && offerMarket(best.currency) ? (
+              <span
+                className="label-token shrink-0 whitespace-nowrap rounded px-2 py-0.5"
+                style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px solid var(--rc-line)" }}
+              >
+                <bdi>{marketPriceLabel(offerMarket(best.currency) as CountryCode, locale)}</bdi>
+              </span>
+            ) : null}
             {heroUnavailable ? (
               <span className="price-cur rc-price-card tabular" style={{ font: "var(--rc-text-price-card)", color: "var(--rc-muted)" }}>
                 <bdi>{t.priceUnavailable}</bdi>
@@ -740,7 +840,9 @@ export default function ProductResultCard({
                 <span className="best-flag best-flag-pending" role="status" title={t.kuwaitChecking}>
                   <bdi>{t.kuwaitChecking}</bdi>
                 </span>
-              ) : !oos && !offerFlagged(best) ? (
+              ) : hasLocalOffer && !oos && !offerFlagged(best) ? (
+                // REEA-1142 AC2 — a cross-market-only card never claims an
+                // unqualified "Best price" on the Kuwait surface.
                 <span className="best-flag">{t.bestPrice}</span>
               ) : null
             ) : null}
@@ -799,6 +901,7 @@ export default function ProductResultCard({
                 query={query}
                 rank={rank}
                 country={country}
+                scope={scope}
                 renderStartMs={renderStartMs}
                 locale={locale}
                 queryId={queryId}
@@ -827,6 +930,7 @@ export default function ProductResultCard({
               merchant={best.merchant}
               href={bestHref}
               effectiveLabel={leadEffLabel}
+              crossMarket={!hasLocalOffer}
               couponed={leadCouponed}
               pending={kuwaitChecking}
               collectedAt={best.collectedAt}
@@ -847,7 +951,7 @@ export default function ProductResultCard({
             <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>{t.couponNoneLabel}</p>
           )}
 
-          {best && cheapestListed != null && (
+          {best && hasLocalOffer && cheapestListed != null && (
             <p style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
               <span className="tabular">{offers.length}</span>{" "}
               {offers.length === 1 ? t.retailersOne : t.retailersMany} · {t.fromWord}{" "}
@@ -856,7 +960,12 @@ export default function ProductResultCard({
               </span>
             </p>
           )}
-          {best && cheapestListed == null && offers.length > 0 && (
+          {best && !hasLocalOffer && headline && (
+            <p style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
+              <bdi>{headline}</bdi>
+            </p>
+          )}
+          {best && hasLocalOffer && cheapestListed == null && offers.length > 0 && (
             <p style={{ font: "var(--rc-text-body)", color: "var(--rc-muted)" }}>
               <span className="price-warn" title={t.verifyOutlier}>
                 <bdi>{t.priceVerifyBadge}</bdi>

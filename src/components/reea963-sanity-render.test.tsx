@@ -68,8 +68,10 @@ const NO_PRICE: PriceOffer = offer({
 
 describe("REEA-963 FR-1.3 — the warning affordance", () => {
   it("flagged hero renders the badge with the reason sentence, figure stays visible", () => {
+    // A card whose only offer is flagged has no eligible headline claim, so
+    // the flagged offer still renders as the display hero with its warning.
     const { container } = render(
-      <ProductResultCard product={product([FLAGGED_LOW, OK_LEAD])} query="iphone 17 pro" rank={0} />,
+      <ProductResultCard product={product([FLAGGED_LOW])} query="iphone 17 pro" rank={0} />,
     );
     const warns = container.querySelectorAll(".price-warn");
     expect(warns.length).toBeGreaterThanOrEqual(1); // hero + its row
@@ -98,7 +100,7 @@ describe("REEA-963 FR-1.4 — flagged offers are excluded from claims and rollup
 
   it("a flagged lead offer never wears the Best-price flag nor the lowest chip", () => {
     const { container } = render(
-      <ProductResultCard product={product([FLAGGED_LOW, OK_LEAD])} isBest query="iphone 17 pro" rank={0} />,
+      <ProductResultCard product={product([FLAGGED_LOW])} isBest query="iphone 17 pro" rank={0} />,
     );
     expect(container.textContent).not.toContain("Best price");
     for (const el of container.querySelectorAll(".label-token")) {

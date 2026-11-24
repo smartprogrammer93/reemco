@@ -16,7 +16,12 @@ import { hiddenMatchReport, hiddenMatchTotal } from "@/lib/hidden-matches";
 import { readRetiredLanes, recordLaneAttempts } from "@/lib/collect/lane-health";
 // REEA-1078 AC9 — lane reachability from the same zone status /api/echo reports.
 import { readUnreachableLanes } from "@/lib/collect/zone-status";
-import { MARKET_COOKIE, resolveCountrySelection, filterProductsByCountry } from "@/lib/country";
+import { MARKET_COOKIE, resolveCountrySelection } from "@/lib/country";
+import {
+  countCrossMarketOffers,
+  marketScope,
+  scopeProductsByMarket,
+} from "@/lib/market";
 import { LOCALE_COOKIE, resolveUiLocale } from "@/lib/i18n";
 import { isRefreshSignal, REFRESH_COOKIE } from "@/lib/query-cache";
 import { buildResultsMeta } from "@/lib/results-meta";
@@ -251,6 +256,13 @@ export default async function ResultsPage({
       const shelfCards = pageSnap
         ? resultsShelfCards(pageSnap, query, 1, country, showOutOfStock)
         : [];
+      // REEA-1142 AC5 — the cross-market share of the SAME shelf the page
+      // painted: offers whose market differs from the selected market (e.g.
+      // danube.sa SAR rows on a Kuwait search). Aggregate integer only.
+      const crossMarketOffers = shelfCards.reduce(
+        (n, p) => n + countCrossMarketOffers(p.offers, marketScope(country)),
+        0,
+      );
       // REEA-1114 AC6 — a served page with zero visible cards while an ACTIVE
       // filter hid ≥1 confident match is the false-empty the shopper saw. The
       // classification is the renderer's own chain (lib/hidden-matches.ts), so
@@ -295,6 +307,8 @@ export default async function ResultsPage({
         filteredEmpty,
         // REEA-1141 AC-4 — aggregate duplicate-card inflation (see above).
         duplicateCards,
+        // REEA-1142 AC5 — cross-market offers on the served shelf.
+        crossMarketOffers,
       });
       // REEA-1078 S2 — the same telemetry feeds the per-lane daily evidence
       // the 7-day auto-retire rule reads. Behind the response (deferred
@@ -335,7 +349,7 @@ export default async function ResultsPage({
         ? partitionByConfidence(
             query,
             filterProductsByStock(
-              filterProductsByCountry(snap.products, country),
+              scopeProductsByMarket(snap.products, marketScope(country)),
               showOutOfStock,
               exactSkuKeep(query),
             ),

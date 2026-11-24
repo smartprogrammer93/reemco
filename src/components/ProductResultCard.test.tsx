@@ -610,12 +610,18 @@ describe("REEA-847 — honest first paint keys on the FLAGGED offer's currency",
     expect(container.querySelectorAll(".best-flag")).toHaveLength(1);
   });
 
-  it("settled render (no batch pending) + non-KWD flagged offer -> flag stays (AC4 guard)", () => {
+  it("settled render + a cross-market-only offer -> no unqualified Best price, honest headline (REEA-1142 AC2)", () => {
     const { container } = render(
       <ProductResultCard product={sarLead()} isBest kuwaitBatchPending={false} kuwaitPendingStatus={false} query="iphone 17 pro" rank={0} />,
     );
     expect(container.querySelectorAll(".best-flag-pending")).toHaveLength(0);
-    expect(container.querySelectorAll(".best-flag")).toHaveLength(1);
+    // REEA-1142 supersedes the REEA-847 settled-flag rule for a converted
+    // lead: the Saudi-only card states "No Kuwait offer · Saudi price from
+    // KD X" instead of wearing an unqualified "Best price".
+    expect(container.querySelectorAll(".best-flag")).toHaveLength(0);
+    expect((container.textContent ?? "").replace(/\s+/g, " ")).toContain(
+      "No Kuwait offer · Saudi price from KD 546.64",
+    );
   });
 
   it("batch pending + snapshot flags zero Kuwait-primary offers -> checking pill even over a KWD lead (REEA-835 shape)", () => {
@@ -721,7 +727,17 @@ describe("REEA-944 — pending-pill containment contract (REEA-863 spec)", () =>
 
   it("settled flag keeps its natural size — containment is scoped to the pending pill", () => {
     const { container } = render(
-      <ProductResultCard product={sarLead()} isBest kuwaitBatchPending={false} kuwaitPendingStatus={false} query="iphone 17 pro" rank={0} />,
+      <ProductResultCard
+        product={{
+          ...sarLead(),
+          offers: [{ merchant: "Blink", price: 364.9, currency: "KWD", url: "https://blink.example/p", inStock: true }],
+        }}
+        isBest
+        kuwaitBatchPending={false}
+        kuwaitPendingStatus={false}
+        query="iphone 17 pro"
+        rank={0}
+      />,
     );
     const flag = container.querySelector(".best-flag:not(.best-flag-pending)") as HTMLElement;
     expect(flag).toBeTruthy();

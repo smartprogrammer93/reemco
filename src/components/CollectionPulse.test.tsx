@@ -98,23 +98,29 @@ describe("PulseOfferCascade", () => {
     expect(screen.queryByText(/Save /)).toBeNull();
   });
 
-  it("badges the cheapest-after-conversion offer on mixed-currency cascades (REEA-604)", () => {
-    // Jarir SAR 5,199 (=KD 424.24) beats Xcite KD 429.9 once both figures
-    // normalize to KWD-space. Raw numerics would badge the KD card wrongly
-    // (429.9 < 5199 reads backwards on a mixed-currency shelf).
+  it("badges the cheapest local offer on a mixed-currency cascade (REEA-604/1142)", () => {
+    // REEA-1142 AC2 — the badge is a LOCAL claim: the KWD offers compete on
+    // the same KWD-space ladder (Xcite 429.9 leads Eureka 449.9), while the
+    // Saudi Jarir row renders in its labeled cross-market group. The savings
+    // pill still reads in KWD-space across the rendered local set.
     const { container } = render(
       <PulseOfferCascade
         offers={[
           { merchant: "Xcite", domain: "xcite.com", price: 429.9, currency: "KWD", url: "https://xcite.example/p", inStock: true, collectedAt: startedAt, method: "live" as const },
+          { merchant: "Eureka", domain: "eureka.com", price: 449.9, currency: "KWD", url: "https://eureka.example/p", inStock: true, collectedAt: startedAt, method: "live" as const },
           { merchant: "Jarir", domain: "jarir.com.sa", price: 5199, currency: "SAR", url: "https://jarir.example/p", inStock: true, collectedAt: startedAt, method: "live" as const },
         ]}
       />,
     );
+    // REEA-1142 AC2 — the badge is a LOCAL claim: the KWD card owns it, and
+    // the cheaper converted SAR card is a labeled cross-market group.
     expect(screen.getAllByText("Best price")).toHaveLength(1);
     const bestCard = Array.from(container.querySelectorAll("article")).find((a) =>
       a.querySelector(".best-flag"),
     );
-    expect(bestCard?.textContent).toContain("Jarir");
+    expect(bestCard?.textContent).toContain("Xcite");
+    expect(container.textContent).toContain("Saudi price");
+    expect(container.textContent).toContain("KSA stock");
     // The savings pill reads in KWD-space too — one unit for the whole gap.
     expect(screen.getByText(/^Save /).textContent).toMatch(/^Save (≈)?KD\b/);
   });

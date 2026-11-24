@@ -103,6 +103,7 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
       "cold_serves_full",
       "cold_serves_pending",
       "comparison_depth",
+      "cross_market_offers",
       "filtered_empty_searches",
       "latency_band_1_3s",
       "latency_band_3_10s",

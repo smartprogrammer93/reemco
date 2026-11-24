@@ -305,6 +305,13 @@ const en = {
   statusStaleTip: "Collected more than 24 hours ago. Re-check before you buy.",
   savingsBaseline: "vs {x} listed price",
   bestEffectiveLabel: "best effective price",
+  // REEA-1142 — market scope on the live offer set: a cross-market listing
+  // names its market on the row ("Saudi price · ≈KD X") and the headline is
+  // the selected market's cheapest offer, or the honest no-local-offer line.
+  marketPrice: "{market} price",
+  marketStock: "{market} stock",
+  crossMarketHeadline: "No {market} offer · {marketOther} price from {price}",
+  crossMarketLead: "{market} price {price}",
   checkedLead: "Checked",
   checkedJustNow: "Checked just now",
   offerGo: "Go",
@@ -584,6 +591,11 @@ const ar: typeof en = {
   statusStaleTip: "جُمع قبل أكثر من 24 ساعة. أعد التحقق قبل الشراء.",
   savingsBaseline: "مقارنةً بسعر {x} المعلن",
   bestEffectiveLabel: "أفضل سعر فعلي",
+  // REEA-1142 — نفس نطاق السوق في النسخة العربية.
+  marketPrice: "سعر {market}",
+  marketStock: "مخزون {market}",
+  crossMarketHeadline: "لا يوجد عرض في {market} · سعر {marketOther} من {price}",
+  crossMarketLead: "سعر {market} {price}",
   checkedLead: "حُدِّث",
   checkedJustNow: "حُدِّث الآن",
   offerGo: "اذهب",

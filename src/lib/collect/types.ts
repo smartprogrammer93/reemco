@@ -27,6 +27,9 @@ export interface LiveOffer {
   domain: string;
   price: number;
   currency: string;
+  /** REEA-1142 AC3 — the storefront market this listing serves (KW/SA/EG),
+   *  derived from the currency. The renderer labels cross-market rows. */
+  market?: string;
   url: string;
   inStock: boolean;
   wasPrice?: number;

@@ -33,6 +33,12 @@ import { HeadingGhost, SkeletonCard, StampGhost, coverageLhTier } from "@/compon
 import { PRODUCTS } from "@/lib/feed";
 import { resultsShelfCards, resultsShelfSections, shelfSectionsFromProducts, RESULTS_PAGE_SIZE, freshCardsForFlush, paintedIdsAfter } from "@/lib/results-shelf";
 import { formatPrice, sortOffers } from "@/lib/format";
+import {
+  marketName,
+  marketScope,
+  sortOffersByMarket,
+} from "@/lib/market";
+import { merchantMarketCode } from "@/lib/collect/coverage";
 import SearchForm from "@/components/SearchForm";
 import { coverageParts, type LiveSearchResult } from "@/lib/collect/coverage";
 import { markLiveRefresh, withRefreshBypass } from "@/lib/query-cache";
@@ -266,9 +272,16 @@ function collectionFailed(notes: LiveSearchResult["notes"]): boolean {
    LEADS the card — the same sortOffers order the rows render in, so the
    attributed retailer is the one the card's CTA acts on; priceSanityStatus
    rides R1's per-offer annotation (null when the cohort pass never ran). */
-function offerMetricsFor(products: readonly NormalizedProduct[]): RenderedOffer[] {
+function offerMetricsFor(
+  products: readonly NormalizedProduct[],
+  country: CountryCode | null,
+): RenderedOffer[] {
+  // REEA-1142 — the attributed retailer is the card's LEAD offer in the same
+  // market-scoped order the rows render in, so a converted cross-market row
+  // never impersonates the local lead in the funnel.
+  const scope = marketScope(country);
   return products.map((p) => {
-    const lead = sortOffers(p.offers, p.coupons[0] ?? null)[0];
+    const lead = sortOffersByMarket(p.offers, p.coupons[0] ?? null, scope)[0];
     return {
       offerId: p.productId,
       retailer: lead?.merchant ?? "unknown",
@@ -380,7 +393,8 @@ function ResultsGrid({
   queryId?: string;
 }) {
   const t = getStrings(locale ?? clientLocale());
-  const bestAt = bestBadgeIndex(products);
+  // REEA-1142 AC2 — the single "Best price" badge rests on a LOCAL offer only.
+  const bestAt = bestBadgeIndex(products, marketScope(country));
   return (
     <section aria-label={t.primaryResultsAria} data-primary-section="true">
       <div
@@ -540,7 +554,7 @@ function FlushBlock(props: {
   if (products.length === 0) return null;
   // REEA-213: inside a participating block the badge rides the first
   // in-stock card of the final sorted order, never a later cheaper one.
-  const badgeAt = bestAt < 0 ? -1 : bestBadgeIndex(products);
+  const badgeAt = bestAt < 0 ? -1 : bestBadgeIndex(products, marketScope(country));
   return (
     <div>
       <div className={GRID_CLASS}>
@@ -846,9 +860,15 @@ function CoverageNames({ names, ar }: { names: string[]; ar: boolean }) {
         <span key={`sep-${i}`}>{ar ? " و" : i === shown.length - 1 && rest === 0 ? " and " : ", "}</span>,
       );
     }
+    // REEA-1142 AC4 — a lane that answers from another market says so in the
+    // coverage sentence ("Danube Home · Saudi Arabia"), so its rows are never
+    // read as Kuwait coverage.
+    const market = merchantMarketCode(name);
+    const marketSuffix = market && market !== "KW" ? ` · ${marketName(market, ar ? "ar" : "en")}` : "";
     out.push(
       <bdi key={`name-${i}`} className="lat">
         {name}
+        {marketSuffix ? <span className="rc-market-coverage">{marketSuffix}</span> : null}
       </bdi>,
     );
   });
@@ -1269,7 +1289,7 @@ function StagedResults(props: {
       // between two snapshots). Fire-and-forget; the transport chunks to the
       // endpoint's per-request cap.
       ...(props.queryId
-        ? buildOfferRenderedEvents({ queryId: props.queryId, offers: offerMetricsFor(products) })
+        ? buildOfferRenderedEvents({ queryId: props.queryId, offers: offerMetricsFor(products, props.country ?? null) })
         : []),
     ]);
   }, [eventsKey, query, page, products, props.queryId]);
@@ -1632,7 +1652,7 @@ function ResultsInner(props: {
       // REEA-965 — offer_rendered/coupon_hit on the same converged-set pass
       // as the plain path's impressions (see the staged-path twin above).
       ...(props.queryId
-        ? buildOfferRenderedEvents({ queryId: props.queryId, offers: offerMetricsFor(products) })
+        ? buildOfferRenderedEvents({ queryId: props.queryId, offers: offerMetricsFor(products, props.country ?? null) })
         : []),
     ]);
   }, [staged, eventsKey, query, page, zero, matchCount, products, props.queryId]);

@@ -9,6 +9,7 @@ import { cleanup, fireEvent, render } from "@testing-library/react";
 import { act } from "react";
 import { renderToReadableStream, renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetCountryPrefs } from "@/lib/country";
 
 const searchParams = new URLSearchParams();
 const refreshSpy = vi.hoisted(() => vi.fn());
@@ -38,6 +39,9 @@ import type { NormalizedProduct } from "@/types/product";
 const beaconCalls: { url: string; body: unknown }[] = [];
 
 beforeEach(() => {
+  // REEA-1142 — the country preference is a module-level slot; reset it so a
+  // market click in one case cannot change the market scope of the next.
+  resetCountryPrefs();
   searchParams.set("q", "");
   beaconCalls.length = 0;
   vi.stubGlobal("navigator", {
@@ -136,7 +140,7 @@ describe("country filter UI (REEA-170)", () => {
     },
   ];
 
-  it("renders the pills and keeps only matching-offer retailers under Kuwait", async () => {
+  it("renders the pills and labels cross-market rows instead of dropping them (REEA-1142)", async () => {
     searchParams.set("q", "airpods");
     await act(async () => {
       render(
@@ -160,17 +164,22 @@ describe("country filter UI (REEA-170)", () => {
     // aria-pressed (REEA-1069 AC3), no link navigation involved.
     expect(pills[1].getAttribute("aria-pressed")).toBe("true");
     const html = document.body.innerHTML;
-    // Offer rows honor the selection: the SAR listing is suppressed, the KWD
-    // one stays.
+    // REEA-1142 AC1: the market selection no longer DROPS other-market rows —
+    // the Saudi listing stays visible with its market label, and the Kuwait
+    // headline rests on the KWD offer.
     expect(html).toContain("Xcite");
-    expect(html).not.toContain("Jarir");
+    expect(html).toContain("Jarir");
+    expect(html).toContain("Saudi price");
+    expect(html).toContain("Best price");
     await act(async () => {
       fireEvent.click(pills[2]); // Saudi Arabia (SAR)
     });
-    // Same-document filtering: the SAR-only view renders in place, the pill
-    // moves its marker, and the URL echo follows without navigation.
+    // Same-document filtering: the view renders in place, the pill moves its
+    // marker, and the URL echo follows without navigation. Under the Saudi
+    // scope the Kuwait offer is the cross-market row, labeled as such.
     expect(document.body.innerHTML).toContain("Jarir");
-    expect(document.body.innerHTML).not.toContain("Xcite");
+    expect(document.body.innerHTML).toContain("Xcite");
+    expect(document.body.innerHTML).toContain("Kuwait price");
     const pillsAfter = Array.from(
       document.querySelectorAll('[role="group"][aria-label="Filters and market"] button'),
     );
@@ -637,7 +646,11 @@ describe("staged progressive results (REEA-178)", () => {
     });
 
     expect(document.querySelectorAll(".best-flag-pending")).toHaveLength(0);
-    expect(document.querySelectorAll(".best-flag")).toHaveLength(1);
+    // REEA-1142 AC2 — a settled snapshot with zero Kuwait offers makes no
+    // unqualified "Best price" claim; it states the honest headline instead.
+    expect(document.querySelectorAll(".best-flag")).toHaveLength(0);
+    // The settled product is Amazon.eg EGP, so the honest headline names Egypt.
+    expect(document.body.textContent).toContain("No Kuwait offer · Egypt price from");
   });
 
   it("REEA-847: withholds the flag for the checking state when the interim lead is a Kuwait-primary merchant priced non-KWD (Jarir SAR)", async () => {
@@ -985,7 +998,7 @@ describe("coverage line (REEA-290)", () => {
     const text = document.body.textContent ?? "";
     // REEA-1096 D7: names are bdi.lat isolates, so assert the readable text
     // (tags/comment seams no longer sit inside the sentence).
-    expect(text).toContain("No response from Jarir.");
+    expect(text).toContain("No response from Jarir · Saudi Arabia.");
     // …while the responding retailer's live offer still renders beside it.
     expect(text).toContain("Prices from Xcite.");
     expect(text).toContain("Sony WH-1000XM6");
@@ -1074,7 +1087,7 @@ describe("coverage line (REEA-290)", () => {
     // Jarir (later blocks) — every named merchant has ≥1 row in this markup.
     // REEA-1096 D7 wraps each name in bdi.lat, so read the stripped text.
     const text = html.replace(/<!--.*?-->/g, "").replace(/<[^>]+>/g, "");
-    expect(text).toContain("Prices from Xcite, Blink and Jarir.");
+    expect(text).toContain("Prices from Xcite, Blink and Jarir · Saudi Arabia.");
     // A merchant answered-but-displaced must not survive into the stamp…
     expect(text).not.toContain("Prices from Jarir, Blink.");
     // …and A's painted row keeps its name beside it.

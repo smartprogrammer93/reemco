@@ -234,7 +234,9 @@ describe("REEA-930 AC3 — pending state suppresses the 'Best' claim", () => {
     expect(cta?.textContent).toContain("Checking Kuwait stores…");
     expect(cta?.textContent).not.toContain("Best effective price");
     // Still a real link (graceful degradation) with its freshness line.
-    expect(cta?.getAttribute("href")).toBe("https://xcite.example/p");
+    // REEA-1142: the pending lead is the local KWD offer (Eureka), never the
+    // converted EGP offer that used to lead.
+    expect(cta?.getAttribute("href")).toBe("https://eureka.example/p");
     expect(cta?.textContent).toContain("Checked");
   });
 

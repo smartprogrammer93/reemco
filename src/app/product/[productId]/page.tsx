@@ -5,7 +5,8 @@ import { startProductCollectionStaged } from "@/lib/collect/runner";
 import type { StagedProductCollection } from "@/lib/collect/runner";
 import { PRODUCTS } from "@/lib/feed";
 import { resolveProductIdentity } from "@/lib/product-identity";
-import { filterProductsByCountry, sanitizeCountry } from "@/lib/country";
+import { sanitizeCountry } from "@/lib/country";
+import { marketScope, scopeProductsByMarket } from "@/lib/market";
 import { resolveRequestLocale } from "@/lib/i18n-server";
 import { sanitizeSearchQuery } from "@/lib/search-params";
 
@@ -53,9 +54,10 @@ export default async function ProductPage({
   const locale = await resolveRequestLocale();
   const product = await resolveProductIdentity(productId, country, carriedQuery);
   if (!product) notFound();
-  // Catalog identities carry bundled offers — apply the same selection the
-  // live path applies before grouping (idempotent on live-resolved products).
-  const shown = filterProductsByCountry([product], country)[0];
+  // Catalog identities carry bundled offers — apply the same market scope the
+  // live path applies (REEA-1142: every offer stays, tagged to its market;
+  // the renderer labels cross-market rows). Idempotent on live products.
+  const shown = scopeProductsByMarket([product], marketScope(country))[0];
   // REEA-248 — start the live per-product collection during the server render
   // (the detail-page sibling of results-page streaming): the panel's first
   // retailer offer rides the streamed HTML with no click needed, and the

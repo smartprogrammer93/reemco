@@ -29,6 +29,8 @@
  * selects among what was just fetched — never a bundled catalog.
  */
 import type { NormalizedProduct, PriceOffer } from "@/types/product";
+import type { CountryCode } from "@/lib/country";
+import { HOME_MARKET, isCrossMarketOffer } from "@/lib/market";
 
 /**
  * Allowlisted normalize of the `?oos=` search param. Checked ⇔ "1"/"true";
@@ -118,13 +120,31 @@ export function filterProductsByStock(
  * the claim is suppressed (-1) instead of resting on flagged prices. The
  * zero-stock fallback keeps the old first-card rule.
  */
-export function bestBadgeIndex(products: readonly NormalizedProduct[]): number {
+export function bestBadgeIndex(
+  products: readonly NormalizedProduct[],
+  scope: CountryCode = HOME_MARKET,
+): number {
+  // REEA-1142 AC2 — the "Best price" claim rests only on offers of the
+  // SELECTED market. A cross-market (converted) offer may rank inside its
+  // labeled group, but it can never carry an unqualified Kuwait best claim.
   const i = products.findIndex((p) =>
-    p.offers.some((o) => o.inStock && o.sanity?.status !== "flagged"),
+    p.offers.some(
+      (o) => o.inStock && o.sanity?.status !== "flagged" && !isCrossMarketOffer(o, scope),
+    ),
   );
   if (i >= 0) return i;
+  // No local claim available: a cross-market-only stocked card still owns the
+  // flag SLOT (the pending "Checking Kuwait stores…" state needs an owner),
+  // but the card withholds "Best price" itself. A list whose in-stock offers
+  // are ALL flagged suppresses the claim (-1), as before.
+  const crossStocked = products.findIndex((p) =>
+    p.offers.some(
+      (o) => o.inStock && o.sanity?.status !== "flagged" && isCrossMarketOffer(o, scope),
+    ),
+  );
+  if (crossStocked >= 0) return crossStocked;
   const anyStocked = products.findIndex((p) => p.offers.some((o) => o.inStock));
-  if (anyStocked >= 0) return -1; // stocked, but only flagged offers — no claim
+  if (anyStocked >= 0) return -1; // stocked, but only flagged — no claim
   return products.length > 0 ? 0 : -1;
 }
 

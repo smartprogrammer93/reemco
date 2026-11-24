@@ -229,6 +229,9 @@ export function weeklyResponse(
       // zero because an active filter hid matches. Aggregate integer only;
       // the rate is filtered_empty_searches ÷ searches.
       filtered_empty_searches: w.filtered_empty_searches,
+      // REEA-1142 AC5 — offers served outside the selected market (integer
+      // aggregate; no identifiers).
+      cross_market_offers: w.cross_market_offers,
       offer_link_clicks: clicks[week] ?? 0,
       // REEA-935 — per-outcome counts plus the derived dead/challenge rates;
       // the annotation fields ride verbatim when stamped.

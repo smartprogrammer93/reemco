@@ -147,9 +147,10 @@ describe("ProductResultCard rendered guards", () => {
     expect(html.match(/class="offer-row/g)?.length).toBe(3);
     expect(html).toContain("Danube Home");
     expect(html).toContain("View all 4 offers");
-    // The count line reads the SAME folded set the rows render (JSX text
-    // seams serialize as comment pairs — match through them).
-    expect(/tabular">4<\/span>\s*(?:<!-- -->)?retailers/.test(html)).toBe(true);
+    // REEA-1142 — every Danube listing is a SAUDI offer on the Kuwait
+    // surface, so the rollup is the honest no-local-offer headline, never a
+    // "from KD" Kuwait price claim.
+    expect(html).toContain("No Kuwait offer · Saudi price from KD");
   });
 
   it("collapses duplicate alternatives into one card", () => {
