@@ -90,13 +90,18 @@ describe("REEA-1143 AC1 — category queries lead with the class product", () =>
     // A platform name is a category, not an exact model: `ps5` is in the class
     // noun list, so the model-identity guard does not turn it into a model query.
     expect(intent.id).toBe("gaming-console");
-    expect(titles.slice(0, 3).map((t) => categoryRowClass(intent, t))).toEqual([
-      "product",
+    // REEA-1140 — Alpine Green is a colourway of the same DualSense card, so
+    // this fixture carries TWO class products, not three: the console and the
+    // merged controller. Both lead; a complement may follow them.
+    expect(titles.slice(0, 2).map((t) => categoryRowClass(intent, t))).toEqual([
       "product",
       "product",
     ]);
-    expect(titles.slice(0, 3)).not.toContain("USTM PS5 Cartridge");
-    expect(titles.slice(0, 3)).not.toContain("PS5 NBA 2K27 for PlayStation 5");
+    expect(titles.slice(0, 2)).not.toContain("USTM PS5 Cartridge");
+    expect(titles.slice(0, 2)).not.toContain("PS5 NBA 2K27 for PlayStation 5");
+    // The Alpine Green listing folded into the base controller card.
+    expect(titles).toContain("Sony PS5 DualSense Wireless Controller");
+    expect(titles).not.toContain("Sony PS5 DualSense Wireless Controller Alpine Green");
   });
 
   it("laptop and headphones lead with their class products", () => {
