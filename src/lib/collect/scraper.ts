@@ -198,8 +198,26 @@ export function isSoftNotFound(html: string): boolean {
  * Scrape one retailer offer URL. Enforces the per-retailer timeout server-side
  * (AC7); a timeout is reported distinctly so the UI can show "timed out".
  */
+/**
+ * REEA-1140 — a listing row carried by the live query-time fan-out. `price`,
+ * `inStock` and `collectedAt` are the query-time evidence for THIS exact
+ * retailer listing; when the detail page re-checks it and the retailer's PDP
+ * or search cannot answer, the row must fall back to that evidence instead of
+ * disappearing. The results card and the PDP then name the same offer.
+ */
+interface SeedListing {
+  merchant: string;
+  url: string;
+  currency: string;
+  wasPrice?: number;
+  titleQuery?: string;
+  price?: number;
+  inStock?: boolean;
+  collectedAt?: string;
+}
+
 export async function scrapeOffer(
-  offer: { merchant: string; url: string; currency: string; wasPrice?: number; titleQuery?: string },
+  offer: SeedListing,
   opts: { timeoutMs?: number; fetchImpl?: FetchImpl; now?: number } = {},
 ): Promise<ScrapeOutcome> {
   const fetchImpl: FetchImpl = opts.fetchImpl ?? ((url, init) => fetch(url, init));
@@ -211,6 +229,14 @@ export async function scrapeOffer(
   // per-retailer budget; an explicitly injected opts.timeoutMs still wins.
   const timeoutMs = opts.timeoutMs ?? PER_RETAILER_TIMEOUT_MS;
   const direct = await tryDirectFetch(offer, { timeoutMs, fetchImpl, now: opts.now, domain });
+  if (direct && direct.offers.length > 0) return direct;
+  // REEA-1140 — the direct listing page timed out, soft-404'd or could not be
+  // parsed. A live query-time row already verified at the fan-out is a better
+  // answer than a blank retailer (or a different listing found by a title
+  // search): return the SAME listing, its real price and its real collection
+  // stamp. Catalog seeds (no collectedAt) keep the REEA-67 search rediscovery.
+  const seeded = seedOutcome(offer, domain, opts.now);
+  if (seeded) return seeded;
   if (direct) return direct;
   // Fallback: re-discover the product via the retailer's own search API —
   // seeded catalog URLs go stale (REEA-67) and some PDPs are client-rendered.
@@ -250,8 +276,47 @@ export async function scrapeOffer(
   }
 }
 
+/** REEA-1140 — replay the query-time listing row when its re-check fails.
+ *  Returns null for catalog seeds (no price / no collection stamp), which keep
+ *  the REEA-67 search fallback. */
+function seedOutcome(
+  offer: SeedListing,
+  domain: string,
+  now?: number,
+): ScrapeOutcome | null {
+  if (offer.price == null || offer.price <= 0 || !offer.collectedAt) return null;
+  const collectedAt = offer.collectedAt;
+  const savings = savingsFor({
+    merchant: offer.merchant,
+    price: offer.price,
+    currency: offer.currency,
+    url: offer.url,
+    wasPrice: offer.wasPrice,
+    collectedAt,
+  });
+  return {
+    offers: [
+      {
+        merchant: offer.merchant,
+        domain,
+        price: offer.price,
+        currency: offer.currency,
+        url: offer.url,
+        inStock: offer.inStock ?? true,
+        ...(offer.wasPrice != null ? { wasPrice: offer.wasPrice } : {}),
+        ...(savings ? { savings } : {}),
+        collectedAt,
+        collectedAtEpochMs: Number.isNaN(Date.parse(collectedAt))
+          ? now ?? Date.now()
+          : Date.parse(collectedAt),
+        method: "live",
+      },
+    ],
+  };
+}
+
 async function tryDirectFetch(
-  offer: { merchant: string; url: string; currency: string; wasPrice?: number; titleQuery?: string },
+  offer: SeedListing,
   opts: { timeoutMs: number; fetchImpl: FetchImpl; now?: number; domain: string },
 ): Promise<{ offers: LiveOffer[]; error?: string; timedOut?: boolean } | null> {
   let html: string;

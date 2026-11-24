@@ -275,6 +275,13 @@ async function runCollectionAdmitted(
     wasPrice: o.wasPrice,
     // Title for the retailer-search fallback (stale seed URLs, REEA-67).
     titleQuery: product.title,
+    // REEA-1140 — the query-time evidence for THIS listing. A detail-page
+    // re-check that cannot read the retailer's page falls back to this exact
+    // row instead of dropping the retailer, so the PDP offer set stays the
+    // same as the card's.
+    price: o.price,
+    inStock: o.inStock,
+    collectedAt: o.collectedAt,
   }));
 
   const scrape = async (retailer: (typeof retailers)[number], sub: RetailerSubtask) => {
