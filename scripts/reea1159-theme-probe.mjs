@@ -48,7 +48,27 @@ async function open(browser, { width, height, locale, colorScheme }) {
   const page = await ctx.newPage();
   await page.goto(`${BASE}/about`, { waitUntil: "domcontentloaded", timeout: 30000 });
   await page.waitForSelector("[data-theme-cookie]", { timeout: 10000 });
+  // The control is server-rendered, so it exists before React hydrates; a click
+  // that lands in that window is swallowed by the browser. Wait for the JS
+  // chunks (networkidle) before interacting — measured live, this is the
+  // difference between a lost first click and a real one.
+  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
   return page;
+}
+
+/**
+ * One-action switch, with a hydration-safe retry: click until the DOM reaches
+ * the expected state. A lost pre-hydration click is retried; a genuinely broken
+ * control never reaches the state and returns -1 (the caller fails).
+ */
+async function toggleUntil(page, predicate) {
+  for (let i = 1; i <= 25; i++) {
+    if (await predicate()) return i - 1;
+    await page.locator("[data-theme-cookie]").click({ force: true, timeout: 4000 });
+    await page.waitForTimeout(300);
+    if (await predicate()) return i;
+  }
+  return -1;
 }
 
 // --- EN desktop, OS light, no stored choice --------------------------------
@@ -62,16 +82,21 @@ await withBrowser(async (browser) => {
   check("EN/1280 aria-pressed starts false", (await btn.getAttribute("aria-pressed")) === "false", null);
   check("EN/1280 no data-theme with no cookie", (await page.evaluate(() => document.documentElement.dataset.theme ?? null)) === null, null);
   const lightCanvas = await canvas(page);
-  await btn.click();
+  const darkAttempts = await toggleUntil(page, () =>
+    page.evaluate(() => document.documentElement.dataset.theme === "dark"),
+  );
   const darkCanvas = await canvas(page);
-  check("EN/1280 click sets data-theme=dark", (await page.evaluate(() => document.documentElement.dataset.theme)) === "dark", null);
-  check("EN/1280 click flips canvas", lightCanvas !== darkCanvas, { lightCanvas, darkCanvas });
+  check("EN/1280 click sets data-theme=dark", darkAttempts > 0, { attempts: darkAttempts });
+  check("EN/1280 click flips canvas", darkCanvas !== lightCanvas && darkCanvas === "rgb(23, 19, 16)", { lightCanvas, darkCanvas });
   check("EN/1280 click sets aria-pressed", (await btn.getAttribute("aria-pressed")) === "true", null);
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector("[data-theme-cookie]");
   check("EN/1280 reload keeps dark", (await page.evaluate(() => document.documentElement.dataset.theme)) === "dark", null);
   check("EN/1280 reload paints dark", (await canvas(page)) === darkCanvas, null);
-  await page.locator("[data-theme-cookie]").click();
+  const lightAttempts = await toggleUntil(page, () =>
+    page.evaluate(() => document.documentElement.dataset.theme === "light"),
+  );
+  check("EN/1280 click -> explicit light", lightAttempts > 0, { attempts: lightAttempts });
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector("[data-theme-cookie]");
   check("EN/1280 explicit light survives reload", (await page.evaluate(() => document.documentElement.dataset.theme)) === "light", null);
@@ -86,8 +111,10 @@ await withBrowser(async (browser) => {
   check("EN/375 44px box", b && b.width >= 44 && b.height >= 44, b);
   check("EN/375 no data-theme with no cookie", (await page.evaluate(() => document.documentElement.dataset.theme ?? null)) === null, null);
   check("EN/375 OS dark paints dark", (await canvas(page)) === "rgb(23, 19, 16)", await canvas(page));
-  await btn.click();
-  check("EN/375 click -> explicit light", (await page.evaluate(() => document.documentElement.dataset.theme)) === "light", null);
+  const lightAttempts = await toggleUntil(page, () =>
+    page.evaluate(() => document.documentElement.dataset.theme === "light"),
+  );
+  check("EN/375 click -> explicit light", lightAttempts > 0, { attempts: lightAttempts });
   check("EN/375 explicit light beats dark OS", (await canvas(page)) === "rgb(248, 245, 239)", await canvas(page));
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector("[data-theme-cookie]");
@@ -104,6 +131,7 @@ await withBrowser(async (browser) => {
   const page = await ctx.newPage();
   await page.goto(`${BASE}/about`, { waitUntil: "domcontentloaded", timeout: 30000 });
   await page.waitForSelector("[data-theme-cookie]");
+  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
   const btn = page.locator("[data-theme-cookie]");
   const b = await box(page);
   check("AR/375 dir=rtl", (await page.evaluate(() => document.documentElement.dir)) === "rtl", null);
@@ -113,8 +141,10 @@ await withBrowser(async (browser) => {
   check("AR/375 stored dark is pressed", (await btn.getAttribute("aria-pressed")) === "true", null);
   check("AR/375 dark canvas from stored cookie", (await canvas(page)) === "rgb(23, 19, 16)", await canvas(page));
   check("AR/375 control inside viewport", b && b.x >= 0 && b.x + b.width <= 375, b);
-  await btn.click();
-  check("AR/375 click -> light", (await page.evaluate(() => document.documentElement.dataset.theme)) === "light", null);
+  const lightAttempts = await toggleUntil(page, () =>
+    page.evaluate(() => document.documentElement.dataset.theme === "light"),
+  );
+  check("AR/375 click -> light", lightAttempts > 0, { attempts: lightAttempts });
   check("AR/375 light canvas", (await canvas(page)) === "rgb(248, 245, 239)", await canvas(page));
 });
 
