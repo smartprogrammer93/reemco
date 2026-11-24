@@ -13,10 +13,10 @@
  * Response shape (no-store):
  * { generated_at, retention_weeks, weeks: { "<ISOWeek>": {
  *   searches, zero_offer_searches, offers_by_retailer,
- *   cold_serves_full, cold_serves_pending,
+ *   serves_full, serves_pending,
  *   retailer_adapter_attempts, retailer_adapter_failures,
  *   latency_band_lt_1s, latency_band_1_3s, latency_band_3_10s,
- *   latency_band_gt_10s,
+ *   latency_band_gt_10s, latency_p90_ms,
  *   latency_warm_band_lt_1s, latency_warm_band_1_3s,
  *   latency_warm_band_3_10s, latency_warm_band_gt_10s,
  *   comparison_depth: { cards_total, cards_multi_retailer, ratio },
@@ -24,14 +24,18 @@
  *   offer_link_clicks,
  *   link_smoke: { runs, checked, ok, dead, challenge, by_retailer,
  *                 dead_rate, challenge_rate,
- *                 checkerContaminated?, methodologyNote? } } } }
+ *                 checkerContaminated?, methodologyNote? } } },
+ *   methodology: { latency_band_clock, p90, shopper_visible_targets,
+ *                  counter_naming, source } }
  *
- * REEA-871 — the cold-serve outcome split, the per-retailer adapter
- * attempts/failures and the four latency bands ride the same payload with
- * the same no-store header and the same 1–26 weeks clamping. Invariants by
- * construction: cold_serves_full + cold_serves_pending == searches, the four
- * bands sum to searches, and retailer_adapter_failures ≤ attempts per
- * retailer. Weeks stored before the extension read back with 0 backfill.
+ * REEA-871/REEA-1148 — the all-serve outcome split (published as
+ * serves_full / serves_pending, see the REEA-1148 note below), the
+ * per-retailer adapter attempts/failures and the four latency bands ride the
+ * same payload with the same no-store header and the same 1–26 weeks
+ * clamping. Invariants by construction: serves_full + serves_pending ==
+ * searches == sum(cold bands) + sum(warm bands), and
+ * retailer_adapter_failures ≤ attempts per retailer. Weeks stored before the
+ * extension read back with 0 backfill.
  *
  * REEA-935 — link_smoke gains the per-outcome counts (ok/dead/challenge) and
  * the derived rates: dead_rate = dead / (ok + dead) — persistent challenges
@@ -53,12 +57,30 @@
  * key absent) still answers 200 with an empty map. The 200 payload shape,
  * the aggregation and the 1–26 window clamping are untouched.
  *
- * REEA-1009 S1b — while the bet #2 flag (REEMCO_BET2_FAIL_FAST) is on, the
- * 200 payload gains a `methodology` block stating what the latency bands
- * actually clock (full-convergence recording, 8.5 s structural cap), that
- * p90 is band-interpolated, and the ratified shopper-visible targets
- * (first-offer p75 ≤ 2.0 s; follow-up-complete ≤ 8.5 s). Reporting text
- * only: no counter changes (AC-4).
+ * REEA-1009 S1b / REEA-1148 — the 200 payload ALWAYS carries a
+ * `methodology` block stating what the latency bands actually clock
+ * (full-convergence recording, 8.5 s structural cap, now enforced by the
+ * results after() tail), that p90 is band-interpolated, and the ratified
+ * shopper-visible targets (first-offer p75 ≤ 2.0 s; follow-up-complete
+ * ≤ 8.5 s). REEA-1148 removed the bet-flag gate: the W49 read found no
+ * methodology on the served stamp because the flag was off, so AC-6c (the
+ * payload states its own clock) was not on the wire. Reporting text only:
+ * no counter changes (AC-4).
+ *
+ * REEA-1148 — measurement honesty + counter reconciliation (bet #2 REVISE):
+ *  - AC-2 choice: RENAMED, not redefined. The all-serve outcome split is
+ *    published as `serves_full` / `serves_pending`; the old
+ *    `cold_serves_*` names wrongly implied cold-only while the stored
+ *    counter also folded warm serves (W48 read: 4,696 "cold full" against a
+ *    3,563 cold band sum). Cold and warm stay separable through the disjoint
+ *    latency band sets, and `serves_full + serves_pending == searches ==
+ *    sum(cold bands) + sum(warm bands)` holds for every week, including the
+ *    weeks recorded before this change (the stored value was always the
+ *    all-serve split). The `methodology.counter_naming` text states this on
+ *    the payload.
+ *  - `latency_p90_ms` is a DERIVED per-week field (not a stored counter): the
+ *    REEA-884 interpolation with the 3–10 s band's upper edge set to the
+ *    recording cap, so the reported p90 cannot claim a tail past 8.5 s.
  *
  * REEA-1078 — measurement integrity (REEA-1074 F4 / AC-A): the payload now
  * carries (a) `comparison_depth` per week — cards_total,
@@ -96,7 +118,7 @@
  * standard 429 body and performs no counter or funnel read; the 200/503
  * payloads are otherwise byte-identical to the pre-gate response.
  */
-import { RETENTION_WEEKS, isoWeekKey, linkSmokeRates, readWeeklyCountersDetailed } from "@/lib/metrics";
+import { RETENTION_WEEKS, coldBandP90Ms, isoWeekKey, linkSmokeRates, readWeeklyCountersDetailed } from "@/lib/metrics";
 import type { WeeklyCountersRead } from "@/lib/metrics";
 import { readEvents } from "@/lib/event-store";
 import type { FunnelEvent } from "@/lib/events";
@@ -104,10 +126,10 @@ import type { FunnelEvent } from "@/lib/events";
 // it now rides the same REEA-827 shared fixed-window gate as its siblings.
 import { checkRateLimitShared } from "@/lib/rate-limit-kv";
 import { rateLimitHeaders } from "@/lib/rate-limit";
-// REEA-1009 S1b — the metric-honesty note rides the payload only while the
-// bet #2 flag is on (a reporting-text change is part of the §9 flag-gated
-// change; flag-off answers the exact pre-bet payload).
-import { bet2FailFastEnabled } from "@/lib/collect/bet2-flag";
+// REEA-1148 — the metric-honesty block is no longer bet-flag-gated: the W49
+// read found no `methodology` on the served stamp because the flag was off,
+// and AC-6c is about the payload always stating its clock. Reporting text
+// only — no counter changes (AC-1).
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -190,15 +212,22 @@ export function weeklyResponse(
       searches: w.searches,
       zero_offer_searches: w.zero_offer_searches,
       offers_by_retailer: w.offers_by_retailer,
-      // REEA-871 — aggregate extension (integer counters, retailer names only).
-      cold_serves_full: w.cold_serves_full,
-      cold_serves_pending: w.cold_serves_pending,
+      // REEA-871/REEA-1148 — all-serve outcome split, published under honest
+      // names (AC-2 choice: RENAMED). The stored counter has always folded
+      // cold AND warm serves; `cold_serves_*` implied cold-only and made the
+      // W48 read look inconsistent with the cold band total. The cold/warm
+      // split rides the disjoint latency band sets below.
+      serves_full: w.cold_serves_full,
+      serves_pending: w.cold_serves_pending,
       retailer_adapter_attempts: w.retailer_adapter_attempts,
       retailer_adapter_failures: w.retailer_adapter_failures,
       latency_band_lt_1s: w.latency_band_lt_1s,
       latency_band_1_3s: w.latency_band_1_3s,
       latency_band_3_10s: w.latency_band_3_10s,
       latency_band_gt_10s: w.latency_band_gt_10s,
+      // REEA-1148 — derived cold p90 (ms) with the recording cap as the
+      // 3–10 s band's real upper edge. Not stored, not a new counter.
+      latency_p90_ms: coldBandP90Ms(w),
       // REEA-1078 — warm-serve bands: a fresh memo hit's SERVE clock, kept
       // disjoint from the cold collection bands above. Cold + warm == searches.
       latency_warm_band_lt_1s: w.latency_warm_band_lt_1s,
@@ -261,25 +290,22 @@ export function weeklyResponse(
       retention_weeks: MAX_WEEKS,
       window_weeks: windowWeeks,
       weeks,
-      // REEA-1009 S1b — metric honesty (bet #2 spec v1.0 §5, AC-6(c)/AC-8):
-      // the latency-band clock is the full-convergence recording, p90 is
-      // band-interpolated with an 8.5 s structural max, and the budget is
-      // stated against the shopper-visible clocks the ratified AC-8 targets
-      // use. Pure reporting text — no counter changes, no new instrumentation
-      // (AC-4/REEA-865 stand), bands themselves untouched (REEA-884).
-      ...(bet2FailFastEnabled()
-        ? {
-            methodology: {
-              latency_band_clock:
-                "fan-out start → converged-chain recording (serveLatencyMs in the results after() tail: allSettled + final + converged + adapterTelemetry), structurally capped at RESULTS_COMPLETION_BUDGET_MS (1800 ms) + STAGE_TAIL_HEADROOM_MS (6200 ms) = 8.5 s",
-              p90:
-                "REEA-884 band-interpolated inside the containing band; the structural max is the 8.5 s tail cap, so the raw within-band p90 never exceeds it — a figure above 8.5 s is interpolation, not a measured tail",
-              shopper_visible_targets:
-                "first-offer p75 ≤ 2.0 s (G3 guard — staged first-offer flush must not get slower); full-offer follow-up-complete ≤ 8.5 s (the recording cap); blocking aggregate gates: latency_band_gt_10s == 0 and cold_serves_pending < 5% weekly (AC-8, ratified on REEA-1002)",
-              source: "REEA-1009 bet #2 spec v1.0 §5 S1b / §10; band definitions unchanged (REEA-871/REEA-884)",
-            },
-          }
-        : {}),
+      // REEA-1009 S1b / REEA-1148 — metric honesty (bet #2 spec v1.0 §5,
+      // AC-6(c)/AC-8). Always on the payload, not bet-flag-gated: the W49
+      // read found it missing on the served stamp, which is the AC-6c defect
+      // this fixes. Pure reporting text — no counter changes, no new
+      // instrumentation (AC-4/REEA-865 stand), bands untouched (REEA-884).
+      methodology: {
+        latency_band_clock:
+          "fan-out start → converged-chain recording at the structural tail cap: RESULTS_COMPLETION_BUDGET_MS (1800 ms) + STAGE_TAIL_HEADROOM_MS (6200 ms) + 500 ms settle margin = 8.5 s. The results after() tail now records on that bounded wait (REEA-1148), so a cold serve is never banded past the cap; latency_band_gt_10s is unreachable for a serve recorded by this build.",
+        p90:
+          "REEA-884 band-interpolated inside the containing band (r = ceil(0.9 × n), linear within the band); the 3–10 s band's real upper edge is the 8.5 s recording cap, so the derived latency_p90_ms cannot report a tail past the cap. A figure above 8.5 s is interpolation, not a measured tail.",
+        shopper_visible_targets:
+          "first-offer p75 ≤ 2.0 s (G3 guard — staged first-offer flush must not get slower); full-offer follow-up-complete ≤ 8.5 s (the recording cap); blocking aggregate gates: latency_band_gt_10s == 0 and serves_pending < 5% weekly (AC-8, ratified on REEA-1002; serves_pending is the all-serve count, a superset of cold pending, so a pass is conservative)",
+        counter_naming:
+          "AC-2 choice: RENAMED, not redefined. serves_full / serves_pending are the all-serve outcome split (formerly cold_serves_full / cold_serves_pending, whose names wrongly implied cold-only while the counter also folded warm serves). Cold and warm are not conflated: the disjoint latency_band_* / latency_warm_band_* sets carry that split, and serves_full + serves_pending == searches == sum(cold bands) + sum(warm bands) for every week, including weeks recorded before this change.",
+        source: "REEA-1148 bet #2 AC-6c/AC-8; REEA-1009 S1b; band definitions unchanged (REEA-871/REEA-884)",
+      },
     },
     { headers: { "cache-control": "no-store" } },
   );

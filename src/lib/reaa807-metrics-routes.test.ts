@@ -71,6 +71,7 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
       weeks: Record<string, Record<string, unknown>>;
       retention_weeks: number;
       window_weeks: number;
+      methodology?: Record<string, string>;
     };
     const week = body.weeks[WEEK_KEY] as Record<string, unknown>;
     expect(body.retention_weeks).toBe(26);
@@ -79,11 +80,14 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
     expect(week.zero_offer_searches).toBe(1);
     expect(week.offers_by_retailer).toEqual({ Xcite: 3, Jarir: 2 });
     expect(week.offer_link_clicks).toBe(2);
-    // REEA-871 — the aggregate extension rides the same payload with the
-    // same invariants the store guarantees by construction.
-    expect(week.cold_serves_full).toBe(1);
-    expect(week.cold_serves_pending).toBe(1);
-    expect((week.cold_serves_full as number) + (week.cold_serves_pending as number)).toBe(week.searches);
+    // REEA-871/REEA-1148 — the all-serve outcome split rides the same
+    // payload under its honest names (AC-2: RENAMED), and the derived p90
+    // can never claim a tail past the 8.5 s recording cap.
+    expect(week.serves_full).toBe(1);
+    expect(week.serves_pending).toBe(1);
+    expect((week.serves_full as number) + (week.serves_pending as number)).toBe(week.searches);
+    expect(week.cold_serves_full).toBeUndefined();
+    expect(week.cold_serves_pending).toBeUndefined();
     const bands = ["latency_band_lt_1s", "latency_band_1_3s", "latency_band_3_10s", "latency_band_gt_10s"] as const;
     const warmBands = [
       "latency_warm_band_lt_1s",
@@ -91,8 +95,10 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
       "latency_warm_band_3_10s",
       "latency_warm_band_gt_10s",
     ] as const;
-    expect(bands.reduce((n, b) => n + (week[b] as number), 0)).toBe(week.searches);
+    expect(bands.reduce((n, b) => n + (week[b] as number), 0) + warmBands.reduce((n, b) => n + (week[b] as number), 0)).toBe(week.searches);
     expect(warmBands.reduce((n, b) => n + (week[b] as number), 0)).toBe(0);
+    // Derived from the bands, capped at the structural recording cap.
+    expect(week.latency_p90_ms).toBe(8_500);
     expect(week.retailer_adapter_attempts).toEqual({ Xcite: 2, Jarir: 1 });
     expect(week.retailer_adapter_failures).toEqual({ Xcite: 1 });
     for (const [merchant, attempts] of Object.entries(week.retailer_adapter_attempts as Record<string, number>)) {
@@ -100,8 +106,6 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
     }
     // No PII surface: counters and retailer names only.
     expect(Object.keys(week).sort()).toEqual([
-      "cold_serves_full",
-      "cold_serves_pending",
       "comparison_depth",
       "cross_market_offers",
       "filtered_empty_searches",
@@ -109,6 +113,7 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
       "latency_band_3_10s",
       "latency_band_gt_10s",
       "latency_band_lt_1s",
+      "latency_p90_ms",
       "latency_warm_band_1_3s",
       "latency_warm_band_3_10s",
       "latency_warm_band_gt_10s",
@@ -119,8 +124,13 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
       "retailer_adapter_attempts",
       "retailer_adapter_failures",
       "searches",
+      "serves_full",
+      "serves_pending",
       "zero_offer_searches",
     ]);
+    // REEA-1148 AC-1 — the methodology block is always on the payload.
+    expect(body.methodology).toBeTruthy();
+    expect(body.methodology!.counter_naming).toContain("RENAMED");
     // REEA-1078 — comparison depth is one aggregate block, never per card.
     // REEA-1141 AC-4 — duplicate_cards + dedupe_ratio ride the same block.
     expect(week.comparison_depth).toEqual({

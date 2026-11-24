@@ -13,7 +13,7 @@ function stagesOf(final: Promise<LiveSearchResult>): LiveSearchStages {
   return {
     stages: [final],
     final,
-    allSettled: Promise.resolve(),
+    allSettled: Promise.resolve(null),
     converged: final,
     adapterTelemetry: Promise.resolve({ attempts: {}, failures: {} }),
     // REEA-1078 — the collection layer always stamps the serve kind; this

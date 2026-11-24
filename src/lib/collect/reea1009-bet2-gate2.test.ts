@@ -328,11 +328,10 @@ describe("REEA-1009 S1a constants and the rotation-budget boundary", () => {
   });
 });
 
-describe("REEA-1009 S1b: the weekly read carries the metric-honesty note (flag-gated)", () => {
+describe("REEA-1009 S1b / REEA-1148: the weekly read ALWAYS carries the metric-honesty note", () => {
   const read = { weeks: { "2026-W38": emptyWeek() }, source: "kv" as const, kvReadFailed: false };
 
-  it("flag ON: the payload states the 8.5 s recording cap, the band-interpolated p90 and the shopper-visible targets", async () => {
-    flagOn();
+  it("states the 8.5 s recording cap, the band-interpolated p90, the shopper-visible targets and the AC-2 counter naming", async () => {
     const res = weeklyResponse(read, {}, 8);
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -344,15 +343,18 @@ describe("REEA-1009 S1b: the weekly read carries the metric-honesty note (flag-g
     expect(body.methodology!.latency_band_clock).toContain("1800");
     expect(body.methodology!.p90).toContain("band-interpolated");
     expect(body.methodology!.shopper_visible_targets).toContain("2.0");
+    expect(body.methodology!.counter_naming).toContain("RENAMED");
     // The counters themselves are untouched — reporting text only (AC-4).
     expect(body.weeks["2026-W38"]).toHaveProperty("latency_band_3_10s");
   });
 
-  it("flag OFF: the payload is byte-for-byte the pre-bet shape — no methodology key", async () => {
+  it("REEA-1148: the block is no longer bet-flag-gated — flag OFF answers the same methodology", async () => {
     flagOff();
     const res = weeklyResponse(read, {}, 8);
-    const body = (await res.json()) as { methodology?: unknown };
-    expect("methodology" in body).toBe(false);
+    const body = (await res.json()) as { methodology?: Record<string, string> };
+    expect(body.methodology).toBeTruthy();
+    expect(body.methodology!.latency_band_clock).toContain("8.5");
+    expect(body.methodology!.counter_naming).toContain("RENAMED");
   });
 });
 

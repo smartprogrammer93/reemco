@@ -3174,10 +3174,16 @@ export interface LiveSearchStages {
    * REEA-807 — the converged full-ranked chain itself (NOT capped to the
    * completion budget the way `final` is): serve-time outcome counters read
    * the converged answer off this promise in the page's after() tail so the
-   * weekly snapshot counts what the run actually delivered. Resolves before
-   * allSettled's tail cap in the normal case; may reject — readers catch.
+   * weekly snapshot counts what the run actually delivered.
+   * REEA-1148 — it now resolves with that snapshot when the chain lands
+   * inside the structural tail cap, and with `null` AT the cap otherwise:
+   * value and clock come from the same bounded wait, so the page's latency
+   * recording can never outlive the cap its methodology is documented
+   * against (the REEA-1009 claim that `latency_band_gt_10s` is unreachable
+   * is now true by construction instead of merely asserted). A rejected
+   * chain normalizes to `null`, exactly like a capped-out one.
    */
-  allSettled: Promise<void>;
+  allSettled: Promise<LiveSearchResult | null>;
   /** Converged full-ranked snapshot of this run (see allSettled note). */
   converged: Promise<LiveSearchResult>;
   /**
@@ -3762,6 +3768,39 @@ const NO_CACHE: QueryCache = {
   reset: () => {},
 };
 
+/**
+ * REEA-1148 — bound the converged-chain wait at a hard cap.
+ *
+ * The weekly latency bands clock fan-out start → the converged-chain
+ * recording, and the bet #2 methodology (REEA-1009 S1b / AC-8) states that
+ * recording is structurally capped at RESULTS_COMPLETION_BUDGET_MS +
+ * STAGE_TAIL_HEADROOM_MS + one settle margin (8.5 s). Before this, the
+ * results after() tail awaited `staged.converged` directly, so a serve whose
+ * convergence (round one + deepen + widened retry) ran long was recorded
+ * past the cap — that is where the 87 serves >10 s on the W48 read came from,
+ * and it is why the asserted cap could not defend the p90.
+ *
+ * Resolves with the converged snapshot when it lands inside `capMs`; resolves
+ * `null` AT the cap otherwise. The caller reads its recording clock on the
+ * same resolution, so the recorded wall clock can never exceed the cap, and
+ * a serve still converging at the cap is classified from the page's actual
+ * state at that moment (pending) instead of from an answer the shopper's
+ * follow-up wait had already given up on.
+ */
+export function convergedWithinCap(
+  converged: Promise<LiveSearchResult>,
+  capMs: number,
+): Promise<LiveSearchResult | null> {
+  const cap = Number.isFinite(capMs) ? Math.max(0, capMs) : 0;
+  return Promise.race([
+    converged.then(
+      (snap) => snap,
+      () => null,
+    ),
+    new Promise<LiveSearchResult | null>((resolve) => setTimeout(() => resolve(null), cap)),
+  ]);
+}
+
 /** REEA-743 — serve-time head guard for STORED snapshots: fresh memo hits,
  *  stale cache-first flushes and shared-layer KV replays all bypass the fresh
  *  fan-out's rankByRelevance narrowing, so an aged snapshot could still lead
@@ -4041,7 +4080,13 @@ export async function collectLiveResultsStagedAdmitted(
     final: pending,
     // Keeps the invocation alive behind the response until the queued run
     // settles (the page's after() tail), exactly like a normal run's tail.
-    allSettled: deferred,
+    // REEA-1148 — carries the queued run's converged answer (or null on a
+    // rejected/dropped run) so the page can classify from the same value the
+    // deferred chain produced; the recording clock is clamped at the cap.
+    allSettled: deferred.then(
+      () => queuedConverged.then((s) => s, () => null),
+      () => null,
+    ),
     converged: queuedConverged,
     adapterTelemetry: queuedTelemetry,
     // No cached first paint led this serve; the recorded clock is the cold
@@ -4097,7 +4142,7 @@ export function collectLiveResultsStaged(
     return {
       stages: [served],
       final: served,
-      allSettled: Promise.resolve(),
+      allSettled: Promise.resolve(null),
       converged: served,
       adapterTelemetry: Promise.resolve({ attempts: {}, failures: {} }),
       // REEA-1078 — no fan-out ran: this serve's weekly latency record is the
@@ -4315,13 +4360,11 @@ export function collectLiveResultsStaged(
   const tailCapMs =
     (opts.signal ? opts.deadlineMs ?? LIVE_SEARCH_BUDGET_MS : deadlineMs + STAGE_TAIL_HEADROOM_MS) +
     500;
-  const allSettled: Promise<void> = Promise.race([
-    converged.then(
-      () => undefined,
-      () => undefined,
-    ),
-    new Promise<void>((resolve) => setTimeout(resolve, tailCapMs)),
-  ]);
+  // REEA-1148 — the same bounded wait now also carries the converged answer
+  // (or null when the cap won), so the results after() tail reads its value
+  // and its recording clock from ONE resolution and cannot drift past the
+  // cap the methodology states.
+  const allSettled: Promise<LiveSearchResult | null> = convergedWithinCap(converged, tailCapMs);
 
   if (cached) {
     // Stale window only reaches here (fresh returns above): cache-first flush,

@@ -157,6 +157,66 @@ export function warmLatencyBandOf(latencyMs: number): WarmLatencyBand {
 }
 
 /**
+ * REEA-1148 — the structural recording cap for a cold serve's latency band:
+ * RESULTS_COMPLETION_BUDGET_MS (1800) + STAGE_TAIL_HEADROOM_MS (6200) + the
+ * 500 ms settle margin the collection layer's own tail race uses. The
+ * results after() tail now records on this bound (see convergedWithinCap in
+ * lib/collect/live-search.ts), so a cold serve cannot be banded past it and
+ * the >10 s band is unreachable for a serve recorded by this build.
+ */
+export const COLD_RECORDING_CAP_MS = 8_500;
+
+/**
+ * REEA-884/REEA-1148 — derived cold-serve p90 from the four band counts.
+ *
+ * Rank r = ceil(0.9 × n), then linear interpolation inside the containing
+ * band (the REEA-884 formula). REEA-1148: the 3–10 s band's real upper edge
+ * is the recording cap, not 10 s — a serve still converging at the cap is
+ * recorded AT the cap, so interpolating all the way to 10 s reports a tail
+ * no serve measured (the W48 9.45 s figure was exactly that artifact). The
+ * >10 s band is legacy-only now; its true value is unknown once recorded, so
+ * it interpolates inside [10 s, 10 s]. Returns null for an empty week.
+ *
+ * Derived, never stored: no new counter and no per-query data (AC-1).
+ */
+export function coldBandP90Ms(bands: {
+  latency_band_lt_1s: number;
+  latency_band_1_3s: number;
+  latency_band_3_10s: number;
+  latency_band_gt_10s: number;
+}): number | null {
+  const counts = [
+    clampCount(bands.latency_band_lt_1s),
+    clampCount(bands.latency_band_1_3s),
+    clampCount(bands.latency_band_3_10s),
+    clampCount(bands.latency_band_gt_10s),
+  ];
+  const n = counts.reduce((a, b) => a + b, 0);
+  if (n === 0) return null;
+  const rank = Math.ceil(0.9 * n); // 1-based, the REEA-884 rank
+  const edges: Array<{ count: number; lo: number; hi: number }> = [
+    { count: counts[0], lo: 0, hi: LATENCY_BAND_EDGES_MS.lt },
+    { count: counts[1], lo: LATENCY_BAND_EDGES_MS.lt, hi: LATENCY_BAND_EDGES_MS.mid },
+    {
+      count: counts[2],
+      lo: LATENCY_BAND_EDGES_MS.mid,
+      hi: Math.min(LATENCY_BAND_EDGES_MS.top, COLD_RECORDING_CAP_MS),
+    },
+    { count: counts[3], lo: LATENCY_BAND_EDGES_MS.top, hi: LATENCY_BAND_EDGES_MS.top },
+  ];
+  let seen = 0;
+  for (const b of edges) {
+    if (b.count <= 0) continue;
+    if (rank <= seen + b.count) {
+      const within = (rank - seen) / b.count;
+      return Math.round(b.lo + within * (b.hi - b.lo));
+    }
+    seen += b.count;
+  }
+  return LATENCY_BAND_EDGES_MS.top;
+}
+
+/**
  * REEA-1078 — which clock a serve's latency belongs to. "warm" = a cached
  * live answer led the shopper's first paint (a fresh memo hit, or a
  * stale-while-revalidate repeat whose cached snapshot served first while the

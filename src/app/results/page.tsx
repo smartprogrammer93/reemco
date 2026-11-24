@@ -1,6 +1,6 @@
 import ResultsClient from "@/components/ResultsClient";
 import { collectLiveResultsStagedAdmitted } from "@/lib/collect/live-search";
-import { recordSearchOutcome, searchOutcomeFromSnapshot, serveOutcomeOf } from "@/lib/metrics";
+import { COLD_RECORDING_CAP_MS, recordSearchOutcome, searchOutcomeFromSnapshot, serveOutcomeOf } from "@/lib/metrics";
 // REEA-1099 — the ONE results-page shelf card definition the renderer uses;
 // the comparison-depth counter folds over this same set.
 import { resultsShelfCards } from "@/lib/results-shelf";
@@ -211,7 +211,20 @@ export default async function ResultsPage({
     // recording below reads the collection clock after allSettled instead.
     // eslint-disable-next-line react-hooks/purity -- deferred after() tail, not render output.
     const afterEntryMs = Date.now();
-    await staged.allSettled;    // REEA-807 — aggregate outcome counters, folded in the same after() tail
+    // REEA-1148 — bounded converged wait: resolves with the converged
+    // snapshot when the chain lands inside the structural tail cap, null AT
+    // the cap. The recording clock below is read on THIS resolution, so a
+    // cold serve can never be banded past the cap its methodology documents
+    // (the previous code awaited staged.converged unbounded, which is where
+    // the >10 s band came from).
+    const convSnapAtCap = await staged.allSettled;    // REEA-807 — aggregate outcome counters, folded in the same after() tail
+    // REEA-1078/REEA-1148 — warm serves keep the serve-entry clock; a cold
+    // serve records the bounded collection clock read right here, clamped to
+    // the structural cap so latency_band_gt_10s is unreachable by construction.
+    // eslint-disable-next-line react-hooks/purity -- deferred after() tail, not render output.
+    const capClockMs = Date.now();
+    const recordedMs =
+      staged.serveKind === "warm" ? afterEntryMs : Math.min(capClockMs, fanoutStartMs + COLD_RECORDING_CAP_MS);
     // that keeps the run's hops alive: one live fan-out page serve = one
     // search; zero-offer and per-retailer offer counts read the fullest
     // answer the page ended with (REEA-921: the converged answer, else the
@@ -236,17 +249,20 @@ export default async function ResultsPage({
     // document's own snapshot). Aggregate-only; nothing new is stored
     // beyond the existing full/pending split.
     if (query) {
-      const [served, convSnap, adapterTelemetry] = await Promise.all([
+      const [served, adapterTelemetry] = await Promise.all([
         staged.final.then(
-          (s) => s,
-          () => null,
-        ),
-        staged.converged.then(
           (s) => s,
           () => null,
         ),
         staged.adapterTelemetry.catch(() => ({ attempts: {}, failures: {} })),
       ]);
+      // REEA-1148 — the outcome/offer counters keep the REEA-921 definition
+      // (did the registered follow-up deliver the converged answer?), which
+      // is a separate question from the capped latency clock above. When the
+      // cap won the bounded wait, await the converged chain for this
+      // classification only — the recorded clock was already taken at the
+      // cap, so a long convergence can never re-open the >10 s band.
+      const convSnap = convSnapAtCap ?? (await staged.converged.then((s) => s, () => null));
       const pageSnap = convSnap ?? served;
       // REEA-1099 — comparison depth is folded over the SAME shelf the page
       // paints (the primary slice of the filtered, confidence-partitioned
@@ -288,10 +304,9 @@ export default async function ResultsPage({
         showOutOfStock,
       );
       const duplicateCards = duplicateCardsOf(paintedCards);
-      // REEA-1078 — warm serves use the entry clock captured above (the serve
-      // clock); cold serves use the post-allSettled clock (collection clock).
-      // eslint-disable-next-line react-hooks/purity -- read in the deferred after() tail, never during render output.
-      const recordedMs = staged.serveKind === "warm" ? afterEntryMs : Date.now();
+      // REEA-1078/REEA-1148 — the recording clock was read on the bounded
+      // allSettled resolution above: warm serves use the entry clock, cold
+      // serves the capped collection clock. Never re-read here.
       await recordSearchOutcome({
         ...(pageSnap
           ? searchOutcomeFromSnapshot(pageSnap, shelfCards)

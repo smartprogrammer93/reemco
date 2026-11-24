@@ -309,7 +309,7 @@ describe("REEA-1035 stored schema + route byte-shape", () => {
     expect(counter(kv, v2(`${WEEK}:lsbr_dead:Xcite`))).toBe(1);
   });
 
-  it("weekly route payload byte-shape is unchanged when the read comes from the v2 layout", async () => {
+  it("weekly route payload shape from the v2 layout: REEA-1148 renamed outcome split, derived p90, methodology", async () => {
     const { weeklyResponse } = await import("@/app/api/metrics/weekly/route");
     const kv = fakeIncrKv();
     await recordSearchOutcome(outcome(), { kv, now: WEEK_MS });
@@ -323,8 +323,6 @@ describe("REEA-1035 stored schema + route byte-shape", () => {
     };
     const week = body.weeks[WEEK];
     expect(Object.keys(week).sort()).toEqual([
-      "cold_serves_full",
-      "cold_serves_pending",
       "comparison_depth",
       "cross_market_offers",
       "filtered_empty_searches",
@@ -332,6 +330,7 @@ describe("REEA-1035 stored schema + route byte-shape", () => {
       "latency_band_3_10s",
       "latency_band_gt_10s",
       "latency_band_lt_1s",
+      "latency_p90_ms",
       "latency_warm_band_1_3s",
       "latency_warm_band_3_10s",
       "latency_warm_band_gt_10s",
@@ -342,6 +341,8 @@ describe("REEA-1035 stored schema + route byte-shape", () => {
       "retailer_adapter_attempts",
       "retailer_adapter_failures",
       "searches",
+      "serves_full",
+      "serves_pending",
       "zero_offer_searches",
     ]);
     expect(Object.keys(week.link_smoke as object).sort()).toEqual([
