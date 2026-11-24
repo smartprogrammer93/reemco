@@ -4,7 +4,7 @@ import { after } from "next/server";
 import type { Metadata } from "next";
 import SearchForm from "@/components/SearchForm";
 import HomeDiscoveryModules, { HomeDiscoverySkeleton } from "@/components/HomeDiscoveryModules";
-import { collectLiveResultsStaged } from "@/lib/collect/live-search";
+import { collectLiveResultsStagedAdmitted } from "@/lib/collect/live-search";
 import { collectHomeDiscovery } from "@/lib/collect/home-discovery";
 // REEA-1078 S2 — dead-lane retirement for the chip pre-warm fan-outs.
 import { readRetiredLanes } from "@/lib/collect/lane-health";
@@ -52,11 +52,19 @@ export default async function Home() {
   // modules; no bundled catalogue and no second round of retailer requests.
   // REEA-1078 S2 — the pre-warm runs obey the same dead-lane retirement set
   // as the results page; a store failure fails open (static retirement only).
+  // REEA-1133 — the home pre-warm is a page-path fan-out too (three queries =
+  // three ~15-lane runs per render), so it takes the same bounded FAIL-CLOSED
+  // admission as /results. A denied run resolves immediately with the honest
+  // pending shell and is deferred behind the response instead of multiplying
+  // the retailer lanes; the modules then render their no-response state rather
+  // than inventing merchandise.
   const retiredLanes = await readRetiredLanes();
-  const runs = chips.map((c) => ({
-    query: c.query,
-    stages: collectLiveResultsStaged(c.query, { retiredLanes }),
-  }));
+  const runs = await Promise.all(
+    chips.map(async (c) => ({
+      query: c.query,
+      stages: await collectLiveResultsStagedAdmitted(c.query, { retiredLanes }),
+    })),
+  );
   const discovery = collectHomeDiscovery(runs);
   after(async () => {
     await Promise.all(runs.map((r) => r.stages.allSettled));

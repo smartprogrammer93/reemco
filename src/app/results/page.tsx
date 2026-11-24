@@ -1,5 +1,5 @@
 import ResultsClient from "@/components/ResultsClient";
-import { collectLiveResultsStaged } from "@/lib/collect/live-search";
+import { collectLiveResultsStagedAdmitted } from "@/lib/collect/live-search";
 import { recordSearchOutcome, searchOutcomeFromSnapshot, serveOutcomeOf } from "@/lib/metrics";
 // REEA-1099 — the ONE results-page shelf card definition the renderer uses;
 // the comparison-depth counter folds over this same set.
@@ -182,7 +182,13 @@ export default async function ResultsPage({
     readRetiredLanes(),
     readUnreachableLanes(),
   ]);
-  const staged = collectLiveResultsStaged(query, { refresh: hint.refresh, locale, retiredLanes });
+  // REEA-1133 — the page-path fan-out goes through the process-wide admission
+  // cap with a bounded, FAIL-CLOSED wait (src/lib/collect/inflight.ts), so N
+  // distinct queries queue behind the ceiling instead of each multiplying the
+  // retailer lanes. A render that cannot be admitted serves an honest pending
+  // shell and the same run is deferred behind the response: the follow-up feed
+  // (REEA-398) still folds its live answer into the open page.
+  const staged = await collectLiveResultsStagedAdmitted(query, { refresh: hint.refresh, locale, retiredLanes });
   // REEA-398 — keep the hops still in flight alive BEHIND the finalized
   // response: after() runs the run's allSettled chain once the document is
   // sent, so late offers converge into the cache and the follow-up feed

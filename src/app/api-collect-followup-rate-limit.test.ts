@@ -21,6 +21,10 @@ const mocks = vi.hoisted(() => ({
   runCollection: vi.fn(),
   resolveProductIdentity: vi.fn(),
   collectLiveResultsStaged: vi.fn(),
+  // REEA-1133 — the follow-up route's cross-worker fallback now takes the
+  // page-path admission gate; delegate to the same staged stub so the call
+  // counters below still observe exactly one fan-out.
+  collectLiveResultsStagedAdmitted: vi.fn(),
   followUpSnapshot: vi.fn(),
   afterTasks: [] as Array<() => unknown>,
 }));
@@ -42,6 +46,7 @@ vi.mock("@/lib/collect/runner", () => ({
 
 vi.mock("@/lib/collect/live-search", () => ({
   collectLiveResultsStaged: mocks.collectLiveResultsStaged,
+  collectLiveResultsStagedAdmitted: mocks.collectLiveResultsStagedAdmitted,
   followUpSnapshot: mocks.followUpSnapshot,
   FOLLOW_UP_WAIT_MS: 50,
 }));
@@ -100,6 +105,10 @@ beforeEach(() => {
   mocks.runCollection.mockReset();
   mocks.resolveProductIdentity.mockReset();
   mocks.collectLiveResultsStaged.mockReset();
+  mocks.collectLiveResultsStagedAdmitted.mockReset();
+  mocks.collectLiveResultsStagedAdmitted.mockImplementation(async (q: string, o: unknown) =>
+    mocks.collectLiveResultsStaged(q, o),
+  );
   mocks.followUpSnapshot.mockReset();
   mocks.resolveProductIdentity.mockResolvedValue({
     productId: "probe-1",

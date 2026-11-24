@@ -39,7 +39,7 @@ import type { LiveSearchResult } from "@/lib/collect/live-search";
 // REEA-1078 S2 — dead-lane retirement applies to this cross-worker fan-out too.
 import { readRetiredLanes } from "@/lib/collect/lane-health";
 import {
-  collectLiveResultsStaged,
+  collectLiveResultsStagedAdmitted,
   followUpSnapshot,
   FOLLOW_UP_WAIT_MS,
 } from "@/lib/collect/live-search";
@@ -103,7 +103,9 @@ export async function GET(req: Request): Promise<Response> {
     // Cross-worker path: re-collect live for this query on THIS thread.
     // Inside the REEA-291 fresh window the memo serves the last live answer
     // immediately; past it the fan-out runs again — always live-at-query-time.
-    const staged = collectLiveResultsStaged(query, {
+    // REEA-1133 — this fallback is a page-path fan-out too, so it takes the
+    // same bounded FAIL-CLOSED admission instead of bypassing the cap.
+    const staged = await collectLiveResultsStagedAdmitted(query, {
       locale,
       // REEA-1078 S2 — same dead-lane retirement set as the page's fan-out.
       retiredLanes: await readRetiredLanes(),

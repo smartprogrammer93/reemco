@@ -92,6 +92,14 @@ import type { ServeKind } from "@/lib/metrics";
 // and the caller may add the dynamically retired lanes read from the shared
 // lane-health state (see ./lane-health.ts).
 import { DEFAULT_RETIRED_LANES, LANE_CANARY_QUERY } from "@/lib/collect/lane-health";
+// REEA-1133 — the page-path fan-out shares the REEA-1063 admission counter
+// with the product runner, but takes the bounded FAIL-CLOSED variant: a render
+// that cannot be admitted serves a pending shell instead of fanning out.
+import {
+  RENDER_ADMISSION_WAIT_MS,
+  RENDER_DEFERRED_WAIT_MS,
+  tryAcquireCollectionSlot,
+} from "@/lib/collect/inflight";
 
 /**
  * Per-attempt fetch ceiling for the search fan-out (parallel per retailer).
@@ -3671,32 +3679,23 @@ function skuLeadSnap(q: string, snap: LiveSearchResult): LiveSearchResult {
   });
 }
 
-export function collectLiveResultsStaged(
-  query: string,
-  opts: StagedCollectOptions = {},
-): LiveSearchStages {
-  const baseFetch: FetchImpl = opts.fetchImpl ?? ((u, init) => fetch(u, init));
-  // REEA-224 F4 — thread the overall budget signal into every hop: each hop
-  // still carries its own attempt window, whichever expires first aborts.
-  // REEA-398 — TWO clocks on the staged path. The hop chain keeps the
-  // documented LIVE_SEARCH_BUDGET_MS ceiling (late hops must still LAND
-  // behind the finalized response, so the follow-up feed and the next query
-  // get the complete live answer from the same single fan-out), while the
-  // STREAM closes on the completion deadline: whatever answered by
-  // RESULTS_COMPLETION_BUDGET_MS is finalized into the served document with
-  // honest coverage notes, and the stream closes instead of waiting on the
-  // slowest adapter. The blocking path aligns both clocks through opts.signal.
-  const deadlineMs = opts.deadlineMs ?? RESULTS_COMPLETION_BUDGET_MS;
-  // REEA-466 — on the staged page path the behind-the-response tail rides the
-  // SAME clock the document closes on (deadline + STAGE_TAIL_HEADROOM_MS):
-  // every adapter flushes as it resolves, whatever is still in flight at the
-  // finalize lands inside the headroom, and the after() tail settles right
-  // behind the last flush instead of holding the stream open on the 16 s
-  // blocking ceiling. Callers that WAIT on the full settled answer keep their
-  // documented LIVE_SEARCH_BUDGET_MS ceiling through opts.signal.
-  const hopCeiling = opts.signal ?? AbortSignal.timeout(deadlineMs + STAGE_TAIL_HEADROOM_MS);
-  const fetchImpl: FetchImpl = (u, init) =>
-    baseFetch(u, { ...init, signal: joinSignals(hopCeiling, init?.signal ?? undefined) });
+/** REEA-1133 — the identity, lane set and memo probe of one staged run.
+ *  Extracted from collectLiveResultsStaged so the page-path admission gate
+ *  reads the memo with EXACTLY the run's own inputs: a warm hit must be
+ *  recognised without a slot (the repeat path stays instant under saturation),
+ *  and the pending shell must name the same lanes the fan-out would contact. */
+interface StagedRunProbe {
+  q: string;
+  country: CountryCode | null;
+  collectors: RetailerCollector[];
+  cache: QueryCache;
+  cacheKey: string;
+  locale: "ar" | undefined;
+  snapshotsEnabled: boolean;
+  cached: QueryCacheHit<LiveSearchResult> | null;
+}
+
+function probeStagedRun(query: string, opts: StagedCollectOptions): StagedRunProbe {
   const q = query.trim();
   const country = opts.country ?? null;
   // REEA-1078 S2 — dead-lane retirement at the ONE dispatch point: a retired
@@ -3742,6 +3741,184 @@ export function collectLiveResultsStaged(
   const hit = cache.read<LiveSearchResult>(cacheKey);
   const cached: QueryCacheHit<LiveSearchResult> | null =
     hit && opts.refresh && !hit.stale ? { ...hit, stale: true } : hit;
+  return { q, country, collectors, cache, cacheKey, locale, snapshotsEnabled, cached };
+}
+
+/**
+ * REEA-1133 — the pending shell served when a render cannot be admitted.
+ *
+ * It carries NO products and one honest note per lane the fan-out would have
+ * contacted, so the coverage line says "no answer yet" instead of letting a
+ * capacity deferral read as a zero-result answer. `settled: false` keeps the
+ * heading in its pending state; the deferred run behind the response folds the
+ * real answer in through the follow-up feed (see the admitted entry below).
+ * Nothing bundled: every number here is still a live-fetch product.
+ */
+function renderBusySnapshot(probe: StagedRunProbe): LiveSearchResult {
+  const snap = stagedSnapshot(probe.q, probe.country, [], probe.locale, []);
+  for (const c of probe.collectors) {
+    snap.notes.push({
+      merchant: c.merchant,
+      hits: 0,
+      coupons: 0,
+      error: "live check deferred — the server is at its collection cap",
+    });
+  }
+  snap.responders = summarizeResponders(snap.notes);
+  snap.settled = false;
+  return snap;
+}
+
+/**
+ * REEA-1133 — the page-path entry point for the live results fan-out.
+ *
+ * Every page render (/results, /search, the home discovery pre-warm and the
+ * follow-up feed's cross-worker fallback) must go through THIS function, not
+ * collectLiveResultsStaged directly: it routes the fan-out through the
+ * process-wide admission cap (lib/collect/inflight.ts) with a bounded,
+ * FAIL-CLOSED wait, so N distinct queries queue behind the ceiling instead of
+ * each multiplying ~15 retailer lanes. REEA-1121 measured 20 parallel /results
+ * renders on the live box answering 20×200 with zero backpressure.
+ *
+ * Contract:
+ *  - fresh memo hit: no fan-out ran, so no slot is taken and no wait is paid —
+ *    the repeat path stays instant even while every slot is busy.
+ *  - slot granted inside RENDER_ADMISSION_WAIT_MS: the run streams exactly as
+ *    before; the slot is released when its hops settle (or its tail cap fires,
+ *    at which point the hop ceiling has already aborted them).
+ *  - slot NOT granted: this render does not fan out. It serves the honest
+ *    pending shell and queues the SAME run behind the response
+ *    (RENDER_DEFERRED_WAIT_MS, also fail-closed). The deferred run registers a
+ *    follow-up placeholder BEFORE returning, so the open page's feed finds the
+ *    queued run instead of starting a second unadmitted fan-out; its converged
+ *    answer also feeds the page's after() metrics, so the counters stay honest
+ *    about what was actually delivered.
+ *
+ * Live-at-query-time policy untouched: every snapshot is a live fan-out answer
+ * (or a memo of one); the pending shell invents no merchandise.
+ */
+export async function collectLiveResultsStagedAdmitted(
+  query: string,
+  opts: StagedCollectOptions = {},
+): Promise<LiveSearchStages> {
+  const probe = probeStagedRun(query, opts);
+  // Fresh memo hit — no fan-out, no slot (the REEA-291 repeat path).
+  if (probe.cached && !probe.cached.stale) return collectLiveResultsStaged(query, opts);
+
+  const release = await tryAcquireCollectionSlot(RENDER_ADMISSION_WAIT_MS);
+  if (release) {
+    let staged: LiveSearchStages;
+    try {
+      staged = collectLiveResultsStaged(query, opts);
+    } catch (err) {
+      release();
+      throw err;
+    }
+    // Hold the slot for the whole fan-out tail. allSettled is capped at the
+    // run's own hop ceiling + margin, after which every hop fetch has been
+    // aborted, so a release here cannot leave retailer requests running.
+    void staged.allSettled.then(release, release);
+    return staged;
+  }
+
+  // Fail-closed for this render: serve the pending shell now.
+  const busy = renderBusySnapshot(probe);
+  let resolveConverged!: (snap: LiveSearchResult) => void;
+  const queuedConverged = new Promise<LiveSearchResult>((resolve) => {
+    resolveConverged = resolve;
+  });
+  let resolveTelemetry!: (telemetry: AdapterTelemetry) => void;
+  const queuedTelemetry = new Promise<AdapterTelemetry>((resolve) => {
+    resolveTelemetry = resolve;
+  });
+  // Register the placeholder BEFORE returning so the open page's follow-up
+  // fetch (which may land before the deferred run starts) finds this query's
+  // queued run; without it the feed would start a second unadmitted fan-out.
+  registerFollowUp(probe.cacheKey, queuedConverged);
+
+  const deferred: Promise<void> = (async () => {
+    const slot = await tryAcquireCollectionSlot(RENDER_DEFERRED_WAIT_MS);
+    if (!slot) {
+      // Bounded queue: no capacity in the deferred window — drop the run.
+      // Nothing was fetched, so the pending shell stands and the next request
+      // retries live (or takes the memo a sibling run wrote).
+      resolveConverged(busy);
+      resolveTelemetry({ attempts: {}, failures: {} });
+      return;
+    }
+    let run: LiveSearchStages;
+    try {
+      run = collectLiveResultsStaged(query, opts);
+    } catch {
+      slot();
+      resolveConverged(busy);
+      resolveTelemetry({ attempts: {}, failures: {} });
+      return;
+    }
+    void run.allSettled.then(slot, slot);
+    await run.adapterTelemetry.then(
+      (telemetry) => resolveTelemetry(telemetry),
+      () => resolveTelemetry({ attempts: {}, failures: {} }),
+    );
+    await run.converged.then(
+      // Same serve-time head guard the memo/KV replays apply (REEA-743), so a
+      // deferred answer folds into the open page exactly like a streamed one.
+      (snap) => resolveConverged(skuLeadSnap(probe.q, snap)),
+      () => resolveConverged(busy),
+    );
+    await run.allSettled;
+  })();
+
+  const pending = Promise.resolve(busy);
+  return {
+    // The streamed document carries only the pending shell; the converged
+    // answer reaches the shopper through the follow-up feed (REEA-398 shape).
+    stages: [pending],
+    final: pending,
+    // Keeps the invocation alive behind the response until the queued run
+    // settles (the page's after() tail), exactly like a normal run's tail.
+    allSettled: deferred,
+    converged: queuedConverged,
+    adapterTelemetry: queuedTelemetry,
+    // No cached first paint led this serve; the recorded clock is the cold
+    // collection clock of the queued run (REEA-1078 semantics).
+    serveKind: "cold",
+  };
+}
+
+export function collectLiveResultsStaged(
+  query: string,
+  opts: StagedCollectOptions = {},
+): LiveSearchStages {
+  const baseFetch: FetchImpl = opts.fetchImpl ?? ((u, init) => fetch(u, init));
+  // REEA-224 F4 — thread the overall budget signal into every hop: each hop
+  // still carries its own attempt window, whichever expires first aborts.
+  // REEA-398 — TWO clocks on the staged path. The hop chain keeps the
+  // documented LIVE_SEARCH_BUDGET_MS ceiling (late hops must still LAND
+  // behind the finalized response, so the follow-up feed and the next query
+  // get the complete live answer from the same single fan-out), while the
+  // STREAM closes on the completion deadline: whatever answered by
+  // RESULTS_COMPLETION_BUDGET_MS is finalized into the served document with
+  // honest coverage notes, and the stream closes instead of waiting on the
+  // slowest adapter. The blocking path aligns both clocks through opts.signal.
+  const deadlineMs = opts.deadlineMs ?? RESULTS_COMPLETION_BUDGET_MS;
+  // REEA-466 — on the staged page path the behind-the-response tail rides the
+  // SAME clock the document closes on (deadline + STAGE_TAIL_HEADROOM_MS):
+  // every adapter flushes as it resolves, whatever is still in flight at the
+  // finalize lands inside the headroom, and the after() tail settles right
+  // behind the last flush instead of holding the stream open on the 16 s
+  // blocking ceiling. Callers that WAIT on the full settled answer keep their
+  // documented LIVE_SEARCH_BUDGET_MS ceiling through opts.signal.
+  const hopCeiling = opts.signal ?? AbortSignal.timeout(deadlineMs + STAGE_TAIL_HEADROOM_MS);
+  const fetchImpl: FetchImpl = (u, init) =>
+    baseFetch(u, { ...init, signal: joinSignals(hopCeiling, init?.signal ?? undefined) });
+  // REEA-1133 — the run's identity, lane set and memo probe live in ONE helper
+  // so the page-path admission gate (collectLiveResultsStagedAdmitted below)
+  // recognises a warm serve with exactly the same inputs the run would use.
+  const { q, country, collectors, cache, cacheKey, locale, snapshotsEnabled, cached } = probeStagedRun(
+    query,
+    opts,
+  );
   // REEA-1078 — ANY cache hit means a cached live answer led the first paint
   // (fresh memo hit, or the SWR repeat below). The serve kind is stamped from
   // that fact so the weekly fold records the shopper's serve clock instead of
