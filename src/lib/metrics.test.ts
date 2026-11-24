@@ -376,6 +376,8 @@ describe("REEA-807 store round-trip", () => {
       "cold_serves_pending",
       "comparison_cards_multi_retailer",
       "comparison_cards_total",
+      // REEA-1141 AC-4 — duplicate-card aggregate, integer only.
+      "duplicate_cards",
       "filtered_empty_searches",
       "latency_band_1_3s",
       "latency_band_3_10s",

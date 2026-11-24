@@ -96,6 +96,17 @@ export interface LiveSearchResult {
    * is still in flight).
    */
   kuwaitPendingStatus?: boolean;
+  /**
+   * REEA-1141 — provenance flag on a CACHED replay snapshot (stale-while-
+   * revalidate lead or the shared-layer warm replay) that the live fan-out
+   * running behind the response will supersede. It is not product data: the
+   * snapshot is a previous live answer, honestly aged, and the streaming
+   * renderer must NOT paint it as its own shelf — the live stage paints the
+   * newest version of the same products, so painting the replay too would
+   * render the same productId twice (the duplicate-card regression). Absent =
+   * a live stage, painted normally.
+   */
+  replay?: boolean;
 }
 
 /* Fixed presentation order for the coverage sentence — mirrors the COLLECTORS

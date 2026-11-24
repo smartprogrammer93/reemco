@@ -121,10 +121,13 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
       "zero_offer_searches",
     ]);
     // REEA-1078 — comparison depth is one aggregate block, never per card.
+    // REEA-1141 AC-4 — duplicate_cards + dedupe_ratio ride the same block.
     expect(week.comparison_depth).toEqual({
       cards_total: 0,
       cards_multi_retailer: 0,
       ratio: 0,
+      duplicate_cards: 0,
+      dedupe_ratio: 1,
     });
   });
 
@@ -157,11 +160,16 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
       cards_total: 4,
       cards_multi_retailer: 2,
       ratio: 0.5,
+      duplicate_cards: 0,
+      dedupe_ratio: 1,
     });
-    // Aggregate only: two integers and a derived ratio.
+    // Aggregate only: two integers and a derived ratio, plus the REEA-1141
+    // duplicate-card aggregate and its derived dedupe ratio.
     expect(Object.keys(week.comparison_depth as object).sort()).toEqual([
       "cards_multi_retailer",
       "cards_total",
+      "dedupe_ratio",
+      "duplicate_cards",
       "ratio",
     ]);
   });

@@ -228,6 +228,16 @@ export interface WeekCounters {
    * Aggregate integer only: no query text, no identifiers, no per-query row.
    */
   filtered_empty_searches: number;
+  /**
+   * REEA-1141 AC-4 — duplicate cards the served streamed document painted:
+   * cards that repeated a productId an earlier flush already painted. Folded
+   * over the SAME paint chain the renderer runs (lib/results-shelf.ts), so it
+   * measures the real inflation, not a counterfactual. 0 is the healthy read
+   * (one card per product); a positive value means `comparison_cards_total`
+   * over-counts and the reader can subtract it. Aggregate integer only — no
+   * card ids, no per-query row (Data Minimization).
+   */
+  duplicate_cards: number;
   link_smoke: LinkSmokeCounters;
 }
 
@@ -262,6 +272,7 @@ export function emptyWeek(): WeekCounters {
     comparison_cards_total: 0,
     comparison_cards_multi_retailer: 0,
     filtered_empty_searches: 0,
+    duplicate_cards: 0,
     link_smoke: emptyLinkSmoke(),
   };
 }
@@ -341,6 +352,9 @@ function backfillWeek(week: WeekCounters): WeekCounters {
     // REEA-1114 — the filter-aware empty-state counter. Weeks stored before
     // this extension backfill 0, like every earlier aggregate addition.
     "filtered_empty_searches",
+    // REEA-1141 — duplicate cards painted by the streamed shelf. Weeks stored
+    // before this extension backfill 0 (the healthy read).
+    "duplicate_cards",
   ] as const) {
     week[key] = clampCount(week[key]);
   }
@@ -413,6 +427,10 @@ export interface SearchOutcomeBase {
   /** REEA-1078 — comparison depth over the same card set (see
    *  ComparisonDepth). Aggregate-only: two integers, no per-card data. */
   comparisonDepth?: ComparisonDepth;
+  /** REEA-1141 AC-4 — duplicate cards the served streamed document painted
+   *  (see lib/results-shelf.ts duplicateCardsOf). Aggregate integer only;
+   *  absent = 0, so every pre-change caller stays byte-identical. */
+  duplicateCards?: number;
 }
 
 /**
@@ -490,6 +508,10 @@ export function applySearchOutcome(
   const cardsMulti = Math.min(clampCount(outcome.comparisonDepth?.cardsMultiRetailer), cardsTotal);
   w.comparison_cards_total += cardsTotal;
   w.comparison_cards_multi_retailer += cardsMulti;
+  // REEA-1141 AC-4 — duplicate cards painted by the served streamed shelf.
+  // Clamped per serve so a hostile payload can never inflate the week; the
+  // reader subtracts this from cards_total when it is non-zero.
+  w.duplicate_cards += clampCount(outcome.duplicateCards);
   // REEA-1114 AC6 — the false-empty rate numerator: one increment per serve
   // whose visible set was zero because an active filter hid matches. Exactly
   // one bump per serve, so filtered_empty_searches ≤ searches holds.

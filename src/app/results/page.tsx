@@ -4,6 +4,10 @@ import { recordSearchOutcome, searchOutcomeFromSnapshot, serveOutcomeOf } from "
 // REEA-1099 — the ONE results-page shelf card definition the renderer uses;
 // the comparison-depth counter folds over this same set.
 import { resultsShelfCards } from "@/lib/results-shelf";
+// REEA-1141 AC-4 — the served streamed shelf's paint chain and its duplicate
+// fold: the SAME helpers the StageAppend boundaries run, so the counter can
+// never describe a different population than the page painted.
+import { paintedShelfCardsAcrossStages, duplicateCardsOf } from "@/lib/results-shelf";
 // REEA-1114 AC6 — the false-empty numerator: the SAME filter-aware
 // classification the empty state renders, folded into one aggregate counter.
 import { hiddenMatchReport, hiddenMatchTotal } from "@/lib/hidden-matches";
@@ -258,6 +262,20 @@ export default async function ResultsPage({
         hiddenMatchTotal(
           hiddenMatchReport(pageSnap.products, query, country, showOutOfStock),
         ) > 0;
+      // REEA-1141 AC-4 — duplicate cards the SERVED document painted: fold the
+      // same cumulative paint chain the StageAppend boundaries run over this
+      // run's own stage snapshots (replay leads excluded — they are superseded
+      // by the live shelf, not appended). The counter measures the real
+      // inflation in `comparison_cards_total`, so depth can be corrected; it
+      // is an aggregate integer only — no card ids, no query text.
+      const paintedCards = await paintedShelfCardsAcrossStages(
+        staged.stages,
+        query,
+        1,
+        country,
+        showOutOfStock,
+      );
+      const duplicateCards = duplicateCardsOf(paintedCards);
       // REEA-1078 — warm serves use the entry clock captured above (the serve
       // clock); cold serves use the post-allSettled clock (collection clock).
       // eslint-disable-next-line react-hooks/purity -- read in the deferred after() tail, never during render output.
@@ -275,6 +293,8 @@ export default async function ResultsPage({
         adapterFailures: adapterTelemetry.failures,
         // REEA-1114 AC6 — aggregate false-empty numerator (see above).
         filteredEmpty,
+        // REEA-1141 AC-4 — aggregate duplicate-card inflation (see above).
+        duplicateCards,
       });
       // REEA-1078 S2 — the same telemetry feeds the per-lane daily evidence
       // the 7-day auto-retire rule reads. Behind the response (deferred

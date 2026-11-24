@@ -3808,6 +3808,19 @@ function skuLeadSnap(q: string, snap: LiveSearchResult): LiveSearchResult {
   });
 }
 
+/**
+ * REEA-1141 — a cached replay that the live fan-out running behind this
+ * response will supersede. Same serve-time head guard as a memo hit, plus the
+ * provenance flag the streaming renderer reads: it paints the LIVE stage's
+ * version of these products (the newest collectedAt), not the stale shelf, so
+ * the same productId can never be rendered twice. The flag is envelope
+ * metadata only — the cached answer itself is unchanged and still honestly
+ * aged in the RSC payload.
+ */
+function replaySnap(q: string, snap: LiveSearchResult): LiveSearchResult {
+  return { ...skuLeadSnap(q, snap), replay: true };
+}
+
 /** REEA-1133 — the identity, lane set and memo probe of one staged run.
  *  Extracted from collectLiveResultsStaged so the page-path admission gate
  *  reads the memo with EXACTLY the run's own inputs: a warm hit must be
@@ -4086,7 +4099,9 @@ export function collectLiveResultsStaged(
     snapshotsEnabled && !cached
       ? replaySharedQuerySnapshot<LiveSearchResult>(cacheKey).then(
           // REEA-743 — same serve-time head guard on the replayed snapshot.
-          (snap) => (snap ? skuLeadSnap(q, snap) : new Promise<LiveSearchResult>(() => {})),
+          // REEA-1141 — flagged as a replay: the renderer paints the live
+          // stage's newest version instead of appending a stale shelf.
+          (snap) => (snap ? replaySnap(q, snap) : new Promise<LiveSearchResult>(() => {})),
         )
       : null;
 
@@ -4292,8 +4307,11 @@ export function collectLiveResultsStaged(
     // shopper's FIRST PAINT is the cached live answer, so this is a warm
     // serve: the recorded clock is the serve clock (request → finalized
     // response), not the collection clock of the fan-out deepening behind it.
+    // REEA-1141 — the lead is a REPLAY (flagged): the streaming renderer
+    // paints the live stage's newest version of the same products rather than
+    // appending the stale shelf beside it, so one productId = one card.
     return {
-      stages: [Promise.resolve(skuLeadSnap(q, cached.value)), ...stages],
+      stages: [Promise.resolve(replaySnap(q, cached.value)), ...stages],
       final,
       allSettled,
       converged,

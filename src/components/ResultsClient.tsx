@@ -31,7 +31,7 @@ import {
 } from "@/lib/metrics-events";
 import { HeadingGhost, SkeletonCard, StampGhost, coverageLhTier } from "@/components/SkeletonSlots";
 import { PRODUCTS } from "@/lib/feed";
-import { resultsShelfCards, resultsShelfSections, shelfSectionsFromProducts, RESULTS_PAGE_SIZE } from "@/lib/results-shelf";
+import { resultsShelfCards, resultsShelfSections, shelfSectionsFromProducts, RESULTS_PAGE_SIZE, freshCardsForFlush, paintedIdsAfter } from "@/lib/results-shelf";
 import { formatPrice, sortOffers } from "@/lib/format";
 import SearchForm from "@/components/SearchForm";
 import { coverageParts, type LiveSearchResult } from "@/lib/collect/coverage";
@@ -565,14 +565,23 @@ function FlushBlock(props: {
 }
 
 /* One boundary per adapter flush: renders only the cards NEW in this snapshot.
-   A card whose id already appeared in the immediately-prior snapshot keeps its
-   slot and is not re-rendered (append-only over cumulative snapshots, AC-2).
+   A card whose id already appeared in ANY earlier painted flush keeps its slot
+   and is not re-rendered (append-only over cumulative snapshots, AC-2).
+   REEA-1141 — the baseline is CUMULATIVE, not the adjacent prior snapshot: an
+   empty intermediate flush (an adapter that answered with no kept offers) used
+   to reset the diff baseline, so the next flush re-rendered products already
+   painted by the stale replay lead. A replay snapshot (cached stale-while-
+   revalidate / shared-layer warm, `snap.replay`) is not painted at all: the
+   live stage paints the newest version of the same products, so the fresh
+   shelf REPLACES the stale one instead of appending beside it.
    All values derive purely from the snapshot pair — no mutable accumulators —
    so flush order, hydration, and re-renders land on identical markup.
 
    REEA-964: flushes render CONFIDENT (primary) cards only; the related band
    is a separate final-stage boundary (StageEmptyState below), so a
    below-threshold row can never append into the primary flow mid-stream. */
+const EMPTY_PAINTED_IDS: ReadonlySet<string> = new Set<string>();
+
 function StageAppend(props: {
   stages: Promise<LiveSearchResult>[];
   index: number;
@@ -584,22 +593,25 @@ function StageAppend(props: {
   locale?: Locale;
   /** REEA-965 — per-query metrics id; rides the {...props} spread into FlushBlock. */
   queryId?: string;
+  /** REEA-1141 — productIds painted by every earlier flush in this chain. */
+  paintedIds?: ReadonlySet<string>;
 }) {
   const { stages, index, page, country, showOutOfStock } = props;
   const snap = use(stages[index]);
   const visible = stagedView(snap, props.query, page, country, showOutOfStock);
-  // Snapshots are cumulative, so comparing against the adjacent prior stage is
-  // enough to isolate what this flush adds. At index 0 the "prior" is the
-  // same stage — everything visible is fresh.
-  const prevSnap = use(stages[Math.max(0, index - 1)]);
-  const prevVisible = stagedView(prevSnap, props.query, page, country, showOutOfStock);
-  const prevIds = new Set(prevVisible.map((p) => p.productId));
-  const fresh = index === 0 ? visible : visible.filter((p) => !prevIds.has(p.productId));
+  const paintedIds = props.paintedIds ?? EMPTY_PAINTED_IDS;
+  // REEA-1141 — a cached replay is superseded by the live fan-out running
+  // behind this response; painting it would duplicate the live shelf. It
+  // contributes no cards and does not claim ids in the baseline, so the live
+  // stage paints the newest version of those products (AC-3).
+  const replay = snap.replay === true;
+  const fresh = freshCardsForFlush(visible, paintedIds, replay);
+  const nextPaintedIds = paintedIdsAfter(paintedIds, fresh);
   // REEA-222: badge ownership follows the first flush that actually RENDERS
   // cards, not index 0 blindly. When the earliest snapshots are empty under
-  // the country/stock selections, the whole page used to render without any
-  // Best-price badge (only index 0 could carry one).
-  const badgeOwner = index === 0 || prevVisible.length === 0;
+  // the country/stock selections (or a replay that paints nothing), the whole
+  // page used to render without any Best-price badge.
+  const badgeOwner = fresh.length > 0 && paintedIds.size === 0;
   // REEA-835/847 — the Kuwait batch is still pending for THIS render when
   // more answers may still land: any intermediate flush (later stages are
   // still streaming), or a finalized-at-budget snapshot (`settled === false`,
@@ -620,10 +632,10 @@ function StageAppend(props: {
   // NOTHING has painted and a later stage is still in flight, keep the same
   // named-slot ghost in the reserve, so the shopper sees "still checking"
   // geometry instead of an empty band until the honest empty state lands.
-  const shelfStillEmpty = prevVisible.length === 0 && fresh.length === 0;
+  const shelfStillEmpty = paintedIds.size === 0 && fresh.length === 0;
   const next = index + 1 < stages.length ? (
     <Suspense fallback={shelfStillEmpty ? <StagedGridGhost /> : null}>
-      <StageAppend {...props} index={index + 1} />
+      <StageAppend {...props} index={index + 1} paintedIds={nextPaintedIds} />
     </Suspense>
   ) : null;
 
@@ -1054,6 +1066,11 @@ export function renderedAcrossStages(
       // returns a real Promise, so the painted-row union is what actually
       // painted.
       Promise.resolve(stage).then((snap) => {
+        // REEA-1141 — a cached replay is not painted (the live stage paints
+        // the newest version of its products), so it must not contribute
+        // merchant names to the stamp either: naming a replay-only merchant
+        // would fork the sentence against the rows actually on screen.
+        if (snap.replay === true) return [];
         // REEA-964 — the painted set is primary slice + related band (both
         // derive from the same confidence partition the render uses), so a
         // merchant visible only through the related band still gets named.

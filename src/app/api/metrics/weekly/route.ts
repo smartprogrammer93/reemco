@@ -211,6 +211,19 @@ export function weeklyResponse(
         cards_total: w.comparison_cards_total,
         cards_multi_retailer: w.comparison_cards_multi_retailer,
         ratio: w.comparison_cards_total > 0 ? w.comparison_cards_multi_retailer / w.comparison_cards_total : 0,
+        // REEA-1141 AC-4 — duplicate cards the served streamed shelf painted
+        // (same paint chain as the renderer, aggregate integer only) and the
+        // derived dedupe ratio (unique cards ÷ painted cards, 1 when clean).
+        // A non-zero duplicate_cards is the inflation to subtract from
+        // cards_total before reading depth; the ratio states the same fact.
+        duplicate_cards: w.duplicate_cards,
+        dedupe_ratio:
+          w.comparison_cards_total > 0
+            ? Math.max(
+                0,
+                w.comparison_cards_total - Math.min(w.duplicate_cards, w.comparison_cards_total),
+              ) / w.comparison_cards_total
+            : 1,
       },
       // REEA-1114 AC6 — false-empty numerator: serves whose visible set was
       // zero because an active filter hid matches. Aggregate integer only;
