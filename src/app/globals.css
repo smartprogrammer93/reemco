@@ -158,8 +158,21 @@
   --rc-dark-action-hover: #9A3412;
 }
 
+/* REEA-1159 — theme resolution. Three states over ONE palette (no new hex):
+   1. no explicit choice: follow the OS (the guarded media query below), which
+      is the pre-REEA-1159 behaviour;
+   2. data-theme="dark": the shopper's stored dark choice overrides the OS —
+      the layout writes this attribute server-side from the rc_theme cookie, so
+      it is on <html> in the first paint;
+   3. data-theme="light": the stored light choice overrides a dark OS. The
+      media query is guarded with :not([data-theme="light"]) so it cannot win
+      over the explicit light choice.
+   The explicit-dark mapping repeats the media block's declarations because CSS
+   has no mixins; src/app/theme-css.test.ts pins the two lists to be identical.
+   `color-scheme` follows the choice too, so native scrollbars and form
+   controls match the theme the shopper picked. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --rc-canvas: var(--rc-dark-canvas);
     --rc-surface: var(--rc-dark-surface);
     --rc-surface-sunken: var(--rc-dark-surface-sunken);
@@ -188,9 +201,45 @@
      #FBBF24 but keeps the cream background (~1.5:1). The chip background
      follows the dark line token → #FBBF24 on #3A3128 ≈ 7.6:1; the light
      pairing stays untouched above. Existing tokens only. */
-  .coupon-badge {
+  :root:not([data-theme="light"]) .coupon-badge {
     background: var(--rc-dark-line);
   }
+}
+
+/* REEA-1159 — the explicit dark choice, same mapping as the OS block above.
+   Higher specificity than the base :root block, so it wins whether or not the
+   OS is dark; the explicit light choice simply omits the attribute mapping
+   and inherits the base light :root values. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --rc-canvas: var(--rc-dark-canvas);
+  --rc-surface: var(--rc-dark-surface);
+  --rc-surface-sunken: var(--rc-dark-surface-sunken);
+  --rc-line: var(--rc-dark-line);
+  --rc-line-strong: var(--rc-dark-line-strong);
+  --rc-ink: var(--rc-dark-ink);
+  --rc-body-text: var(--rc-dark-body-text);
+  --rc-muted: var(--rc-dark-muted);
+  --rc-primary: var(--rc-dark-primary);
+  --rc-savings: var(--rc-dark-savings);
+  --rc-savings-bg: var(--rc-dark-savings-bg);
+  --rc-fresh: var(--rc-dark-fresh);
+  --rc-error: var(--rc-dark-error);
+  --rc-error-bg: var(--rc-dark-error-bg);
+  --rc-status-bg: var(--rc-dark-status-bg);
+  --rc-status-border: var(--rc-dark-status-border);
+  --rc-status-ink: var(--rc-dark-status-ink);
+  --rc-status-verified: var(--rc-dark-status-verified);
+  --rc-status-unverified: var(--rc-dark-status-unverified);
+  --rc-status-stale: var(--rc-dark-status-stale);
+  --rc-skeleton-bg: #241E18;
+  --rc-skeleton-fill: #2E261E;
+}
+
+/* REEA-1159 — an explicit light choice must also defeat a dark OS at the
+   native-controls level. */
+:root[data-theme="light"] {
+  color-scheme: light;
 }
 
 /* Layout gutter tightens below 400px (Direction A: 16px mobile density). */
@@ -320,7 +369,7 @@ a:focus-visible {
    measured #FBBF24 on #FEF3C7 ≈ 1.5:1 on results/product coupon pills. Same
    remedy, placed after the base: #FBBF24 on #3A3128 ≈ 7.6:1. */
 @media (prefers-color-scheme: dark) {
-  .coupon-badge {
+  :root:not([data-theme="light"]) .coupon-badge {
     background: var(--rc-dark-line);
   }
 }
@@ -657,12 +706,12 @@ html[lang="ar"] .coupon-via {
    override, placed AFTER .query-pill:hover so it wins the equal-specificity
    cascade: #FB923C on #2B2118 ≈ 6.9:1. */
 @media (prefers-color-scheme: dark) {
-  .query-pill-on-light {
+  :root:not([data-theme="light"]) .query-pill-on-light {
     background: var(--rc-dark-surface-sunken);
     color: var(--rc-dark-primary);
   }
 
-  .query-pill-on-light:hover {
+  :root:not([data-theme="light"]) .query-pill-on-light:hover {
     background: var(--rc-dark-line);
   }
 }
@@ -1104,7 +1153,7 @@ html[lang="ar"] .coupon-via {
    swapped in dark, so #FBBF24 text sat on the cream #FEF3C7 fill (≈1.5:1).
    Follow the REEA-760 remedy: dark line surface → 7.6:1. */
 @media (prefers-color-scheme: dark) {
-  .cached-chip {
+  :root:not([data-theme="light"]) .cached-chip {
     background: var(--rc-dark-line);
   }
 }
@@ -1160,20 +1209,20 @@ html[lang="ar"] .coupon-via {
    price/Retry). The dark action surface keeps #FFFFFF at 5.18:1 (hover
    7.31:1). The retailer rail's landed chip rides the same fill. */
 @media (prefers-color-scheme: dark) {
-  .btn-primary,
-  .r2-btn,
-  .rc-chip.is-done {
+  :root:not([data-theme="light"]) .btn-primary,
+  :root:not([data-theme="light"]) .r2-btn,
+  :root:not([data-theme="light"]) .rc-chip.is-done {
     background: var(--rc-dark-action);
     color: var(--rc-on-primary);
   }
 
-  .btn-primary:hover,
-  .r2-btn:hover {
+  :root:not([data-theme="light"]) .btn-primary:hover,
+  :root:not([data-theme="light"]) .r2-btn:hover {
     background: var(--rc-dark-action-hover);
   }
 
   /* Outline hover: the light tint kept #FB923C text at ≈2.0:1 in dark. */
-  .btn-outline:hover {
+  :root:not([data-theme="light"]) .btn-outline:hover {
     background: var(--rc-dark-surface-sunken);
   }
 }
@@ -1402,6 +1451,24 @@ html[lang="ar"] .coupon-via {
   background: var(--rc-surface-sunken);
 }
 
+/* REEA-1159 — the theme control. Same 44x44 header-control geometry as the
+   language and menu buttons; a hairline border makes it a visible control
+   rather than a bare glyph. It is icon-only because the 375px brand row has
+   no room for a third text label (design judgement recorded on REEA-1159),
+   and the icon is direction-neutral, so it needs no RTL mirroring.
+   The pressed state carries the stored dark choice (aria-pressed) as a filled
+   surface + amber glyph; --rc-primary on --rc-surface-sunken is the shipped
+   accent pairing in both themes. */
+.rc-theme-btn {
+  border-color: var(--rc-line);
+}
+
+.rc-theme-btn[aria-pressed="true"] {
+  background: var(--rc-surface-sunken);
+  border-color: var(--rc-line-strong);
+  color: var(--rc-primary);
+}
+
 /* Menu panel: a real navigation surface, never a decorative icon. */
 .rc-menu {
   position: relative;
@@ -1513,7 +1580,7 @@ html[lang="ar"] .coupon-via {
 }
 
 @media (prefers-color-scheme: dark) {
-  .rc-chip-count {
+  :root:not([data-theme="light"]) .rc-chip-count {
     color: var(--rc-dark-primary);
   }
 }
@@ -1524,15 +1591,15 @@ html[lang="ar"] .coupon-via {
    remedy — dark sunken surface + bright primary text/border/check:
    #FB923C on #2A231C ≈ 6.84:1. */
 @media (prefers-color-scheme: dark) {
-  .rc-chip[aria-pressed="true"],
-  .rc-chip.is-selected {
+  :root:not([data-theme="light"]) .rc-chip[aria-pressed="true"],
+  :root:not([data-theme="light"]) .rc-chip.is-selected {
     background: var(--rc-dark-surface-sunken);
     border-color: var(--rc-dark-primary);
     color: var(--rc-dark-primary);
   }
 
-  .rc-chip[aria-pressed="true"] .check,
-  .rc-chip.is-selected .check {
+  :root:not([data-theme="light"]) .rc-chip[aria-pressed="true"] .check,
+  :root:not([data-theme="light"]) .rc-chip.is-selected .check {
     color: var(--rc-dark-primary);
   }
 }
@@ -3309,4 +3376,65 @@ html[lang="ar"] .coupon-via {
     inset-inline-end: 0;
     z-index: 2;
   }
+}
+
+/* ==========================================================================
+ * REEA-1159 — explicit dark choice (data-theme="dark" on <html>).
+ *
+ * The OS-following rules above are already gated with
+ * :root:not([data-theme="light"]), so an explicit LIGHT choice needs nothing
+ * here (it falls back to the base light tokens). An explicit DARK choice on a
+ * light-OS device does need the component-level dark remedies, and this block
+ * repeats them at a specificity that wins over the base rules regardless of
+ * source order. The declarations are the shipped REEA-760 / REEA-983 /
+ * REEA-1095 AC12 contrast remedies — same values, no new palette. Parity with
+ * the media-query blocks is pinned by src/app/theme-css.test.ts.
+ * ========================================================================== */
+:root[data-theme="dark"] .coupon-badge {
+  background: var(--rc-dark-line);
+}
+
+:root[data-theme="dark"] .query-pill-on-light {
+  background: var(--rc-dark-surface-sunken);
+  color: var(--rc-dark-primary);
+}
+
+:root[data-theme="dark"] .query-pill-on-light:hover {
+  background: var(--rc-dark-line);
+}
+
+:root[data-theme="dark"] .cached-chip {
+  background: var(--rc-dark-line);
+}
+
+:root[data-theme="dark"] .btn-primary,
+:root[data-theme="dark"] .r2-btn,
+:root[data-theme="dark"] .rc-chip.is-done {
+  background: var(--rc-dark-action);
+  color: var(--rc-on-primary);
+}
+
+:root[data-theme="dark"] .btn-primary:hover,
+:root[data-theme="dark"] .r2-btn:hover {
+  background: var(--rc-dark-action-hover);
+}
+
+:root[data-theme="dark"] .btn-outline:hover {
+  background: var(--rc-dark-surface-sunken);
+}
+
+:root[data-theme="dark"] .rc-chip-count {
+  color: var(--rc-dark-primary);
+}
+
+:root[data-theme="dark"] .rc-chip[aria-pressed="true"],
+:root[data-theme="dark"] .rc-chip.is-selected {
+  background: var(--rc-dark-surface-sunken);
+  border-color: var(--rc-dark-primary);
+  color: var(--rc-dark-primary);
+}
+
+:root[data-theme="dark"] .rc-chip[aria-pressed="true"] .check,
+:root[data-theme="dark"] .rc-chip.is-selected .check {
+  color: var(--rc-dark-primary);
 }

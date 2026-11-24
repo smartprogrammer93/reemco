@@ -6,8 +6,10 @@ import HeaderSearch from "@/components/HeaderSearch";
 import HeaderMenu from "@/components/HeaderMenu";
 import FooterNav from "@/components/FooterNav";
 import LocaleToggle from "@/components/LocaleToggle";
+import ThemeToggle from "@/components/ThemeToggle";
 import { getStrings, localeDir } from "@/lib/i18n";
 import { resolveRequestLocale } from "@/lib/i18n-server";
+import { resolveRequestTheme } from "@/lib/theme-server";
 import "./globals.css";
 
 /* Theme v1 §6: Inter 400/500/600/700, display swap; fallback stack in --rc-font-body. */
@@ -57,12 +59,20 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
   // right lang/dir and chrome strings on first paint, with no client-side
   // flip and no hydration mismatch.
   const locale = await resolveRequestLocale();
+  // REEA-1159: the shopper's explicit theme choice rides the rc_theme cookie
+  // and is resolved HERE, on the server, so the first paint already carries
+  // data-theme="light|dark" on <html> — no flash of the wrong theme and no
+  // inline bootstrap script to nonce under the REEA-1088 CSP path. No cookie
+  // means no attribute: the shipped @media (prefers-color-scheme: dark) rules
+  // keep following the OS, exactly as before this change.
+  const theme = await resolveRequestTheme();
   const dir = localeDir(locale);
   const t = getStrings(locale);
   return (
     <html
       lang={locale}
       dir={dir}
+      data-theme={theme ?? undefined}
       className={`${inter.variable} ${spaceGrotesk.variable} ${notoArabic.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col">
@@ -104,6 +114,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
             </Suspense>
             <div className="rc-header-actions">
               <LocaleToggle locale={locale} />
+              <ThemeToggle locale={locale} initialTheme={theme} />
               <HeaderMenu locale={locale} />
             </div>
           </div>

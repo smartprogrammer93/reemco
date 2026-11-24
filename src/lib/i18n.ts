@@ -279,6 +279,14 @@ const en = {
   menuClose: "Close menu",
   menuHowCompare: "How we compare",
   toggleAriaTo: "Switch language to {lang}",
+  // REEA-1159 — the theme control's accessible name is the STATE ("Dark mode"
+  // + aria-pressed), not the action, so a screen reader announces "Dark mode,
+  // toggle button, pressed / not pressed" instead of a label that flips under
+  // the user. The action hint rides `title` for sighted hover.
+  themeLabel: "Dark mode",
+  themeToggleTo: "Switch to {theme} theme",
+  themeLight: "light",
+  themeDark: "dark",
   filterAria: "Filters and market",
   filterSaudi: "Saudi",
   resultsHeading: "{q} prices in {country}",
@@ -552,6 +560,12 @@ const ar: typeof en = {
   menuClose: "أغلق القائمة",
   menuHowCompare: "كيف نقارن",
   toggleAriaTo: "تبديل اللغة إلى {lang}",
+  // REEA-1159 — AR theme chrome, written in Arabic (not a mirrored fallback):
+  // named by its state, with the same aria-pressed pair as EN.
+  themeLabel: "الوضع الداكن",
+  themeToggleTo: "التبديل إلى الوضع {theme}",
+  themeLight: "الفاتح",
+  themeDark: "الداكن",
   filterAria: "التصفية والسوق",
   filterSaudi: "السعودية",
   resultsHeading: "أسعار {q} في {country}",
