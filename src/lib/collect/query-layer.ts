@@ -16,7 +16,7 @@
  * Best-effort by contract (the REEA-92 rule): no KV binding or a hiccup
  * reads as a plain miss, never as a failed request. Server-only module.
  */
-import { QUERY_CACHE_MAX_AGE_MS } from "@/lib/query-cache";
+import { QUERY_CACHE_FRESH_MS, QUERY_CACHE_MAX_AGE_MS } from "@/lib/query-cache";
 import { getSharedKv } from "@/lib/collect/kv";
 
 /** Namespace for mirrored query snapshots: one entry per memo identity. */
@@ -50,6 +50,32 @@ export async function replaySharedQuerySnapshot<T>(
   } catch {
     return null;
   }
+}
+
+/**
+ * REEA-1154 D4 — replay this query's mirrored answer ONLY while it is still
+ * inside the memo's fresh window, judged by the snapshot's own live-fetch
+ * stamp (`collectedAtEpochMs`, else `collectedAt`). The shared layer keeps the
+ * memo CEILING as TTL (minutes), so an un-aged replay can be far older than
+ * the fresh window; serving that as the answer to a NEW dispatch would present
+ * aged prices as fresh. Inside the window it is exactly what a warm memo hit
+ * would have served: one dispatched query, one live answer — across worker
+ * threads, not just within one. A snapshot with no usable stamp is treated as
+ * aged (the caller keeps its live path / first-flush-only role).
+ */
+export async function replayFreshSharedQuerySnapshot<T>(
+  cacheKey: string,
+  nowMs: number = Date.now(),
+): Promise<T | null> {
+  const snap = await replaySharedQuerySnapshot<T & { collectedAt?: string; collectedAtEpochMs?: number }>(
+    cacheKey,
+  );
+  if (!snap) return null;
+  const stamp =
+    snap.collectedAtEpochMs ?? (snap.collectedAt ? Date.parse(snap.collectedAt) : Number.NaN);
+  if (!Number.isFinite(stamp)) return null;
+  const age = nowMs - stamp;
+  return age >= 0 && age <= QUERY_CACHE_FRESH_MS ? (snap as unknown as T) : null;
 }
 
 /**

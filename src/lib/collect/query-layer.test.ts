@@ -40,6 +40,7 @@ vi.stubGlobal(
 
 import {
   mirrorSharedQuerySnapshot,
+  replayFreshSharedQuerySnapshot,
   replaySharedQuerySnapshot,
   sharedQuerySnapshotKey,
 } from "@/lib/collect/query-layer";
@@ -47,6 +48,8 @@ import {
 interface Snapshot {
   products: { title: string }[];
   scrapedAt: string;
+  collectedAt?: string;
+  collectedAtEpochMs?: number;
 }
 
 describe("shared-layer warm (REEA-602)", () => {
@@ -86,5 +89,37 @@ describe("shared-layer warm (REEA-602)", () => {
     expect(await replaySharedQuerySnapshot("xm6")).toBeNull();
     expect(await mirrorSharedQuerySnapshot("xm6", { products: [] })).toBe(false);
     kvDown = false;
+  });
+});
+
+describe("shared-layer fresh replay (REEA-1154 D4)", () => {
+  const T0 = Date.parse("2026-11-25T12:00:00.000Z");
+  const fresh: Snapshot = {
+    products: [{ title: "Samsung Galaxy Z Fold7, 5G, 12 GB RAM" }],
+    scrapedAt: "2026-11-25T11:59:58.000Z",
+    collectedAt: "2026-11-25T11:59:58.000Z",
+    collectedAtEpochMs: T0 - 2_000,
+  };
+
+  it("serves the mirrored answer as this dispatch's answer inside the fresh window", async () => {
+    await mirrorSharedQuerySnapshot("fold7", fresh);
+    expect(await replayFreshSharedQuerySnapshot<Snapshot>("fold7", T0)).toEqual(fresh);
+  });
+
+  it("keeps an aged mirror out of the fresh path (the caller still runs live)", async () => {
+    await mirrorSharedQuerySnapshot("fold7-aged", fresh);
+    // The memo ceiling outlives the fresh window; a 90 s old answer is still
+    // replayable, just not as a fresh one.
+    expect(await replayFreshSharedQuerySnapshot<Snapshot>("fold7-aged", T0 + 90_000)).toBeNull();
+    expect(await replaySharedQuerySnapshot<Snapshot>("fold7-aged")).not.toBeNull();
+  });
+
+  it("treats a snapshot with no usable live-fetch stamp as aged", async () => {
+    table.set("pc:q:fold7-unstamped", JSON.stringify({ products: [{ title: "Fold7" }], scrapedAt: "x" }));
+    expect(await replayFreshSharedQuerySnapshot<Snapshot>("fold7-unstamped", T0)).toBeNull();
+  });
+
+  it("misses cleanly when the shared layer has nothing (no binding / unknown key)", async () => {
+    expect(await replayFreshSharedQuerySnapshot<Snapshot>("fold7-never", T0)).toBeNull();
   });
 });

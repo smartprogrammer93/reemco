@@ -44,6 +44,10 @@ import {
   FOLLOW_UP_WAIT_MS,
 } from "@/lib/collect/live-search";
 import { sanitizeSearchQuery } from "@/lib/search-params";
+import { queryCacheKey } from "@/lib/query-cache";
+// REEA-1154 D4 — the cross-worker fresh answer, read from the shared layer
+// under the same memo identity and fresh window the page's memo uses.
+import { replayFreshSharedQuerySnapshot } from "@/lib/collect/query-layer";
 import { LOCALE_COOKIE, resolveUiLocale } from "@/lib/i18n";
 import { checkRateLimitShared } from "@/lib/rate-limit-kv";
 import { rateLimitHeaders } from "@/lib/rate-limit";
@@ -100,6 +104,20 @@ export async function GET(req: Request): Promise<Response> {
   let pending = query ? followUpSnapshot(query, locale) : null;
   let fallbackFinal: Promise<LiveSearchResult> | null = null;
   if (!pending && query) {
+    // REEA-1154 D4 — cross-worker FRESH answer first. The per-instance memo
+    // and the follow-up registry are both thread-local, so a spelling that
+    // lands on a worker which never ran this dispatch used to pay its OWN
+    // fan-out and fold in its own, slightly different set (QA measured 5/13
+    // vs 10/28 for one dispatched query). The shared layer holds the sibling
+    // run's converged live answer under the same memo identity; while that
+    // answer is inside the memo's fresh window it IS this dispatch's answer,
+    // so serve it and skip the second fan-out. Past the window the replay is
+    // honestly aged and the live path below runs — never stale-as-fresh, and
+    // never bundled data.
+    const shared = await replayFreshSharedQuerySnapshot<LiveSearchResult>(
+      queryCacheKey(query, undefined, locale === "ar" ? "ar" : undefined),
+    );
+    if (shared) return Response.json(shared, { headers: gateHeaders });
     // Cross-worker path: re-collect live for this query on THIS thread.
     // Inside the REEA-291 fresh window the memo serves the last live answer
     // immediately; past it the fan-out runs again — always live-at-query-time.
