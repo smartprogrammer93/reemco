@@ -650,8 +650,20 @@ export default function ProductResultCard({
   const heroPrice = best
     ? formatCountryPrice(best.price, best.currency, hasLocalOffer ? country : null)
     : null;
+  // REEA-1147 AC2 — a card is a cross-store comparison only when at least two
+  // distinct retailers answer IN the surface's market. REEA-1142 already
+  // scopes the card (explicit selection, else home Kuwait), so the count reads
+  // that same market: a one-store card never claims a cross-store saving or a
+  // "best effective price", and a cross-market row never counts as a local
+  // comparison store.
+  const inMarketRetailers = new Set(
+    product.offers
+      .filter((o) => offerMarket(o.currency) === scope)
+      .map((o) => o.merchant),
+  ).size;
+  const comparison = inMarketRetailers >= 2;
   const saved =
-    best != null && !heroUnavailable && best.wasPrice != null && best.wasPrice > best.price;
+    comparison && best != null && !heroUnavailable && best.wasPrice != null && best.wasPrice > best.price;
   const heroSavedAmount =
     best != null && best.wasPrice != null && best.wasPrice > best.price
       ? formatCountryPrice(best.wasPrice - best.price, best.currency, country).primary
@@ -765,11 +777,13 @@ export default function ProductResultCard({
         <span className="flex min-w-0 flex-wrap items-center justify-end gap-2">
           <FreshnessBadge scrapedAt={product.scrapedAt} renderStartMs={renderStartMs} locale={locale} />
           <span className="rc-card-basis">
-            {hasLocalOffer
+            {comparison
               ? t.bestEffectiveLabel
-              : best && offerMarket(best.currency)
-                ? marketPriceLabel(offerMarket(best.currency) as CountryCode, locale)
-                : t.bestEffectiveLabel}
+              : inMarketRetailers === 1
+                ? `${inMarketRetailers} ${t.retailersOne}`
+                : !hasLocalOffer && best && offerMarket(best.currency)
+                  ? marketPriceLabel(offerMarket(best.currency) as CountryCode, locale)
+                  : t.bestEffectiveLabel}
           </span>
         </span>
       </div>
@@ -962,8 +976,8 @@ export default function ProductResultCard({
 
           {best && hasLocalOffer && cheapestListed != null && (
             <p style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
-              <span className="tabular">{offers.length}</span>{" "}
-              {offers.length === 1 ? t.retailersOne : t.retailersMany} · {t.fromWord}{" "}
+              <span className="tabular">{inMarketRetailers}</span>{" "}
+              {inMarketRetailers === 1 ? t.retailersOne : t.retailersMany} · {t.fromWord}{" "}
               <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
                 <bdi>{formatCountryPrice(cheapestListed, "KWD", country).primary}</bdi>
               </span>

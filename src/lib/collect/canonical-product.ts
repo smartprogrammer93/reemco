@@ -746,6 +746,58 @@ export function listingLabel(listingTitle: string, cardTitle: string): string {
   return axisLabel(kept.join(" "));
 }
 
+/**
+ * REEA-1147 — the model-family display title for the served results page.
+ *
+ * A shopper searching an exact model ("samsung galaxy s25 ultra", "fold 7")
+ * is comparing THAT model, not one retailer's capacity/colour tier. The
+ * canonical key keeps storage as a card discriminator (REEA-254), which on a
+ * live panel split one model into one single-retailer card per tier: Xcite
+ * carried 256GB, Wibi 512GB, Eureka 1TB, so no card could show two stores.
+ * The results-page grouping folds those tier groups into one family card and
+ * this helper names it: the member title with capacity, colour, grade, RAM
+ * and marketing restatements removed. Every word comes from the fetched
+ * retailer title — nothing bundled, nothing invented.
+ *
+ * The glued Xcite spelling ("512Phone", REEA-1109) is removed too, so a
+ * family title never keeps one tier's number. When removal leaves nothing
+ * usable the caller falls back to the verbatim shortest title.
+ */
+export function familyDisplayTitle(listingTitle: string): string {
+  const bare = (w: string): string =>
+    w.toLowerCase().replace(/^[(\[{“"'‘]+/, "").replace(/[)\]},.;:!؟”"'’]+$/, "");
+  const words = (t: string): string[] => t.trim().replace(/\s+/g, " ").split(" ").filter(Boolean);
+  const kept: string[] = [];
+  for (const word of words(listingTitle)) {
+    const t = bare(word);
+    if (t === "" || !/[\p{L}\p{N}]/u.test(t)) continue;
+    if (STORAGE_RE.test(t) || /^\d{2,4}phone$/.test(t)) continue; // capacity tier / glued tier
+    if (RAM_QUANTITY_RE.test(t) || RAM_WORDS.has(t) || /^(gb|tb|mb)$/i.test(t)) continue;
+    if (COLORS.has(t) || COLOR_PREFIXES.has(t)) continue;
+    if (GRADE_WORDS.has(t) || GRADE_LETTERS.has(t) || t === "grade") continue;
+    if (arabicNoise(t) || NOISE.has(t)) continue;
+    kept.push(word.trim());
+  }
+  const numericOnly = (w: string): boolean => /^\p{N}+(?:[.,]\p{N}+)?$/u.test(bare(w));
+  while (kept.length > 0 && numericOnly(kept[0])) kept.shift();
+  while (kept.length > 0 && numericOnly(kept[kept.length - 1])) kept.pop();
+  return kept.join(" ");
+}
+
+/**
+ * REEA-1147 — the visible capacity qualifier of a listing ("256 GB"), read
+ * from the same STORAGE_RE/glued vocabulary as the canonical key. Empty when
+ * the title names no capacity. Used only on family cards, where capacity is
+ * an offer-row qualifier rather than the card-splitting discriminator.
+ */
+export function capacityLabelOf(listingTitle: string): string {
+  const storage = canonicalFields(listingTitle).storage;
+  if (storage === "") return "";
+  const m = /^(\d+(?:\.\d+)?)(gb|tb)$/.exec(storage);
+  if (!m) return "";
+  return `${m[1]} ${m[2].toUpperCase()}`;
+}
+
 /** REEA-787 — bundle words: a listing that ships more than the bare device
  *  ("Bundle", "Kit", "Duo") is a different offer, never a restatement —
  *  these keep rows apart inside the tier fold, same role as the qualifier

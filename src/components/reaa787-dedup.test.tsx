@@ -151,6 +151,11 @@ describe("ProductResultCard rendered guards", () => {
     // surface, so the rollup is the honest no-local-offer headline, never a
     // "from KD" Kuwait price claim.
     expect(html).toContain("No Kuwait offer · Saudi price from KD");
+    // REEA-1147 AC2 — the card's ONE store is not a cross-store comparison:
+    // with no Kuwait retailer the basis names the market ("Saudi price"), never
+    // "best effective price". (The "N retailers" footer needs a local offer, so
+    // it is asserted in reea1147-single-retailer.test.tsx.)
+    expect(html).not.toContain("best effective price");
   });
 
   it("collapses duplicate alternatives into one card", () => {

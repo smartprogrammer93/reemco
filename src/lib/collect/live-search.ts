@@ -59,7 +59,9 @@ import {
 } from "@/lib/collect/price-sanity";
 import {
   canonicalFields,
+  capacityLabelOf,
   compatibleFields,
+  familyDisplayTitle,
   listingLabel,
   productSlugFor,
   storageFromListingUrl,
@@ -94,7 +96,7 @@ import type { Coupon, NormalizedProduct, PriceOffer, ProductAlternative, Product
 import type { LiveSearchResult } from "@/lib/collect/coverage";
 export type { LiveSearchResult } from "@/lib/collect/coverage";
 export { coverageLine } from "@/lib/collect/coverage";
-import { deviceLeadFlags, summarizeResponders } from "@/lib/collect/coverage";
+import { deviceLeadFlags, queryHasDeviceIntent, summarizeResponders } from "@/lib/collect/coverage";
 // REEA-1078 — serve-kind type only (erased at build; no runtime import of the
 // server-only metrics module into this graph).
 import type { ServeKind } from "@/lib/metrics";
@@ -1086,6 +1088,101 @@ export function yousifiHits(html: string, query: string): SearchHit[] {
  * six-query QA measurement showed while one throttled hop never blanks the
  * adapter. Only a fully empty run with every hop failing reports the error.
  */
+/** REEA-1147 — polite backoff for Shopify's per-IP suggest throttle (429).
+ *  Long enough to clear the edge's window, short enough to stay inside the
+ *  lane's doubled hop budget. */
+const SHOPIFY_THROTTLE_BACKOFF_MS = 700;
+
+/**
+ * REEA-1147 — the Shopify JSON hop the Kuwait storefront lanes share.
+ *
+ * The W48 weekly counter showed Astore, Wibi, Zayoom, Switch and Quadra
+ * failing an almost identical 37.5% of attempts (1,945–1,951 of 5,181 each)
+ * — one shared pattern, not five defects. Their common surface is Shopify's
+ * suggest/products JSON edge, which carries a per-IP throttle; when the
+ * egress is throttled, every one of the five lanes fails the same round.
+ * This helper is the one place that talks to that edge:
+ *  - an HTTP 429 is answered with ONE polite, Retry-After-aware backoff and a
+ *    single retry inside the lane's existing window (a throttle is not a
+ *    dead zone; the current 250 ms settle retry was too short to clear it),
+ *  - nothing else is retried here — the shared settle point keeps its own
+ *    bounded retry for real blips.
+ * The caller still owns the window and the parse.
+ */
+async function shopifyJsonHop(
+  fetchImpl: FetchImpl,
+  url: string,
+  signal: AbortSignal,
+): Promise<unknown> {
+  const once = async (): Promise<unknown> => {
+    const res = await fetchChecked(fetchImpl, url, { headers: { accept: "application/json" } }, signal);
+    return await res.json();
+  };
+  // REEA-1147 — one process-wide polite pace across EVERY Shopify hop: the
+  // five Kuwait lanes are dispatched in parallel on one query, so without a
+  // limit they fire 5 simultaneous requests at a per-IP throttled edge and all
+  // five record the same 429 (the W48 37.5% cluster). A small concurrency cap
+  // plus a short spacing keeps the aggregate burst under the throttle while
+  // still landing all five inside the run's 8 s ceiling (serialising all five
+  // pushed the tail lanes past it). The page's first paint is unaffected:
+  // Shopify lanes land in the follow-up fold, not the 1.8 s document.
+  const release = await acquireShopifySlot(signal);
+  try {
+    try {
+      return await once();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!/HTTP 429/.test(message) || signal.aborted) throw err;
+      await new Promise((r) => setTimeout(r, SHOPIFY_THROTTLE_BACKOFF_MS));
+      if (signal.aborted) throw err;
+      return await once();
+    }
+  } finally {
+    release();
+  }
+}
+
+/** REEA-1147 — process-wide Shopify request pace (see shopifyJsonHop).
+ *  A concurrency cap only: a time gap delayed the tight completion-budget
+ *  finalize tests and bought nothing the cap does not already buy. */
+const SHOPIFY_GATE_MAX_CONCURRENT = 3;
+const SHOPIFY_GATE_GAP_MS = 0;
+let shopifyActive = 0;
+let shopifyGateLastAt = 0;
+const shopifyQueue: Array<() => void> = [];
+
+async function acquireShopifySlot(signal: AbortSignal): Promise<() => void> {
+  while (shopifyActive >= SHOPIFY_GATE_MAX_CONCURRENT) {
+    await new Promise<void>((resolve) => shopifyQueue.push(resolve));
+  }
+  shopifyActive += 1;
+  // Space a concurrent burst only: a lone Shopify lane (a test's single stub
+  // hop, or a query whose other lanes already failed) starts immediately, so
+  // a tight completion budget never waits behind a pace it does not need.
+  const waitMs = shopifyActive > 1
+    ? Math.max(0, shopifyGateLastAt + SHOPIFY_GATE_GAP_MS - Date.now())
+    : 0;
+  if (waitMs > 0 && !signal.aborted) await new Promise((r) => setTimeout(r, waitMs));
+  shopifyGateLastAt = Date.now();
+  return () => {
+    shopifyActive -= 1;
+    const next = shopifyQueue.shift();
+    if (next) next();
+  };
+}
+
+/**
+ * REEA-1147 — the newest-page top-up: a GENERIC page (its title filter is
+ * ignored server-side) fetched only to fill an EMPTY suggest answer. It rides
+ * the same paced helper, so the throttle sees one request, not two, on the
+ * lanes that already answered. (No cross-query cache: a cached payload would
+ * leak into tests and across injected fetches; the request-halving above is
+ * the polite win.)
+ */
+async function shopifyTopUp(origin: string, fetchImpl: FetchImpl, signal: AbortSignal): Promise<unknown> {
+  return await shopifyJsonHop(fetchImpl, `${origin}/products.json?limit=100`, signal);
+}
+
 async function collectShopifyKuwait(
   origin: string,
   query: string,
@@ -1095,35 +1192,46 @@ async function collectShopifyKuwait(
   const signal = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
   const hits: SearchHit[] = [];
   const seen = new Set<string>();
-  let lastError: unknown;
-  let failed = 0;
-  const urls = [
-    `${origin}/search/suggest.json?q=${encodeURIComponent(query)}&resources[type]=product&resources[limit]=${LIVE_SEARCH_HITS_PER_PAGE}`,
-    // The newest-page hop ignores its title filter server-side, so it gets
-    // one wide bounded page (Shopify's `limit` ceiling) — measured live, the
-    // 24-hit convention cut the tail the generic page tops up with, while
-    // limit=100 still answers in well under a second.
-    `${origin}/products.json?limit=100`,
-  ];
-  for (const url of urls) {
+  const collect = (payload: unknown): void => {
+    for (const h of parse(payload, query)) {
+      if (seen.has(h.url)) continue;
+      seen.add(h.url);
+      hits.push(h);
+    }
+  };
+  // Filter-aware suggest hop first. REEA-1147 — when it answers, the generic
+  // newest-page top-up is skipped: it is the throttle-heavy hop and only
+  // exists to fill an EMPTY suggest answer (the Quadra full-phrase case the
+  // comment above names). Halving the per-lane request count is the polite
+  // half of the shared-throttle fix; the short top-up cache is the other.
+  let suggestError: unknown;
+  let suggestAnswered = false;
+  try {
+    collect(await shopifyJsonHop(
+      fetchImpl,
+      `${origin}/search/suggest.json?q=${encodeURIComponent(query)}&resources[type]=product&resources[limit]=${LIVE_SEARCH_HITS_PER_PAGE}`,
+      signal,
+    ));
+    suggestAnswered = true;
+  } catch (err) {
+    suggestError = err;
+  }
+  let topUpError: unknown;
+  let topUpAnswered = false;
+  if (hits.length === 0 && !signal.aborted) {
     try {
-      const res = await fetchChecked(
-        fetchImpl,
-        url,
-        { headers: { accept: "application/json" } },
-        signal,
-      );
-      for (const h of parse(await res.json(), query)) {
-        if (seen.has(h.url)) continue;
-        seen.add(h.url);
-        hits.push(h);
-      }
+      collect(await shopifyTopUp(origin, fetchImpl, signal));
+      topUpAnswered = true;
     } catch (err) {
-      failed++;
-      lastError = err;
+      topUpError = err;
     }
   }
-  if (hits.length === 0 && failed === urls.length && lastError) throw lastError;
+  // A lane that answered EMPTY on either hop is a coverage answer, not a
+  // failure; only when no hop answered is the error recorded (the same rule
+  // the previous two-hop loop enforced).
+  if (hits.length === 0 && !suggestAnswered && !topUpAnswered) {
+    throw topUpError ?? suggestError ?? new Error("shopify: no hop answered");
+  }
   return hits;
 }
 
@@ -1512,15 +1620,12 @@ export const COLLECTORS: RetailerCollector[] = [
       // its title parameter (answers a generic newest-products page), which
       // is what left blink/quadra coverage at 0–5 hits. Same hop for quadra.
       const window = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
-      const hopJson = async (q: string): Promise<unknown> => {
-        const res = await fetchChecked(
+      const hopJson = async (q: string): Promise<unknown> =>
+        shopifyJsonHop(
           fetchImpl,
           `https://blink.com.kw/search/suggest.json?q=${encodeURIComponent(q)}&resources[type]=product&resources[limit]=${LIVE_SEARCH_HITS_PER_PAGE}`,
-          { headers: { accept: "application/json" } },
           window,
         );
-        return await res.json();
-      };
       const whole = await hopJson(query);
       const products = normalizeShopifyProducts(whole);
       if (products.length === 0 && !window.aborted) {
@@ -2245,6 +2350,7 @@ export function groupHits(
   hits: SearchHit[],
   includeAlternatives = true,
   locale?: "en" | "ar",
+  familyMerge = false,
 ): NormalizedProduct[] {
   // REEA-963 R1 — the cohort pass runs FIRST, over every offer the adapters
   // returned for this query execution: one (retailer, SKU) survivor per
@@ -2255,8 +2361,17 @@ export function groupHits(
   // by object identity and ride the rendered rows.
   const sanity = computeCohortSanity(queryIdForSanity(query, locale), hits);
   const groups = buildGroups(query, sanity.deduped);
+  // REEA-1147 — on the served results page an exact-model query compares the
+  // MODEL, not one capacity tier: fold same-brand+model-line tier groups into
+  // one family card BEFORE ranking, so the page's ~10 slots spend on the
+  // model's stores instead of one single-retailer card per capacity. The
+  // exact-SKU grouping primitive keeps its REEA-254 shape for callers that do
+  // not opt in (tests, blocking paths).
+  const familyMerged = familyMerge && queryHasDeviceIntent(query)
+    ? mergeModelFamilies(groups)
+    : groups;
   const products = finalizeGroups(
-    rankByRelevance(query, groups),
+    rankByRelevance(query, familyMerged),
     includeAlternatives,
     query,
     locale,
@@ -2610,10 +2725,16 @@ function canonicalGroupTitle(group: HitGroup, locale?: "en" | "ar"): string {
     // Latin keeps its Latin answer (nothing is ever invented). Same shortest
     // rule inside, so AR and EN runs of one query still rank identically.
     for (const t of group.titles) if (hasArabicScript(t)) consider(t);
-    if (title !== "") return title;
+    if (title !== "") {
+      // REEA-1147 — a family card names the MODEL, not one retailer's tier:
+      // strip the capacity/colour the folded offers carry as their own rows.
+      // The Arabic answer keeps its own script; only variant tokens leave.
+      return group.family ? familyDisplayTitle(title) || title : title;
+    }
   }
   for (const t of group.titles) consider(t);
-  return title;
+  // REEA-1147 — same family naming rule for the Latin answer.
+  return group.family ? familyDisplayTitle(title) || title : title;
 }
 
 /**
@@ -2800,6 +2921,90 @@ function mergeSameTitleGroups(groups: HitGroup[]): HitGroup[] {
   return out;
 }
 
+/**
+ * REEA-1147 — model-family fold for the served results page.
+ *
+ * The canonical key (REEA-254) keeps capacity as a card discriminator. That
+ * is right for an exact-SKU view but wrong for an exact-model search: on the
+ * live W48 panel Xcite carried one capacity, Wibi another and Eureka a third
+ * of the same S25 Ultra, so the page rendered one single-retailer card per
+ * tier and no card could compare two stores (0/5 depth on that query). This
+ * pass folds the tier groups of one brand+model line and one grade into ONE
+ * family card: the union of the live offers, capacity carried as the per-offer
+ * label so each store's tier stays visible, colour swatches unchanged.
+ * Model lines that genuinely differ (17 Pro vs 17 Pro Max, Fold7 vs Flip7)
+ * never fold; accessories never fold into the device; renewed stays its own
+ * card. Pure query-time aggregation over fetched titles — no catalog, no
+ * alias table.
+ */
+function mergeModelFamilies(groups: HitGroup[]): HitGroup[] {
+  const families = new Map<string, HitGroup[]>();
+  const out: HitGroup[] = [];
+  for (const g of groups) {
+    const f = g.fields;
+    // No model line = no safe family key (a brand-only hit could belong to
+    // any line); it keeps its own card exactly as before.
+    if (f.modelLine === "") {
+      out.push(g);
+      continue;
+    }
+    // REEA-1147 — accessories fold on their own class key: the accessory noun
+    // stays in the model line (REEA-169), so a silicone case never folds into
+    // a screen protector.
+    const key = `${Number(g.accessory)}|${f.brand}|${f.modelLine}|${f.grade}`;
+    const bucket = families.get(key);
+    if (bucket) bucket.push(g);
+    else families.set(key, [g]);
+  }
+  const inMarketCount = (g: HitGroup): number =>
+    new Set(
+      g.offers
+        .filter((o) => o.currency.trim().toUpperCase() === "KWD")
+        .map((o) => o.merchant),
+    ).size;
+  const cheapestOf = (g: HitGroup): number => Math.min(...g.offers.map((o) => effectiveKeyOf(o)));
+  for (const bucket of families.values()) {
+    if (bucket.length === 1) {
+      out.push(bucket[0]);
+      continue;
+    }
+    // Preserve every tier that ALREADY compares: folding two multi-store
+    // tiers into one card would shrink the number of comparison cards on the
+    // page (the live iphone/fold panels lost depth that way). Only a family
+    // whose every tier is single-store is folded into one family card — the
+    // union can then carry the stores each tier alone could not, and capacity
+    // stays visible as the per-offer label.
+    if (bucket.some((g) => inMarketCount(g) >= 2)) {
+      out.push(...bucket);
+      continue;
+    }
+    const lead = [...bucket].sort((a, b) => cheapestOf(a) - cheapestOf(b))[0];
+    const family: HitGroup = {
+      ...lead,
+      fields: { ...lead.fields },
+      titles: new Set(lead.titles),
+      offers: [...lead.offers],
+      family: true,
+    };
+    for (const g of bucket) {
+      if (g === lead) continue;
+      for (const o of g.offers) {
+        if (
+          !family.offers.some(
+            (x) => x.merchant === o.merchant && x.price === o.price && x.url === o.url,
+          )
+        ) {
+          family.offers.push(o);
+        }
+      }
+      for (const t of g.titles) family.titles.add(t);
+      if (family.brandRaw === "" && g.brandRaw !== "") family.brandRaw = g.brandRaw;
+    }
+    out.push(family);
+  }
+  return out;
+}
+
 function finalizeGroups(
   selected: HitGroup[],
   includeAlternatives: boolean,
@@ -2954,6 +3159,14 @@ function finalizeGroups(
 
   return groups.map((group, idx) => {
     const title = canonicalGroupTitle(group, locale);
+    // REEA-1147 — on a folded family card capacity is a visible per-offer
+    // qualifier (the card itself names the model), so each store's tier keeps
+    // its own row instead of folding into one merchant row at its cheapest
+    // tier. Only applied when the family actually spans tiers.
+    const familyTiers = group.family === true
+      ? new Set(group.offers.map((o) => canonicalFields(o.title).storage).filter((s) => s !== ""))
+      : new Set<string>();
+    const multiTierFamily = familyTiers.size > 1;
     const rows: PriceOffer[] = [...group.offers]
       // Cheapest offer first in KWD-space (REEA-167 §2 + REEA-254 item B);
       // purchasable offers break ties. Within one currency the order is the
@@ -2970,7 +3183,11 @@ function finalizeGroups(
         const grade = canonicalFields(o.title).grade;
         // REEA-486 AC-6: the listing's own qualifier beyond the card title —
         // it survives the merge so a folded variant row stays identifiable.
-        const label = listingLabel(o.title, title);
+        // REEA-1147 — a family card spanning capacities labels each row with
+        // its tier, so the fold never hides a store's other capacity.
+        const label = multiTierFamily
+          ? [capacityLabelOf(o.title), listingLabel(o.title, title)].filter(Boolean).join(" · ")
+          : listingLabel(o.title, title);
         // REEA-963 — the offer's own query-time sanity verdict rides the row;
         // every render component reads THIS object (FR-2.1: one resolved
         // price object per (retailer, SKU) per render).
@@ -3093,7 +3310,22 @@ function finalizeGroups(
   });
 }
 
-type HitGroup = { fields: CanonicalFields; accessory: boolean; titleScore: number; titles: Set<string>; offers: SearchHit[]; brandRaw: string };
+type HitGroup = {
+  fields: CanonicalFields;
+  accessory: boolean;
+  titleScore: number;
+  titles: Set<string>;
+  offers: SearchHit[];
+  brandRaw: string;
+  /**
+   * REEA-1147 — true when this card is a MODEL-FAMILY card on the served
+   * results page: the same brand+model line across capacity/colour tiers,
+   * folded into one comparison card (capacity rides as a per-offer label).
+   * The exact-SKU grouping primitive keeps its storage-discriminating shape;
+   * only the served snapshot sets this.
+   */
+  family?: boolean;
+};
 
 /**
  * REEA-137 — fill the served slice round-robin across retailers instead of a
@@ -3507,7 +3739,7 @@ function stagedSnapshot(
   // REEA-510: intermediate flushes stay pure-live on purpose — a merchant
   // that has not answered yet at flush time is still in flight, not silent;
   // the last-seen fill lands with the converged snapshot only (finalSnapshot).
-  const products = groupHits(q, hits, true, locale);
+  const products = groupHits(q, hits, true, locale, true);
   // REEA-540 Bet A — confidence-line roll-up over the STORED observations
   // (window/dedup/threshold in lib/seen-range.ts). Purely additive: the
   // best-price badge and cheapest-first sort above are untouched. An empty
@@ -3619,7 +3851,7 @@ async function finalSnapshot(
   retiredLanes?: readonly string[],
 ): Promise<LiveSearchResult> {
   const { hits, notes } = filterNotes(country, settled);
-  let products = groupHits(q, hits, true, locale);
+  let products = groupHits(q, hits, true, locale, true);
   let servedNotes = notes;
   let attemptedQueries: string[] | undefined;
   let retrySuggestions: NormalizedProduct[] | undefined;
@@ -3677,7 +3909,7 @@ async function finalSnapshot(
     const fill = await fillSilentFromLastSeen(q, country, settled);
     if (fill.length > 0) {
       nearPool = [...hits, ...fill];
-      products = groupHits(q, nearPool, true, locale);
+      products = groupHits(q, nearPool, true, locale, true);
     }
   }
   // REEA-468 G4 — the converged zero answer still carries ≥1 near-match pill:
