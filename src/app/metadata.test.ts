@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
 import robots from "@/app/robots";
 import sitemap from "@/app/sitemap";
+import { generateMetadata as resultsMetadata } from "@/app/results/page";
+import { generateMetadata as searchMetadata } from "@/app/search/page";
 import * as robotsModule from "@/app/robots";
 import * as sitemapModule from "@/app/sitemap";
+import { SITEMAP_QUERY_SEEDS } from "@/lib/sitemap-queries";
 
 /**
- * REEA-278 — guardrails for the metadata route handlers. These prove the
- * acceptance shape of the two endpoints without a server: robots names the
- * sitemap and stays crawl-open; the sitemap lists the four core pages plus
- * top-query result pages, all as absolute URLs.
+ * REEA-278 / REEA-1168 — guardrails for the metadata route handlers. These
+ * prove the acceptance shape without a server: robots names the sitemap and
+ * stays crawl-open; the sitemap lists the core pages, ≥10 live query URLs and
+ * ≥10 stable product URLs, all absolute and all on the /results canonical
+ * shape (never the /search duplicate).
  */
 describe("robots route handler (/robots.txt)", () => {
   it("opens the site to all crawlers and references the sitemap", () => {
@@ -19,26 +23,60 @@ describe("robots route handler (/robots.txt)", () => {
 });
 
 describe("sitemap route handler (/sitemap.xml)", () => {
-  it("lists the core pages and top-query result pages as absolute URLs", () => {
-    const urls = sitemap().map((entry) => entry.url);
+  it("lists the core pages, ≥10 query URLs and ≥10 product URLs as absolute URLs", async () => {
+    const urls = (await sitemap()).map((entry) => entry.url);
     expect(urls).toContain("https://ns539626.ip-144-217-72.net");
     expect(urls).toContain("https://ns539626.ip-144-217-72.net/about");
     expect(urls).toContain("https://ns539626.ip-144-217-72.net/privacy");
     expect(urls).toContain("https://ns539626.ip-144-217-72.net/contact");
-    // Top-query result pages use the live /results?q= shape.
+    // REEA-1168 AC-2 — the long-tail query set is at least ten URLs.
     expect(urls.filter((u) => /^https:\/\/ns539626\.ip-144-217-72\.net\/results\?q=\S/.test(u)).length)
-      .toBeGreaterThanOrEqual(3);
+      .toBeGreaterThanOrEqual(10);
+    // Stable product identities from the feed.
+    expect(urls.filter((u) => /^https:\/\/ns539626\.ip-144-217-72\.net\/product\/[^/?#]+$/.test(u)).length)
+      .toBeGreaterThanOrEqual(10);
+    // /search?q= is the duplicate address; only /results?q= is listed.
+    expect(urls.some((u) => u.includes("/search?q="))).toBe(false);
     // Every entry is absolute — relative URLs break XML sitemap validation.
     expect(urls.every((u) => /^https:\/\//.test(u))).toBe(true);
+    // The curated preset pills are always present, even when the funnel store
+    // is empty (the QA anchor queries).
+    for (const query of SITEMAP_QUERY_SEEDS.slice(0, 3)) {
+      expect(urls).toContain(
+        `https://ns539626.ip-144-217-72.net/results?q=${encodeURIComponent(query)}`,
+      );
+    }
+  });
+});
+
+describe("results canonical shape (REEA-1168 AC-3)", () => {
+  it("the results surface advertises /results?q= with the same encoding as internal links", async () => {
+    const meta = await resultsMetadata({
+      searchParams: Promise.resolve({ q: "iphone 17 pro" }),
+    });
+    expect(meta.alternates?.canonical).toBe(
+      "https://ns539626.ip-144-217-72.net/results?q=iphone%2017%20pro",
+    );
+    // No noindex on an indexable query surface.
+    expect(meta.robots).toBeUndefined();
+  });
+
+  it("the /search duplicate points its canonical at /results?q=", async () => {
+    const meta = await searchMetadata({
+      searchParams: Promise.resolve({ q: "iphone 17 pro" }),
+    });
+    expect(meta.alternates?.canonical).toBe(
+      "https://ns539626.ip-144-217-72.net/results?q=iphone%2017%20pro",
+    );
   });
 });
 
 describe("crawler routes follow the serving host (REEA-1051)", () => {
   const previous = process.env.REEMCO_SITE_ORIGIN;
-  function withOrigin<T>(origin: string, run: () => T): T {
+  async function withOrigin<T>(origin: string, run: () => Promise<T>): Promise<T> {
     process.env.REEMCO_SITE_ORIGIN = origin;
     try {
-      return run();
+      return await run();
     } finally {
       if (previous === undefined) delete process.env.REEMCO_SITE_ORIGIN;
       else process.env.REEMCO_SITE_ORIGIN = previous;
@@ -46,14 +84,12 @@ describe("crawler routes follow the serving host (REEA-1051)", () => {
   }
 
   it("robots names the sitemap on the self-hosted box, not the Vercel alias", () => {
-    withOrigin("https://ns539626.ip-144-217-72.net", () => {
-      expect(robots().sitemap).toBe("https://ns539626.ip-144-217-72.net/sitemap.xml");
-    });
+    expect(robots().sitemap).toBe("https://ns539626.ip-144-217-72.net/sitemap.xml");
   });
 
-  it("sitemap URLs all ride the configured origin", () => {
-    withOrigin("https://ns539626.ip-144-217-72.net", () => {
-      const urls = sitemap().map((entry) => entry.url);
+  it("sitemap URLs all ride the configured origin", async () => {
+    await withOrigin("https://ns539626.ip-144-217-72.net", async () => {
+      const urls = (await sitemap()).map((entry) => entry.url);
       expect(urls.every((u) => u.startsWith("https://ns539626.ip-144-217-72.net"))).toBe(true);
       expect(urls.some((u) => u.includes("reemco.vercel.app"))).toBe(false);
     });

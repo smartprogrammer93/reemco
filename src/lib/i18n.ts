@@ -273,6 +273,14 @@ const en = {
   metaTitle: "{q} prices in {country} - Reemco",
   metaDescription:
     "Compare live prices, coupons and stock for {q} across retailers in {country}. Offers are collected the moment you search — best effective price wins.",
+  // REEA-1168 — Product/Offer JSON-LD copy. {title} product, {country} market,
+  // {n} fresh offers, {price}/{cur} cheapest claimable offer. The EN name is
+  // the retailer's own product title; the AR name carries the localized
+  // "prices in <market>" phrase so the Arabic page emits Arabic structured
+  // data instead of an English-only name.
+  jsonLdProductName: "{title}",
+  jsonLdProductDescription:
+    "Live prices for {title} in {country}: {n} retailer offers, starting at {price} {cur}.",
   // REEA-1069 — Direction A "Shelf" chrome (design pack REEA-1055).
   brandHomeAria: "Reemco home",
   menuLabel: "Menu",
@@ -559,6 +567,12 @@ const ar: typeof en = {
   metaTitle: "أسعار {q} في {country} - ريمكو",
   metaDescription:
     "قارن الأسعار والكوبونات وحالة التوافر لـ{q} عبر متاجر {country}. تُجمع العروض لحظة بحثك — أفضل سعر فعلي يفوز.",
+  // REEA-1168 — Arabic structured data: the name carries the localized
+  // market phrase and the description is Arabic, matching the same Offer
+  // freshness rules as the English page.
+  jsonLdProductName: "{title} — أسعار في {country}",
+  jsonLdProductDescription:
+    "أسعار {title} في {country}: {n} عرضًا من المتاجر، تبدأ من {price} {cur}.",
   // REEA-1069 — Arabic Direction A "Shelf" chrome, designed in Arabic (not a
   // mirrored afterthought): price order, timestamps, status labels and CTAs
   // follow the signed REEA-1055 RTL checklist.

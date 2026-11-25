@@ -1,4 +1,6 @@
 import ResultsClient from "@/components/ResultsClient";
+import ResultsStructuredData from "@/components/ResultsStructuredData";
+import { Suspense } from "react";
 import { collectLiveResultsStagedAdmitted } from "@/lib/collect/live-search";
 import { COLD_RECORDING_CAP_MS, recordSearchOutcome, searchOutcomeFromSnapshot, serveOutcomeOf } from "@/lib/metrics";
 // REEA-1099 — the ONE results-page shelf card definition the renderer uses;
@@ -25,6 +27,7 @@ import {
 import { LOCALE_COOKIE, resolveUiLocale } from "@/lib/i18n";
 import { isRefreshSignal, REFRESH_COOKIE } from "@/lib/query-cache";
 import { buildResultsMeta } from "@/lib/results-meta";
+import { siteOrigin } from "@/lib/site-origin";
 import { sanitizeSearchQuery, sanitizePage } from "@/lib/search-params";
 import { filterProductsByStock, sanitizeShowOutOfStock } from "@/lib/stock";
 import { appendEvents } from "@/lib/event-store";
@@ -64,7 +67,21 @@ export async function generateMetadata({
   // "آيفون prices in Kuwait - Reemco".
   const locale = resolveUiLocale(hint.localeCookie, hint.acceptLanguage, query);
   const meta = buildResultsMeta({ query, country, locale });
-  return { title: meta.title, description: meta.description };
+  // REEA-1168 AC-3 — the query surface keeps ONE canonical shape: /results?q=
+  // (never the /search duplicate, never the market/stock filter params, which
+  // are viewer selections over the same live payload). Page 2+ names its page
+  // so the canonical matches the slice the document actually renders. The
+  // encoding matches every internal /results link (encodeURIComponent), so a
+  // crawler sees the same URL string the site itself emits.
+  const page = sanitizePage(params.page);
+  const queryPart = query ? `?q=${encodeURIComponent(query)}` : "";
+  const pagePart = page > 1 ? `${queryPart ? "&" : "?"}page=${page}` : "";
+  const canonical = `${siteOrigin()}/results${queryPart}${pagePart}`;
+  return {
+    title: meta.title,
+    description: meta.description,
+    alternates: { canonical },
+  };
 }
 
 /**
@@ -387,6 +404,23 @@ export default async function ResultsPage({
       className="results-viewport-reserve mx-auto w-full py-6"
       style={{ maxWidth: "var(--rc-layout-max-w)", paddingInline: "var(--rc-gutter)" }}
     >
+      {/* REEA-1168 — Product/Offer JSON-LD for the offers this run actually
+          observed. It awaits the SAME `staged.final` promise the page already
+          streams (no second fan-out, no client fetch, no admission change);
+          the shell/heading flushes first and the script lands in the served
+          document when the run finalizes. Empty when nothing has a fresh
+          claimable observation. */}
+      <Suspense fallback={null}>
+        <ResultsStructuredData
+          final={staged.final}
+          query={query}
+          country={country}
+          locale={locale}
+          nowMs={renderStartMs}
+          page={page}
+          showOutOfStock={showOutOfStock}
+        />
+      </Suspense>
       {/* REEA-965 — the per-query id rides the committed REEA-964 props seam:
           click events client-side join the same query execution's server-side
           search_performed through this value (FR-3.1). */}

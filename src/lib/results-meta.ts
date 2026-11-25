@@ -25,7 +25,7 @@ export interface ResultsMeta {
 }
 
 /** Market code → localized label from the same static table the pills use. */
-function countryLabel(country: CountryCode | null, locale: Locale): string {
+export function countryLabel(country: CountryCode | null, locale: Locale): string {
   const t = getStrings(locale);
   if (!country) return t.countryKW; // home-market default (brief's Arabic pattern)
   const option = COUNTRY_OPTIONS.find((o) => o.code === country);
