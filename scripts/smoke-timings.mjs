@@ -6,8 +6,8 @@
  * smartphones / headphones / appliances + 4 typo rows) against the PRODUCTION
  * results page and reports nearest-rank p50/p95 for:
  *   - time-to-first-offer: request start -> bytes of the first real offer
- *     card (<article class="result-card"> without the aria-hidden skeleton
- *     attribute) arrive in the streamed response body. This is the shopper's
+ *     card (<article> carrying the result-card class, without the aria-hidden
+ *     skeleton attribute) arrive in the streamed response body. This is the shopper's
  *     moment of truth: press search -> see first real price.
  *   - time-to-full-results: request start -> whole document body downloaded
  *     (all retailers flushed into the stream).
@@ -55,9 +55,21 @@ const THRESHOLD_P50_MS = 1500;
 const THRESHOLD_P95_MS = 3000;
 
 // First real offer card: the streaming shell emits aria-hidden skeleton
-// placeholders first; the real offer is the bare result-card article
+// placeholders first; the real offer is a result-card article
 // (same distinction step 2 of smoke-check.mjs makes in the DOM).
-const FIRST_OFFER_RE = /<article class="result-card"(?! aria-hidden)/;
+//
+// REEA-1166 — the REEA-1069 Shelf UI renders the real card as
+// `<article class="rc-card result-card ...">`, so the old regex that required
+// `result-card` to be the FIRST class token never matched a served card and
+// reported `TIMINGS skipped — 20/20 query probe(s) failed` on a healthy host.
+// Match the class TOKEN anywhere in the class list, and keep rejecting the
+// aria-hidden skeleton.
+const FIRST_OFFER_RE = /<article\s+class="(?=[^"]*\bresult-card\b)[^"]*"(?![^>]*\baria-hidden\b)/i;
+
+/** True when the served HTML carries a real (non-skeleton) offer card. */
+export function hasFirstOfferCard(html) {
+  return FIRST_OFFER_RE.test(html ?? "");
+}
 
 const HEADERS = {
   accept: "text/html,application/xhtml+xml",

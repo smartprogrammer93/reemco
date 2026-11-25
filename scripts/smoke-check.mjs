@@ -276,6 +276,7 @@ await step(6, "catalog offer URLs resolve (link-health)", async () => {
   const urls = [...new Set([...src.matchAll(/url:\s*"([^"]+)"/g)].map((m) => m[1]))];
   if (urls.length === 0) throw new Error("no offer URLs found in src/lib/catalog.ts");
   const bad = [];
+  const botBlocked = [];
   for (const url of urls) {
     let ok = false;
     let detail = "";
@@ -293,17 +294,19 @@ await step(6, "catalog offer URLs resolve (link-health)", async () => {
         const html = await res.text();
         const title = html.match(/<title[^>]*>([^<]+?)\s*<\/title>/i)?.[1]?.trim() ?? "";
         ok = res.status < 400 && !/^(?:404\b|page not found\b)/i.test(title);
-        // REEA-1056: reuse the REEA-935 challenge classifier (scripts/
-        // dead-link-smoke.mjs) instead of treating every non-2xx as dead. A
-        // Cloudflare bot-wall (403 + `cf-mitigated: challenge` or the "Just a
-        // moment..." interstitial) means the host answered and a real browser
-        // gets the page — a shopper-reachable link, not a dead one. Jarir's
-        // search URLs are exactly that shape from datacenter egress; the old
-        // plain `status < 400` test failed the deploy gate on healthy links.
+        // REEA-1056/REEA-1166: reuse the REEA-935 challenge classifier
+        // (scripts/dead-link-smoke.mjs) instead of treating every non-2xx as
+        // dead. A Cloudflare bot-wall (403 + `cf-mitigated` or a challenge /
+        // "Attention Required! | Cloudflare" / "Just a moment" body) means the
+        // host answered and a real browser gets the page — a shopper-reachable
+        // link, not a dead one. Talabat's /en/kuwait answers that block page
+        // from the deploy runner; counting it dead rolled back every deploy.
+        // A genuine 404/410/5xx/timeout still fails below.
         const verdict = classifyAttempt(res.status, res.headers, html.slice(0, 4000));
         if (!ok && verdict === "challenge") {
           ok = true;
-          detail = `HTTP ${res.status} bot-wall challenge${title ? ` title="${title}"` : ""} — live for a real browser`;
+          detail = `HTTP ${res.status} bot-blocked/challenge${title ? ` title="${title}"` : ""} — reachable for a real browser`;
+          botBlocked.push(`${url} (${detail})`);
         }
         // REEA-132: amazon.eg answers some datacenter egress IPs with an Arabic
         // apology interstitial (HTTP 503, title "عذرًا" = Sorry) instead of the
@@ -321,7 +324,10 @@ await step(6, "catalog offer URLs resolve (link-health)", async () => {
     if (!ok) bad.push(`${url} (${detail})`);
   }
   if (bad.length) throw new Error(`${bad.length}/${urls.length} offer URL(s) dead: ${bad.join("; ")}`);
-  return `${urls.length} unique offer URL(s) resolve (<400)`;
+  const blockedNote = botBlocked.length
+    ? ` — ${botBlocked.length} bot-blocked but shopper-reachable: ${botBlocked.join("; ")}`
+    : "";
+  return `${urls.length} unique offer URL(s) resolve (<400)${blockedNote}`;
 });
 
 // REEA-260: adapter-registration parity on the DEPLOYED query path. The

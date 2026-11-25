@@ -132,29 +132,37 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  *  - "dead"       definitive answer: 404/410, a plain 403 without challenge
  *                 markers, any other 4xx
  *  - "challenge"  bot-wall, not a dead link: HTTP 429, or a 403 carrying
- *                 `cf-mitigated: challenge` / a "Just a moment" body marker /
- *                 Cloudflare's block page ("Attention Required! | Cloudflare",
- *                 `server: cloudflare`) — REEA-1154
+ *                 `cf-mitigated` (any value), Cloudflare's block page
+ *                 ("Attention Required! | Cloudflare", `server: cloudflare`)
+ *                 or a JS/cookie interstitial ("Just a moment", "Checking
+ *                 your browser") — REEA-1154/REEA-1166
  *  - "transient"  5xx — worth one backoff retry before `dead`
  * A thrown fetch (network error / the 10 s abort) is the caller's transient.
+ *
+ * REEA-1166 — a Cloudflare BLOCK page (HTTP 403, title
+ * "Attention Required! | Cloudflare") is the same class as the JS challenge:
+ * the edge answered and a real shopper browser gets the page, while the smoke
+ * runner's plain fetch is refused. Talabat's `/en/kuwait` offer URL answers
+ * exactly that shape from the deploy runner, so counting it as `dead` rolled
+ * back every deploy. It stays a challenge (reachable-but-bot-blocked), never
+ * an `ok` 200 and never a `dead`; a genuine 404/410/plain 403/5xx is untouched.
  */
+const BOT_WALL_BODY_RE =
+  /just a moment|attention required|checking your browser|enable javascript and cookies to continue|cf-browser-verification/i;
+
 export function classifyAttempt(status, resHeaders, bodySnip) {
   if (status >= 200 && status < 400) return "ok";
   if (status === 429) return "challenge";
   if (status === 403) {
+    // REEA-1154/REEA-1166 — Cloudflare intervened: any `cf-mitigated` value
+    // ("challenge", "block"), a response served by Cloudflare's edge, or a
+    // challenge/block body marker means a real browser gets the page while a
+    // plain fetch is refused. A plain 403 from any other origin stays dead.
     const mitigated = String(resHeaders?.get?.("cf-mitigated") ?? "").toLowerCase();
-    if (mitigated === "challenge" || /just a moment/i.test(bodySnip ?? "")) return "challenge";
-    // REEA-1154 — Cloudflare's BLOCK page ("Attention Required! | Cloudflare")
-    // is a bot-wall too, but it carries no `cf-mitigated` header and is not the
-    // JS "Just a moment..." interstitial, so the markers above missed it and
-    // every deploy failed the link-health gate on Talabat's catalog URL
-    // (HTTP 403, server: cloudflare, cf-ray, title "Attention Required! |
-    // Cloudflare") — a shopper-reachable page from datacenter egress, the exact
-    // shape REEA-1056 says must not read as dead. A 403 actually served by
-    // Cloudflare (or carrying its block-page marker) is a challenge; a plain
-    // 403 from any other origin stays dead.
+    if (mitigated) return "challenge";
     const server = String(resHeaders?.get?.("server") ?? "").toLowerCase();
-    if (server === "cloudflare" || /attention required/i.test(bodySnip ?? "")) return "challenge";
+    if (server === "cloudflare") return "challenge";
+    if (BOT_WALL_BODY_RE.test(bodySnip ?? "")) return "challenge";
     return "dead";
   }
   if (status >= 500) return "transient";

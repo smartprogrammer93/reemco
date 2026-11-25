@@ -69,6 +69,39 @@ describe("REEA-935 classifyAttempt", () => {
     expect(checker.classifyAttempt(500, new Headers(), "")).toBe("transient");
     expect(checker.classifyAttempt(503, new Headers(), "")).toBe("transient");
   });
+
+  // REEA-1166 — a Cloudflare BLOCK page (not the JS "Just a moment" challenge)
+  // is a bot-wall answer: the edge served it, a shopper browser gets the page.
+  // Talabat's /en/kuwait offer URL answers exactly this from the deploy runner,
+  // and the gate must not call it dead.
+  it("REEA-1166: a CF 403 block page (Attention Required! | Cloudflare) is challenge, not dead", () => {
+    expect(
+      checker.classifyAttempt(
+        403,
+        new Headers(),
+        '<title>Attention Required! | Cloudflare</title>',
+      ),
+    ).toBe("challenge");
+    expect(
+      checker.classifyAttempt(
+        403,
+        new Headers(),
+        '<title>Checking your browser before accessing</title>',
+      ),
+    ).toBe("challenge");
+    // Any cf-mitigated value means Cloudflare intervened ("block" as well as
+    // "challenge"); a plain 403 without a mitigation marker stays dead.
+    expect(checker.classifyAttempt(403, new Headers({ "cf-mitigated": "block" }), "nope")).toBe(
+      "challenge",
+    );
+  });
+
+  it("REEA-1166: the challenge marker only rescues 403s — real 404/410/5xx stay dead/transient", () => {
+    const cf = '<title>Attention Required! | Cloudflare</title>';
+    expect(checker.classifyAttempt(404, new Headers(), cf)).toBe("dead");
+    expect(checker.classifyAttempt(410, new Headers(), cf)).toBe("dead");
+    expect(checker.classifyAttempt(500, new Headers(), cf)).toBe("transient");
+  });
 });
 
 describe("REEA-935 checkUrl (stubbed fetch, injected backoffs)", () => {

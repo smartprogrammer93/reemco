@@ -101,6 +101,14 @@ from git.
    it advisory were fixed: step 5 now proves reachability inside the deliberately
    scrollable coverage row instead of failing on it (REEA-1056), and step 7 no longer
    requires the retired PC Kuwait lane (REEA-901).
+   Step 6 (offer link-health) classifies a bot-wall answer — HTTP 429, or a 403 carrying
+   a `cf-mitigated` header or a Cloudflare challenge/block body marker ("Just a moment",
+   "Attention Required! | Cloudflare", the JS/cookie interstitial) — as
+   bot-blocked/reachable, not dead (REEA-1166; the classifier is the REEA-935
+   `scripts/dead-link-smoke.mjs` core, pinned in `src/lib/metrics/link-smoke-checker.test.ts`).
+   It never rescues a genuine failure: 404/410, a plain 403 without a marker, 5xx after
+   retries, and timeouts still fail the gate and roll the deploy back. The timing probe
+   that runs before the functional steps is report-only and does not gate.
 8. Secrets hygiene — `verify.sh` fails when `/etc/reemco/release.env` still carries a
    `REEMCO_KV_TOKEN=` line (dead: no consumer, the KV REST surface was replaced by
    RESP to Valkey) or when any hand-made `/etc/reemco/*.bak-*` env copy remains
