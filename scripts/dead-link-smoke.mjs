@@ -132,7 +132,9 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  *  - "dead"       definitive answer: 404/410, a plain 403 without challenge
  *                 markers, any other 4xx
  *  - "challenge"  bot-wall, not a dead link: HTTP 429, or a 403 carrying
- *                 `cf-mitigated: challenge` / a "Just a moment" body marker
+ *                 `cf-mitigated: challenge` / a "Just a moment" body marker /
+ *                 Cloudflare's block page ("Attention Required! | Cloudflare",
+ *                 `server: cloudflare`) — REEA-1154
  *  - "transient"  5xx — worth one backoff retry before `dead`
  * A thrown fetch (network error / the 10 s abort) is the caller's transient.
  */
@@ -142,6 +144,17 @@ export function classifyAttempt(status, resHeaders, bodySnip) {
   if (status === 403) {
     const mitigated = String(resHeaders?.get?.("cf-mitigated") ?? "").toLowerCase();
     if (mitigated === "challenge" || /just a moment/i.test(bodySnip ?? "")) return "challenge";
+    // REEA-1154 — Cloudflare's BLOCK page ("Attention Required! | Cloudflare")
+    // is a bot-wall too, but it carries no `cf-mitigated` header and is not the
+    // JS "Just a moment..." interstitial, so the markers above missed it and
+    // every deploy failed the link-health gate on Talabat's catalog URL
+    // (HTTP 403, server: cloudflare, cf-ray, title "Attention Required! |
+    // Cloudflare") — a shopper-reachable page from datacenter egress, the exact
+    // shape REEA-1056 says must not read as dead. A 403 actually served by
+    // Cloudflare (or carrying its block-page marker) is a challenge; a plain
+    // 403 from any other origin stays dead.
+    const server = String(resHeaders?.get?.("server") ?? "").toLowerCase();
+    if (server === "cloudflare" || /attention required/i.test(bodySnip ?? "")) return "challenge";
     return "dead";
   }
   if (status >= 500) return "transient";

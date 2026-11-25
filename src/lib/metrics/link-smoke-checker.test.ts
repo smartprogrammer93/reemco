@@ -46,6 +46,24 @@ describe("REEA-935 classifyAttempt", () => {
       "challenge",
     );
     expect(checker.classifyAttempt(403, new Headers(), "plain forbidden")).toBe("dead");
+    // REEA-1154 — Cloudflare's block page is a bot-wall, not a dead link. The
+    // live shape: Talabat's catalog URL answered 403 with `server: cloudflare`
+    // and the "Attention Required! | Cloudflare" title, which failed every
+    // deploy's link-health gate until the classifier learned it.
+    expect(
+      checker.classifyAttempt(
+        403,
+        new Headers({ server: "cloudflare", "cf-ray": "a603109a5f797ccf-KWI" }),
+        "",
+      ),
+    ).toBe("challenge");
+    expect(
+      checker.classifyAttempt(
+        403,
+        new Headers(),
+        "<title>Attention Required! | Cloudflare</title>",
+      ),
+    ).toBe("challenge");
     expect(checker.classifyAttempt(404, new Headers(), "")).toBe("dead");
     expect(checker.classifyAttempt(410, new Headers(), "")).toBe("dead");
     expect(checker.classifyAttempt(500, new Headers(), "")).toBe("transient");
