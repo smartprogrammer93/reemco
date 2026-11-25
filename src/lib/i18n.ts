@@ -625,7 +625,7 @@ const ar: typeof en = {
   tableChecked: "وقت الجمع",
   productCollected: "جُمع مباشرةً {age} · استجاب {n} من المتاجر",
   productCollectedOne: "جُمع مباشرةً {age} · استجاب متجر واحد",
-  productRetailersAnswered: "استجاب {n} من المتاجر",
+  productRetailersAnswered: "استجاب {n} متاجر",
   couponApplied: "كوبون {x} يُطبَّق عند الدفع",
   homeRetailersTitle: "متاجر تجمع الآن",
   homeLiveNote: "جمع مباشر لكل بحث · آخر إجابة {age}",

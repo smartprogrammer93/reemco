@@ -149,7 +149,11 @@ function HeroOfferRow({
             two-line geometry, so a foreign-currency row is 93px like every
             other row (and 64px in the ≥641 single-line table). */}
         <span className="rc-price-block">
-          <span className="price-cur rc-price-sm tabular" style={{ font: "var(--rc-text-price-sm)", fontWeight: 600, color: "var(--rc-ink)" }}>
+          {/* REEA-1156 D10 — the font shorthand stays on .rc-price-sm so the
+              >=641px single-row rule can set the 20px/20px line; only the
+              weight/ink override is inline (it used to carry a font shorthand
+              that out-ranked the responsive line-height). */}
+          <span className="price-cur rc-price-sm tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
             <bdi>{price.primary}</bdi>
           </span>
           <span className="rc-price-meta">
@@ -502,7 +506,12 @@ function ProductHeroBody({
             <path d="M12 11v5M12 7.8h.01" />
           </svg>
           <p>
-            {fill(t.productRetailersAnswered, { n: answered })}{" "}
+            {fill(t.productRetailersAnswered, { n: answered })}
+            {/* REEA-1156 — a separator before the retailer list, so the line
+                reads "5 retailers answered · Eureka" / "استجاب 5 متاجر:
+                Eureka" instead of a run-on verb phrase. The Latin name stays
+                an isolated bdi (dir=ltr via .lat). */}
+            {locale === "ar" ? ": " : " · "}
             {failedRetailers.map((name, i) => (
               <span key={name}>
                 <bdi className="lat">{name}</bdi>

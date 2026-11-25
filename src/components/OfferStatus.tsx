@@ -78,6 +78,15 @@ export default function OfferStatusToken({
       tabIndex={0}
       data-tip={tip}
     >
+      {/* REEA-1156 D10 — the chip's first flex item is its icon, whose
+          replaced-element baseline sits 3.2px above the label baseline; that
+          made the status cell miss the row's shared baseline by more than the
+          2px acceptance. A zero-width, aria-hidden text anchor is the first
+          flex item, so the chip's baseline IS its label baseline and the grid
+          baseline rule can align it with retailer/price/stock/checked. Its
+          -4px inline margin cancels the flex gap, so the icon/label geometry
+          and the 44px hit band are untouched. */}
+      <span className="rc-status-baseline" aria-hidden>{"\u200B"}</span>
       {status === "verified" ? <VerifiedIcon /> : status === "stale" ? <StaleIcon /> : <UnverifiedIcon />}
       <span className="label">{copy.label}</span>
     </span>

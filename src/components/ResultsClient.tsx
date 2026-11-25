@@ -766,7 +766,11 @@ function ResultsSubline({
 }) {
   const snap = use(stage);
   const visible = stagedView(snap, query, page, country, showOutOfStock);
-  if (visible.length === 0 && snap.settled === false) return <StampGhost locale={locale} />;
+  // REEA-1156 D11 — a zero-visible set still gets its real count line, even
+  // while the snapshot is finalized-at-budget. The lone "." StampGhost used
+  // to sit there through collection; the designed empty panel now renders
+  // from the same zero state, so the meta line must say "0 results …
+  // collected live just now" instead of an invisible placeholder.
   const offers = visible.reduce((n, p) => n + p.offers.length, 0);
   let newest = 0;
   for (const p of visible) for (const o of p.offers) {
@@ -1312,6 +1316,13 @@ function StagedResults(props: {
     // zero, and names what was tried.
     const provisionalZero = products.length === 0 && finalSnap.settled === false && !feedDone;
     if (provisionalZero) {
+      // REEA-1156 D11 — a finalized-at-budget zero must NOT unmount the
+      // designed empty panel while the follow-up feed is still pending: that
+      // was the 375-only blank band (the 1280 pass kept the panel because it
+      // converged). The panel is mounted from the same zero state as the
+      // settled view, with the partial-response banner above it; the meta
+      // line above now carries the real "0 results … collected live just
+      // now" instead of the lone "." placeholder.
       return (
         <ResultsErrorBoundary locale={locale}>
           <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} hiddenByStock={hiddenByStock} hiddenByCountry={hiddenByCountry} />
@@ -1328,7 +1339,32 @@ function StagedResults(props: {
           <Suspense fallback={null}>
             <StagePendingRow stages={stages} locale={locale} />
           </Suspense>
-          <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} unreachableLanes={props.unreachableLanes} />
+          {query.length > 0 ? (
+            <>
+              {/* Partial-response banner above the designed panel. */}
+              <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} unreachableLanes={props.unreachableLanes} />
+              <EmptyState
+                query={query}
+                unavailable={emptyCase?.kind === "c"}
+                country={country}
+                locale={locale}
+                tries={finalSnap.attemptedQueries}
+                hidden={
+                  emptyCase?.kind === "b"
+                    ? { filter: emptyCase.filter, count: emptyCase.count }
+                    : null
+                }
+                onReveal={
+                  emptyCase?.kind === "b"
+                    ? emptyCase.filter === "stock"
+                      ? props.onRevealOutOfStock
+                      : props.onRevealAllCountries
+                    : undefined
+                }
+              />
+              <RelatedBand items={finalSections.related} locale={locale} queryId={props.queryId} />
+            </>
+          ) : null}
         </ResultsErrorBoundary>
       );
     }
@@ -1345,6 +1381,17 @@ function StagedResults(props: {
         {finalSnap.deviceLeadPending ? <DeviceLeadPendingRow locale={locale} /> : null}
         {products.length === 0 && query.length > 0 ? (
           <>
+            {/* REEA-1156 D11 — the partial-response banner sits ABOVE the
+                designed empty panel on a zero-row page, so the explanation
+                precedes the panel instead of leaving a blank band.
+                REEA-1068 D1 — on a zero-row page the coverage sentence keeps
+                only its failure/empty half (the lanes that errored or
+                answered with nothing), so "No match found" is explained
+                instead of bare. AC9's unreachable names ride it too.
+                REEA-1078 AC9 / REEA-1114 AC2(c) — the existing unreachable
+                sentence must still render on a zero-row page: it is the one
+                statement that explains why an empty shelf is not a no-match. */}
+            <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} unreachableLanes={props.unreachableLanes} />
             {/* REEA-964 — the honest empty state rides the primary position;
                 the related band renders BELOW it, clearly not a result.
                 REEA-1114 — case (b) names the filter that hid the rows and
@@ -1369,14 +1416,6 @@ function StagedResults(props: {
               }
             />
             <RelatedBand items={finalSections.related} locale={locale} queryId={props.queryId} />
-            {/* REEA-1068 D1 — on a zero-row page the coverage sentence keeps
-                only its failure/empty half (the lanes that errored or
-                answered with nothing), so "No match found" is explained
-                instead of bare. AC9's unreachable names ride it too.
-                REEA-1078 AC9 / REEA-1114 AC2(c) — the existing unreachable
-                sentence must still render on a zero-row page: it is the one
-                statement that explains why an empty shelf is not a no-match. */}
-            <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} unreachableLanes={props.unreachableLanes} />
           </>
         ) : (
           <>

@@ -1181,10 +1181,12 @@ describe("cold-start zero handling (REEA-437)", () => {
       );
     });
     // Provisional zero: the Direction A h1 renders immediately from the query
-    // (design loading state), but the COUNT subline keeps its skeleton and no
-    // "0 results"/hint flashes while the page may still deepen.
+    // (design loading state). REEA-1156 D11 supersedes the old "keep the count
+    // skeleton" grammar: the designed empty panel is mounted from the same
+    // zero state, so the meta line carries the honest 0-result count (and no
+    // lone "." placeholder) instead of a skeleton that outlives the panel.
     expect(document.querySelector("h1")?.textContent).toContain("wh-1000xm6");
-    expect(document.body.textContent).not.toContain("0 results for");
+    expect(document.body.textContent).toContain("0 results for");
     expect(document.body.textContent).not.toContain("No matches — try a shorter phrase.");
     // REEA-574 rev 1 (R1) hides the CONTRIBUTOR half when nothing rendered;
     // REEA-1068 D1 supersedes its blanket hide for the failure half: a lane

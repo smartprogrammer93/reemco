@@ -669,6 +669,25 @@ html[lang="ar"] .coupon-via {
   border-bottom: 3px solid var(--rc-accent);
 }
 
+/* REEA-1156 D5 — Arabic glyph metrics make the inline box of "أفضل سعر"
+   taller than the h1 line box (measured accent y111–186 while the h1 ends at
+   165 and the paragraph starts at 173: a 13px overlap through the first
+   Arabic line). The Latin accent wraps across two h1 lines and stays clear
+   (EN 125–207 vs paragraph 209), so the anchored box is scoped to RTL: the
+   accent is painted at the h1's own block box (36px at 375), never at the
+   font's content-box bottom. Static inline position is preserved, so the
+   word stays in its designed slot; only the 3px bar moves to the h1 edge. */
+[dir="rtl"] .rc-hero h1 {
+  position: relative;
+}
+
+[dir="rtl"] .hero-accent {
+  position: absolute;
+  inset-block: 0;
+  block-size: 100%;
+  border-bottom: 3px solid var(--rc-accent);
+}
+
 .hero-sub {
   color: var(--rc-dark-body-text);
   font: var(--rc-text-body);
@@ -1803,7 +1822,11 @@ html[lang="ar"] .coupon-via {
   position: relative;
   inline-size: 100%;
   block-size: var(--rc-image-card);
-  background: var(--rc-surface);
+  /* REEA-1156 D4 — the catalogue photo is shot on white; the dark theme's
+     sunken surface (#201A15) made the image read as a pasted white block
+     inside the frame. The image surface is white in BOTH themes (design spec
+     §9); only the 1px frame follows the theme. */
+  background: #FFFFFF;
   border: 1px solid var(--rc-line);
   border-radius: var(--rc-image-radius);
   overflow: hidden;
@@ -2087,22 +2110,36 @@ html[lang="ar"] .coupon-via {
   letter-spacing: -0.01em;
 }
 
-/* Full-width offers table and product hero: one visual line at >=641px.
-   display:contents promotes the two line wrappers so children occupy the
-   fixed columns: retailer, price, stock, status, checked, action. */
+/* REEA-1156 D10 — the two-line row is a <641px variant only. At >=641px the
+   product hero and the full-width offers table are ONE 64px grid row:
+   retailer, price, stock, status, checked, action, all on one baseline.
+   The signed-off columns (114.75 / 160.67 / 80.34 / 103.28 / 103.30 /
+   101.66) are expressed as proportional tracks: with the 12px column gap they
+   resolve to those exact px inside the 724px hero content box and fill the
+   1072px table without overflow. AR mirrors through the grid's inline axis. */
 @media (min-width: 641px) {
   .rc-offers-table .rc-offer-row,
   .rc-product-hero .rc-offer-row {
     display: grid;
-    /* REEA-1096 D10 — the price column carries the price AND its ≈KD
-       conversion on one line at 1280, so it gets the width the foreign-
-       currency figure needs; the row stays 64px. */
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, 0.7fr) minmax(0, 0.9fr) minmax(0, 0.9fr) auto;
+    /* 63px of content + the 1px divider is the 64px row box; the first row has
+       no divider and min-block-size keeps its box at 64px too, so every row is
+       64px with 0 variance. */
+    grid-template-rows: 63px;
+    align-items: baseline;
+    grid-template-columns: 114.75fr 160.67fr 80.34fr 103.28fr 103.30fr 101.66fr;
     grid-template-areas: "retailer price stock status checked cta";
     column-gap: var(--rc-space-3);
     row-gap: 0;
     min-block-size: var(--rc-row-h);
     padding-block: 0;
+  }
+  .rc-offers-table .rc-table-head,
+  .rc-product-hero .rc-table-head {
+    display: grid;
+    align-items: center;
+    grid-template-columns: 114.75fr 160.67fr 80.34fr 103.28fr 103.30fr 101.66fr;
+    column-gap: var(--rc-space-3);
+    row-gap: 0;
   }
   .rc-offers-table .rc-offer-line,
   .rc-product-hero .rc-offer-line {
@@ -2111,39 +2148,78 @@ html[lang="ar"] .coupon-via {
   .rc-offers-table .rc-offer-row .rc-retailer-name,
   .rc-product-hero .rc-offer-row .rc-retailer-name {
     grid-area: retailer;
+    font: 700 14px/20px var(--rc-font-body);
+  }
+  .rc-offers-table .rc-offer-row .rc-retailer-name .logo,
+  .rc-product-hero .rc-offer-row .rc-retailer-name .logo {
+    font: 700 14px/20px var(--rc-font-display);
+    /* The retailer column is tight at the 641px floor; a long wordmark
+       ellipsises inside its cell instead of colliding with the price. */
+    min-inline-size: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .rc-offers-table .rc-offer-row .rc-price-sm,
   .rc-product-hero .rc-offer-row .rc-price-sm {
     grid-area: price;
+    grid-row: 1;
+    justify-self: start;
+    font-size: 20px;
+    line-height: 20px;
   }
   .rc-offers-table .rc-offer-row .rc-stock,
   .rc-product-hero .rc-offer-row .rc-stock {
     grid-area: stock;
+    font-size: 12px;
+    line-height: 20px;
   }
   .rc-offers-table .rc-offer-row .rc-status,
   .rc-product-hero .rc-offer-row .rc-status {
     grid-area: status;
     justify-self: start;
+    block-size: 22px;
   }
   .rc-offers-table .rc-offer-row .rc-checked,
   .rc-product-hero .rc-offer-row .rc-checked {
     grid-area: checked;
+    font-size: 12px;
+    line-height: 20px;
   }
   .rc-offers-table .rc-offer-row .rc-offer-cta,
   .rc-product-hero .rc-offer-row .rc-offer-cta {
     grid-area: cta;
     justify-self: end;
     align-self: center;
-    block-size: 36px;
+    min-block-size: 44px;
+    block-size: 44px;
   }
-  /* REEA-1096 D10 — the ≈KD conversion stays INSIDE the price cell (a second
-     line under the price) instead of an auto-placed grid item that grew the
-     row to 69px. row-gap:0 above keeps the row at its 64px token. */
+  /* The ≈KD conversion sits INSIDE the price cell on the same row: price at
+     the inline start, conversion at the inline end. This keeps the 64px
+     single-row anatomy and removes the implicit second grid row that used to
+     stagger the cells. */
   .rc-offers-table .rc-offer-row .price-alt,
   .rc-product-hero .rc-offer-row .price-alt {
     grid-column: 2;
-    grid-row: 2;
-    align-self: start;
+    grid-row: 1;
+    justify-self: end;
+    align-self: center;
+    font-size: 12px;
+    line-height: 20px;
+    max-inline-size: 50%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* REEA-1156 D10 — the market qualifier is a 375-only affordance (REEA-1161):
+     it is not one of the six fixed columns, and as a direct child of the
+     display:contents line wrapper it auto-placed into an implicit second row
+     (63px + 22.8px = 85.8px, the staggered half-line). At >=641 the price cell
+     already carries the foreign currency and the ≈KD conversion, so the badge
+     is suppressed here and the row stays one 64px line. */
+  .rc-offers-table .rc-offer-row .rc-market-badge,
+  .rc-product-hero .rc-offer-row .rc-market-badge {
+    display: none;
   }
 }
 
@@ -2189,6 +2265,13 @@ html[lang="ar"] .coupon-via {
   font: var(--rc-status-label);
   white-space: nowrap;
   max-inline-size: 100%;
+}
+
+/* REEA-1156 D10 — zero-width baseline anchor (see OfferStatus.tsx): the
+   negative inline-end margin cancels the token's 4px flex gap so the icon and
+   label keep their designed slots and the chip keeps its 22px box. */
+.rc-status-baseline {
+  margin-inline-end: -4px;
 }
 
 .rc-status svg {
@@ -2271,7 +2354,9 @@ html[lang="ar"] .coupon-via {
   position: relative;
   inline-size: var(--rc-image-hero-mobile);
   block-size: var(--rc-image-hero-mobile);
-  background: var(--rc-surface);
+  /* REEA-1156 D4 — same white image surface as the shelf card (design spec
+     §9: white #FFFFFF frame, theme only changes the hairline). */
+  background: #FFFFFF;
   border: 1px solid var(--rc-line);
   border-radius: var(--rc-image-radius);
   overflow: hidden;
@@ -3361,6 +3446,11 @@ html[lang="ar"] .coupon-via {
      named-baseline lines must still put the first offer above y=600. */
   .rc-product-hero h1 {
     margin-block-start: 2px;
+    /* REEA-1156 D6 — at 375 the h1 bottom and the 34px price top were the same
+       y (417.4), so the 22px title and the price read as one cramped block. A
+       12px block-end gap puts the price at ≥429.4; the first offer row moves
+       to ~550, still inside the AC8 y≤600 ceiling. */
+    margin-block-end: 12px;
   }
   .rc-product-best {
     margin-block-start: 0;
