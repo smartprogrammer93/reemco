@@ -1,5 +1,6 @@
 import type { NormalizedProduct } from "@/types/product";
 import {
+  categoryIntent,
   curatedBrandInTitle,
   isAccessoryTitle,
   modelIdentityTokens,
@@ -271,8 +272,11 @@ function coverageAggregateText(
   }
   const checked = notes.length;
   // "carries this exact model" only when the query names one (a model-number
-  // identity token); a plain class query says "carries this".
-  const exact = modelIdentityTokens(query ?? "").length > 0;
+  // identity token) and is NOT a category query. `ps5` carries a digit but is
+  // a platform class ("2 carry this"), while `fold 7` is a model ("1 carries
+  // this exact model").
+  const q = query ?? "";
+  const exact = categoryIntent(q) === null && modelIdentityTokens(q).length > 0;
   if (ar) {
     // Arabic count agreement: 1/2 take their own forms, 3–10 take the plural
     // (متاجر), 11–99 the singular accusative (متجرًا). Same rule on the

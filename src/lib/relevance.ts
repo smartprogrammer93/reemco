@@ -957,8 +957,10 @@ const CATEGORY_COMPLEMENT_RE =
   // "chips" stays plural-only: a laptop listing's "M4 chip" is hardware, not
   // the snack; "frozen"/"potato" only ever name food. "charging" catches the
   // charging-station accessory class ("Sony PS5 DualSense Charging Station")
-  // that the singular "charger" marker misses.
-  /\b(games?|cartridge|backpacks?|bags?|totes?|pouches?|liners?|papers?|parchment|baking|sprays?|popcorn|chicken|snacks?|food|toys?|play ?sets?|carrying case|cookbooks?|recipes?|books?|chips|frozen|potato(?:es)?|charging)\b/i;
+  // that the singular "charger" marker misses. "seasoning"/"mix" catch the
+  // seasoning sachet that names the class ("Maggi Airfryer Mix Louisiana
+  // Buffalo Seasoning") without being the appliance.
+  /\b(games?|cartridge|backpacks?|bags?|totes?|pouches?|liners?|papers?|parchment|baking|sprays?|popcorn|chicken|snacks?|food|toys?|play ?sets?|carrying case|cookbooks?|recipes?|books?|chips|frozen|potato(?:es)?|charging|seasonings?|mix(?:es)?)\b/i;
 /* "X for PlayStation 5" is the media/software shape (games name the platform
  * as a compatibility suffix), and "disc"/"blu-ray" is the physical media
  * format. A hardware row that ALSO names the platform or a disc drive

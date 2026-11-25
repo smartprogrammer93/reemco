@@ -51,6 +51,9 @@ describe("REEA-1143 AC1 — category queries lead with the class product", () =>
       // Live-caught on the deployed stamp: frozen chips named the class and
       // slipped into #3 before the food marker existed.
       hit({ title: "Mccain Frozen Vegan Airfryer Classique Potato Chips", merchant: "Sultan Center", price: 3 }),
+      // Live-caught on the served payload: a seasoning sachet that names the
+      // class held a top-3 slot before the seasoning/mix marker existed.
+      hit({ title: "Maggi Airfryer Mix Louisiana Buffalo Seasoning", merchant: "Sultan Center", price: 1.5 }),
       hit({ title: "Air Fryer Toy with Light & Sound", merchant: "Danube Home", price: 5 }),
       hit({ title: "Philips Air Fryer, 1700W, 6.2L - Black", merchant: "Xcite", price: 45 }),
       hit({ title: "Xiaomi Air Fryer 6.5L White", merchant: "Eureka", price: 39 }),
@@ -289,6 +292,34 @@ describe("REEA-1143 AC3/AC4 — aggregate coverage on thin and zero pages", () =
     expect(line).toContain("2 stores checked · 1 carries this exact model");
     expect(line).toContain("1 empty");
     expect(line).not.toContain("carries this ·");
+  });
+
+  it("a platform category with a digit says 'carry this', not 'exact model'", () => {
+    // Live-caught on the served ps5 page: `ps5` carries a model-shaped digit
+    // token but names a class, so the aggregate must not claim "exact model".
+    const line = coverageLine(
+      [
+        { merchant: "Wibi", hits: 3 },
+        { merchant: "Eureka", hits: 1 },
+        { merchant: "Blink", hits: 0 },
+      ],
+      "en",
+      [
+        {
+          productId: "ps5-controller",
+          title: "Sony PS5 DualSense Wireless Controller",
+          brand: "Sony",
+          offers: [{ merchant: "Wibi", price: 22, currency: "KWD", url: "https://x/2", inStock: true }],
+          coupons: [],
+          variations: [],
+          alternatives: [],
+        },
+      ],
+      undefined,
+      "ps5",
+    );
+    expect(line).toContain("3 stores checked · 2 carry this · 1 empty");
+    expect(line).not.toContain("exact model");
   });
 
   it("a zero-row page keeps the failure/empty half and the aggregate scale", () => {
