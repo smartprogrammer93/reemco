@@ -2422,7 +2422,17 @@ function rankByRelevance(query: string, groups: HitGroup[]): HitGroup[] {
   // honest zero (heading + hint, item 5) instead of dressing up
   // cross-category rows as results. Queries without such a token — plain
   // phrases and short model qualifiers — keep today's ladder untouched.
-  const codes = skuCodeTokens(query);
+  //
+  // REEA-1154 D4 (second pass) — the gate reads the DISPATCH identity, not the
+  // shopper's spacing. `skuCodeTokens("fold7")` is ["fold7"] but the same
+  // dispatched query typed "fold 7" yields [] (two tokens, neither a code), so
+  // the compact spelling filtered to code-carrying rows while the spaced ones
+  // admitted a zero-coverage Amazon cable at the tail: 8 cards vs 9 for one
+  // query. `queryCacheKey` is the alias fold the memo/registry already use
+  // (`fold 7`/`Fold 7`/`فولد 7` → `fold7`) and leaves every other query's
+  // identity untouched, so the gate now applies identically to all four
+  // spellings and no unrelated query gains a filter.
+  const codes = skuCodeTokens(queryCacheKey(query));
   const kept =
     codes.length === 0
       ? groups

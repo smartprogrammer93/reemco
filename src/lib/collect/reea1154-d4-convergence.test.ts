@@ -50,6 +50,11 @@ const LIVE_SHAPE: SearchHit[] = [
   hit({ title: "Samsung Anti-Reflecting Screen Protector for Galaxy Z Fold7, EF-UF966CTEGWW - Clear", merchant: "Xcite", price: 4.5, url: "https://xcite.example/anti-reflect" }),
   hit({ title: "Panzerglass Camera Lens Protector For Galaxy Z Fold7 PG22394", merchant: "Eureka", price: 1.5, url: "https://eureka.example/pg22394" }),
   hit({ title: "for Samsung Z Fold 7 Case Clear, Compatible with MagSafe", merchant: "Amazon.eg", price: 191, url: "https://amazon.example/dp/case" }),
+  // REEA-1154 D4, second pass — the served `fold 7` document headed with this
+  // Amazon.eg cable at #2: no accessory marker matched "Cable", so the
+  // device-first head guard classed it as a device. It belongs in this live
+  // shape so the head pin below cannot pass again with a cable above the phones.
+  hit({ title: "Heavy Duty 3 Meter Fast Charging 30W Cable USB A to Type-C", merchant: "Amazon.eg", price: 289.99, url: "https://amazon.example/dp/cable" }),
 ];
 
 const SPELLINGS = ["fold 7", "fold7", "Fold 7", "فولد 7"];

@@ -58,6 +58,14 @@ const ACCESSORY_MARKERS: readonly string[] = [
   "film", "skin", "lens",
   "adapter", "adaptor", "charger", "dock", "holder", "hanger", "rack",
   "eartips", "ear tips", "sleeve", "bundle",
+  // REEA-1154 / REEA-1068 D4 — cables were the last accessory class with no
+  // EN marker ("charger" never matches "Charging", and "cable" was absent), so
+  // a "Heavy Duty 3 Meter Fast Charging 30W Cable USB A to Type-C" was classed
+  // as a DEVICE and the device-first head guard kept it at #2 above the Fold7
+  // phones on the served shelf. "cord" stays out on purpose: a plain substring
+  // would also classify a "Cordless Vacuum" as an accessory.
+  "cable",
+  "كيبل",
   "كفر", "جراب", "واقي", "غطاء", "شاحن", "كابل", "وصلة", "حامل",
 ];
 

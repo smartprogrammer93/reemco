@@ -64,6 +64,17 @@ describe("accessory classification (Rule 2)", () => {
     expect(isAccessoryTitle("COVER for Bose QuietComfort")).toBe(true);
   });
 
+  it("cables classify as accessories (REEA-1154 D4)", () => {
+    // The served-head leak: this exact Amazon.eg title headed the `fold 7`
+    // shelf at #2 because no marker matched it, so the device-first head guard
+    // treated it as a device and kept it above the Fold7 phones.
+    expect(isAccessoryTitle("Heavy Duty 3 Meter Fast Charging 30W Cable USB A to Type-C")).toBe(true);
+    expect(isAccessoryTitle("USB-C to USB-C Cable 1m")).toBe(true);
+    expect(isAccessoryTitle("كيبل شحن سريع للايفون")).toBe(true);
+    // A cordless DEVICE must not be swept up by the "cord" trap we avoided.
+    expect(isAccessoryTitle("Cordless Vacuum Cleaner 250W")).toBe(false);
+  });
+
   it("AR markers classify a card as accessory", () => {
     expect(isAccessoryTitle("كفر سيليكون لآيفون")).toBe(true);
     expect(isAccessoryTitle("جراب هواة بومبو")).toBe(true);
