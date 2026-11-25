@@ -954,7 +954,11 @@ const CATEGORY_INTENTS: readonly (CategoryIntent & { query: RegExp })[] = [
  * the accessory markers do. Kept in one table so a new complement class is
  * one entry, not a scatter of special cases. */
 const CATEGORY_COMPLEMENT_RE =
-  /\b(games?|cartridge|backpacks?|bags?|totes?|pouches?|liners?|papers?|parchment|baking|sprays?|popcorn|chicken|snacks?|food|toys?|play ?sets?|carrying case|cookbooks?|recipes?|books?)\b/i;
+  // "chips" stays plural-only: a laptop listing's "M4 chip" is hardware, not
+  // the snack; "frozen"/"potato" only ever name food. "charging" catches the
+  // charging-station accessory class ("Sony PS5 DualSense Charging Station")
+  // that the singular "charger" marker misses.
+  /\b(games?|cartridge|backpacks?|bags?|totes?|pouches?|liners?|papers?|parchment|baking|sprays?|popcorn|chicken|snacks?|food|toys?|play ?sets?|carrying case|cookbooks?|recipes?|books?|chips|frozen|potato(?:es)?|charging)\b/i;
 /* "X for PlayStation 5" is the media/software shape (games name the platform
  * as a compatibility suffix), and "disc"/"blu-ray" is the physical media
  * format. A hardware row that ALSO names the platform or a disc drive
@@ -965,7 +969,7 @@ const CATEGORY_MEDIA_RE =
 const CATEGORY_HARDWARE_RE = /\b(console|controller|dualsense|gamepad|handheld)\b/i;
 const CATEGORY_COMPLEMENT_AR = [
   "لعبة", "ألعاب", "لعبه", "حقيبة", "شنطة", "شنط", "ورق", "أكياس", "اكياس",
-  "طعام", "وجبة", "وجبات", "كتاب",
+  "طعام", "وجبة", "وجبات", "كتاب", "بطاطس", "مجمد", "رقائق",
 ];
 
 /** Query class: a curated category noun with no model identity of its own.

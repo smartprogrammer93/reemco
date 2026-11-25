@@ -48,6 +48,9 @@ describe("REEA-1143 AC1 — category queries lead with the class product", () =>
       hit({ title: "Air Fryer Baking Paper Liners 100 Sheets", merchant: "Xcite", price: 0.9 }),
       hit({ title: "Cooking Spray Oil for Air Fryer", merchant: "Jarir", price: 1.2 }),
       hit({ title: "Chicken Popcorn Air Fryer Snack", merchant: "Sultan Center", price: 2 }),
+      // Live-caught on the deployed stamp: frozen chips named the class and
+      // slipped into #3 before the food marker existed.
+      hit({ title: "Mccain Frozen Vegan Airfryer Classique Potato Chips", merchant: "Sultan Center", price: 3 }),
       hit({ title: "Air Fryer Toy with Light & Sound", merchant: "Danube Home", price: 5 }),
       hit({ title: "Philips Air Fryer, 1700W, 6.2L - Black", merchant: "Xcite", price: 45 }),
       hit({ title: "Xiaomi Air Fryer 6.5L White", merchant: "Eureka", price: 39 }),
@@ -79,6 +82,9 @@ describe("REEA-1143 AC1 — category queries lead with the class product", () =>
       hit({ title: "PS5 Backpack - Console Carrying Case for Sony PlayStation 5", merchant: "Amazon.eg", price: 8 }),
       hit({ title: "PowerA PS5 DualSense Controller Protection Case, 81313", merchant: "Xcite", price: 6 }),
       hit({ title: "PS5 Controller Quick Charger, Dual USB Dock", merchant: "Amazon.eg", price: 3 }),
+      // Live-caught on the deployed stamp: the singular "charger" marker
+      // missed "Charging Station", so it held #3 above the controllers.
+      hit({ title: "Sony PS5 DualSense Charging Station", merchant: "Amazon.eg", price: 9 }),
       hit({ title: "PS5 Call of Duty Modern Warfare 4 for Playstation 5", merchant: "Blink", price: 24 }),
       hit({ title: "PlayStation 5 Console Disc Edition", merchant: "Jarir", price: 150 }),
       hit({ title: "Sony PS5 DualSense Wireless Controller", merchant: "Wibi", price: 22 }),
