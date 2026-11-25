@@ -75,6 +75,15 @@ describe("accessory classification (Rule 2)", () => {
     expect(isAccessoryTitle("Cordless Vacuum Cleaner 250W")).toBe(false);
   });
 
+  it("a bare cord classifies as an accessory, its device homographs do not", () => {
+    // "cord" is matched whole-word only (REEA-1154 D4): a plain substring
+    // would also catch cordless devices and record players.
+    expect(isAccessoryTitle("USB-C Data Cord 480Mbps")).toBe(true);
+    expect(isAccessoryTitle("Braided Charging Cords, 2-Pack")).toBe(true);
+    expect(isAccessoryTitle("Sony Belt Drive Record Player")).toBe(false);
+    expect(isAccessoryTitle("Dyson V8 Cordless Vacuum")).toBe(false);
+  });
+
   it("AR markers classify a card as accessory", () => {
     expect(isAccessoryTitle("كفر سيليكون لآيفون")).toBe(true);
     expect(isAccessoryTitle("جراب هواة بومبو")).toBe(true);

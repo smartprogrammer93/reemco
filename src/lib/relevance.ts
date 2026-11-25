@@ -69,6 +69,14 @@ const ACCESSORY_MARKERS: readonly string[] = [
   "كفر", "جراب", "واقي", "غطاء", "شاحن", "كابل", "وصلة", "حامل",
 ];
 
+/** REEA-1154 D4 — "cord" completes the cable class, but only as a WHOLE WORD:
+ *  a plain substring marker would demote a "Cordless Vacuum" or a "Record
+ *  Player", both devices (the reason it stayed out of the list above).
+ *  `\bcords?\b` accepts "cord"/"cords" and leaves "cordless"/"record"/"accord"
+ *  alone, so a bare "USB-C Data Cord" is an accessory while a cordless device
+ *  stays a device. */
+const ACCESSORY_WORD_RE = /\bcords?\b/;
+
 /** Model-number shape (spec Rule 2): letters immediately followed by digits
  *  ("WH-1000XM6", "SM-R530"). The separator class is widened to a short
  *  space/hyphen/slash gap on purpose: spaced model forms ("Galaxy Buds 3",
@@ -564,7 +572,7 @@ export function resolveBrand(brandField: string | undefined, title: string): str
  *  EN/AR marker; everything else is device. */
 export function isAccessoryTitle(title: string): boolean {
   const lower = normalizedTitle(title).toLowerCase();
-  return ACCESSORY_MARKERS.some((m) => lower.includes(m));
+  return ACCESSORY_MARKERS.some((m) => lower.includes(m)) || ACCESSORY_WORD_RE.test(lower);
 }
 
 /* ---- REEA-592 (REEA-575 spec R1/R3): category gate for the Alternatives
