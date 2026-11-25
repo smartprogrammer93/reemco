@@ -201,7 +201,7 @@ export const defaultQueryCache = createQueryCache();
  * window, then stale-while-revalidate, then ceiling expiry. Curl repro for a
  * cold render of one query: `curl -b 'rc_refresh=1' <same-url>`.
  */
-export function queryCacheKey(query: string, country?: string | null, locale?: "en" | "ar"): string {
+export function queryCacheKey(query: string, country?: string | null, _locale?: "en" | "ar"): string {
   // REEA-1068 D4 — the memo identity is the DISPATCH identity, not the raw
   // shopper spelling. `fold 7`, `fold7` and `Fold 7` all reach the retailers
   // as the same compact query (collectSettled applies the same two folds), so
@@ -214,10 +214,18 @@ export function queryCacheKey(query: string, country?: string | null, locale?: "
   // Country scopes the LIVE fan-out itself (REEA-170 — COLLECTORS are
   // filtered to the adapters tagged for the selection), so the collected
   // payload really differs per selection and its identity must too. Callers
-  // without a selection keep the plain query-only key. REEA-468 G5: the
-  // Arabic locale selects the Arabic-script representative title inside the
-  // snapshot (nearMatchTitles/groupHits), so it joins the identity too —
-  // never as a per-request buster, only from the resolved request locale.
-  const scope = [country, locale].filter((p): p is string => Boolean(p));
+  // without a selection keep the plain query-only key.
+  //
+  // REEA-1154 / D4 — the LOCALE no longer forks the identity. The dispatch
+  // above is already locale-independent (an Arabic spelling bridges to the
+  // same Latin query the EN spelling dispatches), so the collected payload is
+  // the same set in both locales; forking on `ar` made QA measure the AR
+  // spelling as its own fan-out and serve a different Amazon listing than the
+  // EN spellings of the same dispatch. One dispatched query now has ONE live
+  // answer, which is exactly the D4 convergence bar (same set, same head).
+  // The REEA-468 G5 representative-title preference still applies when the
+  // snapshot is BUILT (the run that wins the window carries the locale it was
+  // rendered for); it is a display choice, not a different result set.
+  const scope = country ? [country] : [];
   return scope.length > 0 ? `${scope.join("|")}|${folded}` : folded;
 }

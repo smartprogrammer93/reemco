@@ -167,9 +167,17 @@ export function duplicateCardsOf(cards: readonly NormalizedProduct[]): number {
  *
  * Richness is therefore measured on the comparison evidence the shopper can
  * act on — offer rows — not on card count. A converged answer with more offers
- * always wins; an equal-offer answer wins when it is at least as merged
- * (fewer/equal cards), so the settled, deduped shelf replaces the provisional
- * one. A poorer answer never replaces what is already rendered.
+ * always wins; an equal-offer answer wins when it is STRICTLY more merged
+ * (fewer cards), so the settled, deduped shelf replaces the provisional one.
+ * A poorer answer never replaces what is already rendered, and an exact
+ * evidence tie keeps the rendered shelf.
+ *
+ * REEA-1154 / D4 — the tie must keep the rendered shelf. Two spellings of one
+ * dispatched query are served the same memo answer, but a stale-window repeat
+ * re-runs the fan-out: that sibling run can carry the SAME card and offer
+ * totals with one different listing (QA measured the AR spelling swapping an
+ * Amazon case). Swapping on the tie made two spellings of the same query
+ * render different sets, so equal evidence now keeps what is on screen.
  * ------------------------------------------------------------------------- */
 
 /** Total offer rows a snapshot's products carry — the comparison evidence. */
@@ -181,7 +189,7 @@ export function snapshotOfferTotal(products: readonly NormalizedProduct[]): numb
 
 /**
  * Pick the snapshot to render when a late/converged answer arrives: the one
- * with more offer evidence, else the equally-rich answer that is at least as
+ * with more offer evidence, else the equally-rich answer that is strictly more
  * merged (fewer cards), else the already-rendered one. Pure and client-safe:
  * same pair of snapshots, same choice, every render.
  */
@@ -194,7 +202,7 @@ export function preferRicherSnapshot<T extends { products: readonly NormalizedPr
   const incomingOffers = snapshotOfferTotal(incoming.products);
   const currentOffers = snapshotOfferTotal(current.products);
   if (incomingOffers > currentOffers) return incoming;
-  if (incomingOffers === currentOffers && incoming.products.length <= current.products.length) {
+  if (incomingOffers === currentOffers && incoming.products.length < current.products.length) {
     return incoming;
   }
   return current;

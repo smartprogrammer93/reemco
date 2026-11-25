@@ -87,10 +87,43 @@ describe("REEA-1162 — late-answer fold richness", () => {
     expect(preferRicherSnapshot(rendered, poorer)).toBe(rendered);
   });
 
-  it("accepts an equally rich answer that is at least as merged", () => {
-    const rendered = { products: [product("a", "A", [{ merchant: "Xcite", price: 1 }])] };
-    const merged = { products: [product("a", "A", [{ merchant: "Xcite", price: 1 }])] };
+  it("accepts an equally rich answer that is strictly more merged (fewer cards)", () => {
+    // Same offer evidence (2 rows), but the late answer folded two forked
+    // single-offer cards into one card carrying both — strictly fewer cards.
+    const rendered = {
+      products: [
+        product("a", "A", [{ merchant: "Xcite", price: 1 }]),
+        product("b", "B", [{ merchant: "Blink", price: 2 }]),
+      ],
+    };
+    const merged = {
+      products: [
+        product("a", "A", [
+          { merchant: "Xcite", price: 1 },
+          { merchant: "Blink", price: 2 },
+        ]),
+      ],
+    };
+    expect(snapshotOfferTotal(rendered.products)).toBe(snapshotOfferTotal(merged.products));
     expect(preferRicherSnapshot(rendered, merged)).toBe(merged);
+  });
+
+  it("REEA-1154 D4 — an exact evidence tie keeps the rendered shelf", () => {
+    // Two spellings of one dispatched query must not swap each other's set: a
+    // sibling run can carry the same card/offer totals with one different
+    // listing (the QA `fold7` vs `فولد 7` Amazon case).
+    const rendered = {
+      products: [
+        product("a", "Samsung Galaxy Z Fold7, 5G, 12 GB RAM", [{ merchant: "Xcite", price: 379.9 }]),
+      ],
+    };
+    const tie = {
+      products: [
+        product("other", "Uniq MagSafe Case for Galaxy Z Fold 7", [{ merchant: "Wibi", price: 4.05 }]),
+      ],
+    };
+    expect(snapshotOfferTotal(rendered.products)).toBe(snapshotOfferTotal(tie.products));
+    expect(preferRicherSnapshot(rendered, tie)).toBe(rendered);
   });
 
   it("ignores an absent or malformed late answer", () => {

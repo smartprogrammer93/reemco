@@ -2412,10 +2412,27 @@ function rankByRelevance(query: string, groups: HitGroup[]): HitGroup[] {
     if (out.length >= LIVE_SEARCH_MAX_PRODUCTS) break;
     bucket.sort(insideTier);
     const block = bucket.map((r) => r.group);
+    // REEA-1154 / D4 — device-first head INSIDE this tier. The cross-retailer
+    // breadth round-robin below (selectAcrossRetailers) interleaves merchants,
+    // so a cheap accessory from an early merchant (an Amazon MagSafe case, a
+    // Wibi privacy protector) landed ABOVE the Fold7 phones on a cold serve
+    // even though the tier comparator put devices first: the comparator orders
+    // the bucket before the round-robin, and the shelf renders this order
+    // (there is no device/accessory container split). Re-heading the selected
+    // block restores the comparator's device-first verdict without touching
+    // the tier ladder: a tier-1 phone still beats a tier-2 accessory, and a
+    // tier-3 cross-category device stays in its own lower bucket. An
+    // accessory-naming query ("iphone case") keeps its accessory head because
+    // those cases are their own tier 1. The stored-snapshot guard
+    // (skuLeadSnap → narrowDeviceLead) still applies on memo/KV replays.
     out.push(
-      ...selectAcrossRetailers(
-        leadWithBrandMatch(block, query),
-        LIVE_SEARCH_MAX_PRODUCTS - out.length,
+      ...narrowDeviceLead(
+        query,
+        selectAcrossRetailers(
+          leadWithBrandMatch(block, query),
+          LIVE_SEARCH_MAX_PRODUCTS - out.length,
+        ),
+        (g) => !g.accessory,
       ),
     );
   }

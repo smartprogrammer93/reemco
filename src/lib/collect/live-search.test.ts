@@ -3287,7 +3287,7 @@ describe("REEA-921 memo stale-write (pending class killed at the memo)", () => {
     expect(calls.length).toBe(before);
   });
 
-  it("the follow-up registry key folds the locale exactly like the memo key (en fast path)", async () => {
+  it("the follow-up registry key folds the locale exactly like the memo key (one answer per dispatch)", async () => {
     resetDiscoveryCache();
     const cache = createQueryCache();
     const fetchImpl = shapedFetch();
@@ -3299,10 +3299,13 @@ describe("REEA-921 memo stale-write (pending class killed at the memo)", () => {
     collectLiveResultsStaged("xm6", { fetchImpl, cache, locale: "en" });
     expect(followUpSnapshot("xm6", "en")).not.toBeNull();
 
-    // "ar" still forks its own entry, exactly like the memo does.
+    // REEA-1154 / D4 — the locale no longer forks the entry: the dispatch
+    // identity is locale-independent, so a run registered under one locale is
+    // the same live answer for the other. The AR spelling of a dispatched
+    // query must not re-collect into a second, differently-shaped snapshot.
     collectLiveResultsStaged("xm7", { fetchImpl, cache, locale: "ar" });
     expect(followUpSnapshot("xm7", "ar")).not.toBeNull();
-    expect(followUpSnapshot("xm7", "en")).toBeNull();
+    expect(followUpSnapshot("xm7", "en")).not.toBeNull();
   });
 });
 
