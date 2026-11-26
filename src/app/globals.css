@@ -2392,7 +2392,23 @@ html[lang="ar"] .coupon-via {
   align-items: start;
 }
 
-@media (min-width: 641px) {
+/* REEA-1156 D10 (641–900 regression) — the six fixed offer columns need a
+   content column wide enough to keep the price on one 20px line. The
+   side-by-side hero at 641px leaves the body only 249px (320px image + gap),
+   so the single-line row overflowed: the retailer wordmark collapsed to 0px,
+   "KD 264.90" wrapped to two lines, and checked/action rendered past the
+   viewport. Stack the hero until the body can hold the six columns; the
+   side-by-side hero starts at 1024px, where the 632px body resolves a
+   one-line price and no clipped cells. The single-line offer variant stays
+   >=641px as specified. */
+@media (min-width: 641px) and (max-width: 1023px) {
+  .rc-product-hero {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--rc-space-4);
+  }
+}
+
+@media (min-width: 1024px) {
   .rc-product-hero {
     grid-template-columns: var(--rc-image-hero) minmax(0, 1fr);
     gap: var(--rc-space-6);
