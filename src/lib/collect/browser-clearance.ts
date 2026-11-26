@@ -69,6 +69,8 @@ let launch: Promise<{ browser: BrowserLike; context: ContextLike } | null> | nul
  * needing another guess-and-deploy cycle.
  */
 let lastFailure = "";
+/** Which launch arg set answered (-1 until a browser is up). */
+let lastLaunchArgs = -1;
 
 export function browserLastError(): string {
   return lastFailure;
@@ -80,6 +82,8 @@ export interface BrowserProbe {
   bytes: number;
   painted: boolean;
   ms: number;
+  /** Which launch arg set answered (-1 = none). */
+  args: number;
   error?: string;
 }
 
@@ -87,42 +91,18 @@ export interface BrowserProbe {
 export async function browserProbe(url: string, contentSelector: string): Promise<BrowserProbe> {
   const started = Date.now();
   if (!browserTierEnabled()) {
-    return { enabled: false, ok: false, bytes: 0, painted: false, ms: 0 };
+    return { enabled: false, ok: false, bytes: 0, painted: false, ms: 0, args: -1 };
   }
-  const shared = await getSharedBrowser();
-  if (!shared) {
-    return {
-      enabled: true,
-      ok: false,
-      bytes: 0,
-      painted: false,
-      ms: Date.now() - started,
-      error: lastFailure || "browser launch failed",
-    };
-  }
-  let page: PageLike | null = null;
-  try {
-    page = await shared.context.newPage();
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
-    await page
-      .waitForFunction((sel: string) => document.querySelector(sel) !== null, contentSelector, {
-        timeout: CONTENT_WAIT_MS,
-      })
-      .catch(() => undefined);
-    const html = await page.content();
-    return {
-      enabled: true,
-      ok: html.length > 0,
-      bytes: html.length,
-      painted: html.includes(contentSelector.replace(/^[.#]/, "")),
-      ms: Date.now() - started,
-    };
-  } catch (err) {
-    lastFailure = err instanceof Error ? err.message : String(err);
-    return { enabled: true, ok: false, bytes: 0, painted: false, ms: Date.now() - started, error: lastFailure };
-  } finally {
-    if (page) await page.close().catch(() => undefined);
-  }
+  const { html, error } = await navigate(url, contentSelector);
+  return {
+    enabled: true,
+    ok: html.length > 0 && !error,
+    bytes: html.length,
+    painted: html.includes(contentSelector.replace(/^[.#]/, "")),
+    ms: Date.now() - started,
+    args: lastLaunchArgs,
+    ...(error ? { error } : {}),
+  };
 }
 
 /**
@@ -187,13 +167,36 @@ async function getSharedBrowser(): Promise<{ browser: BrowserLike; context: Cont
         }
         if (existsSync(libDir)) sparticuzMod.setupLambdaEnvironment(libDir);
         const executablePath = await sparticuz.executablePath();
-        const browser = (await chromium.launch({
-          executablePath,
-          args: sparticuz.args,
-          headless: true,
-          // The child must see the lib path set above.
-          env: process.env,
-        })) as unknown as BrowserLike;
+        // REEA-1221 — two arg sets, tried in order. The package's serverless
+        // set runs Chromium with --single-process/--no-zygote, which is right
+        // on Lambda but died on the self-hosted box ("Target page, context or
+        // browser has been closed" right after launch, measured 2026-11-26).
+        // The fallback keeps the same headless identity without the
+        // single-process/zygote pair and with the GPU path disabled, which is
+        // the stable shape on a long-lived server. Whichever answers is what
+        // the process keeps.
+        const launchSets: string[][] = [
+          [...sparticuz.args],
+          sparticuz.args.filter((a) => a !== "--single-process" && a !== "--no-zygote"),
+        ];
+        let browser: BrowserLike | null = null;
+        let usedSet = -1;
+        for (let i = 0; i < launchSets.length && !browser; i++) {
+          try {
+            browser = (await chromium.launch({
+              executablePath,
+              args: launchSets[i],
+              headless: true,
+              // The child must see the lib path set above.
+              env: process.env,
+            })) as unknown as BrowserLike;
+            usedSet = i;
+          } catch (err) {
+            lastFailure = err instanceof Error ? err.message : String(err);
+          }
+        }
+        if (!browser) return null;
+        lastLaunchArgs = usedSet;
         const context = await browser.newContext({
           userAgent: BROWSER_UA,
           locale: "en-US",
@@ -214,6 +217,41 @@ async function getSharedBrowser(): Promise<{ browser: BrowserLike; context: Cont
     return getSharedBrowser();
   }
   return shared;
+}
+
+/**
+ * REEA-1221 — navigate inside one bounded attempt. A browser that died between
+ * the liveness check and the navigation is relaunched once (the launch ladder
+ * in getSharedBrowser picks the arg set that works on this host), so a single
+ * crash does not blank the lane for the rest of the process's life.
+ */
+async function navigate(
+  url: string,
+  contentSelector: string,
+): Promise<{ html: string; error?: string }> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const shared = attempt === 0 ? await getSharedBrowser() : ((launch = null), await getSharedBrowser());
+    if (!shared) return { html: "", error: lastFailure || "browser launch failed" };
+    let page: PageLike | null = null;
+    try {
+      page = await shared.context.newPage();
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+      await page
+        .waitForFunction((sel: string) => document.querySelector(sel) !== null, contentSelector, {
+          timeout: CONTENT_WAIT_MS,
+        })
+        .catch(() => undefined);
+      return { html: await page.content() };
+    } catch (err) {
+      lastFailure = err instanceof Error ? err.message : String(err);
+      // A dead browser is not going to answer this attempt; the next loop
+      // relaunches.
+      if (!/closed|disconnected|crash/i.test(lastFailure)) return { html: "", error: lastFailure };
+    } finally {
+      if (page) await page.close().catch(() => undefined);
+    }
+  }
+  return { html: "", error: lastFailure };
 }
 
 async function isAlive(shared: { browser: BrowserLike; context: ContextLike }): Promise<boolean> {
@@ -251,27 +289,10 @@ export async function browserClearedHtml(url: string, contentSelector: string): 
       // store hiccup — fall through to the browser
     }
   }
-  const shared = await getSharedBrowser();
-  if (!shared) return "";
-  let page: PageLike | null = null;
-  try {
-    page = await shared.context.newPage();
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
-    await page
-      .waitForFunction((sel: string) => document.querySelector(sel) !== null, contentSelector, {
-        timeout: CONTENT_WAIT_MS,
-      })
-      .catch(() => undefined);
-    const html = await page.content();
-    if (html && kv) {
-      // Best-effort write: a store hiccup must not fail the lane.
-      await kv.set(key, html, CLEARED_CACHE_TTL_S).catch(() => false);
-    }
-    return html;
-  } catch (err) {
-    lastFailure = err instanceof Error ? err.message : String(err);
-    return "";
-  } finally {
-    if (page) await page.close().catch(() => undefined);
+  const { html } = await navigate(url, contentSelector);
+  if (html && kv) {
+    // Best-effort write: a store hiccup must not fail the lane.
+    await kv.set(key, html, CLEARED_CACHE_TTL_S).catch(() => false);
   }
+  return html;
 }
