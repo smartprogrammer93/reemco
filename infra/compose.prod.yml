@@ -71,10 +71,21 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
     # 32 GB box: leave ~4 GB headroom for page cache, Caddy, Valkey and the
-    # OS. Chromium is not in this container (it is a CI-only smoke dependency).
+    # OS.
+    # REEA-1226 — headless Chromium DOES run in this container now: the
+    # REEA-1221 browser-clearance tier launches it for the Next Store lane (the
+    # old "CI-only smoke dependency" comment was stale). One Chromium is ~59
+    # threads (browser + 2 zygotes + GPU + network utility) and the render
+    # admission cap allows several at once, so the old 512 ceiling was reached:
+    # measured on the served head 2026-11-26, pids.current 510 / pids.max 512
+    # with 7 live Chromium instances holding 411 threads, and the next
+    # `clone()` failed with `pthread_create: Resource temporarily unavailable`
+    # (EAGAIN). 2048 is ~3x the observed peak, covers the full admission cap
+    # plus a launch overlap, and stays a bounded fork-bomb guard. Chromium
+    # needs ~40-60 threads; do not drop this below 1024.
     mem_limit: 6g
     cpus: 6.0
-    pids_limit: 512
+    pids_limit: 2048
     # REEA-1061 — the app binds 3000 (>1024) and is already uid 1001 from the
     # image; it needs no capabilities at all.
     cap_drop:

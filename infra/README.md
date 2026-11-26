@@ -180,7 +180,7 @@ The stack is capability-minimal and its infrastructure images are immutable:
 
 | Service | Identity | Caps | Rootfs | Limits | Networks |
 |---|---|---|---|---|---|
-| app | uid 1001 (image user) | `cap_drop: ALL` | writable (volumes + `/tmp`) | 6g / 6 CPU / 512 pids | `edge`, `data` |
+| app | uid 1001 (image user) | `cap_drop: ALL` | writable (volumes + `/tmp`) | 6g / 6 CPU / 2048 pids | `edge`, `data` |
 | redis | image user `valkey` (uid 999) | `cap_drop: ALL` | read-only, `/data` volume only | 512m / 256 pids | `data` only |
 | proxy | uid 1000 | `cap_drop: ALL` + `NET_BIND_SERVICE` | read-only, `/data`+`/config` volumes + `/tmp` tmpfs | 256m / 128 pids | `edge` only |
 

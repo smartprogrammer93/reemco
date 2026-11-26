@@ -11,7 +11,8 @@
 #     configured user and the live process)
 #   * CapDrop includes ALL, CapAdd is empty except proxy's NET_BIND_SERVICE
 #   * redis/proxy rootfs is read-only and no-new-privileges is set
-#   * pids_limit matches the compose file (redis 256, proxy 128)
+#   * pids_limit matches the compose file (redis 256, proxy 128, app 2048 —
+#     REEA-1226: the app runs headless Chromium for the browser-clearance tier)
 #   * proxy is on `edge` only and redis on `data` only (no shared network)
 #   * the running image digest equals the digest pinned in compose.prod.yml
 #
@@ -83,7 +84,9 @@ for svc in redis proxy app; do
   case "$svc" in
     redis) want_user="valkey"; want_pids=256; want_nets="reemco_data" ;;
     proxy) want_user="1000:1000"; want_pids=128; want_nets="reemco_edge" ;;
-    app)   want_user=""; want_pids=512; want_nets="reemco_data,reemco_edge" ;;
+    # REEA-1226: the app runs headless Chromium for the browser-clearance
+    # tier, so its pids ceiling is 2048 (was 512, which Chromium exhausted).
+    app)   want_user=""; want_pids=2048; want_nets="reemco_data,reemco_edge" ;;
   esac
 
   # Non-root, both configured and live.
