@@ -33,6 +33,10 @@ import { HeadingGhost, SkeletonCard, StampGhost, coverageLhTier } from "@/compon
 import { PRODUCTS } from "@/lib/feed";
 import { realCouponsFor } from "@/lib/price-composition";
 import { resultsShelfCards, resultsShelfSections, shelfSectionsFromProducts, RESULTS_PAGE_SIZE, freshCardsForFlush, paintedIdsAfter, preferRicherSnapshot } from "@/lib/results-shelf";
+// REEA-1201 (Bet 7A-2) — the honest shelf's pure decisions: the in-scope count
+// plural ladder and the thin-shelf test (same comparison-merchant count the
+// card basis prints, so the page line can never contradict a card).
+import { inScopeCountTemplate, isThinShelf } from "@/lib/shelf-honesty";
 import { formatPrice, sortOffers } from "@/lib/format";
 import {
   marketName,
@@ -353,6 +357,116 @@ function RelatedBand({
         })}
       </ul>
     </section>
+  );
+}
+
+/* REEA-1201 AC 7b-2 — the labelled accessory band. It renders ONLY the cards
+   the payload scoped `accessory`, always BELOW the primary shelf, and reuses
+   the related band's compact-row markup/classes so no new visual direction or
+   component library enters the page. Accessory rows are not primary results;
+   their clicks ride the same `related_click` event as the related band. */
+function AccessoryBand({
+  items,
+  locale,
+  queryId,
+}: {
+  items: NormalizedProduct[];
+  locale?: Locale;
+  queryId?: string;
+}) {
+  const t = getStrings(locale ?? clientLocale());
+  if (items.length === 0) return null;
+  return (
+    <section
+      className="related-band accessory-band"
+      aria-label={t.accessoryBandAria}
+      data-accessory-band="true"
+      style={{ marginTop: "var(--rc-space-8)" }}
+    >
+      <h2 className="related-band-title" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
+        {t.accessoryBandLabel}
+      </h2>
+      <ul className="related-band-list mt-2">
+        {items.map((p) => {
+          const priced = [...p.offers].sort((a, b) => a.price - b.price)[0];
+          return (
+            <li key={p.productId} className="related-item" data-accessory-item="true">
+              <span className="related-chip">{t.accessoryChip}</span>
+              <Link
+                href={`/product/${encodeURIComponent(p.productId)}`}
+                className="related-item-link focusable"
+                aria-label={`${t.accessoryChip}: ${p.title}`}
+                onClick={() => {
+                  if (!queryId || !priced) return;
+                  trackEvents([
+                    buildRelatedClick({ queryId, offerId: p.productId, retailer: priced.merchant }),
+                  ]);
+                }}
+              >
+                <span className="related-item-title">{p.title}</span>
+                {priced ? (
+                  <span className="related-item-meta" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
+                    {t.fromWord} {formatPrice(priced.price, priced.currency)}
+                  </span>
+                ) : null}
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+/* REEA-1201 AC 7b-1 — the honest in-scope count line. `count` is the number of
+   primary-scope cards the shelf actually renders (the payload's own scope
+   decision, see results-shelf.ts), never the padded slot count. The query is
+   bidi-isolated so the Arabic sentence keeps its order. */
+function InScopeCountLine({
+  count,
+  query,
+  locale,
+}: {
+  count: number;
+  query: string;
+  locale?: Locale;
+}) {
+  const l = locale ?? clientLocale();
+  const t = getStrings(l);
+  const template = inScopeCountTemplate(l, count);
+  const [before, after] = template.split("{q}");
+  return (
+    <p
+      className="in-scope-count"
+      data-in-scope-count="true"
+      data-in-scope-total={count}
+      style={{ font: "var(--rc-text-body)", color: "var(--rc-ink)", marginTop: "var(--rc-space-3)" }}
+    >
+      {fill(before, { n: count })}
+      <bdi>{query}</bdi>
+      {fill(after ?? "", { n: count })}
+    </p>
+  );
+}
+
+/* REEA-1201 AC 7b-3 — thin-shelf honesty: when every rendered card carries one
+   in-market retailer, the page says no cross-retailer match was found instead
+   of letting the shelf imply a comparison. */
+function ThinShelfLine({ query, locale }: { query: string; locale?: Locale }) {
+  const l = locale ?? clientLocale();
+  const t = getStrings(l);
+  const [before, after] = t.thinShelfLine.split("{q}");
+  return (
+    <p
+      className="thin-shelf-line"
+      data-thin-shelf="true"
+      role="note"
+      style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)", marginTop: "var(--rc-space-2)" }}
+    >
+      {before}
+      <bdi>{query}</bdi>
+      {after ?? ""}
+    </p>
   );
 }
 
@@ -1057,6 +1171,9 @@ function StageEmptyState(props: {
             : undefined
         }
       />
+      {/* REEA-1201 AC 7b-2 — the streamed zero-primary view keeps accessory
+          cards in their labelled band, never in the primary slot. */}
+      <AccessoryBand items={sections.accessory} locale={props.locale} queryId={props.queryId} />
       <RelatedBand items={sections.related} locale={props.locale} queryId={props.queryId} />
     </>
   );
@@ -1262,6 +1379,10 @@ function StagedResults(props: {
   const products = finalSections
     ? finalSections.primary.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
     : null;
+  // REEA-1201 — the honest in-scope total is the FULL primary shelf, not the
+  // page slice; the thin-shelf decision folds the cards this page renders.
+  const inScopeCount = finalSections ? finalSections.primary.length : 0;
+  const thinShelf = products ? isThinShelf(products, marketViewScope(country)) : false;
   // REEA-1114 — the filter-aware count and the empty-state case are derived
   // from the SAME converged snapshot the shelf renders (and the follow-up
   // fold keeps them in step when late offers land). The chip carries the
@@ -1378,6 +1499,13 @@ function StagedResults(props: {
         </ResultsHead>
         <StatusLegend locale={locale} />
         <ResultsMeta products={products} query={query} renderStartMs={props.renderStartMs} locale={locale} />
+        {/* REEA-1201 AC 7b-1/7b-3 — the honest in-scope count and, when every
+            card is single-retailer, the thin-shelf sentence. Both sit above
+            the shelf and read the payload's own scope decision. */}
+        {inScopeCount > 0 ? (
+          <InScopeCountLine count={inScopeCount} query={query} locale={locale} />
+        ) : null}
+        {thinShelf ? <ThinShelfLine query={query} locale={locale} /> : null}
         {/* REEA-793 B1 — the pending row sits DIRECTLY UNDER the count line
             in the converged view, before the coverage stamp. */}
         {finalSnap.deviceLeadPending ? <DeviceLeadPendingRow locale={locale} /> : null}
@@ -1417,6 +1545,10 @@ function StagedResults(props: {
                   : undefined
               }
             />
+            {/* REEA-1201 AC 7b-2 — accessory cards keep their labelled band
+                even when the primary shelf is empty; they never masquerade as
+                a primary result. */}
+            <AccessoryBand items={finalSections.accessory} locale={locale} queryId={props.queryId} />
             <RelatedBand items={finalSections.related} locale={locale} queryId={props.queryId} />
           </>
         ) : (
@@ -1439,6 +1571,9 @@ function StagedResults(props: {
               kuwaitBatchPending={finalSnap.settled === false && !feedDone}
               kuwaitPendingStatus={finalSnap.kuwaitPendingStatus === true}
             />
+            {/* REEA-1201 AC 7b-2 — the labelled accessory band sits BELOW the
+                primary shelf, never above a primary-scope card. */}
+            <AccessoryBand items={finalSections.accessory} locale={locale} queryId={props.queryId} />
             <RelatedBand items={finalSections.related} locale={locale} queryId={props.queryId} />
           </>
         )}
@@ -1683,6 +1818,9 @@ function ResultsInner(props: {
   const products = plainSections.primary;
   const matchCount = products.length;
   const zero = query.length > 0 && matchCount === 0;
+  // REEA-1201 — same honest count/thin-shelf decisions on the fallback path.
+  const plainInScopeCount = plainSections.primary.length;
+  const plainThinShelf = isThinShelf(products, marketViewScope(country));
   // REEA-1114 — the static-host fallback path obeys the same filter-aware
   // empty state: a zero that a filter hid names the filter and reveals the
   // rows in place instead of blaming the spelling.
@@ -1745,6 +1883,12 @@ function ResultsInner(props: {
       </ResultsHead>
       <StatusLegend locale={locale} />
       <ResultsMeta products={products} query={query} renderStartMs={props.renderStartMs} locale={locale} />
+      {/* REEA-1201 AC 7b-1/7b-3 — honest count and thin-shelf sentence on the
+          fallback path too, from the same scope-aware partition. */}
+      {plainInScopeCount > 0 ? (
+        <InScopeCountLine count={plainInScopeCount} query={query} locale={locale} />
+      ) : null}
+      {plainThinShelf ? <ThinShelfLine query={query} locale={locale} /> : null}
       {zero ? (
         <>
           <EmptyState
@@ -1764,6 +1908,7 @@ function ResultsInner(props: {
                 : undefined
             }
           />
+          <AccessoryBand items={plainSections.accessory} locale={locale} queryId={props.queryId} />
           <RelatedBand items={plainSections.related} locale={locale} queryId={props.queryId} />
         </>
       ) : (
@@ -1777,6 +1922,7 @@ function ResultsInner(props: {
             renderStartMs={props.renderStartMs}
             queryId={props.queryId}
           />
+          <AccessoryBand items={plainSections.accessory} locale={locale} queryId={props.queryId} />
           <RelatedBand items={plainSections.related} locale={locale} queryId={props.queryId} />
         </>
       )}

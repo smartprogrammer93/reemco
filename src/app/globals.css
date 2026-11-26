@@ -932,6 +932,23 @@ html[lang="ar"] .coupon-via {
   -webkit-box-orient: vertical;
 }
 
+/* REEA-1201 (Bet 7A-2) — the labelled accessory band reuses the related band's
+   compact-row structure (one column at 375, two at ≥1280, minmax(0,1fr)
+   tracks) so it cannot widen the page. Only the band identity differs. */
+.accessory-band {
+  border-top-style: solid;
+}
+
+/* REEA-1201 AC 7b-1 — the honest in-scope count line. It is a plain statement,
+   not a chip: it must wrap instead of widening the page at 375, and its digits
+   stay LTR-isolated in Arabic through the surrounding bdi/template. */
+.in-scope-count,
+.thin-shelf-line {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
 /* REEA-793 B2 — lh tiers grow ONE STEP only in has-status mode (desktop 2lh
    -> 3lh; mobile EN 7lh -> 8lh; AR 5lh -> 6lh). Same !important single-owner
    pattern as the base tiers; the normal (no-status) pass is untouched. */

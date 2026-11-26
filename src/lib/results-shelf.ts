@@ -19,16 +19,38 @@ import { isCrossMarketOffer, marketViewScope, scopeProductsByMarket } from "@/li
 import { effectiveKwdOfOffer } from "@/lib/price-composition";
 import { filterProductsByStock } from "@/lib/stock";
 import { exactSkuKeep } from "@/lib/relevance";
-import { partitionByConfidence } from "@/lib/confidence";
+import {
+  CONFIDENCE_THRESHOLD,
+  RELATED_CAP,
+  matchConfidence,
+  partitionByConfidence,
+} from "@/lib/confidence";
 import type { NormalizedProduct } from "@/types/product";
 
 /** Cards per results page. Same slice the renderer applies (REEA-114/291). */
 export const RESULTS_PAGE_SIZE = 20;
 
 /**
- * Apply the shopper's country/stock selections, then the confidence partition
- * the page renders: primary (confident) rows become shelf cards, related
- * (below threshold, capped) rows become the related band — never cards.
+ * REEA-1201 (Bet 7A-2) — the three sections the honest shelf renders:
+ * primary shelf cards, the labelled accessory band, and the existing related
+ * band. Accessory cards NEVER enter `primary` (AC 7b-2).
+ */
+export interface ShelfSections {
+  primary: NormalizedProduct[];
+  related: NormalizedProduct[];
+  accessory: NormalizedProduct[];
+}
+
+/**
+ * Apply the shopper's country/stock selections, then the payload's scope
+ * partition when the relevance gate supplies `productScope`; otherwise the
+ * pre-7A confidence partition (the same one every existing surface uses).
+ *
+ * REEA-1201: the browser does NOT invent `productScope`. When the payload
+ * carries it, the value is read as-is — `primary`/`variant` become shelf
+ * cards, `accessory` the labelled band, `consumable` the related band. A card
+ * that predates the gate keeps the existing confidence ladder for itself only,
+ * so a partial rollout cannot silently demote a primary card.
  *
  * Selections apply BEFORE the partition, per snapshot, exactly as the staged
  * and plain render paths do (REEA-291/964). REEA-822: the exact-SKU keep
@@ -40,7 +62,7 @@ export function shelfSectionsFromProducts(
   query: string,
   country: CountryCode | null,
   showOutOfStock: boolean,
-): { primary: NormalizedProduct[]; related: NormalizedProduct[] } {
+): ShelfSections {
   // REEA-1142 AC1/AC3 — the market selection no longer DROPS other-market
   // offers (that emptied the only lane on panadol/cucumber/air fryer). Every
   // offer stays on the shelf, tagged to its market, and the card renderer
@@ -51,7 +73,9 @@ export function shelfSectionsFromProducts(
     showOutOfStock,
     exactSkuKeep(query),
   );
-  const sections = partitionByConfidence(query, filtered);
+  const sections = hasPayloadScope(filtered)
+    ? scopeSections(filtered, query)
+    : confidenceSections(filtered, query);
   // REEA-1177 AC 6a-4 — the primary shelf ranks by the SAME effective price
   // the card headline prints (lowest in-market effective first).
   const ranked = {
@@ -69,7 +93,60 @@ export function shelfSectionsFromProducts(
   return {
     primary: uniqueCardsByProductId(ranked.primary),
     related: uniqueCardsByProductId(ranked.related),
+    accessory: uniqueCardsByProductId(ranked.accessory),
   };
+}
+
+/* ---------------------------------------------------------------------------
+ * REEA-1201 (Bet 7A-2) — the payload-scope partition.
+ *
+ * The relevance gate (REEA-1200) stamps `productScope` per card. The UI reads
+ * that value; it never computes a scope of its own. A snapshot with no scope
+ * field at all keeps the pre-7A confidence partition byte-for-byte, and a card
+ * that lacks the field while its siblings carry one keeps that same confidence
+ * ladder for itself only — the safe bridge while the gate rolls out.
+ * ------------------------------------------------------------------------- */
+
+/** True when at least one card carries the gate's scope decision. */
+export function hasPayloadScope(products: readonly NormalizedProduct[]): boolean {
+  return products.some((p) => p.productScope != null);
+}
+
+function confidenceSections(
+  products: readonly NormalizedProduct[],
+  query: string,
+): ShelfSections {
+  const sections = partitionByConfidence(query, products);
+  return { primary: sections.primary, related: sections.related, accessory: [] };
+}
+
+function scopeSections(
+  products: readonly NormalizedProduct[],
+  query: string,
+): ShelfSections {
+  const primary: NormalizedProduct[] = [];
+  const related: NormalizedProduct[] = [];
+  const accessory: NormalizedProduct[] = [];
+  for (const p of products) {
+    const scope = p.productScope;
+    if (scope === "primary" || scope === "variant") {
+      primary.push(p);
+      continue;
+    }
+    if (scope === "accessory") {
+      accessory.push(p);
+      continue;
+    }
+    if (scope === "consumable") {
+      if (related.length < RELATED_CAP) related.push(p);
+      continue;
+    }
+    // No scope on this card: keep the existing confidence ladder for it only.
+    const score = matchConfidence(query, p.title);
+    if (score >= CONFIDENCE_THRESHOLD) primary.push(p);
+    else if (score > 0 && related.length < RELATED_CAP) related.push(p);
+  }
+  return { primary, related, accessory };
 }
 
 /**
@@ -138,7 +215,7 @@ export function resultsShelfSections(
   query: string,
   country: CountryCode | null,
   showOutOfStock: boolean,
-): { primary: NormalizedProduct[]; related: NormalizedProduct[] } {
+): ShelfSections {
   return shelfSectionsFromProducts(snap.products, query, country, showOutOfStock);
 }
 

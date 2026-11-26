@@ -190,6 +190,20 @@ export interface NormalizedProduct {
    * renders nothing. The detail view keeps its hierarchy and never shows it.
    */
   seenRange?: SeenRange;
+  /**
+   * REEA-1200 / REEA-1201 (Bet 7A) — the payload's own scope decision for this
+   * card, computed server-side by the relevance gate. The shopper-facing UI
+   * only READS this value: primary/variant cards form the shelf, accessory
+   * cards ride the labelled accessory band, consumable cards the related band.
+   * Never derive it client-side — absent on feeds that predate the gate, and
+   * the renderer then falls back to the existing confidence partition.
+   */
+  productScope?: "primary" | "accessory" | "consumable" | "variant";
+  /**
+   * REEA-1200 — why the relevance gate kept this card. Machine-readable so the
+   * verify ticket can classify without guessing. The UI never re-derives it.
+   */
+  matchReason?: "query_token" | "brand_family" | "storefront_ranked" | "related";
 }
 
 /** REEA-540 Bet A — one endpoint: the native figure and its scraped currency. */

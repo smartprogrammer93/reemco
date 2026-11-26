@@ -229,6 +229,22 @@ const en = {
   // "stores didn't answer" variant (never imply a no-match on an outage).
   relatedNotExactLabel: "Related items — not an exact match",
   relatedChip: "Related",
+  // REEA-1201 (Bet 7A-2) — the honest in-scope count line. The number is the
+  // payload's primary-scope card count (never the padded shelf), so the line
+  // says "in-scope" and names the query. Arabic carries its own dual/few/other
+  // ladder; the English dual/few slots share the plural wording.
+  inScopeCountOne: "1 in-scope product for “{q}”",
+  inScopeCountDual: "{n} in-scope products for “{q}”",
+  inScopeCountFew: "{n} in-scope products for “{q}”",
+  inScopeCountMany: "{n} in-scope products for “{q}”",
+  // REEA-1201 AC 7b-2 — the labelled accessory band, pinned copy.
+  accessoryBandLabel: "Accessories for this product",
+  accessoryBandAria: "Accessories for this product",
+  accessoryChip: "Accessory",
+  // REEA-1201 AC 7b-3 — thin-shelf honesty: every card has one in-market
+  // retailer, so the page says no cross-retailer match was found.
+  thinShelfLine:
+    "No cross-retailer match was found for “{q}” — showing single-retailer offers.",
   // FR-2.1 — the primary section's own DOM landmark, so the two-section
   // separation is machine-checkable (distinct section role/heading).
   primaryResultsAria: "Primary results",
@@ -553,6 +569,16 @@ const ar: typeof en = {
   emptyExample3: "كيندل",
   relatedNotExactLabel: "عناصر ذات صلة — ليست مطابقة تامة",
   relatedChip: "ذات صلة",
+  // REEA-1201 (Bet 7A-2) — Arabic plural ladder for the honest count line.
+  inScopeCountOne: "منتج واحد ضمن نطاق البحث عن «{q}»",
+  inScopeCountDual: "منتجان ضمن نطاق البحث عن «{q}»",
+  inScopeCountFew: "{n} منتجات ضمن نطاق البحث عن «{q}»",
+  inScopeCountMany: "{n} منتجًا ضمن نطاق البحث عن «{q}»",
+  accessoryBandLabel: "ملحقات هذا المنتج",
+  accessoryBandAria: "ملحقات هذا المنتج",
+  accessoryChip: "ملحق",
+  thinShelfLine:
+    "لم نجد مطابقة عبر أكثر من متجر لـ«{q}» — نعرض عروض متجر واحد.",
   primaryResultsAria: "النتائج الأساسية",
   emptyUnavailable:
     "لم تستجب المتاجر هذه المرة — النتائج غير متوفرة مؤقتًا. حاول مرة أخرى بعد قليل.",
