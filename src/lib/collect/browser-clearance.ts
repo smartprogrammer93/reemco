@@ -71,6 +71,29 @@ let launch: Promise<{ browser: BrowserLike; context: ContextLike } | null> | nul
 let lastFailure = "";
 /** Which launch arg set answered (-1 until a browser is up). */
 let lastLaunchArgs = -1;
+/**
+ * REEA-1221 — the arg set the process has climbed to. It only ever moves
+ * forward: once a set has proven to kill the browser on this host, retrying it
+ * is wasted time.
+ */
+let argSetIndex = 0;
+
+/**
+ * The launch ladder. Set 0 is the package's serverless shape (right on Lambda).
+ * Set 1 drops the single-process/zygote pair and the in-process GPU, which is
+ * what killed the browser on the self-hosted box at navigation time
+ * ("Target page, context or browser has been closed", measured 2026-11-26).
+ * Set 2 is a plain headless shell with the GPU disabled outright.
+ */
+function launchArgSets(base: string[]): string[][] {
+  const noSingle = base.filter(
+    (a) => a !== "--single-process" && a !== "--no-zygote" && a !== "--in-process-gpu",
+  );
+  const noSwiftshader = noSingle.filter(
+    (a) => !a.startsWith("--use-gl") && !a.startsWith("--use-angle") && a !== "--ignore-gpu-blocklist",
+  );
+  return [base, [...noSingle, "--disable-gpu"], [...noSwiftshader, "--disable-gpu"]];
+}
 
 export function browserLastError(): string {
   return lastFailure;
@@ -175,28 +198,29 @@ async function getSharedBrowser(): Promise<{ browser: BrowserLike; context: Cont
         // single-process/zygote pair and with the GPU path disabled, which is
         // the stable shape on a long-lived server. Whichever answers is what
         // the process keeps.
-        const launchSets: string[][] = [
-          [...sparticuz.args],
-          sparticuz.args.filter((a) => a !== "--single-process" && a !== "--no-zygote"),
-        ];
         let browser: BrowserLike | null = null;
-        let usedSet = -1;
-        for (let i = 0; i < launchSets.length && !browser; i++) {
+        for (let i = argSetIndex; i < launchArgSets(sparticuz.args).length && !browser; i++) {
           try {
             browser = (await chromium.launch({
               executablePath,
-              args: launchSets[i],
+              args: launchArgSets(sparticuz.args)[i],
               headless: true,
               // The child must see the lib path set above.
               env: process.env,
             })) as unknown as BrowserLike;
-            usedSet = i;
+            argSetIndex = i;
+            lastLaunchArgs = i;
           } catch (err) {
             lastFailure = err instanceof Error ? err.message : String(err);
+            // ETXTBSY: the freshly extracted binary is still being written on
+            // a cold container — one short breath, then the same set retries.
+            if (/ETXTBSY/.test(lastFailure)) {
+              await new Promise((r) => setTimeout(r, 400));
+              i -= 1;
+            }
           }
         }
         if (!browser) return null;
-        lastLaunchArgs = usedSet;
         const context = await browser.newContext({
           userAgent: BROWSER_UA,
           locale: "en-US",
@@ -229,8 +253,15 @@ async function navigate(
   url: string,
   contentSelector: string,
 ): Promise<{ html: string; error?: string }> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const shared = attempt === 0 ? await getSharedBrowser() : ((launch = null), await getSharedBrowser());
+  const maxAttempts = 3;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      // A navigation that kills the browser is an arg-set verdict, not a
+      // transient: climb the ladder before relaunching.
+      if (argSetIndex < 2) argSetIndex += 1;
+      launch = null;
+    }
+    const shared = await getSharedBrowser();
     if (!shared) return { html: "", error: lastFailure || "browser launch failed" };
     let page: PageLike | null = null;
     try {
