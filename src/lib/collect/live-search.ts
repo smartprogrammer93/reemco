@@ -2618,7 +2618,7 @@ export function groupHits(
  * directory; the comparisons lead and the shelf stops here so the page's slots
  * are spent on rows that answer "which store is cheaper".
  */
-const CATEGORY_SHELF_CARDS = 10;
+const CATEGORY_SHELF_CARDS = 6;
 
 /**
  * REEA-1207 rev-2 — the category shelf order. Comparisons (>=2 in-market

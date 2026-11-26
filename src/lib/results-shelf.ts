@@ -275,7 +275,7 @@ export function shelfCardBudget(query: string): number {
 }
 
 /** REEA-1207 — the category shelf budget (cards painted for one query). */
-export const CATEGORY_SHELF_CARDS = 10;
+export const CATEGORY_SHELF_CARDS = 6;
 
 export function freshCardsForFlush(
   visible: readonly NormalizedProduct[],
