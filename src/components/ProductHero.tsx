@@ -51,7 +51,7 @@ import { offerStatusForLiveOffer } from "@/lib/offer-status";
 // REEA-1162 — one row per distinct retailer offer and a distinct-retailer
 // count line: the collect run scrapes one listing per merged-card row, so a
 // retailer's same-price colourway listings arrived as duplicate rows.
-import { dedupeRetailerOfferRows, distinctRetailerCount } from "@/lib/offer-rows";
+import { dedupeRetailerOfferRows, distinctRetailerCount, mergeInheritedOfferRows } from "@/lib/offer-rows";
 import type { NormalizedProduct } from "@/types/product";
 
 /** REEA-1142 — market-scoped order: the selected market's offers lead, the
@@ -236,7 +236,9 @@ function TableSkeleton({ locale }: { locale?: Locale }) {
   const t = getStrings(locale ?? clientLocale());
   return (
     <div className="rc-offers-table" aria-busy="true" aria-label={t.offersTableAria}>
-      <h2>{t.offersTableTitle.replace("{n}", "…")}</h2>
+      {/* REEA-1192 — no count is known yet, so never render the `{n}`
+          placeholder as an ellipsis ("All offers · … retailers"). */}
+      <h2>{t.offersTableTitlePending}</h2>
       {[0, 1, 2].map((i) => (
         <div className="rc-offer-row" key={i}>
           <div className="rc-offer-line line-a">
@@ -364,15 +366,30 @@ function ProductHeroBody({
   // A market-scoped PDP renders that market's offers; cross-market rows stay
   // only when the product has no in-market offer (AC 6d-3).
   const scope = viewCountry;
-  const scopedLiveOffers = job
-    ? scopeProductsByMarket([{ ...product, offers: job.offers as unknown as NormalizedProduct["offers"] }], scope)[0]
-        .offers as unknown as LiveOffer[]
+  // REEA-1192 — collection continuity: the PDP inherits the shelf collection's
+  // offer set and freshness (every row carries the query-time `collectedAt`
+  // the card was built from) and lets this page's live re-checks replace the
+  // rows they re-checked. Rendering only `job.offers` was the defect: at first
+  // paint one lane had answered, so the conversion page claimed "1 retailer
+  // answered" and priced the partial set while its own payload carried the
+  // card's full set. Rows without a collection stamp (catalog seeds) are not
+  // inherited — they render only once a live fetch confirms them.
+  const inheritedOffers = ((product.offers ?? []) as unknown as LiveOffer[]).filter(
+    (o) => typeof o.collectedAt === "string" && o.collectedAt !== "",
+  );
+  const jobOffers = job ? (job.offers as unknown as LiveOffer[]) : [];
+  const mergedOffers = mergeInheritedOfferRows(inheritedOffers, jobOffers);
+  const scopedLiveOffers = mergedOffers.length
+    ? (scopeProductsByMarket(
+        [{ ...product, offers: mergedOffers as unknown as NormalizedProduct["offers"] }],
+        scope,
+      )[0].offers as unknown as LiveOffer[])
     : [];
   // REEA-1162 — the table is a retailer comparison: fold the same-price
   // duplicate rows one retailer's colourway listings produced, so the rows and
   // the "N retailers" count line describe distinct retailers. The cheapest
   // row of each retailer still leads, so the hero price is unchanged.
-  const offers = job ? dedupeRetailerOfferRows(sortLiveOffers(scopedLiveOffers, scope)) : [];
+  const offers = mergedOffers.length ? dedupeRetailerOfferRows(sortLiveOffers(scopedLiveOffers, scope)) : [];
   const localBest = headlineOfferFor(offers as unknown as NormalizedProduct["offers"], scope);
   const crossBest = cheapestCrossMarketOffer(offers as unknown as NormalizedProduct["offers"], scope);
   const best = (localBest ?? crossBest ?? offers[0] ?? null) as LiveOffer | null;
@@ -380,19 +397,20 @@ function ProductHeroBody({
   const headline = hasLocalOffer ? null : crossMarketHeadline(offers as unknown as NormalizedProduct["offers"], scope, locale);
   const displayTitle = cleanDisplayTitle(product.title);
   const titleChanged = displayTitleChanged(product.title, displayTitle);
-  // REEA-1162 — the answered line is a RETAILER count too: one subtask per
-  // listing meant "5 retailers answered" for two retailers with five listings.
-  const answered = job
-    ? distinctRetailerCount(
-        job.subtasks.filter((s) => s.status === "done").map((s) => ({ merchant: s.retailer })),
-      )
-    : 0;
+  // REEA-1162 / REEA-1192 — the answered line is a RETAILER count and it must
+  // describe the SAME row set the offer table renders, so the two lines can
+  // never disagree. With the inherited set in place this counts the card's
+  // retailers even before this page's own re-checks land.
+  const answered = distinctRetailerCount(offers);
+  // REEA-1192 — only a retailer with NO rendered row is "missing"; a lane that
+  // failed but whose inherited row still renders is already represented.
+  const renderedMerchants = new Set(offers.map((o) => o.merchant.trim().toLowerCase()));
   const failedRetailers = job
     ? [...new Set(
         job.subtasks
           .filter((s) => s.status === "failed" || s.status === "timeout")
           .map((s) => s.retailer),
-      )]
+      )].filter((merchant) => !renderedMerchants.has(merchant.trim().toLowerCase()))
     : [];
   // REEA-1177 AC 6a-1/6a-5 — compose the PDP hero from the SAME served
   // figures: listed − appliedDiscount = effective. Derived was-price coupon

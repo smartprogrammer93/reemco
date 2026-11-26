@@ -345,6 +345,9 @@ const en = {
   offerGo: "Go",
   offerGoTo: "Go to {x}",
   offersTableTitle: "All offers · {n} retailers",
+  /* REEA-1192 — the pending skeleton has no count yet, so it must not print
+     the `{n}` placeholder as an ellipsis ("All offers · … retailers"). */
+  offersTableTitlePending: "All offers",
   /* REEA-1096 D6 — the capped shelf card points at the full live offer set on
      the product page; the disclosure carries the blocks outside the accepted
      card anatomy. */
@@ -649,6 +652,7 @@ const ar: typeof en = {
   offerGo: "اذهب",
   offerGoTo: "اذهب إلى {x}",
   offersTableTitle: "كل العروض · {n} متاجر",
+  offersTableTitlePending: "كل العروض",
   viewAllOffers: "عرض كل {n} عروض",
   cardMoreDetails: "الكوبونات والإكسسوارات والتفاصيل",
   offersTableAria: "كل العروض حسب المتجر",

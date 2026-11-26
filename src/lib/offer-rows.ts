@@ -23,6 +23,8 @@
  * retailer with two real prices is still ONE retailer.
  */
 
+import { normalizedListingUrlOf } from "@/lib/collect/types";
+
 export interface RetailerRowKey {
   merchant: string;
   currency: string;
@@ -72,4 +74,60 @@ export function distinctRetailerCount(offers: readonly { merchant: string }[]): 
     if (merchant !== "") merchants.add(merchant);
   }
   return merchants.size;
+}
+
+/**
+ * REEA-1192 — the product page starts from the shelf collection's offer set.
+ *
+ * The results card and the PDP are one click apart, so the PDP must inherit
+ * the set the card rendered instead of showing only the lanes its own
+ * re-check has reached at first paint. This merge keeps every inherited row
+ * (query-time evidence: merchant, price, URL, collectedAt) in its original
+ * order and lets a LIVE re-check replace the row it re-checked — same
+ * listing (merchant + normalized URL) or the same offer (merchant +
+ * currency + price). A live row that matches nothing is appended, so a
+ * retailer discovered only by the PDP's own dispatch still appears.
+ *
+ * Rows without a collection stamp are NOT inherited: a catalog seed is an
+ * identity hint, not live evidence, and must only render once a real fetch
+ * confirmed it (the REEA-95 realtime policy).
+ */
+export interface InheritedOfferRow extends RetailerRowKey {
+  url: string;
+  collectedAt?: string;
+}
+
+/** Listing identity of a row: merchant + URL without query/trailing slash. */
+function listingKeyOf(row: { merchant: string; url: string }): string {
+  return `${merchantKey(row.merchant)}|${normalizedListingUrlOf(row.url)}`;
+}
+
+export function mergeInheritedOfferRows<T extends InheritedOfferRow>(
+  inherited: readonly T[],
+  live: readonly T[],
+): T[] {
+  const out = inherited.filter((o) => (o.collectedAt ?? "") !== "");
+  const byListing = new Map<string, number>();
+  const byOffer = new Map<string, number>();
+  const offerKeyOf = (o: T) => `${merchantKey(o.merchant)}|${o.currency}|${o.price}`;
+  out.forEach((o, i) => {
+    byListing.set(listingKeyOf(o), i);
+    const key = offerKeyOf(o);
+    if (!byOffer.has(key)) byOffer.set(key, i);
+  });
+  for (const row of live) {
+    const listing = listingKeyOf(row);
+    const offer = offerKeyOf(row);
+    const at = byListing.get(listing) ?? byOffer.get(offer);
+    if (at !== undefined) {
+      out[at] = row;
+      byListing.set(listing, at);
+      byOffer.set(offer, at);
+      continue;
+    }
+    out.push(row);
+    byListing.set(listing, out.length - 1);
+    byOffer.set(offer, out.length - 1);
+  }
+  return out;
 }
