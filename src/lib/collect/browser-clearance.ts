@@ -44,6 +44,8 @@ const CONTENT_WAIT_MS = 12_000;
 type BrowserLike = {
   newContext(options: Record<string, unknown>): Promise<ContextLike>;
   version?(): string;
+  isConnected?(): boolean;
+  on?(event: string, cb: () => void): void;
   close(): Promise<void>;
 };
 type ContextLike = {
@@ -258,6 +260,9 @@ async function getSharedBrowser(): Promise<{ browser: BrowserLike; context: Cont
           }
         }
         if (!browser) return null;
+        browser.on?.("disconnected", () => {
+          launch = null;
+        });
         try {
           browserVersion = browser.version?.() ?? "";
         } catch {
@@ -327,16 +332,22 @@ async function navigate(
   return { html: "", error: lastFailure };
 }
 
+/**
+ * REEA-1221 — liveness is read from the browser's own connection state, never
+ * by opening and closing a probe page: this Chromium runs with
+ * --no-startup-window, and closing the LAST page can end the process on the
+ * self-hosted box (the next goto then reports "Target page, context or browser
+ * has been closed" — measured 2026-11-26, which is exactly what the old
+ * page-open probe did right before every navigation).
+ */
 async function isAlive(shared: { browser: BrowserLike; context: ContextLike }): Promise<boolean> {
+  if (typeof shared.browser.isConnected === "function") {
+    return shared.browser.isConnected() !== false;
+  }
   try {
     await shared.context.newPage().then((p) => p.close());
     return true;
   } catch {
-    try {
-      await shared.browser.close();
-    } catch {
-      // already gone
-    }
     return false;
   }
 }
@@ -386,8 +397,14 @@ export async function browserClearedHtml(url: string, contentSelector: string): 
  * pass never reaches it.
  */
 const RELAY_ENDPOINT = "https://api.microlink.io/";
-const RELAY_TTL_S = 1_800;
-const RELAY_TIMEOUT_MS = 20_000;
+// REEA-1221 — a relay answer is a live page, so it stays valid for a while; a
+// longer TTL is what keeps the free tier polite (measured 2026-11-26: the relay
+// answered, then 429'd a few calls later — the cached answer is the point).
+const RELAY_TTL_S = 6 * 60 * 60;
+const RELAY_TIMEOUT_MS = 12_000;
+/** After a 429, skip the relay for this long instead of paying the refusal. */
+const RELAY_COOLDOWN_MS = 10 * 60 * 1000;
+let relayCooldownUntil = 0;
 
 /**
  * Gate for the relay hop. Same posture as the browser tier: an explicit opt-out
@@ -405,6 +422,10 @@ export function relayTierEnabled(): boolean {
 
 export async function relayClearedHtml(url: string, contentSelector: string): Promise<string> {
   if (!relayTierEnabled()) return "";
+  if (Date.now() < relayCooldownUntil) {
+    lastFailure = "relay cooling down after a rate-limit answer";
+    return "";
+  }
   const token = contentSelector.replace(/^[.#]/, "");
   const kv = getSharedKv();
   const key = `relay-cleared:${url}`;
@@ -421,6 +442,7 @@ export async function relayClearedHtml(url: string, contentSelector: string): Pr
     const res = await fetch(target, { signal: AbortSignal.timeout(RELAY_TIMEOUT_MS) });
     if (!res.ok) {
       lastFailure = `relay HTTP ${res.status}`;
+      if (res.status === 429 || res.status === 503) relayCooldownUntil = Date.now() + RELAY_COOLDOWN_MS;
       return "";
     }
     const payload = (await res.json()) as { data?: { html?: unknown } } | null;
