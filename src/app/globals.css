@@ -3726,6 +3726,30 @@ html[lang="ar"] .coupon-via {
   [dir="rtl"] .rc-product-hero .rc-offer-row {
     grid-template-columns: minmax(112px, 1.15fr) minmax(96px, 1.35fr) 22px minmax(104px, 0.95fr) minmax(112px, auto);
   }
+  /* REEA-1220 — §4.2 is an icon-only 22×22 token here. 4px inline padding
+     centres the 14px icon inside the 22px box; the old 8px padding pushed the
+     icon past the border box even after the label was removed from flow. */
+  .rc-offers-table .rc-offer-row .rc-status,
+  .rc-product-hero .rc-offer-row .rc-status {
+    padding-inline: 4px;
+  }
+  /* REEA-1220 — the label is reducible at rank 5 in this compact variant; it
+     stays in the DOM (the token's aria-label and tooltip still carry the
+     words) but is visually hidden inside the 22px cell. Without this it
+     paints 26.9–45.6px wide from outside the box and lands on .rc-checked
+     (38.5px EN / 19.8px AR overlap at 641 and 700). The absolute 1×1 box is
+     pinned to the token's padding-box corner, so it paints nothing and its
+     rect stays inside the 22×22 cell. */
+  .rc-offers-table .rc-offer-row .rc-status .label,
+  .rc-product-hero .rc-offer-row .rc-status .label {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline-start: 0;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
   /* The stock word is suppressed in this variant; only the 7px availability
      dot survives, inline at the retailer cell's inline start. The real .dot
      element is kept (font-size:0 collapses the word to zero width), so the
