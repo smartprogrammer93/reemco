@@ -95,7 +95,17 @@ function launchArgSets(base: string[]): string[][] {
   const noSwiftshader = noSingle.filter(
     (a) => !a.startsWith("--use-gl") && !a.startsWith("--use-angle") && a !== "--ignore-gpu-blocklist",
   );
-  return [base, [...noSingle, "--disable-gpu"], [...noSwiftshader, "--disable-gpu"]];
+  const lean = [
+    "--blink-settings=imagesEnabled=false",
+    "--renderer-process-limit=1",
+    "--js-flags=--max-old-space-size=192",
+    "--window-size=1024,768",
+  ];
+  return [
+    base,
+    [...noSingle, "--disable-gpu", ...lean],
+    [...noSwiftshader, "--disable-gpu", ...lean],
+  ];
 }
 
 export function browserLastError(): string {
@@ -358,4 +368,56 @@ export async function browserClearedHtml(url: string, contentSelector: string): 
     await kv.set(key, html, CLEARED_CACHE_TTL_S).catch(() => false);
   }
   return html;
+}
+
+/**
+ * REEA-1221 — relay clearance tier. When the box cannot run Chromium to the
+ * end of a navigation (measured 2026-11-26 on the served head: the browser
+ * launches and reports its own version, but the process dies during goto —
+ * `gotoOk:false` with libs + exe + launch all healthy), the lane still needs a
+ * live fetch of the challenged page. A reader relay renders it from ITS egress
+ * and hands back the painted HTML, which is the same live page a shopper's
+ * browser would see — no bundled catalogue, no cached snapshot.
+ *
+ * Politeness: the relay answer is cached in the shared KV store per URL, so a
+ * repeat query inside the window spends no relay call; every call is bounded
+ * and best-effort, and the lane's own presence gate decides whether the body
+ * is usable. The relay is the LAST hop: a working browser or a plain challenge
+ * pass never reaches it.
+ */
+const RELAY_ENDPOINT = "https://api.microlink.io/";
+const RELAY_TTL_S = 1_800;
+const RELAY_TIMEOUT_MS = 20_000;
+
+export async function relayClearedHtml(url: string, contentSelector: string): Promise<string> {
+  const token = contentSelector.replace(/^[.#]/, "");
+  const kv = getSharedKv();
+  const key = `relay-cleared:${url}`;
+  if (kv) {
+    try {
+      const cached = await kv.get(key);
+      if (cached && cached.includes(token)) return cached;
+    } catch {
+      // store hiccup — pay the relay once
+    }
+  }
+  try {
+    const target = `${RELAY_ENDPOINT}?url=${encodeURIComponent(url)}&meta=false&data.html.selector=body`;
+    const res = await fetch(target, { signal: AbortSignal.timeout(RELAY_TIMEOUT_MS) });
+    if (!res.ok) {
+      lastFailure = `relay HTTP ${res.status}`;
+      return "";
+    }
+    const payload = (await res.json()) as { data?: { html?: unknown } } | null;
+    const html = typeof payload?.data?.html === "string" ? payload.data.html : "";
+    if (!html.includes(token)) {
+      lastFailure = "relay answered without the lane's content selector";
+      return "";
+    }
+    if (kv) await kv.set(key, html, RELAY_TTL_S).catch(() => false);
+    return html;
+  } catch (err) {
+    lastFailure = err instanceof Error ? err.message : String(err);
+    return "";
+  }
 }

@@ -36,7 +36,7 @@ import {
 import { bet2FailFastEnabled } from "@/lib/collect/bet2-flag";
 // REEA-1221 — real-browser clearance tier for the lanes whose origin sits
 // behind a JavaScript challenge no plain hop can solve (Next Store).
-import { browserClearedHtml, browserLastError } from "@/lib/collect/browser-clearance";
+import { browserClearedHtml, browserLastError, relayClearedHtml } from "@/lib/collect/browser-clearance";
 import {
   defaultQueryCache,
   queryCacheKey,
@@ -1974,6 +1974,12 @@ export const COLLECTORS: RetailerCollector[] = [
       // goes straight to the browser tier that does clear it.
       const painted = await browserClearedHtml(searchUrl, ".product-item-link");
       if (hasGrid(painted)) return nextStoreHits(painted, query);
+      // REEA-1221 — last hop: a reader relay renders the challenged page from
+      // its own egress. Reached only when the local browser could not finish
+      // the navigation (measured on the self-hosted box), and KV-cached per URL
+      // so a repeat query spends nothing.
+      const relayed = await relayClearedHtml(searchUrl, ".product-item-link");
+      if (hasGrid(relayed)) return nextStoreHits(relayed, query);
       // A lane that never got a grid is a coverage loss, not an "answered
       // empty": settle it as a blocked failure so the counter stops reading 0
       // for a lane that delivered nothing (REEA-1207 AC 7B-3).

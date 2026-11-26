@@ -45,6 +45,7 @@ import { jarirHits, jsdClearedHtml } from "@/lib/collect/live-search";
 // hop; this probe reports whether it launches and paints from THIS runtime, so
 // a failed lane is diagnosable from the served payload without another deploy.
 import { browserProbe } from "@/lib/collect/browser-clearance";
+import { readFileSync } from "node:fs";
 // REEA-782 — GET /api/echo rides the shared rate limiter (REEA-37 bucket,
 // REEA-827 deployment-wide counter: the namespaced `echo:` budget counts
 // across instances on the shared KV when bound, degrading to the per-process
@@ -323,6 +324,33 @@ function clientKey(req: Request): string {
   return (fwd ? fwd.split(",")[0].trim() : "") || req.headers.get("x-real-ip") || "unknown";
 }
 
+/**
+ * REEA-1221 — the runtime's memory ceiling as the kernel reports it: cgroup v2
+ * limit (the container's own cap) and the host's available memory. Read-only,
+ * no state, no new counters.
+ */
+function readRuntimeMemory(): { limitBytes: number | null; availableBytes: number | null } {
+  const readNumber = (path: string): number | null => {
+    try {
+      const raw = readFileSync(path, "utf8").trim();
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : null;
+    } catch {
+      return null;
+    }
+  };
+  const limit = readNumber("/sys/fs/cgroup/memory.max");
+  let availableBytes: number | null = null;
+  try {
+    const info = readFileSync("/proc/meminfo", "utf8");
+    const kb = /MemAvailable:\s+(\d+)/.exec(info)?.[1];
+    availableBytes = kb ? Number(kb) * 1024 : null;
+  } catch {
+    availableBytes = null;
+  }
+  return { limitBytes: limit && limit > 0 ? limit : null, availableBytes };
+}
+
 export async function GET(req: Request): Promise<Response> {
   // REEA-782 — rate-limit gate BEFORE any probe fan-out. Past the bucket the
   // handler returns 429 and performs zero upstream fetches (fail closed on
@@ -374,8 +402,11 @@ export async function GET(req: Request): Promise<Response> {
     probeJarir(fetch),
   ]);
   // REEA-1221 — the browser tier probe rides the Next Store collector's own
-  // URL + content selector, bounded by the tier's own windows.
+  // URL + content selector, bounded by the tier's own windows. The runtime's
+  // memory ceiling rides along: a Chromium that launches and then dies during
+  // navigation is the OOM signature, and only the box can say what it allows.
   const browser = await browserProbe(NEXTSTORE_URL, ".product-item-link");
+  const memory = readRuntimeMemory();
   const [lulu, pckuwait] = await Promise.all([
     withClearanceTier(fetch, luluRaw, LULU_URL),
     withClearanceTier(fetch, pckRaw, PCK_URL),
@@ -415,6 +446,7 @@ export async function GET(req: Request): Promise<Response> {
       jarir,
       // REEA-1221 — real-browser clearance tier status on this egress.
       browser,
+      memory,
       pinned: {
         "www.luluhypermarket.com": luluPinned,
         "pckuwait.com": pckPinned,
