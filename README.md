@@ -60,6 +60,7 @@ Artifact decision (REEA-1054): **GHCR gets no credentials on the box; the box bu
 2. Compare with the intended HEAD: the run's `github.sha`, or `rollback_sha` on a rollback run. `.github/workflows/deploy-selfhosted.yml` runs this comparison automatically and fails the job on mismatch.
 3. Record both values in the deploy comment: `served=<sha> intended=<sha> match|no-match`. On no-match treat the deploy as failed and rerun with `rollback_sha` = last known-good commit. QA verification starts only after this parity line exists.
 4. The on-box `verify.sh` runs the same stamp + header + health gate; its output is appended to `/var/log/reemco/deploy.log` on the box.
+5. **Invariant (REEA-1233): maximum acceptable lag between `origin/main` and the served `/__commit.txt` is 15 minutes.** Beyond that, or when the deploy run for the head failed/cancelled (the lag is final, not in flight), the scheduled `stamp-parity.yml` tripwire opens/appends the deduped `stamp-parity-alert` issue naming the failing run; production keeps serving the last good artifact until a green deploy catches up. Read the state yourself with `npm run parity` (`scripts/parity-check.mjs`): it prints `PARITY: served=… origin/main=… lag_min=… status=…` and exits 1 when behind beyond the window. The deploy workflow writes the same line into its job summary (advisory there: a push landing mid-run is a queued deploy, not a stale artifact).
 
 ### Egress reputation — expected lane state (REEA-1067)
 

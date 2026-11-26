@@ -10,7 +10,8 @@
     "test": "vitest run",
     "build:static": "node scripts/static-export.mjs",
     "smoke": "node scripts/smoke-check.mjs",
-    "report": "node --experimental-strip-types scripts/weekly-report.ts"
+    "report": "node --experimental-strip-types scripts/weekly-report.ts",
+    "parity": "node scripts/parity-check.mjs"
   },
   "dependencies": {
     "@sparticuz/chromium": "^149.0.0",

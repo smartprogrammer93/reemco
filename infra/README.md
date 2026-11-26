@@ -101,14 +101,6 @@ from git.
    it advisory were fixed: step 5 now proves reachability inside the deliberately
    scrollable coverage row instead of failing on it (REEA-1056), and step 7 no longer
    requires the retired PC Kuwait lane (REEA-901).
-   Step 6 (offer link-health) classifies a bot-wall answer — HTTP 429, or a 403 carrying
-   a `cf-mitigated` header or a Cloudflare challenge/block body marker ("Just a moment",
-   "Attention Required! | Cloudflare", the JS/cookie interstitial) — as
-   bot-blocked/reachable, not dead (REEA-1166; the classifier is the REEA-935
-   `scripts/dead-link-smoke.mjs` core, pinned in `src/lib/metrics/link-smoke-checker.test.ts`).
-   It never rescues a genuine failure: 404/410, a plain 403 without a marker, 5xx after
-   retries, and timeouts still fail the gate and roll the deploy back. The timing probe
-   that runs before the functional steps is report-only and does not gate.
    Since REEA-1184 every app GET in the suite is throttle-aware
    (`scripts/smoke-http.mjs`): it retries HTTP 429/503 up to 4 attempts, honouring the
    served `Retry-After` (capped at 30s) and falling back to bounded exponential backoff.
@@ -121,6 +113,16 @@ from git.
    75s and reruns the smoke once before any rollback, and only a real failure (exit 1) or
    a second throttled run rolls the build back. Pinned in
    `src/lib/metrics/smoke-http.test.ts`.
+   **Step 6 (offer link-health) is ADVISORY since REEA-1233.** An outbound retailer URL
+   is a third-party dependency; four deploys had been rolled back by its flake, not by
+   the build (REEA-1166 CF 403, REEA-1184 burst 429, REEA-1224 funnel-smoke false
+   positive). The step still classifies a bot-wall answer as bot-blocked/reachable
+   (REEA-1166; the REEA-935 `scripts/dead-link-smoke.mjs` classifier, pinned in
+   `src/lib/metrics/link-smoke-checker.test.ts`), retries with bounded exponential
+   backoff (2s/4s/8s over four paced attempts) and prints unresolved URLs as a
+   `::warning::` annotation. It does not fail the deploy; the weekly link-smoke metric
+   owns the dead-link trend. Set `LINK_HEALTH_BLOCKING=1` to restore the hard gate
+   deliberately. The timing probe before the functional steps is report-only too.
 8. Secrets hygiene — `verify.sh` fails when `/etc/reemco/release.env` still carries a
    `REEMCO_KV_TOKEN=` line (dead: no consumer, the KV REST surface was replaced by
    RESP to Valkey) or when any hand-made `/etc/reemco/*.bak-*` env copy remains
@@ -135,8 +137,30 @@ commands by hand first.
 
 **Advisory — runs and alerts, but does not fail the deploy:**
 
-- _Nothing, as of REEA-1059._ Every gate above blocks. This is the intended steady
-  state; an advisory exception must be re-added here deliberately, never inherited.
+- Funnel-smoke step 6 (offer link-health) — third-party retailer reachability only,
+  retried with bounded backoff and reported as a `::warning::` (REEA-1233). The rest
+  of the smoke (steps 1-5, 7, 8) remains blocking. Tracking: REEA-1233 owns the
+  invariant; the weekly link-smoke metric (`scripts/dead-link-smoke.mjs`) owns the
+  dead-link trend. Flip-back is a one-line `LINK_HEALTH_BLOCKING=1` if the metric
+  shows a real regression class.
+
+**Deploy parity invariant (REEA-1233) — checked, not discovered by hand:**
+
+- Maximum acceptable lag between `origin/main` and the served `/__commit.txt` is
+  **15 minutes** (one stamp-parity detection window). Exceeding it, or a
+  failed/cancelled deploy run for the head (the lag is then final, not in flight),
+  makes `.github/workflows/stamp-parity.yml` open/append the deduped
+  `stamp-parity-alert` issue naming the failing run. Production keeps serving the
+  last good artifact until a green deploy catches up; a rollback is not a resting
+  state.
+- QA and every lane can read the same state with `npm run parity`
+  (`scripts/parity-check.mjs`): it prints `PARITY: served=… origin/main=… lag_min=…
+  status=…` and exits 1 when behind beyond the window. The deploy workflow also
+  writes that line into its job summary; it is advisory there because a push may
+  land while the run is in flight (a queued deploy, not a stale artifact).
+- Rollback Path: the tripwire is read-only and deploys nothing; rollback of the
+  invariant change is reverting the REEA-1233 commit. Rollback of a bad deploy
+  remains `rollback.sh --tag <previous>` / the workflow `rollback_sha` input.
 
 An advisory exception is **not a resting state**: it must carry an open tracking issue
 and a named owner who flips it back, and it is recorded in this section in the same

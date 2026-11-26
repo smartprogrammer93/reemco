@@ -293,24 +293,35 @@ await step(5, "375px mobile pass: no horizontal overflow, CTAs in viewport (REEA
 
 await browser.close();
 
-// REEA-67 link-health gate: every unique offer URL shipped in the seeded
-// catalog must resolve (final status < 400 after redirects), so dead retailer
-// deep links fail the deploy check instead of silently breaking the click-out
-// funnel. Deterministic: reads the shipped catalog source, retries once on a
-// transport error so flaky DNS/edge hiccups don't fail the deploy on one miss.
-await step(6, "catalog offer URLs resolve (link-health)", async () => {
+// REEA-67 link-health signal — ADVISORY since REEA-1233.
+//
+// Why this stopped blocking: an outbound retailer URL is a THIRD-PARTY
+// dependency. Four deploys were rolled back by its flake, not by the build:
+// Cloudflare 403 false positives (REEA-1166), burst 429s from the app's own
+// gate (REEA-1184) and the funnel-smoke regex false positive (REEA-1224).
+// A retailer's 429/WAF/DNS blip must not be able to pin production behind
+// origin/main. The blocking gates are the build gate, the stamp/header/health
+// verification and smoke steps 1-5, 7, 8; the weekly link-smoke metric
+// (scripts/dead-link-smoke.mjs) owns the dead-link trend.
+//
+// The signal is still retried with bounded exponential backoff (4 paced
+// attempts) so a transient blip is not even reported, and a real unresolved
+// URL is printed as a GitHub ::warning:: annotation. Set
+// LINK_HEALTH_BLOCKING=1 to restore the old hard gate deliberately.
+const LINK_HEALTH_BLOCKING = /^(1|true|yes)$/i.test(process.env.LINK_HEALTH_BLOCKING || "");
+await step(6, "catalog offer URLs resolve (link-health, advisory)", async () => {
   const src = readFileSync(new URL("../src/lib/catalog.ts", import.meta.url), "utf8");
   const urls = [...new Set([...src.matchAll(/url:\s*"([^"]+)"/g)].map((m) => m[1]))];
   if (urls.length === 0) throw new Error("no offer URLs found in src/lib/catalog.ts");
   const bad = [];
   const botBlocked = [];
+  // Bounded exponential backoff: 2s, 4s, 8s between the four paced attempts.
+  const RETRY_BACKOFF_MS = [2000, 4000, 8000];
   for (const url of urls) {
     let ok = false;
     let detail = "";
-    // 3 attempts with spacing: some retailer CDNs answer plain fetches with a
-    // transient 503; a persistent dead link still fails all attempts.
-    for (let attempt = 0; attempt < 3 && !ok; attempt++) {
-      if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
+    for (let attempt = 0; attempt <= RETRY_BACKOFF_MS.length && !ok; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS[attempt - 1]));
       try {
         // Same headers the collector uses (REEA-93): amazon.eg answers plain
         // fetches with an Arabic apology interstitial; Accept-Language: en
@@ -326,9 +337,7 @@ await step(6, "catalog offer URLs resolve (link-health)", async () => {
         // dead. A Cloudflare bot-wall (403 + `cf-mitigated` or a challenge /
         // "Attention Required! | Cloudflare" / "Just a moment" body) means the
         // host answered and a real browser gets the page — a shopper-reachable
-        // link, not a dead one. Talabat's /en/kuwait answers that block page
-        // from the deploy runner; counting it dead rolled back every deploy.
-        // A genuine 404/410/5xx/timeout still fails below.
+        // link, not a dead one.
         const verdict = classifyAttempt(res.status, res.headers, html.slice(0, 4000));
         if (!ok && verdict === "challenge") {
           ok = true;
@@ -338,9 +347,7 @@ await step(6, "catalog offer URLs resolve (link-health)", async () => {
         // REEA-132: amazon.eg answers some datacenter egress IPs with an Arabic
         // apology interstitial (HTTP 503, title "عذرًا" = Sorry) instead of the
         // results page. The host is answering and real browsers get results, so
-        // the challenge page counts as alive; genuinely dead links return 404
-        // and still fail above. Retries alone do not help — the interstitial is
-        // IP-reputation based, identical on every attempt from those runners.
+        // the challenge page counts as alive.
         if (!ok && res.status === 503 && /^(?:عذرًا|sorry)/i.test(title)) ok = true;
         if (!ok) detail = `HTTP ${res.status}` + (title ? ` title="${title}"` : "");
       } catch (e) {
@@ -350,10 +357,15 @@ await step(6, "catalog offer URLs resolve (link-health)", async () => {
     }
     if (!ok) bad.push(`${url} (${detail})`);
   }
-  if (bad.length) throw new Error(`${bad.length}/${urls.length} offer URL(s) dead: ${bad.join("; ")}`);
   const blockedNote = botBlocked.length
     ? ` — ${botBlocked.length} bot-blocked but shopper-reachable: ${botBlocked.join("; ")}`
     : "";
+  if (bad.length) {
+    const msg = `${bad.length}/${urls.length} offer URL(s) unresolved after ${RETRY_BACKOFF_MS.length + 1} paced attempts: ${bad.join("; ")}`;
+    if (LINK_HEALTH_BLOCKING) throw new Error(msg);
+    console.log(`::warning::link-health is advisory (REEA-1233) — ${msg}`);
+    return `${urls.length} checked, ${bad.length} unresolved — advisory, does not gate the deploy${blockedNote}`;
+  }
   return `${urls.length} unique offer URL(s) resolve (<400)${blockedNote}`;
 });
 
