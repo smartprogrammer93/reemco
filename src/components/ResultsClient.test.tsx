@@ -352,6 +352,11 @@ describe("staged progressive results (REEA-178)", () => {
     brand: "Sony",
     offers: [
       { merchant: "Xcite", price: 74, currency: "KWD", url: "https://xcite.example/p", inStock: true },
+      // REEA-1238 — a category shelf's intermediate flush paints comparison
+      // cards only (singles wait for the final flush), so the progressive-paint
+      // fixture must carry two retailers to represent a card that can paint
+      // before convergence.
+      { merchant: "Blink", price: 76, currency: "KWD", url: "https://blink.example/p", inStock: true },
     ],
     coupons: [],
     variations: [],
@@ -1040,8 +1045,12 @@ describe("coverage line (REEA-290)", () => {
       alternatives: [],
       scrapedAt: "2026-09-11T00:00:00.000Z",
     });
+    const stageA = row("a", "Xcite", 100);
+    // REEA-1238 — A must be a comparison card to paint in the first flush of
+    // a category shelf; B is a single and paints with the final flush.
+    stageA.offers.push({ merchant: "Blink", price: 101, currency: "KWD", url: "https://blink.example/a2", inStock: true });
     const stageOne: LiveSearchResult = {
-      products: [row("a", "Xcite", 100), row("b", "Blink", 90)],
+      products: [stageA, row("b", "Blink", 90)],
       notes: [
         { merchant: "Xcite", hits: 1 },
         { merchant: "Blink", hits: 1 },

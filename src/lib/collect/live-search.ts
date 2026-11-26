@@ -2750,16 +2750,29 @@ const CATEGORY_SHELF_CARDS = 6;
  * retailers, the same integrity definition the card and the weekly fold read)
  * lead; two single-retailer rows follow so the page still shows alternatives.
  * No comparison at all = the ordinary category page, never a near-empty shelf.
+ *
+ * REEA-1238 AC 7B-2b — a card that carries TWO distinct retailers across the
+ * whole fetched set (the Kuwait lane plus a cross-market row, e.g. the pinned
+ * Panadol pack at Danube Home + BinSina) is still "one card carrying both
+ * retailers" and must be in the shelf: it used to be classed as a single
+ * because the rev-2 depth gate counts in-market Kuwait lanes only, so the
+ * two-single tail dropped it. It now leads in a second band after the
+ * in-market comparisons; the card's own `data-comparison-kw` still reports the
+ * Kuwait-only basis the gate reads.
  */
 function comparisonLedShelf(products: NormalizedProduct[]): NormalizedProduct[] {
-  const comparisons: NormalizedProduct[] = [];
+  const inMarket: NormalizedProduct[] = [];
+  const crossMarketPairs: NormalizedProduct[] = [];
   const singles: NormalizedProduct[] = [];
   for (const p of products) {
-    if (comparisonMerchantCount(p.offers, "KW") >= 2) comparisons.push(p);
+    if (comparisonMerchantCount(p.offers, "KW") >= 2) inMarket.push(p);
+    else if (comparisonMerchantCount(p.offers, null) >= 2) crossMarketPairs.push(p);
     else singles.push(p);
   }
-  if (comparisons.length === 0) return products.slice(0, CATEGORY_SHELF_CARDS);
-  return [...comparisons, ...singles.slice(0, 2)].slice(0, CATEGORY_SHELF_CARDS);
+  if (inMarket.length === 0 && crossMarketPairs.length === 0) {
+    return products.slice(0, CATEGORY_SHELF_CARDS);
+  }
+  return [...inMarket, ...crossMarketPairs, ...singles.slice(0, 2)].slice(0, CATEGORY_SHELF_CARDS);
 }
 
 /** AC-7 query id: the normalized query + locale fork of the render. */

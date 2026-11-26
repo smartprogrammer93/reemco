@@ -254,6 +254,7 @@ export type CoveragePart =
 function coverageAggregateText(
   notes: LiveSearchResult["notes"],
   blocked: readonly string[],
+  seen: ReadonlySet<string>,
   ar: boolean,
   query?: string,
 ): string {
@@ -265,6 +266,14 @@ function coverageAggregateText(
   for (const n of notes) {
     if (blockedSet.has(n.merchant)) {
       failed += 1;
+      continue;
+    }
+    // REEA-1238 AC 7B-4 — a lane whose offers RENDERED did answer, even when
+    // its note carries an error (a partial hop, or a labeled last-seen row).
+    // It counts as answered, never as failed, so the aggregate "N failed" can
+    // never exceed the lanes the "No response from" sentence names.
+    if (seen.has(n.merchant)) {
+      answered += 1;
       continue;
     }
     if (n.error) failed += 1;
@@ -390,7 +399,11 @@ export function coverageParts(
   // of the live run first (counts only), then the named lane detail. A thin
   // page can no longer hide that twenty-two stores were checked for one
   // carrier; a zero page can no longer read as a shallow miss.
-  const aggregate = coverageAggregateText(ordered, blocked, ar, query);
+  // REEA-1238 AC 7B-4 — the aggregate reads the SAME `seen` set the named
+  // sentences read, so "N failed" can never exceed the lanes the "No response
+  // from" sentence names: a lane that errored but still rendered prices counts
+  // as answered, not failed.
+  const aggregate = coverageAggregateText(ordered, blocked, seen, ar, query);
   if (aggregate !== "") parts.push({ kind: "text", value: aggregate });
   const sentence = (next: CoveragePart[]) => {
     if (parts.length > 0) parts.push({ kind: "text", value: " " });

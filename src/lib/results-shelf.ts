@@ -15,8 +15,9 @@
  * store.
  */
 import type { CountryCode } from "@/lib/country";
-import { isCrossMarketOffer, marketViewScope, scopeProductsByMarket } from "@/lib/market";
+import { HOME_MARKET, isCrossMarketOffer, marketViewScope, scopeProductsByMarket } from "@/lib/market";
 import { effectiveKwdOfOffer } from "@/lib/price-composition";
+import { comparisonMerchantCount } from "@/lib/offer-integrity";
 import { filterProductsByStock } from "@/lib/stock";
 import { exactSkuKeep, modelIdentityTokens } from "@/lib/relevance";
 import {
@@ -277,11 +278,26 @@ export function shelfCardBudget(query: string): number {
 /** REEA-1207 — the category shelf budget (cards painted for one query). */
 export const CATEGORY_SHELF_CARDS = 6;
 
+/** REEA-1238 — how the streamed paint chain may spend a category shelf's
+ *  slots. The category shelf is a COMPARISON surface (REEA-1207 AC 7B-1R):
+ *  an intermediate flush may only claim slots with comparison cards, so the
+ *  singles that answer first cannot consume the budget before the
+ *  cross-retailer merge exists. The final flush then spends whatever is left
+ *  on the comparison-led shelf (comparisons first, then the two singles the
+ *  shelf is allowed). Exact-model shelves keep the pre-change append rule. */
+export interface FlushPaintOptions {
+  /** True for the category budget (comparison-led shelf). */
+  comparisonFirst?: boolean;
+  /** True for the LAST stage of the run (the settled/finalized snapshot). */
+  finalFlush?: boolean;
+}
+
 export function freshCardsForFlush(
   visible: readonly NormalizedProduct[],
   paintedIds: ReadonlySet<string>,
   replay: boolean,
   budget: number = RESULTS_PAGE_SIZE,
+  opts: FlushPaintOptions = {},
 ): NormalizedProduct[] {
   if (replay) return [];
   // The budget is CUMULATIVE: later flushes only fill the slots the page has
@@ -289,8 +305,31 @@ export function freshCardsForFlush(
   const remaining = Math.max(0, budget - paintedIds.size);
   if (remaining === 0) return [];
   const fresh: NormalizedProduct[] = [];
-  for (const p of visible) {
+  // REEA-1238 — a category shelf's intermediate flush is COMPARISON-ONLY.
+  // Live evidence: the first flushes painted the six cheapest single-retailer
+  // cards (an early-answering lane's rows), the budget was exhausted, and the
+  // final snapshot's merged comparison cards could never paint — the served
+  // page read as a directory even though the run had produced comparisons.
+  // Reserving every remaining slot for comparison cards until the final flush
+  // makes the painted shelf track the merge instead of the arrival order.
+  // The final flush paints the full comparison-led shelf, so a query with no
+  // comparison still fills its ordinary category page. The comparison cards
+  // paint before the singles in BOTH cases: the price-ranked `visible` order
+  // (REEA-1177 AC 6a-4) would otherwise put a cheap single ahead of the
+  // comparison card the category surface exists to show.
+  const comparisonFirst = opts.comparisonFirst === true;
+  const comparisonOnly = comparisonFirst && opts.finalFlush !== true;
+  const isComparison = (p: NormalizedProduct): boolean =>
+    comparisonMerchantCount(p.offers, HOME_MARKET) >= 2;
+  const ordered = comparisonFirst
+    ? [
+        ...visible.filter(isComparison),
+        ...visible.filter((p) => !isComparison(p)),
+      ]
+    : visible;
+  for (const p of ordered) {
     if (paintedIds.has(p.productId)) continue;
+    if (comparisonOnly && !isComparison(p)) continue;
     fresh.push(p);
     if (fresh.length >= remaining) break;
   }
@@ -394,7 +433,10 @@ export async function paintedShelfCardsAcrossStages(
 ): Promise<NormalizedProduct[]> {
   let paintedIds: ReadonlySet<string> = new Set<string>();
   const painted: NormalizedProduct[] = [];
-  for (const stage of stages) {
+  const budget = shelfCardBudget(query);
+  const comparisonFirst = budget === CATEGORY_SHELF_CARDS;
+  for (let index = 0; index < stages.length; index += 1) {
+    const stage = stages[index];
     let snap: { products: readonly NormalizedProduct[]; replay?: boolean } | null;
     try {
       // REEA-1068 D1 — adopt through Promise.resolve so React thenables (SSR
@@ -405,11 +447,15 @@ export async function paintedShelfCardsAcrossStages(
       snap = null;
     }
     if (!snap) continue;
+    // REEA-1238 — the SAME flush policy the renderer applies: a category
+    // shelf's intermediate flushes only paint comparison cards, so the fold
+    // can never describe a different population than the page painted.
     const fresh = freshCardsForFlush(
       resultsShelfCards(snap, query, page, country, showOutOfStock),
       paintedIds,
       snap.replay === true,
-      shelfCardBudget(query),
+      budget,
+      { comparisonFirst, finalFlush: index === stages.length - 1 },
     );
     painted.push(...fresh);
     paintedIds = paintedIdsAfter(paintedIds, fresh);

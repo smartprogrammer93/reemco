@@ -57,7 +57,15 @@ const PANEL = [
 
 const LOCALES = ["en", "ar"];
 const RUNS = 3;
+/** Per-query gate: a query's panel ratio must reach 40% on the median run. */
 const CARD_GATE = 0.4;
+/**
+ * REEA-1207 rev-2 gates (the ones the ACs actually carry — REEA-1238).
+ * The rev-1 labels were left in this probe after the AC was revised, so a
+ * passing run printed "FAIL". Keep these in one place and print them.
+ */
+const PANEL_GATE = 0.2; // AC 7B-1R: median panel comparison share >= 20%
+const QUERY_GATE_COUNT = 4; // AC 7B-2R: >= 4 of 11 queries at >= 40% on the median run
 /** Politeness: one page at a time, a short breath between them. */
 const QUERY_GAP_MS = 400;
 const PAGE_TIMEOUT_MS = 90_000;
@@ -320,15 +328,18 @@ async function main() {
   console.log("\n=== Bet 7B panel summary (median of 3 runs, EN+AR, 375 basis) ===");
   console.log(`stamps: ${runs.map((r) => r.stamp.commit).join(" | ")}`);
   console.log(`panel ratios per run: ${panelRatios.map(pct).join(" | ")}`);
-  console.log(`MEDIAN panel multi-retailer ratio: ${pct(medianRatio)}  (AC 7B-1 gate ${pct(CARD_GATE)})`);
+  console.log(`MEDIAN panel multi-retailer ratio: ${pct(medianRatio)}  (AC 7B-1R gate ≥${pct(PANEL_GATE)})`);
   console.log(
-    `queries at ≥40% on median run: ${queriesAtGateMedian}/11  (AC 7B-2 gate ≥6/11)`,
+    `queries at ≥40% on median run: ${queriesAtGateMedian}/11  (AC 7B-2R gate ≥${QUERY_GATE_COUNT}/11)`,
   );
   console.log(
     `median run ${medianRun.run} per-query: ` +
       medianRun.perQuery.map((q) => `${q.query}=${pct(q.ratio)}`).join(", "),
   );
-  console.log(`AC 7B-1 ${medianRatio >= CARD_GATE ? "PASS" : "FAIL"} · AC 7B-2 ${queriesAtGateMedian >= 6 ? "PASS" : "FAIL"}`);
+  console.log(
+    `AC 7B-1R ${medianRatio >= PANEL_GATE ? "PASS" : "FAIL"} · ` +
+      `AC 7B-2R ${queriesAtGateMedian >= QUERY_GATE_COUNT ? "PASS" : "FAIL"}`,
+  );
 
   const payload = {
     ticket: "REEA-1207",
@@ -343,7 +354,12 @@ async function main() {
       run: medianRun.run,
       perQuery: medianRun.perQuery,
     },
-    acGate: { panel: medianRatio >= CARD_GATE, queries: queriesAtGateMedian >= 6 },
+    acGate: {
+      panel: medianRatio >= PANEL_GATE,
+      queries: queriesAtGateMedian >= QUERY_GATE_COUNT,
+      panelGate: PANEL_GATE,
+      queryGateCount: QUERY_GATE_COUNT,
+    },
   };
   writeFileSync(OUT, `${JSON.stringify(payload, null, 2)}\n`);
   console.log(`\nfull payload: ${OUT}`);

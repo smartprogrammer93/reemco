@@ -2491,9 +2491,11 @@ describe("REA-290 — retry once with backoff + per-query coverage line", () => 
     expect(coverageLine(notes, "ar", [product("p", ["Sultan Center", "Eureka"])]).trim()).toBe(
       "تم فحص 3 متاجر · 3 متاجر توفّر هذا. الأسعار من Eureka وSultan Center.",
     );
-    // A merchant that answered rows but also logged an error stays a contributor.
+    // REEA-1238 AC 7B-4 — a merchant whose rows RENDERED is a contributor even
+    // when its note carries an error: it counts as answered, never as a failed
+    // lane above the named gap list, so the aggregate and the sentence agree.
     expect(coverageLine([...notes, { merchant: "Jarir", hits: 0, error: "timeout" }], "en", [product("p", ["Jarir"])])).toBe(
-      "4 stores checked · 3 carry this · 1 failed. Prices from Jarir.",
+      "4 stores checked · 4 carry this. Prices from Jarir.",
     );
     // Zero rendered rows, no failures, no empty answers → the contributor
     // half stays hidden (REEA-574 R1); REEA-1143 keeps the aggregate scale.
