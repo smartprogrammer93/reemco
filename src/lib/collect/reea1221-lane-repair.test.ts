@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { binsinaHits, luluListHits, nextStoreHits, nextStoreMarkdownHits } from "@/lib/collect/live-search";
+import { binsinaHits, luluListHits, nextStoreHits, nextStoreMarkdownHits, yousifiOccHits } from "@/lib/collect/live-search";
 import { browserTierEnabled, relayTierEnabled } from "@/lib/collect/browser-clearance";
 import { coverageParts, type LiveSearchResult } from "@/lib/collect/coverage";
 
@@ -140,6 +140,41 @@ describe("REEA-1221 lane repair", () => {
       currency: "KWD",
       url: "https://www.nextstore.com.kw/razer-laptop-sleeve-16.html",
     });
+  });
+
+  it("Yousifi reads Best Al-Yousifi's OCC rows and treats an empty answer as no-match", () => {
+    // REEA-1221 — PM ruling on REEA-1225 re-pointed this lane to the live shop's
+    // SAP Commerce OCC search API. Measured live 2026-11-26:
+    // `iphone 17 pro` → 10 products at KWD 444.9, `panadol` → 0 products.
+    const payload = {
+      products: [
+        {
+          name: "Apple iPhone 17 Pro Max 256GB Esim - Blue",
+          code: "IP17PM256BL",
+          url: "/All-Categories/Mobiles/iPhone-17-Pro-Max/p/IP17PM256BL",
+          price: { currencyIso: "KWD", value: 444.9 },
+          stock: { stockLevelStatus: "inStock" },
+        },
+        {
+          name: "Promate Laptop Backpack for 15inch Laptop",
+          url: "/All-Categories/Travel-and-Bags/Backpack/p/REBEL-BP-BLACK",
+          price: { currencyIso: "KWD", value: 11.9 },
+          stock: { stockLevelStatus: "outOfStock" },
+        },
+      ],
+    };
+    const hits = yousifiOccHits(payload, "iphone 17 pro");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({
+      merchant: "Yousifi",
+      title: "Apple iPhone 17 Pro Max 256GB Esim - Blue",
+      price: 444.9,
+      currency: "KWD",
+      inStock: true,
+      url: "https://best.com.kw/en/All-Categories/Mobiles/iPhone-17-Pro-Max/p/IP17PM256BL",
+    });
+    // An empty products array is the retailer saying "no match".
+    expect(yousifiOccHits({ products: [] }, "panadol")).toEqual([]);
   });
 
   it("keeps both clearance tiers out of the hermetic test run", () => {

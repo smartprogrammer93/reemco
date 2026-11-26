@@ -36,13 +36,16 @@ function recordingFetch(seen: string[]) {
 }
 
 describe("REEA-1207 — no lane is retired for failing", () => {
-  it("keeps the six zero-offer lanes in the fan-out (fixed, not killed)", () => {
-    for (const lane of ["Lulu Hypermarket", "BinSina", "Yousifi", "YasO", "Hobby Center", "Bomai"]) {
+  it("keeps the fixable zero-offer lanes in the fan-out and only the ruled-absent ones out", () => {
+    // REEA-1221 — the lanes we fixed or that still answer stay dispatched.
+    for (const lane of ["Lulu Hypermarket", "BinSina", "Yousifi", "Next Store", "Ounass"]) {
       expect(DEFAULT_RETIRED_LANES).not.toContain(lane);
     }
-    // REEA-1221 — Next Store was re-admitted too (its collector now clears
-    // the challenge through the browser tier), so the static list is empty.
-    expect(DEFAULT_RETIRED_LANES).not.toContain("Next Store");
+    // PM's REEA-1225 ruling (2026-11-26) took these three out on "no
+    // addressable catalogue" evidence — adapters and tests stay.
+    for (const lane of ["YasO", "Hobby Center", "Bomai"]) {
+      expect(DEFAULT_RETIRED_LANES).toContain(lane);
+    }
   });
 
   it("dispatches a lane a canary readmitted, and keeps a dynamic retirement out", async () => {

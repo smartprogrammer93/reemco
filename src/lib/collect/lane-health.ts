@@ -48,7 +48,23 @@ import { getSharedKv } from "@/lib/collect/kv";
  * were already not retired. A lane still leaves the fan-out only when the
  * 7-day every-attempt-failed rule or the canary says so.
  */
-export const DEFAULT_RETIRED_LANES: readonly string[] = [];
+export const DEFAULT_RETIRED_LANES: readonly string[] = [
+  // REEA-1221 — PM ruling on REEA-1225 (2026-11-26). These three lanes left the
+  // fan-out on "no addressable catalogue", NOT because they failed: their
+  // adapters, parsers and tests stay, and the canary re-admits a lane the day
+  // its storefront answers with a priced card.
+  //   Bomai        — bomai.com has been a Chinese domain-parking shell;
+  //                  /search?q= answers 404; bomai.com.kw is NXDOMAIN.
+  //   Hobby Center — hobbycenter.com.kw is NXDOMAIN; the real domain
+  //                  hobbycenter.net is the retailer's "Launching Soon"
+  //                  placeholder (origin re-pointed there).
+  //   YasO         — yaso.com is a Korean site (406 over https, 403 over http,
+  //                  self-signed cert, +82 phone); the retailer is
+  //                  Instagram-only today.
+  "Bomai",
+  "Hobby Center",
+  "YasO",
+];
 
 /**
  * REEA-1221 — the reason string a code-level retirement carries. It is policy,

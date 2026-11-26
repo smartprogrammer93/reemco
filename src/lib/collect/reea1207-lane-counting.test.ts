@@ -55,7 +55,11 @@ describe("REEA-1207 AC 7B-3 — a silent zero is a failure, not an answer", () =
     });
     await staged.allSettled;
     const telemetry = await staged.adapterTelemetry;
-    for (const lane of ["Bomai", "Hobby Center", "YasO", "Nest", "BinSina"]) {
+    // REEA-1221 — PM's REEA-1225 ruling retired Bomai / Hobby Center / YasO on
+    // "no addressable catalogue", so they are no longer dispatched; the lanes
+    // asserted here are the ones still in the fan-out that cannot prove an
+    // answer from an empty shell.
+    for (const lane of ["Nest", "BinSina", "Lulu Hypermarket"]) {
       expect(telemetry.attempts[lane], `${lane} attempted`).toBeGreaterThan(0);
       expect(telemetry.failures[lane], `${lane} counted as a failure`).toBeGreaterThan(0);
     }

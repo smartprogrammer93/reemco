@@ -1140,6 +1140,47 @@ export function danubeHomeHits(payload: unknown, query: string): SearchHit[] {
   return out;
 }
 
+/**
+ * REEA-1221 — Best Al-Yousifi's live shop (best.com.kw) through its SAP
+ * Commerce OCC search API. PM ruling on REEA-1225 re-pointed this lane here:
+ * the corporate site the old Woo hop read answers "Nothing Found" for every
+ * panel query, while the OCC index answers real KWD-priced rows (measured live
+ * 2026-11-26: `iphone 17 pro` → 10 products at KWD 444.9, `dyson` → 10,
+ * `washing machine` → 10, `panadol` → 0).
+ *
+ * Record shape: `products[].name`, `.url` (storefront path), `.price.value` +
+ * `.price.currencyIso`, `.stock.stockLevelStatus`. An empty `products` array is
+ * the retailer saying "no match" — an explicit no-match, never a blocked zero.
+ */
+export function yousifiOccHits(payload: unknown, query: string): SearchHit[] {
+  const wrap = payload as { products?: unknown } | null;
+  const items = Array.isArray(wrap?.products) ? (wrap.products as Record<string, unknown>[]) : [];
+  const out: SearchHit[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const title = typeof item.name === "string" ? item.name.trim() : "";
+    const path = typeof item.url === "string" ? item.url.trim() : "";
+    const price = item.price as { value?: unknown; currencyIso?: unknown } | undefined;
+    const value = Number(price?.value);
+    if (!title || !path || !Number.isFinite(value) || value <= 0) continue;
+    if (!queryGatePasses(title, query, MIN_SCORE)) continue;
+    const url = `https://best.com.kw/en${path.startsWith("/") ? "" : "/"}${path}`;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    const stock = item.stock as { stockLevelStatus?: unknown } | undefined;
+    out.push({
+      title,
+      merchant: "Yousifi",
+      country: "KW",
+      price: value,
+      currency: typeof price?.currencyIso === "string" ? price.currencyIso : "KWD",
+      url,
+      inStock: String(stock?.stockLevelStatus ?? "inStock") !== "outOfStock",
+    });
+  }
+  return out;
+}
+
 /** Yousifi Kuwait (www.yousifi.com.kw): WooCommerce archive cards. */
 export function yousifiHits(html: string, query: string): SearchHit[] {
   const out: SearchHit[] = [];
@@ -2154,20 +2195,20 @@ export const COLLECTORS: RetailerCollector[] = [
     merchant: "Yousifi",
     country: "KW",
     collect: async (query, fetchImpl) => {
-      // WooCommerce archive hop in the PC Kuwait shape (verified live
-      // 2026-09-08): `post_type=product` lands the priced card archive — the
-      // plain blog search view carries none — over the same identity-
-      // alternating handshake the other CF-fronted stores get. Measured
-      // answer is thin (the site favors corporate content in its search
-      // views); the hop stays live-fetched and the counts are reported as
-      // measured in the closing note.
-      const res = await fetchThroughChallenge(
+      // REEA-1221 — PM ruling on REEA-1225: re-pointed from the corporate Woo
+      // site (which answers "Nothing Found" for every panel query) to Best
+      // Al-Yousifi's live shop through its SAP Commerce OCC search API.
+      // Measured live 2026-11-26: real KWD-priced rows for `iphone 17 pro`
+      // (KWD 444.9), `dyson`, `washing machine`; an empty `products` array for
+      // a non-electronics query such as `panadol` is an explicit no-match.
+      const url = `https://api.ctxzq48eta-easahussa1-p1-public.model-t.cc.commerce.ondemand.com/occ/v2/best/products/search?query=${encodeURIComponent(query)}&pageSize=${LIVE_SEARCH_HITS_PER_PAGE}&fields=products(name,code,url,price(FULL),stock(FULL))`;
+      const res = await fetchChecked(
         fetchImpl,
-        `https://www.yousifi.com.kw/?s=${encodeURIComponent(query)}&post_type=product`,
-        {},
-        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2),
+        url,
+        { headers: { accept: "application/json" } },
+        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
       );
-      return yousifiHits(await res.text(), query);
+      return yousifiOccHits(await res.json(), query);
     },
   },
   {
@@ -2480,7 +2521,13 @@ export const COLLECTORS: RetailerCollector[] = [
     merchant: "Hobby Center",
     country: "KW",
     silentWhenEmpty: true,
-    collect: (query, fetchImpl) => ladderCollect(fetchImpl, "https://hobbycenter.com.kw", query, "Hobby Center"),
+    // REEA-1221 — PM ruling on REEA-1225: the configured host
+    // `hobbycenter.com.kw` is NXDOMAIN; the retailer's own domain is
+    // `hobbycenter.net`, which today serves a "Launching Soon" placeholder with
+    // no priced cards. The origin is re-pointed here so the day the placeholder
+    // becomes a shop the SAME ladder answers with no code change; until then the
+    // lane is recorded proven absent and stays out of the fan-out.
+    collect: (query, fetchImpl) => ladderCollect(fetchImpl, "https://hobbycenter.net", query, "Hobby Center"),
   },
   {
     merchant: "YasO",

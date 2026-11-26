@@ -19,7 +19,7 @@ function recordingFetch(urls: string[]) {
 }
 
 describe("dead-lane retirement at dispatch (REEA-1078 S2)", () => {
-  it("dispatches Next Store — no lane is retired at the code level", async () => {
+  it("dispatches Next Store — the static list holds only the PM-ruled absent lanes", async () => {
     const urls: string[] = [];
     const staged = collectLiveResultsStaged("iphone 17", {
       fetchImpl: recordingFetch(urls),
@@ -27,7 +27,7 @@ describe("dead-lane retirement at dispatch (REEA-1078 S2)", () => {
       deadlineMs: 2000,
     });
     await staged.allSettled;
-    expect(DEFAULT_RETIRED_LANES).toEqual([]);
+    expect([...DEFAULT_RETIRED_LANES].sort()).toEqual(["Bomai", "Hobby Center", "YasO"]);
     expect(urls.some((u) => u.includes("nextstore.com.kw"))).toBe(true);
   });
 

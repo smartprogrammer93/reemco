@@ -1772,19 +1772,20 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     // re-admitting lanes (Next Store rejoined, Lulu's hop shapes are
     // WAF-blocked from every egress), so a lane that starts answering must be
     // free to leave this list without a test rewrite.
+    // REEA-1221 — Bomai / Hobby Center / YasO left the fan-out under PM's
+    // REEA-1225 ruling ("no addressable catalogue"), so they are not dispatched
+    // and cannot record a failure; the lanes still in the fan-out that swallow a
+    // shell are the ones asserted here.
     for (const lane of [
       "BinSina",
-      "Bomai",
-      "Hobby Center",
       "Lulu Hypermarket",
       "Nest",
-      "YasO",
     ]) {
       expect(telemetry.failures[lane], `${lane} counted as a failure`).toBeGreaterThan(0);
     }
     for (const lane of Object.keys(telemetry.failures)) {
       expect(
-        ["BinSina", "Bomai", "Hobby Center", "Lulu Hypermarket", "Nest", "Next Store", "YasO"],
+        ["BinSina", "Lulu Hypermarket", "Nest", "Next Store"],
         `${lane} is a silent-empty lane`,
       ).toContain(lane);
     }

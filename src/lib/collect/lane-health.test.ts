@@ -61,12 +61,16 @@ function laneWithStreak(startedAt: number) {
 }
 
 describe("DEFAULT_RETIRED_LANES (AC-6 / REEA-1221)", () => {
-  it("retires no lane at the code level — every adapter is dispatched", () => {
-    // REEA-1221: the CEO directive is "fix it, not kill it". Next Store's old
-    // static retirement is gone now that its collector clears the challenge
-    // through the browser tier; only the 7-day rule may retire a lane.
-    expect(DEFAULT_RETIRED_LANES).toEqual([]);
+  it("holds only the lanes PM ruled 'no addressable catalogue', never a failing one", () => {
+    // REEA-1221: the CEO directive is "fix it, not kill it", and PM's ruling on
+    // REEA-1225 (2026-11-26) took exactly three lanes out on evidence that their
+    // storefront carries no in-market catalogue at all — not because they fail.
+    // Next Store, which used to be retired here, is re-admitted and dispatched.
+    expect([...DEFAULT_RETIRED_LANES].sort()).toEqual(["Bomai", "Hobby Center", "YasO"]);
     expect(DEFAULT_RETIRED_LANES).not.toContain("Next Store");
+    expect(DEFAULT_RETIRED_LANES).not.toContain("Lulu Hypermarket");
+    expect(DEFAULT_RETIRED_LANES).not.toContain("BinSina");
+    expect(DEFAULT_RETIRED_LANES).not.toContain("Yousifi");
   });
 });
 
