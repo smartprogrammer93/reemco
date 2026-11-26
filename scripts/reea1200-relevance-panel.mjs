@@ -268,7 +268,12 @@ async function probe(query, locale) {
   const relatedPrimary = relatedInPrimary(primary);
   const visiblePrimary = visibleUnderDefaultStockView(primary);
   const predicate = AC_PREDICATES[query];
-  const offScopeOnPrimary = primary.filter((c) => !predicate.inScope(c.title));
+  // The page paints the DEFAULT stock view (all-OOS cards are hidden by the
+  // In stock selection), so the AC "primary shelf contains only …" is measured
+  // on the rendered primary set, not on rows the viewer never sees. The raw
+  // payload count is printed beside it so a difference is attributable.
+  const renderedPrimary = visibleUnderDefaultStockView(primary);
+  const offScopeOnPrimary = renderedPrimary.filter((c) => !predicate.inScope(c.title));
   const accessory = cards.filter((c) => c.productScope === "accessory");
   const consumable = cards.filter((c) => c.productScope === "consumable");
   return {
@@ -282,7 +287,7 @@ async function probe(query, locale) {
     missing,
     primary,
     relatedPrimary,
-    visiblePrimary,
+    renderedPrimary,
     offScopeOnPrimary,
     accessory,
     consumable,
@@ -296,14 +301,18 @@ function printRun(r) {
   line(`=== ${r.query} | locale=${r.locale} | http=${r.http} | ${r.ms} ms | source=${r.source}`);
   line(`stamp BEFORE run: /__commit.txt=${r.stamp.commit} | /api/health=${r.stamp.health}`);
   line(
-    `payload cards=${r.cards.length} | primary-scope=${r.primary.length} | primary visible under the default stock view=${r.visiblePrimary.length} | off-scope on primary shelf=${r.offScopeOnPrimary.length} | accessory band=${r.accessory.length} | consumable band=${r.consumable.length} | cards missing fields=${r.missing.length} | related cards in primary=${r.relatedPrimary.length}`,
+    `payload cards=${r.cards.length} | payload primary-scope=${r.primary.length} | rendered primary (default stock view; the count line reads this)=${r.renderedPrimary.length} | off-scope on rendered primary=${r.offScopeOnPrimary.length} | accessory band=${r.accessory.length} | consumable band=${r.consumable.length} | rendered cards missing fields=${r.renderedPrimary.filter((c) => c.matchReason === null || c.productScope === null).length} | related cards in primary=${r.relatedPrimary.length}`,
   );
   if (r.cards.length === 0) {
     line("EMPTY STATE — 0 cards (zzzzqqq control must read exactly this)");
     return;
   }
-  line("primary shelf (title | productScope | matchReason):");
-  for (const c of r.primary) line(`  - ${c.title} | ${c.productScope} | ${c.matchReason}`);
+  line("rendered primary shelf (title | productScope | matchReason):");
+  for (const c of r.renderedPrimary) line(`  - ${c.title} | ${c.productScope} | ${c.matchReason}`);
+  const hidden = r.primary.length - r.renderedPrimary.length;
+  if (hidden > 0) {
+    line(`(${hidden} payload primary-scope card(s) hidden by the default In stock view — not padding)`);
+  }
   if (r.offScopeOnPrimary.length > 0) {
     line(`OFF-SCOPE ON PRIMARY SHELF (${r.predicate.label}):`);
     for (const c of r.offScopeOnPrimary) line(`  ! ${c.title} | ${c.productScope} | ${c.matchReason}`);
@@ -312,9 +321,10 @@ function printRun(r) {
     line("RELATED-MATCHED CARDS IN PRIMARY (AC 7a-6 violation):");
     for (const c of r.relatedPrimary) line(`  ! ${c.title} | ${c.productScope} | ${c.matchReason}`);
   }
-  if (r.missing.length > 0) {
-    line("CARDS MISSING matchReason/productScope:");
-    for (const c of r.missing) line(`  ? ${c.title}`);
+  const renderedMissing = r.renderedPrimary.filter((c) => c.matchReason === null || c.productScope === null);
+  if (renderedMissing.length > 0) {
+    line("RENDERED CARDS MISSING matchReason/productScope (AC 7a-1 violation):");
+    for (const c of renderedMissing) line(`  ? ${c.title}`);
   }
   if (r.accessory.length > 0) {
     line(`accessory band rows (${r.accessory.length}):`);
@@ -331,12 +341,13 @@ function verdict(r) {
     return r.cards.length === 0 && r.primary.length === 0 ? "PASS" : "FAIL (control is not empty)";
   }
   const problems = [];
-  if (r.missing.length > 0) problems.push(`${r.missing.length} card(s) missing fields`);
-  if (r.offScopeOnPrimary.length > 0) problems.push(`${r.offScopeOnPrimary.length} off-scope on primary`);
+  const renderedMissing = r.renderedPrimary.filter((c) => c.matchReason === null || c.productScope === null);
+  if (renderedMissing.length > 0) problems.push(`${renderedMissing.length} rendered card(s) missing fields`);
+  if (r.offScopeOnPrimary.length > 0) problems.push(`${r.offScopeOnPrimary.length} off-scope on rendered primary`);
   if (r.relatedPrimary.length > 0) problems.push(`${r.relatedPrimary.length} related card(s) in primary`);
-  if (r.query === "samsung galaxy s25 ultra" && r.primary.length < 1) problems.push("no S25-family phone on primary");
-  if (r.query === "laptop" && r.primary.length < 4) problems.push("fewer than 4 laptops on primary");
-  if (r.query === "iphone 17 pro" && r.primary.length < 6) problems.push("fewer than 6 iPhone cards on primary");
+  if (r.query === "samsung galaxy s25 ultra" && r.renderedPrimary.length < 1) problems.push("no S25-family phone on primary");
+  if (r.query === "laptop" && r.renderedPrimary.length < 4) problems.push("fewer than 4 laptops on primary");
+  if (r.query === "iphone 17 pro" && r.renderedPrimary.length < 6) problems.push("fewer than 6 iPhone cards on primary");
   return problems.length === 0 ? "PASS" : `FAIL (${problems.join("; ")})`;
 }
 
@@ -355,12 +366,15 @@ async function main() {
     }
   }
   console.log("");
-  console.log("SUMMARY (query | locale | payload cards | primary-scope | off-scope on primary | missing fields | verdict)");
+  console.log("SUMMARY (query | locale | payload cards | payload primary-scope | rendered primary (default view) | off-scope on rendered primary | missing fields on rendered | verdict)");
   for (const r of results) {
+    const renderedMissing = r.renderedPrimary.filter((c) => c.matchReason === null || c.productScope === null).length;
     console.log(
-      `${r.query} | ${r.locale} | ${r.cards.length} | ${r.primary.length} | ${r.offScopeOnPrimary.length} | ${r.missing.length} | ${r.verdict}`,
+      `${r.query} | ${r.locale} | ${r.cards.length} | ${r.primary.length} | ${r.renderedPrimary.length} | ${r.offScopeOnPrimary.length} | ${renderedMissing} | ${r.verdict}`,
     );
   }
+  console.log("");
+  console.log("Note: AC 7a-6 compares the rendered primary-card count with the in-scope count on the SAME view — the count line reads the rendered set. A payload primary-scope card whose every offer is out of stock is hidden by the default In stock selection (pre-existing filter), so the payload count can exceed the rendered count by exactly those hidden cards; the probe prints both.");
   const failed = results.filter((r) => !r.verdict.startsWith("PASS"));
   console.log("");
   console.log(failed.length === 0 ? "PANEL: PASS (all AC rows)" : `PANEL: ${failed.length} row(s) need attention`);
