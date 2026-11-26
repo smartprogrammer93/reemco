@@ -224,7 +224,11 @@ async function main() {
       for (const locale of LOCALES) {
         const url = `${BASE}/results?q=${encodeURIComponent(query)}`;
         const { status, body } = await fetchText(url, {
-          cookie: `rc_locale=${locale}`,
+          // REEA-1207 — `rc_refresh=1` forces the page to run its OWN fan-out
+          // instead of serving a memo/stale replay (QUERY_CACHE_MAX_AGE_MS is
+          // 5 min, so a head deployed minutes ago would otherwise be measured
+          // through the previous build's snapshot). Clean run = current build.
+          cookie: `rc_locale=${locale}; rc_refresh=1`,
           "accept-language": locale === "ar" ? "ar" : "en",
         });
         if (status !== 200) {
