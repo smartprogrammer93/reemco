@@ -675,7 +675,16 @@ export function scanNextStoreCards(html: string): NextStoreCard[] {
   const out: NextStoreCard[] = [];
   const segments = html.split('class="product-item-link"').slice(1);
   for (const seg of segments) {
-    const attrTitle = decodeEntities(seg.match(/title="([^"]+)"/)?.[1] ?? "");
+    // REEA-1221 — the anchor's OWN `title` attribute only counts when it sits
+    // on the link tag itself. The served grids also stamp `title="Add to Bag"`
+    // on the cart button further down the card, and the old "first title=
+    // anywhere in the segment" read made every card adopt that button label —
+    // the shared coverage gate then rejected every priced row as
+    // non-matching (measured live 2026-11-26 on binsina `panadol`: 19 priced
+    // cards, 0 hits). Both Magento scanners split on the same anchor class, so
+    // the rule lives in both.
+    const anchorAttrs = seg.match(/^[^>]*/)?.[0] ?? "";
+    const attrTitle = decodeEntities(anchorAttrs.match(/title="([^"]+)"/)?.[1] ?? "");
     const innerTitle = decodeEntities(seg.match(/^[^>]*>([^<]+)</)?.[1] ?? "");
     const title = attrTitle || innerTitle;
     const url = seg.match(/href="([^"]+)"/)?.[1] ?? "";
@@ -854,19 +863,42 @@ export function scanBinsinaCards(html: string): NextStoreCard[] {
   const out: NextStoreCard[] = [];
   const segments = html.split('class="product-item-link"').slice(1);
   for (const seg of segments) {
-    const attrTitle = decodeEntities(seg.match(/title="([^"]+)"/)?.[1] ?? "");
+    // REEA-1221 — the anchor's OWN `title` attribute only counts when it sits
+    // on the link tag itself. The served grids also stamp `title="Add to Bag"`
+    // on the cart button further down the card, and the old "first title=
+    // anywhere in the segment" read made every card adopt that button label —
+    // the shared coverage gate then rejected every priced row as
+    // non-matching (measured live 2026-11-26 on binsina `panadol`: 19 priced
+    // cards, 0 hits). Both Magento scanners split on the same anchor class, so
+    // the rule lives in both.
+    const anchorAttrs = seg.match(/^[^>]*/)?.[0] ?? "";
+    const attrTitle = decodeEntities(anchorAttrs.match(/title="([^"]+)"/)?.[1] ?? "");
     const innerTitle = decodeEntities(seg.match(/^[^>]*>([^<]+)</)?.[1] ?? "");
     const title = attrTitle || innerTitle;
     let url = seg.match(/href="([^"]+)"/)?.[1] ?? "";
     if (!title || !url) continue;
     if (!url.startsWith("http")) url = `https://binsina.ae${url.startsWith("/") ? "" : "/"}${url}`;
-    // First text after the price span carries the served label: either
-    // "AED 49.00" (label + figure) or a bare figure.
-    const priceText = decodeEntities(seg.match(/class="price"[^>]*>([\s\S]{0,120}?)</)?.[1] ?? "");
-    const label = priceText.match(/([A-Z]{3})?\s*([\d.,]+)/);
-    const price = priceNumber(label?.[2]);
+    // REEA-1221 — the served price box is `<div class="price&#x20;price-cust">`
+    // (an HTML-escaped space inside the class attribute, measured live
+    // 2026-11-26), so the exact `class="price"` match the lane shipped with
+    // skipped every card on the current theme and the lane returned 0 hits on
+    // every query while its hop succeeded (a silent zero). Walk the
+    // price-classed boxes after the link — `price`, `price&#x20;price-cust`, the
+    // `price-box` container — and take the FIRST one whose own text starts
+    // with a figure. The figure is read straight off the tag (`\s*` skips the
+    // theme's deep indentation, which is what a bounded capture window missed
+    // before); a currency label is optional, the storefront's own AED stamp
+    // otherwise.
+    let price = NaN;
+    let currency = "AED";
+    for (const box of seg.matchAll(/class="price(?:&#x20;|&#32;| )?[^"]*"[^>]*>\s*([A-Z]{3})?\s*([\d.,]+)/g)) {
+      const candidate = priceNumber(box[2]);
+      if (!Number.isFinite(candidate) || candidate <= 0) continue;
+      price = candidate;
+      currency = box[1] ?? "AED";
+      break;
+    }
     if (!Number.isFinite(price) || price <= 0) continue;
-    const currency = label?.[1] ?? "AED";
     out.push({
       title,
       url,

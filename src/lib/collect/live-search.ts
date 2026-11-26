@@ -2268,7 +2268,6 @@ export const COLLECTORS: RetailerCollector[] = [
   {
     merchant: "BinSina",
     country: "KW",
-    silentWhenEmpty: true,
     collect: async (query, fetchImpl) => {
       // REEA-557 — Magento Cloud storefront on Fastly; the locale-prefixed
       // search view carries the results. The zone answers per connection
@@ -2279,7 +2278,12 @@ export const COLLECTORS: RetailerCollector[] = [
       // through the bounded JSD clearance tier on a still-shell answer. Only
       // a body carrying real result content (ld+json blocks or the Luma card
       // anchors — the REEA-526 presence-gate shape) may answer early.
-      const searchUrl = `https://binsina.ae/en/catalogsearch/result/?q=${encodeURIComponent(query)}`;
+      // REEA-1221 — the apex host answers a bare 301 onto www.binsina.ae, so
+      // every hop paid an extra round trip and a squeezed window could spend
+      // itself on the redirect. Measured live 2026-11-26: the www view answers
+      // the Luma result grid directly (HTTP 200, ~1.29 MB, 19 priced cards on
+      // `panadol`) — the canonical host is the one the cards live on.
+      const searchUrl = `https://www.binsina.ae/en/catalogsearch/result/?q=${encodeURIComponent(query)}`;
       const qualifies = (html: string): boolean =>
         html !== "" &&
         !html.includes("cf-error-details") &&
@@ -2287,7 +2291,18 @@ export const COLLECTORS: RetailerCollector[] = [
       const html = await challengeHtmlHop(fetchImpl, searchUrl);
       if (qualifies(html)) return binsinaHits(html, query);
       const cleared = await jsdClearedHtml(fetchImpl, searchUrl).catch(() => "");
-      return binsinaHits(qualifies(cleared) ? cleared : html !== "" ? html : cleared, query);
+      // REEA-1221 — the lane now parses a payload it trusts (the Luma grid
+      // above), so it no longer rides `silentWhenEmpty`: an empty answer off a
+      // qualifying grid is the storefront saying "no match for this query",
+      // and only a body that never qualified is a blocked failure. That keeps
+      // the failure share honest in both directions instead of blaming the
+      // store for a query it simply does not stock.
+      if (!qualifies(cleared)) {
+        throw new BlockedLaneError(
+          "blocked: no usable payload from any BinSina hop (shell answer, no Luma grid)",
+        );
+      }
+      return binsinaHits(cleared, query);
     },
   },
   {
