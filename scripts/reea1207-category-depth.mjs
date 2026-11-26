@@ -211,8 +211,11 @@ async function main() {
       `\nRUN ${run} stamp: /__commit.txt HTTP ${stamp.commitHttp} → ${stamp.commit}; ` +
         `/api/health HTTP ${stamp.healthHttp} → ${JSON.stringify(stamp.health)}`,
     );
-    if (stamp.commitHttp !== 200 || stamp.healthHttp !== 200) {
-      throw new Error(`run ${run}: stamp read failed (commit ${stamp.commitHttp}, health ${stamp.healthHttp})`);
+    // The commit stamp is the build identity; the health probe can answer 503
+    // for a moment while a lane canary is down. Record it either way and keep
+    // the run (a degraded health read must not throw away a clean measurement).
+    if (stamp.commitHttp !== 200) {
+      throw new Error(`run ${run}: commit stamp unreadable (HTTP ${stamp.commitHttp})`);
     }
 
     const perQuery = [];
