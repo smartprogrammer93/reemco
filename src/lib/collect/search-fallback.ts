@@ -870,6 +870,36 @@ export function scanAlghanimStoreCards(html: string): WooCard[] {
  * Organization remain), which is why the lane answered zero on every query
  * even when its hop got through.
  */
+/**
+ * REEA-1221 — Next Store product rows from a READER-MARKDOWN render. The zone's
+ * managed challenge only clears for a real browser, and the two relays differ:
+ * one returns rendered HTML, the other returns rendered markdown (measured
+ * 2026-11-26: markdown carries the full grid while the same relay's html mode
+ * hands back the 5.9 KB "Just a moment" shell). The markdown row shape is
+ *
+ *   **[Title](https://www.nextstore.com.kw/<slug>.html "Title")**[Brand](…)
+ *   KD 109.000 KNET - VISA/MASTERCARD
+ *
+ * so the card is title + absolute product URL + KWD price, scored downstream by
+ * the shared coverage gate against the original query.
+ */
+export function scanNextStoreMarkdown(markdown: string): NextStoreCard[] {
+  const out: NextStoreCard[] = [];
+  const seen = new Set<string>();
+  const re =
+    /\*\*\[([^\]]{5,200})\]\((https:\/\/www\.nextstore\.com\.kw\/[^)\s]+\.html)[^)]*\)\*\*(?:\[[^\]]*\]\([^)]*\))?\s*(?:KD|KWD)\s*([\d,]+(?:\.\d+)?)/g;
+  for (const m of markdown.matchAll(re)) {
+    const title = decodeEntities(m[1].trim());
+    const url = m[2];
+    const price = priceNumber(m[3]);
+    if (!title || !url || !Number.isFinite(price) || price <= 0) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    out.push({ title, url, price, currency: "KWD", inStock: true });
+  }
+  return out;
+}
+
 export function scanLuluListCards(html: string): NextStoreCard[] {
   const out: NextStoreCard[] = [];
   const seen = new Set<string>();

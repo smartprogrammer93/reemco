@@ -29,6 +29,7 @@ import {
   scanBinsinaCards,
   scanLuluListCards,
   scanNextStoreCards,
+  scanNextStoreMarkdown,
   scanWooCards,
   titleMatchScore,
 } from "@/lib/collect/search-fallback";
@@ -42,6 +43,7 @@ import {
   browserLastError,
   jinaClearedHtml,
   relayClearedHtml,
+  relayMarkdown,
 } from "@/lib/collect/browser-clearance";
 import {
   defaultQueryCache,
@@ -739,6 +741,28 @@ export function luluListHits(html: string, query: string): SearchHit[] {
       url: card.url,
       inStock: card.inStock,
       ...(card.wasPrice != null ? { wasPrice: card.wasPrice } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * REEA-1221 — Next Store rows from the reader relay's markdown render (the
+ * relay's html mode hands back the challenge shell; its markdown mode carries
+ * the painted grid).
+ */
+export function nextStoreMarkdownHits(markdown: string, query: string): SearchHit[] {
+  const out: SearchHit[] = [];
+  for (const card of scanNextStoreMarkdown(markdown)) {
+    if (!queryGatePasses(card.title, query, MIN_SCORE)) continue;
+    out.push({
+      title: card.title,
+      merchant: "Next Store",
+      country: "KW",
+      price: card.price,
+      currency: card.currency,
+      url: card.url,
+      inStock: card.inStock,
     });
   }
   return out;
@@ -2010,6 +2034,12 @@ export const COLLECTORS: RetailerCollector[] = [
       // so a repeat query spends nothing.
       const relayed = await relayClearedHtml(searchUrl, ".product-item-link");
       if (hasGrid(relayed)) return nextStoreHits(relayed, query);
+      // REEA-1221 — second relay: its markdown render is the one that paints the
+      // grid (its html mode returns the challenge shell), so the lane has two
+      // independent capacities instead of one daily-capped one.
+      const markdown = await relayMarkdown(searchUrl, "KD");
+      const mdHits = nextStoreMarkdownHits(markdown, query);
+      if (mdHits.length > 0) return mdHits;
       // A lane that never got a grid is a coverage loss, not an "answered
       // empty": settle it as a blocked failure so the counter stops reading 0
       // for a lane that delivered nothing (REEA-1207 AC 7B-3).

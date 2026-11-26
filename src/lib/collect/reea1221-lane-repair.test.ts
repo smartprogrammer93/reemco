@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { binsinaHits, luluListHits, nextStoreHits } from "@/lib/collect/live-search";
+import { binsinaHits, luluListHits, nextStoreHits, nextStoreMarkdownHits } from "@/lib/collect/live-search";
 import { browserTierEnabled, relayTierEnabled } from "@/lib/collect/browser-clearance";
 import { coverageParts, type LiveSearchResult } from "@/lib/collect/coverage";
 
@@ -121,6 +121,25 @@ describe("REEA-1221 lane repair", () => {
     expect(unreachable).toContain("Bomai");
     expect(unreachable).not.toContain("Lulu Hypermarket");
     expect(unreachable).not.toContain("Ounass");
+  });
+
+  it("Next Store reads the relay's markdown render (its html mode returns the challenge)", () => {
+    // Measured 2026-11-26: the same reader relay answers Next Store's search
+    // page as 81 KB of markdown carrying ten priced rows, while its html mode
+    // hands back the 5.9 KB "Just a moment" shell. The row shape is
+    // **[Title](product url "Title")**[Brand](…)\nKD 109.000 …
+    const md =
+      'Markdown Content:\n**[Razer Laptop Sleeve 16](https://www.nextstore.com.kw/razer-laptop-sleeve-16.html "Razer Laptop Sleeve 16")**[Razer](https://www.nextstore.com.kw/brand/razer) KD 34.000 KNET\n' +
+      '**[UGreen Desktop Laptop Stand](https://www.nextstore.com.kw/ugreen-desktop-laptop-stand.html "UGreen Desktop Laptop Stand")**[UGreen](https://www.nextstore.com.kw/brand/ugreen) KD 5.000 KNET\n';
+    const hits = nextStoreMarkdownHits(md, "laptop");
+    expect(hits).toHaveLength(2);
+    expect(hits[0]).toMatchObject({
+      merchant: "Next Store",
+      title: "Razer Laptop Sleeve 16",
+      price: 34,
+      currency: "KWD",
+      url: "https://www.nextstore.com.kw/razer-laptop-sleeve-16.html",
+    });
   });
 
   it("keeps both clearance tiers out of the hermetic test run", () => {

@@ -516,3 +516,52 @@ export async function jinaClearedHtml(url: string, contentSelector: string): Pro
     return "";
   }
 }
+
+/**
+ * REEA-1221 — the reader relay's MARKDOWN render. The same relay serves two
+ * modes: `html` hands back the raw source (so a JS challenge is unsolved), while
+ * `markdown` renders the page with a browser and carries the painted grid
+ * (measured 2026-11-26 on Next Store: markdown 81 KB with ten priced rows vs
+ * html 5.9 KB "Just a moment"). Lanes whose parser can read markdown use this
+ * hop; it shares the relay cooldown and is KV-cached per URL.
+ */
+const MARKDOWN_TTL_S = 6 * 60 * 60;
+
+export async function relayMarkdown(url: string, marker: string): Promise<string> {
+  if (!relayTierEnabled()) return "";
+  if (Date.now() < relayCooldownUntil) {
+    lastFailure = "reader relay cooling down after a rate-limit answer";
+    return "";
+  }
+  const kv = getSharedKv();
+  const key = `relay-md:${url}`;
+  if (kv) {
+    try {
+      const cached = await kv.get(key);
+      if (cached && cached.includes(marker)) return cached;
+    } catch {
+      // store hiccup — pay the relay once
+    }
+  }
+  try {
+    const res = await fetch(`https://r.jina.ai/${url}`, {
+      headers: { "x-respond-with": "markdown", "x-timeout": "45", accept: "text/plain" },
+      signal: AbortSignal.timeout(JINA_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      lastFailure = `reader relay HTTP ${res.status}`;
+      if (res.status === 429 || res.status === 503) relayCooldownUntil = Date.now() + RELAY_COOLDOWN_MS;
+      return "";
+    }
+    const md = await res.text();
+    if (!md.includes(marker)) {
+      lastFailure = "reader relay markdown carried no product rows";
+      return "";
+    }
+    if (kv) await kv.set(key, md, MARKDOWN_TTL_S).catch(() => false);
+    return md;
+  } catch (err) {
+    lastFailure = err instanceof Error ? err.message : String(err);
+    return "";
+  }
+}
