@@ -296,6 +296,10 @@ const en = {
   jsonLdProductName: "{title}",
   jsonLdProductDescription:
     "Live prices for {title} in {country}: {n} retailer offers, starting at {price} {cur}.",
+  // REEA-1189 — per-product page metadata. {title} product, {country} market.
+  productMetaTitle: "{title} prices in {country} - Reemco",
+  productMetaDescription:
+    "Compare live prices, stock and retailer offers for {title} in {country}. Offers are collected the moment the page loads.",
   // REEA-1069 — Direction A "Shelf" chrome (design pack REEA-1055).
   brandHomeAria: "Reemco home",
   menuLabel: "Menu",
@@ -598,6 +602,10 @@ const ar: typeof en = {
   jsonLdProductName: "{title} — أسعار في {country}",
   jsonLdProductDescription:
     "أسعار {title} في {country}: {n} عرضًا من المتاجر، تبدأ من {price} {cur}.",
+  // REEA-1189 — Arabic per-product page metadata, written in Arabic.
+  productMetaTitle: "{title} — أسعار في {country} - ريمكو",
+  productMetaDescription:
+    "قارن الأسعار والتوافر وعروض المتاجر لـ{title} في {country}. تُجمع العروض لحظة فتح الصفحة.",
   // REEA-1069 — Arabic Direction A "Shelf" chrome, designed in Arabic (not a
   // mirrored afterthought): price order, timestamps, status labels and CTAs
   // follow the signed REEA-1055 RTL checklist.

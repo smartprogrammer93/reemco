@@ -19,6 +19,7 @@ import type { CountryCode } from "@/lib/country";
 import { fill, getStrings, type Locale } from "@/lib/i18n";
 import { proxiedImageSrc } from "@/lib/image-proxy";
 import { OFFER_STATUS_STALE_MS } from "@/lib/offer-status";
+import { catalogProductIdFor } from "@/lib/product-canonical";
 import { resultsShelfCards } from "@/lib/results-shelf";
 import { countryLabel } from "@/lib/results-meta";
 import { safeHref } from "@/lib/safe-url";
@@ -192,7 +193,11 @@ export function buildResultsStructuredData(args: BuildStructuredDataArgs): Produ
     );
     const currency = cheapest.offer.currency.trim().toUpperCase();
     const price = roundPrice(cheapest.offer.price, currency);
-    const url = productPageUrl(origin, product.productId);
+    // REEA-1189 — point at the same canonical URL the sitemap lists when the
+    // live SKU is the catalog seed's own identity. Live-only SKUs keep their
+    // merge slug; a catalog-covered product must not advertise a second URL.
+    const canonicalId = catalogProductIdFor(product) ?? product.productId;
+    const url = productPageUrl(origin, canonicalId);
 
     const offers: OfferJsonLd[] = eligible.map(({ offer, observedAtMs }) => ({
       "@type": "Offer",

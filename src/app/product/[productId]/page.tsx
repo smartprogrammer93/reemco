@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { after } from "next/server";
 import ProductHero from "@/components/ProductHero";
@@ -5,14 +6,53 @@ import { startProductCollectionStaged } from "@/lib/collect/runner";
 import type { StagedProductCollection } from "@/lib/collect/runner";
 import { PRODUCTS } from "@/lib/feed";
 import { resolveProductIdentity } from "@/lib/product-identity";
+import {
+  canonicalProductIdForSlug,
+  humanizeProductSlug,
+  productTitleForId,
+} from "@/lib/product-canonical";
 import { resolveResultsMarket } from "@/lib/country";
+import { countryLabel } from "@/lib/results-meta";
+import { fill, getStrings } from "@/lib/i18n";
 import { marketViewScope, scopeProductsByMarket } from "@/lib/market";
 import { resolveRequestLocale } from "@/lib/i18n-server";
 import { sanitizeSearchQuery } from "@/lib/search-params";
+import { siteOrigin } from "@/lib/site-origin";
 
-export const metadata = {
-  title: "Product — Reemco",
-};
+/**
+ * REEA-1189 — a product page is an indexed URL too: it must carry a
+ * product-specific title/description and a self-referencing canonical that
+ * matches the one URL the sitemap lists. The canonical id folds a live merge
+ * slug onto its catalog identity when they name the same SKU, so the same
+ * product never advertises two URLs. Resolution here is slug/title-only (no
+ * live fan-out), so generateMetadata adds no render cost to the page.
+ */
+export async function generateMetadata({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ productId: string }>;
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}): Promise<Metadata> {
+  const { productId } = await params;
+  const { c, market } = await searchParams;
+  const locale = await resolveRequestLocale();
+  const country = resolveResultsMarket(market, c, undefined, undefined);
+  const canonicalId = canonicalProductIdForSlug(productId);
+  const title = productTitleForId(canonicalId) ?? humanizeProductSlug(productId);
+  const marketLabel = countryLabel(country, locale);
+  const strings = getStrings(locale);
+  return {
+    title: fill(strings.productMetaTitle, { title, country: marketLabel }),
+    description: fill(strings.productMetaDescription, {
+      title,
+      country: marketLabel,
+    }),
+    alternates: {
+      canonical: `${siteOrigin()}/product/${encodeURIComponent(canonicalId)}`,
+    },
+  };
+}
 
 // REEA-114: identities not in the catalog resolve through the live fan-out,
 // so the page must render per request (server builds), not be pre-baked.

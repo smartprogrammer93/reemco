@@ -131,6 +131,35 @@ describe("REEA-1168 Product/Offer structured data", () => {
     );
   });
 
+  it("advertises the sitemap's catalog URL when a live SKU is catalog-covered", () => {
+    const freshAt = new Date(NOW - 60 * 1000).toISOString();
+    const nodes = build([
+      product({
+        productId: "apple-iphone17-pro-256gb",
+        title: "Apple iPhone 17 Pro 256Gb Silver",
+        offers: [offer({ collectedAt: freshAt, price: 399.9 })],
+      }),
+    ]);
+    expect(nodes).toHaveLength(1);
+    // The merge slug is still the SKU; the URL consolidates on the catalog id
+    // the sitemap lists, so one product never advertises two addresses.
+    expect(nodes[0].sku).toBe("apple-iphone17-pro-256gb");
+    expect(nodes[0].url).toBe(`${ORIGIN}/product/iphone-17-pro`);
+  });
+
+  it("keeps the merge slug for a live-only SKU the catalog does not cover", () => {
+    const freshAt = new Date(NOW - 60 * 1000).toISOString();
+    const nodes = build([
+      product({
+        productId: "apple-iphone17-pro-512gb",
+        title: "Apple iPhone 17 Pro 512GB",
+        offers: [offer({ collectedAt: freshAt, price: 449.9 })],
+      }),
+    ]);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].url).toBe(`${ORIGIN}/product/apple-iphone17-pro-512gb`);
+  });
+
   it("describes the same page slice the shelf renders (page 2 is empty for one card)", () => {
     const freshAt = new Date(NOW - 60 * 1000).toISOString();
     const products = [product({ offers: [offer({ collectedAt: freshAt })] })];

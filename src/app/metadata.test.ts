@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
 import robots from "@/app/robots";
 import sitemap from "@/app/sitemap";
+import { generateMetadata as productMetadata } from "@/app/product/[productId]/page";
 import { generateMetadata as resultsMetadata } from "@/app/results/page";
 import { generateMetadata as searchMetadata } from "@/app/search/page";
 import * as robotsModule from "@/app/robots";
 import * as sitemapModule from "@/app/sitemap";
-import { SITEMAP_QUERY_SEEDS } from "@/lib/sitemap-queries";
+import {
+  SITEMAP_QUERY_SEEDS,
+  queriesWithResults,
+  selectSitemapQueries,
+} from "@/lib/sitemap-queries";
+import type { FunnelEvent } from "@/lib/events";
 
 /**
  * REEA-278 / REEA-1168 — guardrails for the metadata route handlers. These
@@ -102,5 +108,98 @@ describe("crawler routes follow the serving host (REEA-1051)", () => {
     // the Vercel alias after the runtime env was set).
     expect(sitemapModule.dynamic).toBe("force-dynamic");
     expect(robotsModule.dynamic).toBe("force-dynamic");
+  });
+});
+
+describe("sitemap query eligibility (REEA-1189)", () => {
+  const now = Date.parse("2026-11-26T03:00:00.000Z");
+  function event(
+    query: string,
+    count: number,
+    minutesAgo: number,
+  ): FunnelEvent {
+    return {
+      id: `${query}-${minutesAgo}`,
+      ts: new Date(now - minutesAgo * 60 * 1000).toISOString(),
+      type: "search_submitted",
+      query,
+      result_count: count,
+    };
+  }
+
+  it("keeps only queries whose latest search returned a result", () => {
+    const indexable = queriesWithResults(
+      [
+        event("iphone 17 pro", 4, 30),
+        event("zzzz-not-a-product-1156", 0, 20),
+        event("zzqx plumbus 9000", 0, 10),
+        // A query that recovered: the latest stamp wins.
+        event("coffee machine", 0, 60),
+        event("coffee machine", 3, 5),
+        // Outside the 24 h window does not count.
+        event("old query", 0, 60 * 30),
+      ],
+      now,
+    );
+    expect(indexable.has("iphone 17 pro")).toBe(true);
+    expect(indexable.has("coffee machine")).toBe(true);
+    expect(indexable.has("zzzz-not-a-product-1156")).toBe(false);
+    expect(indexable.has("zzqx plumbus 9000")).toBe(false);
+    expect(indexable.has("old query")).toBe(false);
+  });
+
+  it("always keeps curated seeds and drops zero-result trending queries", () => {
+    const indexable = queriesWithResults(
+      [event("zzqx plumbus 9000", 0, 5), event("air fryer", 2, 5)],
+      now,
+    );
+    const queries = selectSitemapQueries(
+      ["iPhone 17 Pro", "panadol"],
+      ["zzqx plumbus 9000", "air fryer", "iPhone 17 Pro"],
+      indexable,
+    );
+    expect(queries).toEqual(["iPhone 17 Pro", "panadol", "air fryer"]);
+  });
+
+  it("fail-open (null indexable set) keeps the curated and trending order", () => {
+    expect(
+      selectSitemapQueries(["iPhone 17 Pro"], ["coffee machine"], null),
+    ).toEqual(["iPhone 17 Pro", "coffee machine"]);
+  });
+});
+
+describe("product page canonical + title (REEA-1189)", () => {
+  it("seeded catalog ids self-canonicalize with a product-specific title", async () => {
+    const meta = await productMetadata({
+      params: Promise.resolve({ productId: "iphone-17-pro" }),
+      searchParams: Promise.resolve({}),
+    });
+    expect(meta.alternates?.canonical).toBe(
+      "https://ns539626.ip-144-217-72.net/product/iphone-17-pro",
+    );
+    expect(String(meta.title)).toContain("Apple iPhone 17 Pro 256GB");
+    expect(String(meta.description)).toContain("Apple iPhone 17 Pro 256GB");
+  });
+
+  it("a live merge slug folds onto the one catalog canonical", async () => {
+    const meta = await productMetadata({
+      params: Promise.resolve({ productId: "apple-iphone17-pro-256gb" }),
+      searchParams: Promise.resolve({}),
+    });
+    expect(meta.alternates?.canonical).toBe(
+      "https://ns539626.ip-144-217-72.net/product/iphone-17-pro",
+    );
+    expect(String(meta.title)).toContain("Apple iPhone 17 Pro 256GB");
+  });
+
+  it("a live-only SKU keeps its own canonical and a readable title", async () => {
+    const meta = await productMetadata({
+      params: Promise.resolve({ productId: "apple-iphone17-pro-512gb" }),
+      searchParams: Promise.resolve({}),
+    });
+    expect(meta.alternates?.canonical).toBe(
+      "https://ns539626.ip-144-217-72.net/product/apple-iphone17-pro-512gb",
+    );
+    expect(String(meta.title)).toContain("Apple iPhone 17 Pro 512GB");
   });
 });

@@ -1,7 +1,12 @@
 import type { MetadataRoute } from "next";
+import { readEvents } from "@/lib/event-store";
 import { PRODUCTS } from "@/lib/feed";
 import { siteOrigin } from "@/lib/site-origin";
-import { SITEMAP_QUERY_SEEDS } from "@/lib/sitemap-queries";
+import {
+  SITEMAP_QUERY_SEEDS,
+  queriesWithResults,
+  selectSitemapQueries,
+} from "@/lib/sitemap-queries";
 import { getTrendingChips } from "@/lib/trending-chips";
 
 // REEA-1051 — sitemap handlers are cached/prerendered at build by default, so
@@ -15,18 +20,16 @@ export const dynamic = "force-dynamic";
  *  top-query tail, enough long-tail coverage without an unbounded list. */
 const MAX_QUERY_URLS = 20;
 
-function dedupeQueries(queries: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of queries) {
-    const query = raw.trim();
-    if (!query) continue;
-    const key = query.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(query);
+/** REEA-1189 — the last-24 h tally decides which trending queries to submit;
+ *  a query whose latest search returned nothing is not an indexable page.
+ *  A feed failure leaves `null`, which keeps the curated seeds and skips the
+ *  filter rather than guessing. */
+async function indexableQuerySet(nowMs: number): Promise<Set<string> | null> {
+  try {
+    return queriesWithResults(await readEvents(), nowMs);
+  } catch {
+    return null;
   }
-  return out;
 }
 
 /**
@@ -63,7 +66,13 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   } catch {
     trending = [];
   }
-  const queries = dedupeQueries([...SITEMAP_QUERY_SEEDS, ...trending]).slice(0, MAX_QUERY_URLS);
+  // REEA-1189 — drop trending queries whose latest search returned zero
+  // results (test queries and dead ends must not be submitted for indexing).
+  const indexable = await indexableQuerySet(now.getTime());
+  const queries = selectSitemapQueries(SITEMAP_QUERY_SEEDS, trending, indexable).slice(
+    0,
+    MAX_QUERY_URLS,
+  );
   const queryPages: MetadataRoute.Sitemap = queries.map((query) => ({
     url: `${origin}/results?q=${encodeURIComponent(query)}`,
     lastModified: now,
