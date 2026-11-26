@@ -719,9 +719,22 @@ export default function ProductResultCard({
   const comparison = inMarketRetailers >= 2;
   const bestEffectiveClaim = comparison && bestKnown;
 
+  // REEA-1207 AC 7B-1/7B-6 — the rendered card carries its own measurement
+  // contract (`data-product-id` + `data-comparison`), derived from the ONE
+  // in-market comparison definition above. The committed category-depth probe
+  // reads these attributes instead of re-deriving merchants from prose, so it
+  // measures the cards the page actually painted (including snapshot replays
+  // that emit no JSON-LD) with the same integrity rule the weekly fold uses.
+  // Non-visual: attributes only, no class or layout change.
+  const comparisonAttrs = {
+    "data-product-id": product.productId,
+    "data-comparison": comparison ? "1" : "0",
+    "data-in-market-retailers": String(inMarketRetailers),
+  } as const;
+
   if (detail) {
     return (
-      <article className={`result-card${oos ? " is-oos" : ""}`}>
+      <article className={`result-card${oos ? " is-oos" : ""}`} {...comparisonAttrs}>
         <div className="flex flex-wrap items-center gap-2">
           {product.brand ? <RetailerChip>{product.brand}</RetailerChip> : null}
           {best && <StockDot state={best.inStock ? "in" : "out"} locale={locale} />}
@@ -821,6 +834,7 @@ export default function ProductResultCard({
     <article
       className={`rc-card result-card min-w-0${oos ? " is-oos" : ""}${cascadeIndex != null ? " pulse-cascade" : ""}`}
       style={cascadeIndex != null ? ({ "--cascade-index": cascadeIndex } as React.CSSProperties) : undefined}
+      {...comparisonAttrs}
     >
       <div className="rc-card-top">
         <span className="rc-card-cat">{product.brand || t.allProducts}</span>

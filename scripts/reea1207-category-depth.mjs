@@ -6,11 +6,16 @@
  * gate on (AC 7B-1 / AC 7B-2): of the unique `productId` cards the page
  * paints, how many carry offers from >=2 distinct IN-MARKET (Kuwait) retailers.
  *
- * No arguments, no browser. It reads the served head's own per-product JSON-LD
- * (`sku` = productId, `offers[].seller.name` = retailer), which the results
- * page emits from the SAME shelf snapshot it paints (`resultsShelfCards` in
- * `src/lib/results-shelf.ts`), so the measurement describes the page that was
- * actually served — no second fetch, no bundled data.
+ * No arguments, no browser. Primary source is the rendered card's own
+ * measurement contract — `data-product-id` / `data-comparison` /
+ * `data-in-market-retailers` on each `<article class="result-card">`, emitted
+ * by `ProductResultCard` from `comparisonMerchantCount` (the one in-market
+ * integrity definition the weekly depth fold also reads). That counts the cards
+ * the page actually painted, including snapshot replays. When a served head
+ * predates those attributes the probe falls back to the page's per-product
+ * JSON-LD (`sku`, `offers[].seller.name`) and labels the source, because the
+ * JSON-LD only describes cards carrying a fresh eligible offer (fold 7 painted
+ * 4 cards while its JSON-LD emitted none).
  *
  * Contract from the ticket:
  *   - the exact 11-query panel, no substitutions;
@@ -99,9 +104,42 @@ function productNodes(html) {
   return nodes;
 }
 
-/** AC 7B-1 arithmetic for one served page: unique productId denominator,
- *  numerator = cards with >=2 distinct in-market retailers. */
-function measure(html) {
+/**
+ * REEA-1207 — the rendered card's own measurement contract: `data-product-id`,
+ * `data-comparison` and `data-in-market-retailers` are emitted by
+ * `ProductResultCard` from `comparisonMerchantCount` (the one in-market
+ * integrity definition the weekly fold also reads). Reading them measures the
+ * cards the page actually painted, including snapshot replays that emit no
+ * JSON-LD, and never re-derives merchants from prose.
+ */
+function measureRendered(html) {
+  const tagRe = /<article\b[^>]*>/g;
+  const cards = new Map();
+  let m;
+  while ((m = tagRe.exec(html))) {
+    const tag = m[0];
+    const id = /data-product-id="([^"]+)"/.exec(tag)?.[1];
+    if (!id) continue;
+    const comparison = /data-comparison="1"/.test(tag);
+    const retailers = Number(/data-in-market-retailers="(\d+)"/.exec(tag)?.[1] ?? "0");
+    const multi = comparison || retailers >= 2 ? 1 : 0;
+    cards.set(id, Math.max(cards.get(id) ?? 0, multi));
+  }
+  const total = cards.size;
+  const multi = [...cards.values()].filter((v) => v === 1).length;
+  return {
+    source: "rendered-card-attributes",
+    cards: total,
+    multi,
+    ratio: total === 0 ? 0 : multi / total,
+    detail: [...cards.entries()].map(([sku, v]) => ({ sku, multi: v === 1 })),
+  };
+}
+
+/** Fallback for a served head that predates the card attributes: JSON-LD
+ *  nodes only describe cards carrying a fresh eligible offer, so replay cards
+ *  are invisible to it (fold 7 measured 0 cards while the page painted 4). */
+function measureJsonLd(html) {
   const nodes = productNodes(html);
   const cards = new Map();
   for (const node of nodes) {
@@ -114,11 +152,17 @@ function measure(html) {
   const total = cards.size;
   const multi = [...cards.values()].filter((set) => set.size >= 2).length;
   return {
+    source: "json-ld-fallback",
     cards: total,
     multi,
     ratio: total === 0 ? 0 : multi / total,
-    detail: [...cards.entries()].map(([sku, set]) => ({ sku, retailers: [...set] })),
+    detail: [...cards.entries()].map(([sku, set]) => ({ sku, multi: set.size >= 2 })),
   };
+}
+
+function measure(html) {
+  const rendered = measureRendered(html);
+  return rendered.cards > 0 ? rendered : measureJsonLd(html);
 }
 
 async function readStamp() {
@@ -181,24 +225,16 @@ async function main() {
         byLocale[locale] = measure(body);
         await sleep(QUERY_GAP_MS);
       }
-      // The AC's panel basis is EN+AR at 375: a query's card population is the
-      // union of both locale renders, deduped by productId (the shelf is the
-      // same snapshot; the locale only changes chrome/copy).
-      const union = new Map();
-      for (const locale of LOCALES) {
-        const m = byLocale[locale];
-        if (!m) continue;
-        for (const row of m.detail) {
-          const set = union.get(row.sku) || new Set();
-          for (const r of row.retailers) set.add(r);
-          union.set(row.sku, set);
-        }
-      }
-      const cards = union.size;
-      const multi = [...union.values()].filter((set) => set.size >= 2).length;
+      // The AC's panel basis is EN+AR at 375: each locale render is one served
+      // page and is counted as such (its own unique productId denominator), so
+      // the panel figure is the aggregate over both locales rather than a
+      // union that would let one locale inflate the other's denominator.
+      const cards = LOCALES.reduce((n, l) => n + (byLocale[l]?.cards ?? 0), 0);
+      const multi = LOCALES.reduce((n, l) => n + (byLocale[l]?.multi ?? 0), 0);
       const ratio = cards === 0 ? 0 : multi / cards;
       totalCards += cards;
       totalMulti += multi;
+      const sources = LOCALES.map((l) => byLocale[l]?.source).filter(Boolean);
       perQuery.push({
         query,
         cards,
@@ -206,9 +242,11 @@ async function main() {
         ratio,
         en: byLocale.en ? { cards: byLocale.en.cards, multi: byLocale.en.multi } : null,
         ar: byLocale.ar ? { cards: byLocale.ar.cards, multi: byLocale.ar.multi } : null,
+        source: sources.length ? [...new Set(sources)].join("+") : "none",
       });
       console.log(
         `  ${query}: cards ${cards} · multi-retailer ${multi} · ${pct(ratio)}` +
+          ` [${perQuery[perQuery.length - 1].source}]` +
           (cards > 0 && ratio >= CARD_GATE ? "  [≥40%]" : ""),
       );
     }
