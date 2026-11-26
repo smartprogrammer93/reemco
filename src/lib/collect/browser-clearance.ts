@@ -319,7 +319,20 @@ async function navigate(
           timeout: CONTENT_WAIT_MS,
         })
         .catch(() => undefined);
-      return { html: await page.content() };
+      const html = await page.content();
+      // REEA-1221 — a page that never painted the lane's selector is an arg-set
+      // verdict too, not an answer. Measured on the self-hosted box 2026-11-26
+      // once the PID ceiling was lifted: the package's --single-process set
+      // launched and navigated, but after 12 s the body was still the 4.7 KB
+      // "Just a moment" shell (`painted:false`). Climb the ladder and try the
+      // full browser shape instead of handing the shell back.
+      const token = contentSelector.replace(/^[.#]/, "");
+      if (!html.includes(token) && attempt < maxAttempts - 1) {
+        lastFailure = "browser painted no content for the lane's selector";
+        if (argSetIndex < 2) argSetIndex += 1;
+        continue;
+      }
+      return { html };
     } catch (err) {
       lastFailure = err instanceof Error ? err.message : String(err);
       // A dead browser is not going to answer this attempt; the next loop
