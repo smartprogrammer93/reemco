@@ -13,14 +13,15 @@
     "report": "node --experimental-strip-types scripts/weekly-report.ts"
   },
   "dependencies": {
+    "@sparticuz/chromium": "^149.0.0",
     "jsdom": "^31.0.1",
     "next": "16.4.6",
+    "playwright-core": "^1.63.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@sparticuz/chromium": "^149.0.0",
     "@tailwindcss/postcss": "^4",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^26",
@@ -28,7 +29,6 @@
     "@types/react-dom": "^19",
     "eslint": "^10.15.0",
     "eslint-config-next": "16.4.6",
-    "playwright-core": "^1.63.0",
     "tailwindcss": "^4",
     "typescript": "^6",
     "vitest": "^5.0.0"

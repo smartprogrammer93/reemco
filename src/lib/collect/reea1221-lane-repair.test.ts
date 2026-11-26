@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { binsinaHits } from "@/lib/collect/live-search";
+import { binsinaHits, nextStoreHits } from "@/lib/collect/live-search";
+import { browserTierEnabled } from "@/lib/collect/browser-clearance";
 
 /**
  * REEA-1221 — lane repair guardrails. Each case pins one measured cause the
@@ -53,5 +54,32 @@ describe("REEA-1221 lane repair", () => {
     const hits = binsinaHits(html, "panadol");
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({ price: 18.5, currency: "AED" });
+  });
+
+  it("Next Store reads the browser-painted Magento grid, not the cart button label", () => {
+    // Measured live 2026-11-26: the real-browser clearance tier paints the
+    // grid (13 priced cards on `laptop`), but the card carries a
+    // `title="Add to Bag"` cart control the old "first title= in segment"
+    // read adopted, which the coverage gate then rejected.
+    const html =
+      '<a class="product-item-link" href="https://www.nextstore.com.kw/razer-laptop-sleeve.html">' +
+      "Razer Laptop Sleeve 16</a>" +
+      '<span data-price-amount="34" data-price-type="finalPrice"></span>' +
+      '<button title="Add to Bag">Add to Bag</button>';
+    const hits = nextStoreHits(html, "laptop");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({
+      merchant: "Next Store",
+      title: "Razer Laptop Sleeve 16",
+      price: 34,
+      currency: "KWD",
+    });
+  });
+
+  it("keeps the browser clearance tier out of the hermetic test run", () => {
+    // The unit suite must not pay a Chromium launch; the self-hosted runtime
+    // and local dev still run it (BROWSER_CLEARANCE=on/off overrides either way).
+    expect(process.env.NODE_ENV).toBe("test");
+    expect(browserTierEnabled()).toBe(false);
   });
 });

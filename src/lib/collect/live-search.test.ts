@@ -1767,8 +1767,11 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     for (const merchant of ["Xcite", "Blink", "Eureka", "Sultan Center", "Jarir", "Amazon.eg"]) {
       expect(telemetry.failures[merchant] ?? 0, `${merchant} has no failure`).toBe(0);
     }
+    // REEA-1221 — Next Store rejoined the fan-out, so a hop that never paints
+    // its grid now settles as a blocked failure too (the honest count for a
+    // lane that delivered nothing), never as a quiet zero.
     expect(Object.keys(telemetry.failures).sort()).toEqual(
-      ["BinSina", "Bomai", "Hobby Center", "Nest", "YasO"],
+      ["BinSina", "Bomai", "Hobby Center", "Nest", "Next Store", "YasO"],
     );
   });
 

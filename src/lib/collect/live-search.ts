@@ -34,6 +34,9 @@ import {
 // REEA-1009 — bet #2 server-side flag (S1a reads it at dispatch time; OFF is
 // the pre-bet serve path per spec §9).
 import { bet2FailFastEnabled } from "@/lib/collect/bet2-flag";
+// REEA-1221 — real-browser clearance tier for the lanes whose origin sits
+// behind a JavaScript challenge no plain hop can solve (Next Store).
+import { browserClearedHtml } from "@/lib/collect/browser-clearance";
 import {
   defaultQueryCache,
   queryCacheKey,
@@ -1363,6 +1366,15 @@ export async function jsdClearedHtml(fetchImpl: FetchImpl, url: string): Promise
     // On the checkpoint shapes here the solver always ships inline; a
     // script-less body is just a page or a stub, worth no jsdom round.
     if (!/<script/i.test(shell)) return shell;
+    // REEA-1221 — a body that carries no Cloudflare challenge marker cannot be
+    // waiting on a clearance cookie, so the 250 ms poll below would just burn
+    // its whole window on a page that is already the answer (measured: a
+    // 4 s stall on every non-challenge HTML hop that reached this tier). Only
+    // the challenge shapes pay the poll; anything else returns immediately.
+    const looksChallenged = /cf-error-details|Just a moment|Attention Required|cf-challenge|challenge-platform|Enable JavaScript and cookies/i.test(
+      shell,
+    );
+    if (!looksChallenged) return shell;
     const dom = new JSDOM(shell, {
       url,
       runScripts: "dangerously",
@@ -1933,24 +1945,36 @@ export const COLLECTORS: RetailerCollector[] = [
     merchant: "Next Store",
     country: "KW",
     collect: async (query, fetchImpl) => {
-      // Magento SSR search page behind a Cloudflare managed challenge (verified
-      // live 2026-09-08): the interstitial steps aside within the hop window —
-      // the verified-crawler identity clears the CF rules on the first attempt,
-      // the scripted-browser set follows on odd attempts — so this hop rides
-      // fetchThroughChallenge's bounded identity-alternating retry without its
-      // own header set. The attempt window mirrors eureka's two-step hop — the
-      // challenge handshake needs a little more room than a plain API answer.
-      // REEA-369 addendum: cache-first replay (challengeHtmlHop) so a cold
-      // fetch replays the last cleared SSR page instead of recording a
-      // zero-hit note mid-handshake. Measured 2026-09-09 from a cold
-      // datacenter hop: the verified-crawler identity answers this zone in
-      // ~0.3 s (plain accept-only does NOT here — unlike pckuwait — so the
-      // rotation order inside fetchThroughChallenge stands as-is).
-      const html = await challengeHtmlHop(
-        fetchImpl,
-        `https://www.nextstore.com.kw/catalogsearch/result/index/?q=${encodeURIComponent(query)}`,
+      // Magento SSR search page behind a Cloudflare managed challenge. REEA-1221
+      // — re-measured 2026-11-26 from both egresses: every plain hop shape
+      // (cache replay, verified-crawler identity, scripted-browser set, pinned
+      // anycast pair) answers HTTP 403 with the 3.2 KB "Just a moment..."
+      // shell, and the jsdom clearance tier polls 4.5 s and still lands on the
+      // same shell — Cloudflare binds the clearance to the TLS fingerprint, so
+      // a cookie replayed into `fetch` does not clear it. A real Chromium does
+      // (13 priced cards on `laptop`), so the ladder now ends on the shared
+      // browser tier. Cheap hops stay first: they answer instantly on the
+      // rounds where the challenge has already stepped aside, and the browser
+      // tier is KV-replayed per URL so a repeat query pays nothing.
+      const searchUrl = `https://www.nextstore.com.kw/catalogsearch/result/index/?q=${encodeURIComponent(query)}`;
+      const hasGrid = (html: string): boolean =>
+        html !== "" &&
+        !/Just a moment\.\.\.|Sorry, you have been blocked|cf-error-details/i.test(html) &&
+        html.includes("product-item-link");
+      const html = await challengeHtmlHop(fetchImpl, searchUrl).catch(() => "");
+      if (hasGrid(html)) return nextStoreHits(html, query);
+      // REEA-1221 — no jsdom round here: measured 2026-11-26, jsdom polls its
+      // whole 4 s window on this zone and still hands back the "Just a moment"
+      // shell (the managed challenge wants a real TLS/JS client), so the ladder
+      // goes straight to the browser tier that does clear it.
+      const painted = await browserClearedHtml(searchUrl, ".product-item-link");
+      if (hasGrid(painted)) return nextStoreHits(painted, query);
+      // A lane that never got a grid is a coverage loss, not an "answered
+      // empty": settle it as a blocked failure so the counter stops reading 0
+      // for a lane that delivered nothing (REEA-1207 AC 7B-3).
+      throw new BlockedLaneError(
+        "blocked: no usable payload from any Next Store hop (challenge shell, no Magento grid)",
       );
-      return nextStoreHits(html, query);
     },
   },
   // REEA-901 — the PC Kuwait lane is RETIRED from the live rotation: Cloudflare

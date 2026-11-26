@@ -46,7 +46,15 @@ const nextConfig: NextConfig = {
   // and infra/scripts/verify.sh can gate both (`Server` is already suppressed at
   // the edge). Pinned by src/next-config.test.ts.
   poweredByHeader: false,
-  serverExternalPackages: ["jsdom"],
+  serverExternalPackages: ["jsdom", "playwright-core", "@sparticuz/chromium"],
+  // REEA-1221 — the browser clearance tier (collect/browser-clearance.ts) runs
+  // a real Chromium from `@sparticuz/chromium`, whose executable is extracted
+  // from `bin/*.br` at run time. Next's tracer follows the JS imports but not
+  // that package-relative binary path, so the standalone image would launch
+  // nothing without an explicit include.
+  outputFileTracingIncludes: {
+    "/*": ["./node_modules/@sparticuz/chromium/bin/**/*"],
+  },
   headers: async () => {
     const windowHeaders = sharedWindowHeaders();
     return RESULTS_PATHS.map((source) => ({

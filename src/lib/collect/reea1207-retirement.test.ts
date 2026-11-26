@@ -40,16 +40,18 @@ describe("REEA-1207 — no lane is retired for failing", () => {
     for (const lane of ["Lulu Hypermarket", "BinSina", "Yousifi", "YasO", "Hobby Center", "Bomai"]) {
       expect(DEFAULT_RETIRED_LANES).not.toContain(lane);
     }
-    // Next Store stays retired on its own evidence (REEA-1078 S2).
-    expect(DEFAULT_RETIRED_LANES).toContain("Next Store");
+    // REEA-1221 — Next Store was re-admitted too (its collector now clears
+    // the challenge through the browser tier), so the static list is empty.
+    expect(DEFAULT_RETIRED_LANES).not.toContain("Next Store");
   });
 
   it("dispatches a lane a canary readmitted, and keeps a dynamic retirement out", async () => {
     resetDiscoveryCache();
     const seenDefault: string[] = [];
     await collectLiveResults("dyson", { fetchImpl: recordingFetch(seenDefault) as never, snapshots: false });
-    // Next Store is statically retired: never contacted by default.
-    expect(seenDefault.some((u) => u.includes("nextstore"))).toBe(false);
+    // REEA-1221 — no lane is statically retired any more, so Next Store is
+    // contacted on a default run.
+    expect(seenDefault.some((u) => u.includes("nextstore"))).toBe(true);
 
     const seenReadmitted: string[] = [];
     await collectLiveResults("dyson", {

@@ -1,8 +1,9 @@
 /**
  * REEA-1078 S2 — dead-lane retirement, the 7-day auto-retire rule and canary
- * re-admission. These pin the policy boundaries the AC names: Next Store is
- * out of the default fan-out, a lane that failed every attempt for 7 days is
- * retired automatically, and only N consecutive canary successes return it.
+ * re-admission. These pin the policy boundaries the AC names: a lane that
+ * failed every attempt for 7 days is retired automatically, and only N
+ * consecutive canary successes return it. REEA-1221 emptied the code-level
+ * retirement list — no lane is skipped by hand any more.
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SharedKv } from "@/lib/collect/kv";
@@ -58,9 +59,13 @@ function laneWithStreak(startedAt: number) {
   };
 }
 
-describe("DEFAULT_RETIRED_LANES (AC-6)", () => {
-  it("retires Next Store at the code level, with the lane still declared elsewhere", () => {
-    expect(DEFAULT_RETIRED_LANES).toContain("Next Store");
+describe("DEFAULT_RETIRED_LANES (AC-6 / REEA-1221)", () => {
+  it("retires no lane at the code level — every adapter is dispatched", () => {
+    // REEA-1221: the CEO directive is "fix it, not kill it". Next Store's old
+    // static retirement is gone now that its collector clears the challenge
+    // through the browser tier; only the 7-day rule may retire a lane.
+    expect(DEFAULT_RETIRED_LANES).toEqual([]);
+    expect(DEFAULT_RETIRED_LANES).not.toContain("Next Store");
   });
 });
 
@@ -187,10 +192,20 @@ describe("maybeRunDailyLaneHealth — the scheduled pass", () => {
     // Seed a failing lane into the store first — the run above had no evidence.
     expect(summary?.retiredNow).toEqual([]);
 
+    // REEA-1221 — the static list is empty, so a retired lane can only come
+    // from evidence now. Seed Next Store as already retired (its own historic
+    // 100% failure) alongside the 7-day Lulu evidence; both must be canaried.
     const seeded = fakeKv({
       [LANE_HEALTH_KEY]: JSON.stringify({
         version: 1,
-        lanes: { Lulu: laneWithStreak(now - 8 * DAY) },
+        lanes: {
+          Lulu: laneWithStreak(now - 8 * DAY),
+          "Next Store": {
+            ...laneWithStreak(now - 8 * DAY),
+            retiredAt: new Date(now - DAY).toISOString(),
+            reason: "static retirement (no answer from this egress)",
+          },
+        },
       }),
     });
     const run = await maybeRunDailyLaneHealth({
@@ -203,7 +218,7 @@ describe("maybeRunDailyLaneHealth — the scheduled pass", () => {
       ],
     });
     expect(run?.retiredNow).toContain("Lulu");
-    expect(run?.canaried).toContain("Next Store"); // static retirement canaried
+    expect(run?.canaried).toContain("Next Store"); // retired evidence canaried
     expect(run?.canaried).toContain("Lulu");
     expect(canaries).toContain("Next Store");
     const stored = JSON.parse(seeded.dump()[LANE_HEALTH_KEY]) as { lanes: Record<string, { retiredAt?: string }> };
@@ -215,7 +230,20 @@ describe("maybeRunDailyLaneHealth — the scheduled pass", () => {
   it("re-admits a retired lane only after the configured consecutive canaries", async () => {
     resetLaneHealthRunState();
     const start = Date.parse("2026-11-23T00:00:00.000Z");
-    const kv = fakeKv();
+    // REEA-1221 — no static retirement exists, so the lane is seeded as
+    // retired on its own evidence; the canary ladder is what returns it.
+    const kv = fakeKv({
+      [LANE_HEALTH_KEY]: JSON.stringify({
+        version: 1,
+        lanes: {
+          "Next Store": {
+            ...laneWithStreak(start - 8 * DAY),
+            retiredAt: new Date(start - DAY).toISOString(),
+            reason: "no successful answer for 7 days",
+          },
+        },
+      }),
+    });
     const targets = [{ merchant: "Next Store", canary: async () => true }];
     const seen: (string[] | undefined)[] = [];
     for (let day = 0; day <= LANE_CANARY_SUCCESS_STREAK; day++) {

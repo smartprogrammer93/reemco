@@ -34,23 +34,21 @@ import { getSharedKv } from "@/lib/collect/kv";
  * that retired them. They stay declared in COLLECTORS (the adapter and its
  * parser stay tested) and are filtered out at dispatch.
  *
- * "Next Store": Magento SSR search behind a Cloudflare managed challenge. From
- * the self-hosted egress the zone answers every hop shape with a 403, and the
- * lane recorded 1,338/1,338 failures in W47 and 365/365 in W48 (REEA-1074 F4).
- * Re-admission tripwire: `/api/echo` `zones["www.nextstore.com.kw"]` reports a
- * real 200 answer, or the daily canary succeeds `LANE_CANARY_SUCCESS_STREAK`
- * times in a row — the runner re-admits automatically on the latter.
+ * REEA-1221 (2026-11-26) — this list is now EMPTY, and that is the point of
+ * the CEO directive on REEA-1216 ("it needs to be fixed. not killed."): no lane
+ * is skipped at the code level any more. The one static retirement that stood
+ * here was Next Store (Magento SSR behind a Cloudflare managed challenge,
+ * 1,338/1,338 failures in W47 and 365/365 in W48 — REEA-1074 F4). It was
+ * re-admitted because its collector now ends on the real-browser clearance
+ * tier, which clears the challenge and paints the Magento grid (12 priced
+ * cards on `laptop`, measured 2026-11-26).
  *
- * REEA-1207 (Bet 7B, 2026-11-26) — the six zero-offer lanes (Lulu
- * Hypermarket, BinSina, Yousifi, YasO, Hobby Center, Bomai: 19,447 attempts
- * each, 0 offers in W48) are NOT retired. The CEO directive on REEA-1216 is
- * explicit: "it needs to be fixed. not killed." The repair lives on
- * REEA-1221; 7B keeps only the honest counting and the coverage line. A lane
- * still leaves the fan-out only when the 7-day rule or the canary says so.
+ * REEA-1207 (Bet 7B) — the six zero-offer lanes (Lulu Hypermarket, BinSina,
+ * Yousifi, YasO, Hobby Center, Bomai: 19,447 attempts each, 0 offers in W48)
+ * were already not retired. A lane still leaves the fan-out only when the
+ * 7-day every-attempt-failed rule or the canary says so.
  */
-export const DEFAULT_RETIRED_LANES: readonly string[] = [
-  "Next Store",
-];
+export const DEFAULT_RETIRED_LANES: readonly string[] = [];
 
 /** A lane must have failed every attempt for at least this many days. */
 export const LANE_RETIRE_WINDOW_DAYS = 7;
