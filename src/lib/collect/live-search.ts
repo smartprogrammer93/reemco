@@ -2194,48 +2194,60 @@ export const COLLECTORS: RetailerCollector[] = [
       return nahdiHits(await res.text(), query);
     },
   },
-  // REEA-1067 — Ounass is RETIRED from the live rotation: from the self-hosted
-  // egress 144.217.72.236 the hop answers "fetch failed", and from a second
-  // egress (the coder container) it lands on the Cloudflare "Just a moment"
-  // challenge — 0 hits on every sample in both places (REEA-1051 Part 1,
-  // re-probed 2026-11-22 for REEA-1067). The adapter itself is unchanged and
-  // answered on Vercel, so this is an egress-reputation decision, not code
-  // drift: the lane is kept in git history, not in the rotation, so it stops
-  // spending a hop window on a guaranteed zero.
-  // Re-admission tripwire: restore this collector from git history (this
-  // commit) once an egress answers `http://kuwait.ounass.com/?q=…` with the
-  // `/?q=` island — probe it with
-  //   node scripts/reea1051-adapter-probe.mjs https://ns539626.ip-144-217-72.net
-  // and look for merchant "Ounass" in `samples[].notes[]` with hits > 0 and no
-  // error. The parser (`ounassHits`) and its unit test stay, so the restore is
-  // the collector block + the COVERAGE_ORDER entry only.
-  //
-  // {
-  //   merchant: "Ounass",
-  //   country: "KW",
-  //   collect: async (query, fetchImpl) => {
-  //     // REEA-378 — the scripted-tolerant shape measured from the coder edge
-  //     // 2026-09-09: plain HTTP GET on the working `/?q=` route answers ~177 KB
-  //     // with the browser-shaped Accept combo (https lands on the CF
-  //     // interstitial; `/search` and `/women/search` render the styled error
-  //     // shell), and the served island carries the KWD label verbatim. Offers
-  //     // hydrate client-side behind the island, so the hop contributes what
-  //     // the server actually stamps and the counts are reported as measured.
-  //     const res = await fetchChecked(
-  //       fetchImpl,
-  //       `http://kuwait.ounass.com/?q=${encodeURIComponent(query)}`,
-  //       {
-  //         headers: {
-  //           accept: "text/html,application/xhtml+xml",
-  //           "accept-language": "en-US,en;q=0.9",
-  //           "user-agent": "Mozilla/5.0",
-  //         },
-  //       },
-  //       AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
-  //     );
-  //     return ounassHits(await res.text(), query);
-  //   },
-  // },
+  {
+    merchant: "Ounass",
+    country: "KW",
+    collect: async (query, fetchImpl) => {
+      // REEA-1221 — re-admitted. REEA-1067 had retired it on "0 hits from this
+      // egress", but the re-probe on 2026-11-26 shows the host answers again:
+      // `https://kuwait.ounass.com/?q=<term>` returns HTTP 200 / ~184 KB (the
+      // `/?q=` route is the one the storefront's own country links use; every
+      // `/search`-shaped route answers 404 on this host). The `?q=` island is
+      // the SSR shell — its only JSON-LD block is an `OnlineStore` record and
+      // it carries no `"name"`+numeric `"price"` pairs, because Ounass hydrates
+      // its product grid client-side. So this lane contributes what the server
+      // actually stamps (the shared parser's contract) and, when the island
+      // carries no product record at all, answers an explicit no-match instead
+      // of a blocked zero — the coverage line must not call a reachable host
+      // unreachable.
+      //
+      // The reader relay is the last hop for the rounds where the plain fetch
+      // lands on the Cloudflare interstitial: it renders the page from its own
+      // egress and is KV-cached per URL.
+      const url = `https://kuwait.ounass.com/?q=${encodeURIComponent(query)}`;
+      const isShell = (html: string): boolean =>
+        html === "" ||
+        /cf-error-details|Just a moment|Attention Required|Sorry, you have been blocked/i.test(html);
+      const bodies: string[] = [];
+      try {
+        const res = await fetchChecked(
+          fetchImpl,
+          url,
+          {
+            headers: {
+              accept: "text/html,application/xhtml+xml",
+              "accept-language": "en-US,en;q=0.9",
+              "user-agent": "Mozilla/5.0",
+            },
+          },
+          AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
+        );
+        bodies.push(await res.text());
+      } catch {
+        // The relay below still gets its own window.
+      }
+      for (const body of bodies) {
+        if (isShell(body)) continue;
+        return ounassHits(body, query);
+      }
+      const relayed = await jinaClearedHtml(url, "OnlineStore");
+      if (!isShell(relayed)) return ounassHits(relayed, query);
+      throw new BlockedLaneError(
+        "blocked: no usable payload from any Ounass hop (challenge shell, no SSR island)" +
+          (browserLastError() ? ` [relay: ${browserLastError().slice(0, 120)}]` : ""),
+      );
+    },
+  },
   {
     merchant: "Danube Home",
     country: "KW",

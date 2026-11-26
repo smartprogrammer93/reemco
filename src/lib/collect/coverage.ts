@@ -137,10 +137,11 @@ export const COVERAGE_ORDER = [
   "Yousifi",
   "Aster Pharmacy",
   "Nahdi",
-  // REEA-1067 — "Ounass" retired from the live rotation (0 hits on every
-  // sample from the self-hosted egress; restore path in live-search.ts). The
-  // parity pin keeps this list == COLLECTORS order, so the retired name leaves
-  // with its collector.
+  // REEA-1221 — "Ounass" is back in the rotation: its host answers again
+  // (HTTP 200 on the storefront's own `/?q=` route) and its collector is
+  // restored in live-search.ts. The parity pin keeps this list == COLLECTORS
+  // order, so the name returns with its collector.
+  "Ounass",
   "Danube Home",
   // REEA-557 first wave — appended in COLLECTORS declaration order so the
   // parity pin in live-search.test.ts keeps COVERAGE_ORDER == adapter order.
