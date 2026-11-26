@@ -187,6 +187,15 @@ The stack is capability-minimal and its infrastructure images are immutable:
 `edge` is proxy↔app; `data` is app↔redis and is `internal: true` (no gateway).
 The proxy cannot resolve `redis`, and Valkey is not reachable from the edge.
 
+**Browser tier runtime (REEA-1226).** The app container also runs headless
+Chromium for the REEA-1221 browser-clearance tier. Its `pids_limit` is 2048
+(one Chromium is ~59 threads; the old 512 ceiling was exhausted and `clone()`
+failed with `pthread_create: Resource temporarily unavailable`), and the runtime
+image installs `libsqlite3-0` because Chromium's NSS certificate store aborts
+every navigation without `libsqlite3.so.0`. `assert-containers.sh` asserts both
+the pids ceiling and the presence of that library on the running container.
+`GET /api/echo` reports `browser.stages.launched` / `gotoOk` as the live probe.
+
 Two invariants are enforced automatically, so a regression cannot ship silently:
 
 - CI: `infra/scripts/assert-compose-hardening.sh` renders

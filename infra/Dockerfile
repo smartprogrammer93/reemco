@@ -41,6 +41,16 @@ ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0 \
     NEXT_TELEMETRY_DISABLED=1
 
+# REEA-1226 — the REEA-1221 browser-clearance tier runs headless Chromium in
+# this container. Chromium's NSS certificate store needs libsqlite3, which
+# bookworm-slim does not ship: without it every navigation aborts with
+# "FATAL: nss_util.cc ... libsqlite3.so.0: cannot open shared object file"
+# (SIGTRAP) and the tier silently degrades. Installed here so the dependency
+# ships with the image instead of relying on a host package.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libsqlite3-0 \
+ && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --system --gid 1001 reemco \
  && useradd --system --uid 1001 --gid reemco --home-dir /app --shell /usr/sbin/nologin reemco \
  && mkdir -p /data/events /data/metrics /data/collect \
@@ -50,6 +60,11 @@ WORKDIR /app
 COPY --from=build --chown=reemco:reemco /app/.next/standalone ./
 COPY --from=build --chown=reemco:reemco /app/.next/static ./.next/static
 COPY --from=build --chown=reemco:reemco /app/public ./public
+
+# REEA-1226 — HOME is /app; give the service user a writable home so Chromium
+# can create its persistent NSS database (/app/.local/share/pki/nssdb) instead
+# of logging "Failed to create ... directory" on every launch.
+RUN mkdir -p /app/.local/share && chown -R reemco:reemco /app/.local
 
 USER reemco
 EXPOSE 3000

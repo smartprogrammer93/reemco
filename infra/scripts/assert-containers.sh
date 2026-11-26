@@ -135,6 +135,21 @@ for svc in redis proxy app; do
   expect_pids "$svc" "$want_pids" "$cid"
   expect_networks "$svc" "$want_nets" "$cid"
 
+  # REEA-1226 — the browser-clearance tier's runtime dependency. Chromium's
+  # NSS aborts on the first navigation when libsqlite3.so.0 is absent
+  # ("FATAL: nss_util.cc ... cannot open shared object file", SIGTRAP), so the
+  # tier silently degrades. The runtime image installs libsqlite3-0; assert it
+  # is present on the RUNNING app container so a trimmed image cannot regress.
+  if [ "$svc" = "app" ]; then
+    if docker exec "$cid" sh -c \
+      'ls /usr/lib/x86_64-linux-gnu/libsqlite3.so.0 >/dev/null 2>&1 || ldconfig -p 2>/dev/null | grep -q libsqlite3.so.0' \
+      >/dev/null 2>&1; then
+      ok "app: Chromium NSS dependency libsqlite3.so.0 is present"
+    else
+      fail "app: libsqlite3.so.0 missing — Chromium NSS cannot initialise (REEA-1226)"
+    fi
+  fi
+
   # Running artifact must be exactly the digest-pinned image from the file.
   case "$svc" in
     redis|proxy)
