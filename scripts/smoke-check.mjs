@@ -52,6 +52,46 @@ function step(n, name, fn) {
   );
 }
 
+/**
+ * REEA-1133 interaction — the live-fanout page gate counts every /results and
+ * /product GET per client IP (60/min) and sheds scripted bursts with 429 +
+ * Retry-After. This smoke IS such a burst: the 20-query timing probe plus the
+ * browser pass, and the product prefetches those page loads trigger, can spend
+ * the window before the functional steps finish. A 429 here is the gate doing
+ * its job, not the build failing, so wait out the advertised window and retry
+ * once. Any other non-2xx still fails the deploy.
+ *
+ * Measured: the 641c2b7 deploy failed step 7 twice with "results page returned
+ * HTTP 429" while steps 1-6 were green; the rollback then served the previous
+ * tag, so every downstream check measured the wrong build.
+ */
+const GATE_RETRY_CAP_MS = 65_000;
+
+function gateRetryMs(retryAfter) {
+  const seconds = Number(retryAfter);
+  return Math.min(GATE_RETRY_CAP_MS, Math.max(1, Number.isFinite(seconds) && seconds > 0 ? seconds : 60)) * 1000;
+}
+
+/** Fetch a live-fanout page, waiting out the page gate if it answers 429. */
+async function fetchPage(url, init) {
+  const first = await fetch(url, init);
+  if (first.status !== 429) return first;
+  const wait = gateRetryMs(first.headers.get("retry-after"));
+  console.log(`  INFO 429 on ${url} — page gate engaged, retrying in ${Math.round(wait / 1000)}s`);
+  await new Promise((resolve) => setTimeout(resolve, wait));
+  return fetch(url, init);
+}
+
+/** Navigate a Playwright page to a live-fanout address, waiting out a 429. */
+async function gotoPage(page, url, opts) {
+  const first = await page.goto(url, opts);
+  if (!first || first.status() !== 429) return first;
+  const wait = gateRetryMs(first.headers()["retry-after"]);
+  console.log(`  INFO 429 on ${url} — page gate engaged, retrying in ${Math.round(wait / 1000)}s`);
+  await page.waitForTimeout(wait);
+  return page.goto(url, opts);
+}
+
 // @sparticuz/chromium bundles its shared libraries (libnspr4 etc.) in
 // al2023.tar.br but only wires them up on Amazon Linux. Extract them and point
 // LD_LIBRARY_PATH at the result before spawning the browser. The tarball is
@@ -117,7 +157,7 @@ await step(1, "home page loads (200, no fatal render error)", async () => {
 });
 
 await step(2, `search "${FIXTURE_QUERY}" returns results`, async () => {
-  const resp = await page.goto(`${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`, { waitUntil: "load" });
+  const resp = await gotoPage(page, `${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`, { waitUntil: "load" });
   if (!resp || resp.status() !== 200) throw new Error(`results returned HTTP ${resp ? resp.status() : "no response"}`);
   // Wait out client-side hydration: real cards replace the aria-hidden skeletons.
   await page.waitForFunction(
@@ -137,7 +177,7 @@ await step(3, "result card has a working click-out link", async () => {
   const offerHref = await page.$(".result-card a[target='_blank'][rel*='noopener'], .result-card a[href^='http']");
   if (!productHref && !offerHref) throw new Error("no click-out link (product or offer) on the result card");
   if (productHref) {
-    const resp = await page.goto(`${BASE}${productHref}`, { waitUntil: "load" });
+    const resp = await gotoPage(page, `${BASE}${productHref}`, { waitUntil: "load" });
     if (!resp || resp.status() !== 200) throw new Error(`product page ${productHref} returned HTTP ${resp ? resp.status() : "no response"}`);
     return `product page ${productHref} resolves HTTP 200${offerHref ? " (+ offer link present)" : ""}`;
   }
@@ -153,7 +193,7 @@ await step(3, "result card has a working click-out link", async () => {
 // negative that fails every deploy despite healthy cards.
 await step(4, "results surface last-verified freshness (REEA-65)", async () => {
   const t0 = Date.now();
-  await page.goto(`${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`, { waitUntil: "load" });
+  await gotoPage(page, `${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`, { waitUntil: "load" });
   await page.waitForSelector(".result-card", { timeout: 25000 });
   const html = await page.content();
   // REEA-283/REEA-254/REEA-1092 chip copy renders uppercase with the minute
@@ -201,7 +241,7 @@ await step(5, "375px mobile pass: no horizontal overflow, CTAs in viewport (REEA
   const pages = ["/", `/results?q=${encodeURIComponent(FIXTURE_QUERY)}`];
   // Include one real product detail page when step 3 found its href.
   try {
-    const detailHref = await mobile.goto(`${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`, { waitUntil: "load" }).then(() =>
+    const detailHref = await gotoPage(mobile, `${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`, { waitUntil: "load" }).then(() =>
       mobile.$eval(".result-card a[href^='/product/']", (a) => a.getAttribute("href")),
     );
     if (detailHref) pages.push(detailHref);
@@ -210,7 +250,7 @@ await step(5, "375px mobile pass: no horizontal overflow, CTAs in viewport (REEA
   }
   const scrolled = [];
   for (const path of pages) {
-    await mobile.goto(`${BASE}${path}`, { waitUntil: "load" });
+    await gotoPage(mobile, `${BASE}${path}`, { waitUntil: "load" });
     await mobile.waitForTimeout(500); // allow hydration to settle before measuring
     const { scrollWidth, clipped, reachable } = await mobile.evaluate(() => {
       const vw = document.documentElement.clientWidth;
@@ -341,7 +381,7 @@ await step(6, "catalog offer URLs resolve (link-health)", async () => {
 // deploy check (graceful degradation), but an adapter absent from the notes
 // array means the deployed build never dispatched it.
 await step(7, "deployed results notes carry every registered adapter (REEA-238/260)", async () => {
-  const resp = await fetch(`${BASE}/results?q=${encodeURIComponent("iPhone 15")}`, {
+  const resp = await fetchPage(`${BASE}/results?q=${encodeURIComponent("iPhone 15")}`, {
     headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36" },
     redirect: "follow",
     signal: AbortSignal.timeout(30000),
@@ -386,7 +426,7 @@ await step(7, "deployed results notes carry every registered adapter (REEA-238/2
 await step(8, "served cache-window headers on repeated /results (REEA-447 R5)", async () => {
   const url = `${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`;
   const get = async () =>
-    fetch(url, { headers: { accept: "text/html", "cache-control": "max-age=0" }, redirect: "follow", signal: AbortSignal.timeout(15000) });
+    fetchPage(url, { headers: { accept: "text/html", "cache-control": "max-age=0" }, redirect: "follow", signal: AbortSignal.timeout(15000) });
   const first = await get();
   const second = await get(); // the repeat the window exists for
   if (!first.ok || !second.ok) throw new Error(`results GETs returned ${first.status}/${second.status}`);
