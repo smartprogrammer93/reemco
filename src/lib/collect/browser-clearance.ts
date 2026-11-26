@@ -75,6 +75,9 @@ type BrowserLike = {
 };
 type ContextLike = {
   newPage(): Promise<PageLike>;
+  addCookies(cookies: StoredCookie[]): Promise<void>;
+  cookies(urls?: string): Promise<StoredCookie[]>;
+  addInitScript(script: () => void): Promise<void>;
   close(): Promise<void>;
 };
 export type PageLike = {
@@ -87,6 +90,152 @@ export type PageLike = {
 /** Desktop Chrome identity — the challenge is scored on this, so it is pinned. */
 const BROWSER_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+/**
+ * REEA-1242 — the client hints, not the UA string, are what Cloudflare scores.
+ * The serverless Chromium this tier launches is a headless shell, so it emits
+ * `sec-ch-ua: ...HeadlessChrome...` no matter what `userAgent` the context
+ * sets. Measured on the production egress 2026-11-26, same URL, same IP, same
+ * second: headless hints -> HTTP 403 "Sorry, you have been blocked"; these
+ * hints -> HTTP 200 / 908 KB with `app-product-card` priced cards (LuLu) and
+ * the `OnlineStore` island (Ounass). So the hint set is pinned to the UA we
+ * claim, and every context carries it.
+ */
+const BROWSER_HINTS: Record<string, string> = {
+  accept:
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+  "accept-language": "en-US,en;q=0.9",
+  "sec-ch-ua": '"Chromium";v="126", "Google Chrome";v="126", "Not:A-Brand";v="99"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"macOS"',
+  "sec-fetch-dest": "document",
+  "sec-fetch-mode": "navigate",
+  "sec-fetch-site": "none",
+  "sec-fetch-user": "?1",
+  "upgrade-insecure-requests": "1",
+};
+
+/**
+ * REEA-1242 — the stealth init script every page gets. `navigator.webdriver`
+ * is the first thing a bot score reads, and headless Chromium sets it to true;
+ * a real desktop browser also ships plugin entries and a `chrome` runtime
+ * object, so the shape is completed rather than only the flag cleared.
+ */
+const STEALTH_INIT_SCRIPT = (): void => {
+  Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+  Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
+  Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
+  (window as unknown as { chrome?: unknown }).chrome = { runtime: {} };
+};
+
+/**
+ * REEA-1242 — classify a clearance body. Three states matter and they lead to
+ * different actions, so they are named rather than inferred from a selector
+ * miss:
+ *  - `challenge`: Cloudflare's managed challenge ("Just a moment..."), which a
+ *    real browser resolves on its own if given a moment;
+ *  - `block`: the WAF's outright refusal ("Sorry, you have been blocked" /
+ *    "Attention Required! | Cloudflare"). There is nothing to solve — the
+ *    request was refused at the edge before the origin answered — so waiting
+ *    the whole content window only burns time;
+ *  - `""`: a body that carries the page.
+ */
+export type ClearanceShell = "" | "challenge" | "block";
+
+export function classifyClearanceBody(html: string): ClearanceShell {
+  if (!html) return "block";
+  if (/Sorry, you have been blocked|Attention Required!\s*\|\s*Cloudflare|cf-error-details/i.test(html)) {
+    return "block";
+  }
+  // Only the shell's own markers count. `/cdn-cgi/challenge-platform/` scripts
+  // are also injected into CLEARED pages (Turnstile, bot-management JS), so
+  // matching that string would reject the very page the browser painted —
+  // measured 2026-11-26: the cleared 908 KB LuLu list page carries it.
+  if (/Just a moment\.\.\.|Enable JavaScript and cookies to continue|cf-browser-verification|cf-challenge-running/i.test(html)) {
+    return "challenge";
+  }
+  return "";
+}
+
+/**
+ * REEA-1242 — the `cf_clearance` store. Cloudflare binds a clearance cookie to
+ * the client IP and the TLS/JS fingerprint that earned it, so it is only
+ * reusable from the same egress. The key therefore carries host + egress IP,
+ * and the value carries the cookie set plus its own expiry: a relaunched
+ * browser (or a fresh context) replays the clearance instead of paying another
+ * challenge. Best-effort in both directions — a KV hiccup costs one challenge.
+ */
+const CLEARANCE_TTL_S = 60 * 60;
+const CLEARANCE_DEFAULT_AGE_MS = 30 * 60 * 1000;
+const IP_ECHO_URL = "https://api.ipify.org?format=json";
+const IP_ECHO_TIMEOUT_MS = 4_000;
+let cachedEgressIp: string | null = null;
+
+type StoredCookie = {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires: number;
+  httpOnly?: boolean;
+  secure?: boolean;
+  sameSite?: "Strict" | "Lax" | "None";
+};
+
+async function egressIp(): Promise<string> {
+  if (cachedEgressIp != null) return cachedEgressIp;
+  try {
+    const res = await fetch(IP_ECHO_URL, { signal: AbortSignal.timeout(IP_ECHO_TIMEOUT_MS) });
+    if (!res.ok) return "";
+    const body = (await res.json()) as { ip?: unknown } | null;
+    cachedEgressIp = typeof body?.ip === "string" ? body.ip : "";
+  } catch {
+    // No echo answer: the key degrades to host-only, which is still correct —
+    // just less precise across an egress change.
+    cachedEgressIp = "";
+  }
+  return cachedEgressIp;
+}
+
+function clearanceKey(host: string, ip: string): string {
+  return `cf-clearance:${host}:${ip || "unknown"}`;
+}
+
+async function readClearance(host: string): Promise<StoredCookie[]> {
+  const kv = getSharedKv();
+  if (!kv) return [];
+  try {
+    const raw = await kv.get(clearanceKey(host, await egressIp()));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as { at?: number; cookies?: StoredCookie[] } | null;
+    if (!parsed || !Array.isArray(parsed.cookies)) return [];
+    const age = Date.now() - (parsed.at ?? 0);
+    if (age > CLEARANCE_DEFAULT_AGE_MS && parsed.cookies.every((c) => c.expires > 0 && c.expires * 1000 < Date.now())) {
+      return [];
+    }
+    return parsed.cookies.filter((c) => !c.expires || c.expires * 1000 > Date.now());
+  } catch {
+    return [];
+  }
+}
+
+async function writeClearance(host: string, cookies: StoredCookie[]): Promise<void> {
+  const kv = getSharedKv();
+  if (!kv || cookies.length === 0) return;
+  try {
+    await kv.set(clearanceKey(host, await egressIp()), JSON.stringify({ at: Date.now(), cookies }), CLEARANCE_TTL_S);
+  } catch {
+    // Best-effort: the next navigation pays one challenge.
+  }
+}
+
+function safeHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
+}
 
 let launch: Promise<{ browser: BrowserLike; context: ContextLike } | null> | null = null;
 
@@ -403,8 +552,12 @@ async function getSharedBrowser(): Promise<{ browser: BrowserLike; context: Cont
           userAgent: BROWSER_UA,
           locale: "en-US",
           viewport: { width: 1366, height: 900 },
-          extraHTTPHeaders: { "accept-language": "en-US,en;q=0.9" },
+          // REEA-1242 — the hints are pinned with the UA. Without this the
+          // headless shell advertises `HeadlessChrome` in `sec-ch-ua` and the
+          // WAF blocks a page it would otherwise serve (measured 2026-11-26).
+          extraHTTPHeaders: BROWSER_HINTS,
         });
+        await context.addInitScript(STEALTH_INIT_SCRIPT);
         return { browser, context };
       } catch (err) {
         lastFailure = err instanceof Error ? err.message : String(err);
@@ -442,9 +595,24 @@ async function navigate(
     const shared = await getSharedBrowser();
     if (!shared) return { html: "", error: lastFailure || "browser launch failed" };
     let page: PageLike | null = null;
+    const host = safeHost(url);
     try {
+      // REEA-1242 — replay a clearance this egress already earned before
+      // paying for another challenge. Bound to host + egress IP by the store.
+      if (host) {
+        const stored = await readClearance(host);
+        if (stored.length > 0) await shared.context.addCookies(stored).catch(() => undefined);
+      }
       page = await shared.context.newPage();
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+      // REEA-1242 — a WAF block is not a challenge: there is nothing to solve,
+      // so return immediately instead of burning the content window, and let
+      // the lane fall through to its relay hop.
+      const first = await page.content();
+      if (classifyClearanceBody(first) === "block") {
+        lastFailure = `cloudflare WAF block (not a challenge) on ${host}`;
+        return { html: "", error: lastFailure };
+      }
       await page
         .waitForFunction((sel: string) => document.querySelector(sel) !== null, contentSelector, {
           timeout: CONTENT_WAIT_MS,
@@ -453,6 +621,20 @@ async function navigate(
       // REEA-1241 — bounded: a page bigger than the cap is trimmed before the
       // presence gate, the lane parser, and the cache ever see it.
       const html = await readPageContent(page);
+      // REEA-1242 — a resolved challenge that still carries the shell is not
+      // an answer: do not hand it back, and do not cache it.
+      const shell = classifyClearanceBody(html);
+      if (shell) {
+        lastFailure =
+          shell === "challenge" ? `managed challenge unresolved on ${host}` : `cloudflare WAF block on ${host}`;
+        return { html: "", error: lastFailure };
+      }
+      // Persist the clearance this navigation earned (cf_clearance / __cf_bm).
+      if (host) {
+        const cookies = await shared.context.cookies().catch(() => [] as StoredCookie[]);
+        const keep = cookies.filter((c) => /^cf_clearance$|^__cf_bm$|^_cfuvid$/.test(c.name));
+        if (keep.length > 0) await writeClearance(host, keep);
+      }
       // REEA-1221 — a no-paint result feeds the circuit breaker above; the
       // ladder still climbs only when a navigation DIES (escalating on no-paint
       // reached the lean shell and crashed it with SIGTRAP).
@@ -512,49 +694,159 @@ export async function browserClearedHtml(url: string, contentSelector: string): 
   if (disabled()) return "";
   const kv = getSharedKv();
   const key = cacheKey(url);
-  const cached = await readClearedBody(kv, key);
+  const token = contentSelector.replace(/^[.#]/, "");
+  // REEA-1242 — only replay a body that carries the lane's content. The old hop
+  // cached whatever came back, so one WAF-block navigation pinned that URL to
+  // the block page for the whole TTL.
+  const cached = await readClearedBody(kv, key, (body) => body.includes(token));
   if (cached) return cached;
   const { html } = await navigate(url, contentSelector);
-  if (html) await cacheClearedBody(kv, key, html, CLEARED_CACHE_TTL_S);
+  if (html && html.includes(token)) await cacheClearedBody(kv, key, html, CLEARED_CACHE_TTL_S);
   return html;
 }
 
 /**
  * REEA-1221 — relay clearance tier. When the box cannot run Chromium to the
- * end of a navigation (measured 2026-11-26 on the served head: the browser
- * launches and reports its own version, but the process dies during goto —
- * `gotoOk:false` with libs + exe + launch all healthy), the lane still needs a
- * live fetch of the challenged page. A reader relay renders it from ITS egress
- * and hands back the painted HTML, which is the same live page a shopper's
- * browser would see — no bundled catalogue, no cached snapshot.
+ * end of a navigation, the lane still needs a live fetch of the challenged
+ * page. A reader relay renders it from ITS egress and hands back the painted
+ * HTML/markdown, which is the same live page a shopper's browser would see —
+ * no bundled catalogue, no cached snapshot.
  *
- * Politeness: the relay answer is cached in the shared KV store per URL, so a
+ * REEA-1242 — capacity is the constraint, so every relay call now passes a
+ * per-endpoint budget and a per-hop cooldown:
+ *  - the free reader tier publishes 20 requests per 60 s (`x-ratelimit-limit`),
+ *    and the old hop answered a single 429 with a silence that outlived the
+ *    limit — that is how a lane that had a working relay settled `blocked:`
+ *    for the rest of the window;
+ *  - the budget is a sliding window, a call waits only a bounded moment for a
+ *    slot, and a 429 sets a cooldown read from the answer's own `retry-after`
+ *    (floor 20 s, cap two minutes) instead of a blanket pause;
+ *  - each hop owns its own cooldown, so a rate-limited markdown render no
+ *    longer silences the html hop (they ride different quotas);
+ *  - `JINA_API_KEY` in the environment lifts the free ceiling (the paid reader
+ *    tier answers 200 rpm) without a code change, and the key is only ever
+ *    read from the environment — never logged, never in a comment.
+ *
+ * Politeness: every answer is cached in the shared KV store per URL, so a
  * repeat query inside the window spends no relay call; every call is bounded
  * and best-effort, and the lane's own presence gate decides whether the body
  * is usable. The relay is the LAST hop: a working browser or a plain challenge
  * pass never reaches it.
  */
 const RELAY_ENDPOINT = "https://api.microlink.io/";
-// REEA-1221 — a relay answer is a live page, so it stays valid for a while; a
-// longer TTL is what keeps the free tier polite (measured 2026-11-26: the relay
-// answered, then 429'd a few calls later — the cached answer is the point).
-// REEA-1241 — shortened from 6 h to 30 min: only bodies under the cache value
-// cap are stored now, and a shorter residency keeps the cache namespace small
-// even when many distinct queries are in flight.
+const JINA_ENDPOINT = "https://r.jina.ai/";
+// REEA-1241 — 30 min: only bodies under the cache value cap are stored now, and
+// a shorter residency keeps the cache namespace small even when many distinct
+// queries are in flight.
 const RELAY_TTL_S = 30 * 60;
 const RELAY_TIMEOUT_MS = 12_000;
+const JINA_TIMEOUT_MS = 20_000;
+/** Never silence a hop for less than this, nor for longer than two minutes. */
+const RELAY_COOLDOWN_FLOOR_MS = 20_000;
+const RELAY_COOLDOWN_CAP_MS = 120_000;
+/** A lane will wait this long for a relay slot before it takes the degraded path. */
+const RELAY_MAX_WAIT_MS = 2_500;
+
+export type RelayLimits = { limit: number; windowMs: number };
+
+/** Free reader tier: 20 requests / 60 s (`x-ratelimit-limit: 20, 20;w=60`). */
+const JINA_FREE_LIMITS: RelayLimits = { limit: 20, windowMs: 60_000 };
+/** Paid reader tier with an API key: 200 requests / 60 s. */
+const JINA_KEYED_LIMITS: RelayLimits = { limit: 200, windowMs: 60_000 };
+/** Free meta-relay tier: 50 requests / day per egress. */
+const MICROLINK_FREE_LIMITS: RelayLimits = { limit: 50, windowMs: 24 * 60 * 60 * 1000 };
+
+function envInt(name: string): number {
+  const raw = process.env[name];
+  if (!raw) return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+}
+
+/** The reader tier's limits, lifted by an API key or an explicit override. */
+export function jinaLimits(): RelayLimits {
+  const override = envInt("JINA_RPM");
+  if (override > 0) return { limit: override, windowMs: 60_000 };
+  return process.env.JINA_API_KEY ? JINA_KEYED_LIMITS : JINA_FREE_LIMITS;
+}
+
+function microlinkLimits(): RelayLimits {
+  const override = envInt("MICROLINK_RPD");
+  if (override > 0) return { limit: override, windowMs: 24 * 60 * 60 * 1000 };
+  return MICROLINK_FREE_LIMITS;
+}
+
 /**
- * After a 429, skip the relay for this long instead of paying the refusal.
- *
- * REEA-1221 — measured 2026-11-26: a ten-minute cooldown amplified ONE 429 into
- * ten minutes of failures across every relay-dependent lane (Nest 83%,
- * Next Store 80% on a 12-query panel), because the cooldown is process-wide and
- * shared by the lanes that use the same provider. A rate-limit answer is
- * normally a per-minute budget, so the pause is now 90 s: long enough to stop
- * hammering, short enough that the rest of the panel still gets served.
+ * How long until a sliding-window budget admits one more call. Pure, so the
+ * pacing is pinned by a unit test instead of being measured against a live
+ * relay.
  */
-const RELAY_COOLDOWN_MS = 90 * 1000;
-let relayCooldownUntil = 0;
+export function relayWaitMs(hits: readonly number[], now: number, limits: RelayLimits): number {
+  if (limits.limit <= 0) return 0;
+  const recent = hits.filter((t) => now - t < limits.windowMs);
+  if (recent.length < limits.limit) return 0;
+  const oldest = Math.min(...recent);
+  return Math.max(0, limits.windowMs - (now - oldest));
+}
+
+type RelayState = { hits: number[]; cooldownUntil: number };
+
+const relayStates = new Map<string, RelayState>();
+
+function relayState(id: string): RelayState {
+  let state = relayStates.get(id);
+  if (!state) {
+    state = { hits: [], cooldownUntil: 0 };
+    relayStates.set(id, state);
+  }
+  return state;
+}
+
+/** Reset the in-process pacing state (used by the probe and by tests). */
+export function resetRelayState(): void {
+  relayStates.clear();
+}
+
+/**
+ * Take one slot on a relay's budget, waiting at most RELAY_MAX_WAIT_MS. Returns
+ * false when the hop must degrade this call (cooldown or spent budget), and
+ * leaves the reason in `lastFailure` so the lane's note names it.
+ */
+async function acquireRelaySlot(id: string, limits: RelayLimits): Promise<boolean> {
+  const state = relayState(id);
+  const now = Date.now();
+  if (now < state.cooldownUntil) {
+    lastFailure = `${id} relay cooling down after a rate-limit answer`;
+    return false;
+  }
+  state.hits = state.hits.filter((t) => now - t < limits.windowMs);
+  const wait = relayWaitMs(state.hits, now, limits);
+  if (wait > RELAY_MAX_WAIT_MS) {
+    lastFailure = `${id} relay budget spent (${limits.limit}/${Math.round(limits.windowMs / 1000)}s)`;
+    return false;
+  }
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  state.hits.push(Date.now());
+  return true;
+}
+
+/**
+ * Set a hop's cooldown from the relay's own answer. `retry-after` wins when it
+ * is present; otherwise the hop rests one window. Never shorter than the floor
+ * (a relay that answers 429 immediately would otherwise be hammered).
+ */
+function applyRelayCooldown(id: string, retryAfterSeconds: number, windowMs: number): void {
+  const requested = retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : windowMs;
+  const ms = Math.min(RELAY_COOLDOWN_CAP_MS, Math.max(RELAY_COOLDOWN_FLOOR_MS, requested));
+  relayState(id).cooldownUntil = Date.now() + ms;
+}
+
+function retryAfterSeconds(res: Response): number {
+  const raw = res.headers.get("retry-after");
+  if (!raw) return 0;
+  const seconds = Number(raw);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
+}
 
 /**
  * Gate for the relay hop. Same posture as the browser tier: an explicit opt-out
@@ -570,23 +862,37 @@ export function relayTierEnabled(): boolean {
   return process.env.NODE_ENV !== "test";
 }
 
+/**
+ * The reader tier's request headers. The API key, when configured, rides an
+ * Authorization header read from the environment — never logged, never baked
+ * into the image.
+ */
+export function jinaHeaders(mode: "html" | "markdown"): Record<string, string> {
+  const headers: Record<string, string> = {
+    "x-respond-with": mode,
+    "x-timeout": mode === "markdown" ? "45" : "40",
+    accept: mode === "markdown" ? "text/plain" : "text/html",
+  };
+  if (process.env.JINA_API_KEY) headers.authorization = `Bearer ${process.env.JINA_API_KEY}`;
+  return headers;
+}
+
 export async function relayClearedHtml(url: string, contentSelector: string): Promise<string> {
   if (!relayTierEnabled()) return "";
-  if (Date.now() < relayCooldownUntil) {
-    lastFailure = "relay cooling down after a rate-limit answer";
-    return "";
-  }
   const token = contentSelector.replace(/^[.#]/, "");
   const kv = getSharedKv();
   const key = `relay-cleared:${url}`;
   const cached = await readClearedBody(kv, key, (body) => body.includes(token));
   if (cached) return cached;
+  if (!(await acquireRelaySlot("microlink-html", microlinkLimits()))) return "";
   try {
     const target = `${RELAY_ENDPOINT}?url=${encodeURIComponent(url)}&meta=false&data.html.selector=body`;
     const res = await fetch(target, { signal: AbortSignal.timeout(RELAY_TIMEOUT_MS) });
     if (!res.ok) {
       lastFailure = `relay HTTP ${res.status}`;
-      if (res.status === 429 || res.status === 503) relayCooldownUntil = Date.now() + RELAY_COOLDOWN_MS;
+      if (res.status === 429 || res.status === 503) {
+        applyRelayCooldown("microlink-html", retryAfterSeconds(res), microlinkLimits().windowMs);
+      }
       return "";
     }
     // REEA-1241 — bounded read: a fat microlink answer aborts at the cap and
@@ -614,24 +920,15 @@ export async function relayClearedHtml(url: string, contentSelector: string): Pr
 }
 
 /**
- * REEA-1221 — reader-relay hop for LuLu Kuwait. Its zone answers every plain
- * hop from our egress with Cloudflare's "Sorry, you have been blocked" page,
- * and its list page is server-rendered (923 KB, 20 priced cards measured
- * 2026-11-26), so a reader relay that renders the page from ITS egress returns
- * exactly the HTML the lane's card scanner reads. The relay's own free tier
- * allows ~20 requests/minute with no daily cap, which is why this hop — not the
- * per-day-capped one — carries LuLu.
+ * REEA-1221 — reader-relay hop for LuLu Kuwait and Ounass. Its zone answers
+ * every plain hop from our egress with Cloudflare's block page, and its list
+ * page is server-rendered, so a reader relay that renders the page from ITS
+ * egress returns exactly the HTML the lane's card scanner reads.
  *
- * Politeness: KV-cached per URL, one cooldown after a rate-limit answer, and
- * every call bounded. Best-effort: any miss returns "" and the lane keeps its
- * existing degraded note.
+ * Politeness: KV-cached per URL, a budgeted slot per call, a per-hop cooldown
+ * after a rate-limit answer. Best-effort: any miss returns "" and the lane
+ * keeps its existing degraded note.
  */
-const JINA_ENDPOINT = "https://r.jina.ai/";
-// REEA-1241 — shortened from 6 h to 30 min (see RELAY_TTL_S).
-const JINA_TTL_S = 30 * 60;
-const JINA_TIMEOUT_MS = 20_000;
-let jinaCooldownUntil = 0;
-
 export async function jinaClearedHtml(
   url: string,
   /**
@@ -644,10 +941,6 @@ export async function jinaClearedHtml(
   marker: string | readonly string[],
 ): Promise<string> {
   if (!relayTierEnabled()) return "";
-  if (Date.now() < jinaCooldownUntil) {
-    lastFailure = "reader relay cooling down after a rate-limit answer";
-    return "";
-  }
   const markers = (Array.isArray(marker) ? marker : [marker])
     .map((m) => m.replace(/^[.#]/, ""))
     .filter((m) => m !== "");
@@ -656,14 +949,17 @@ export async function jinaClearedHtml(
   const key = `jina-cleared:${url}`;
   const cached = await readClearedBody(kv, key, carries);
   if (cached) return cached;
+  if (!(await acquireRelaySlot("jina-html", jinaLimits()))) return "";
   try {
     const res = await fetch(`${JINA_ENDPOINT}${url}`, {
-      headers: { "x-respond-with": "html", "x-timeout": "40", accept: "text/html" },
+      headers: jinaHeaders("html"),
       signal: AbortSignal.timeout(JINA_TIMEOUT_MS),
     });
     if (!res.ok) {
       lastFailure = `reader relay HTTP ${res.status}`;
-      if (res.status === 429 || res.status === 503) jinaCooldownUntil = Date.now() + RELAY_COOLDOWN_MS;
+      if (res.status === 429 || res.status === 503) {
+        applyRelayCooldown("jina-html", retryAfterSeconds(res), jinaLimits().windowMs);
+      }
       return "";
     }
     // REEA-1241 — bounded read: an oversized reader-relay answer degrades to
@@ -673,7 +969,7 @@ export async function jinaClearedHtml(
       lastFailure = "reader relay answered without the lane's content selector";
       return "";
     }
-    await cacheClearedBody(kv, key, html, JINA_TTL_S);
+    await cacheClearedBody(kv, key, html, RELAY_TTL_S);
     return html;
   } catch (err) {
     lastFailure = err instanceof Error ? err.message : String(err);
@@ -687,33 +983,28 @@ export async function jinaClearedHtml(
  * `markdown` renders the page with a browser and carries the painted grid
  * (measured 2026-11-26 on Next Store: markdown 81 KB with ten priced rows vs
  * html 5.9 KB "Just a moment"). Lanes whose parser can read markdown use this
- * hop; it shares the relay cooldown and is KV-cached per URL.
+ * hop; it has its OWN budget and cooldown because it rides a different quota
+ * than the html hop.
  */
 const MARKDOWN_TTL_S = 30 * 60;
 
 export async function relayMarkdown(url: string, marker: string): Promise<string> {
   if (!relayTierEnabled()) return "";
-  // REEA-1221 — its OWN cooldown: the markdown hop rides a different relay
-  // (and therefore a different quota) than the html hop, so a rate-limit on one
-  // must not silence the other (measured 2026-11-26: a microlink 429 put the
-  // jina markdown hop into cooldown too, and the lane settled blocked while the
-  // markdown relay was answering fine).
-  if (Date.now() < jinaCooldownUntil) {
-    lastFailure = "markdown relay cooling down after a rate-limit answer";
-    return "";
-  }
   const kv = getSharedKv();
   const key = `relay-md:${url}`;
   const cached = await readClearedBody(kv, key, (body) => body.includes(marker));
   if (cached) return cached;
+  if (!(await acquireRelaySlot("jina-markdown", jinaLimits()))) return "";
   try {
-    const res = await fetch(`https://r.jina.ai/${url}`, {
-      headers: { "x-respond-with": "markdown", "x-timeout": "45", accept: "text/plain" },
+    const res = await fetch(`${JINA_ENDPOINT}${url}`, {
+      headers: jinaHeaders("markdown"),
       signal: AbortSignal.timeout(JINA_TIMEOUT_MS),
     });
     if (!res.ok) {
       lastFailure = `markdown relay HTTP ${res.status}`;
-      if (res.status === 429 || res.status === 503) jinaCooldownUntil = Date.now() + RELAY_COOLDOWN_MS;
+      if (res.status === 429 || res.status === 503) {
+        applyRelayCooldown("jina-markdown", retryAfterSeconds(res), jinaLimits().windowMs);
+      }
       return "";
     }
     // REEA-1241 — bounded read: an oversized markdown render degrades to "".

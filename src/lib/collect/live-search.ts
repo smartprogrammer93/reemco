@@ -16,6 +16,7 @@
 import zlib from "node:zlib";
 import {
   APP_ID_ALLOW,
+  CHALLENGE_HEADERS,
   SEARCH_KEY_ALLOW,
   VERIFIED_BOT_HEADERS,
   discoverJarirIndexKey,
@@ -1393,19 +1394,28 @@ async function collectShopifyKuwait(
  * carries; a cache-hit spends milliseconds of it and a miss keeps the full
  * handshake budget.
  */
-async function challengeHtmlHop(fetchImpl: FetchImpl, url: string): Promise<string> {
+async function challengeHtmlHop(
+  fetchImpl: FetchImpl,
+  url: string,
+  lead: "verified" | "browser" = "verified",
+): Promise<string> {
   const window = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
+  // REEA-1242 — the lead identity is the zone's own verdict, not a house
+  // style. LuLu Kuwait and Next Store answer a UA that CLAIMS Googlebot from a
+  // non-Google IP with Cloudflare's "Sorry, you have been blocked" page (the
+  // verified-bot check fails, so the claim is worse than no claim at all —
+  // measured 2026-11-26: Googlebot UA -> HTTP 403 block, Chrome UA -> HTTP 200
+  // / 933 KB priced list on the same URL and second). Those lanes lead with
+  // CHALLENGE_HEADERS; zones that really do allow-list the crawler keep the
+  // verified identity as their lead.
+  const leadHeaders = lead === "browser" ? CHALLENGE_HEADERS : VERIFIED_BOT_HEADERS;
   try {
-    // REEA-399 — the replay rides the verified-crawler identity, not a bare
-    // request: measured from a cold datacenter hop, a header-less GET lands
-    // on the CF interstitial instantly on these zones (every Lulu cell in the
-    // QA baseline recorded its 403 through exactly this shape), so the cached
-    // answer was only ever replayable after some OTHER hop had already paid
-    // the handshake. With the browser-shaped identity on the replay itself,
-    // the first attempt answers on zones that allow-list it — the same
-    // identity the handshake rotates through first.
+    // REEA-399 — the replay rides the lead identity, not a bare request:
+    // measured from a cold datacenter hop, a header-less GET lands on the CF
+    // interstitial instantly on these zones, so the cached answer was only
+    // ever replayable after some OTHER hop had already paid the handshake.
     const cached = await fetchImpl(url, {
-      headers: { ...VERIFIED_BOT_HEADERS },
+      headers: { ...leadHeaders },
       cache: "force-cache",
       next: { revalidate: 300 },
       signal: window,
@@ -2087,7 +2097,7 @@ export const COLLECTORS: RetailerCollector[] = [
         html !== "" &&
         !/Just a moment\.\.\.|Sorry, you have been blocked|cf-error-details/i.test(html) &&
         html.includes("product-item-link");
-      const html = await challengeHtmlHop(fetchImpl, searchUrl).catch(() => "");
+      const html = await challengeHtmlHop(fetchImpl, searchUrl, "browser").catch(() => "");
       if (hasGrid(html)) return nextStoreHits(html, query);
       // REEA-1221 — no jsdom round here: measured 2026-11-26, jsdom polls its
       // whole 4 s window on this zone and still hands back the "Just a moment"
@@ -2167,9 +2177,15 @@ export const COLLECTORS: RetailerCollector[] = [
         html.includes("app-product-card") ? luluListHits(html, query) : luluHits(html, query);
       let answeredEmpty = false;
       for (const hop of [
-        () => challengeHtmlHop(fetchImpl, searchUrl).catch(() => ""),
+        () => challengeHtmlHop(fetchImpl, searchUrl, "browser").catch(() => ""),
         () => jsdClearedHtml(fetchImpl, searchUrl).catch(() => ""),
         () => staticIpHtml(fetchImpl, searchUrl).catch(() => ""),
+        // REEA-1242 — the durable hop: a real Chromium that runs the challenge
+        // JS and holds cf_clearance. Measured 2026-11-26 on the production
+        // egress: with the pinned desktop identity the browser paints the
+        // list page (908 KB, `app-product-card` priced cards) where every
+        // plain hop is refused.
+        () => browserClearedHtml(searchUrl, "app-product-card").catch(() => ""),
       ]) {
         const body = await hop();
         if (!answered(body)) continue;
@@ -2341,6 +2357,13 @@ export const COLLECTORS: RetailerCollector[] = [
         if (isShell(body)) continue;
         return ounassHits(body, query);
       }
+      // REEA-1242 — durable hop: the box's Chromium runs the zone's challenge
+      // JS and paints the hydrated page (measured 2026-11-26 on the production
+      // egress: 185 KB, `<main>` + `OnlineStore` island) when the plain hop
+      // lands on the interstitial. Cheap hop stays first; the browser only runs
+      // on a shell answer.
+      const painted = await browserClearedHtml(url, "main").catch(() => "");
+      if (!isShell(painted)) return ounassHits(painted, query);
       const relayed = await jinaClearedHtml(url, "OnlineStore");
       if (!isShell(relayed)) return ounassHits(relayed, query);
       throw new BlockedLaneError(
