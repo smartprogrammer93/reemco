@@ -431,6 +431,16 @@ function identityTokens(tokens: string[]): string[] {
 }
 
 /** Compute the spec §1 tuple from any live title (or slug-decoded query). */
+/**
+ * REEA-1207 — identity words that may legitimately follow a model code and
+ * still name a different product tier ("17 Pro" vs "17 Pro Max"). Anything
+ * else after the code is listing chrome and must not fork the identity.
+ */
+const MODEL_IDENTITY_SUFFIX = new Set([
+  "pro", "max", "plus", "ultra", "air", "mini", "lite", "se", "fe", "neo",
+  "prime", "edge", "xl", "xs", "fold", "flip", "note", "tab", "detect", "open",
+]);
+
 function computeCanonicalFields(title: string): CanonicalFields {
   // REEA-1162 — the platform role is read off the RAW token stream, before the
   // head-position shelf-code skip can drop a leading `ps5`, and its tokens are
@@ -597,6 +607,73 @@ function computeCanonicalFields(title: string): CanonicalFields {
   }
 
   // Grade parts join with "-" so "Renewed Grade B" lands on the spec value
+  // REEA-1207 AC 7B-1 — the model line must END at the model code. Retailers
+  // append listing prose after the code ("Sony WH-1000XM5 Wireless Industry
+  // Leading Noise Canceling ..." vs "Sony Wireless Noise Cancelling
+  // Headphones, WH1000XM5 - Black"), and the greedy scan kept that prose in
+  // the line, so the same model at two retailers produced two different keys
+  // and never merged into one comparison card. When the line carries a
+  // code-shaped token and everything after it is descriptive chrome, the line
+  // stops at that code. A trailing identity word ("pro", "max", "ultra", ...)
+  // is kept, so iPhone 17 Pro and iPhone 17 Pro Max stay two cards (REA-213).
+  // A model code is any token mixing letters and digits ("wh1000xm5",
+  // "ch720n", "1000xm5", "fold7") — the shelf-code shape used by the merge
+  // containment rule is narrower and misses the digit-led spellings.
+  const isModelCode = (t: string): boolean => t.length >= 3 && /[a-z]/.test(t) && /\d/.test(t);
+  // A hyphenated shelf code ("WH-1000XM5") tokenizes into a short letter
+  // fragment plus the code ("wh", "1000xm5"); another retailer spells the same
+  // code unbroken ("wh1000xm5"). Joining the fragment onto its code makes the
+  // two spellings one token so the merge sees one model line.
+  for (let i = 0; i + 1 < line.length; i += 1) {
+    // Only the "WH-1000XM5" split shape: a short letter fragment glued to a
+    // DIGIT-LED code ("1000xm5"). "Galaxy Z Fold7" keeps its "z fold7"
+    // spelling so existing slugs stay stable.
+    if (/^[a-z]{2,3}$/.test(line[i]) && isModelCode(line[i + 1])) {
+      line.splice(i, 2, line[i] + line[i + 1]);
+      i -= 1;
+    }
+  }
+  // An accessory title's tail IS its identity ("Silicone Case", "Screen
+  // Protector"): the class gate already keeps accessories out of the device
+  // card, so the prose truncation must not flatten them onto the device's
+  // model line here.
+  const accessoryTitle = isAccessoryTitle(title);
+  let lastCode = -1;
+  for (let i = 0; i < line.length; i += 1) if (isModelCode(line[i])) lastCode = i;
+  if (lastCode >= 0 && lastCode < line.length - 1) {
+    const tail = line.slice(lastCode + 1);
+    // A tail that carries ANOTHER code is a second shelf identity (the
+    // regional suffix shape "U8000F 4K Smart TV UA75U8000FUXZN"), not prose:
+    // the containment rule already reconciles that shape, so the line keeps
+    // its tokens.
+    const carriesCode = tail.some(isModelCode);
+    // The line ends at its last identity token: "17 Pro Max" keeps both
+    // words, "AeroFit 2 Open-Ear Wireless Earbuds" keeps "open" and drops the
+    // rest of the prose.
+    let lastIdentity = -1;
+    for (let i = 0; i < tail.length; i += 1) {
+      if (MODEL_IDENTITY_SUFFIX.has(tail[i])) lastIdentity = i;
+    }
+    // Prose is a long descriptive word ("industry", "canceling") or a lone
+    // form-factor token ("over"). A short multi-word class tail ("4K Smart
+    // TV") is part of the family description, so the line keeps it and the
+    // existing containment rule reconciles the retailer's suffix code.
+    // Marketing prose is a run of words ("Industry Leading Noise Canceling
+    // ..."). A short product-class tail ("Wireless Headphones") names what the
+    // thing IS and stays in the line, so a sibling model still shares that
+    // token with the card it belongs beside.
+    const proseTail =
+      (tail.length >= 3 && tail.some((t) => t.length >= 6)) ||
+      (tail.length === 1 && tail[0].length >= 4);
+    if (accessoryTitle) {
+      // keep the whole line
+    } else if (lastIdentity >= 0) {
+      line.length = lastCode + 1 + lastIdentity + 1;
+    } else if (!carriesCode && proseTail) {
+      line.length = lastCode + 1;
+    }
+  }
+
   // renewed-grade-b; absent grade means new; a lone grade letter stands alone.
   const gradeParts: string[] = [];
   if (gradeWord) gradeParts.push(gradeWord);

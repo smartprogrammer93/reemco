@@ -2410,9 +2410,14 @@ export function groupHits(
   // model's stores instead of one single-retailer card per capacity. The
   // exact-SKU grouping primitive keeps its REEA-254 shape for callers that do
   // not opt in (tests, blocking paths).
-  const familyMerged = familyMerge && queryHasDeviceIntent(query)
-    ? mergeModelFamilies(groups)
-    : groups;
+  // REEA-1207 AC 7B-1 — the family fold is not only for device queries. A
+  // category query ("headphones", "air fryer") has the same problem the 7A
+  // exact-model panel had: one model listed by two retailers under different
+  // capacity/colour spellings becomes two single-retailer cards, so the shelf
+  // cannot compare it. Folding on brand+model-line+grade puts the stores on
+  // ONE card; the card still carries its variations and colour chips, and the
+  // bet accepts "some of them wrong" (no relevance gate).
+  const familyMerged = familyMerge ? mergeModelFamilies(groups) : groups;
   const products = finalizeGroups(
     rankByRelevance(query, familyMerged),
     includeAlternatives,
