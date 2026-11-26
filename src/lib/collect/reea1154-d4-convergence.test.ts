@@ -24,7 +24,7 @@ import { groupHits } from "@/lib/collect/live-search";
 import { partitionByConfidence } from "@/lib/confidence";
 import { queryCacheKey } from "@/lib/query-cache";
 import { shelfSectionsFromProducts } from "@/lib/results-shelf";
-import { dispatchIdentity, isAccessoryTitle } from "@/lib/relevance";
+import { dispatchIdentity, isAccessoryTitle, exactSkuKeep } from "@/lib/relevance";
 import type { SearchHit } from "@/lib/collect/live-search";
 
 function hit(over: Partial<SearchHit>): SearchHit {
@@ -114,6 +114,49 @@ describe("REEA-1154 D4 — the served head of a model query", () => {
         "the accessory band was emptied",
       ).toBe(true);
     }
+  });
+
+  it("keeps an all-OOS device card on the same primary shelf for every spelling", () => {
+    // REEA-1183 — the stock-filter keep predicate was still keyed on the RAW
+    // spelling: skuCodeTokens("fold7") is ["fold7"] but "fold 7" is [] (neither
+    // token is code-shaped), so an all-OOS Fold7 phone survived the default
+    // card-level drop for the tight spelling and vanished for the other three.
+    // The keep must read the dispatch identity, like the ranking gate does.
+    const base = groupHits("fold7", LIVE_SHAPE);
+    const oosDevice = base.find(
+      (p) => !isAccessoryTitle(p.title) && /1 TB/i.test(p.title),
+    )!;
+    expect(oosDevice, "the 1 TB Fold7 device is in the live shape").toBeTruthy();
+    const snapshot = base.map((p) =>
+      p.productId === oosDevice.productId
+        ? { ...p, offers: p.offers.map((o) => ({ ...o, inStock: false })) }
+        : p,
+    );
+    const sections = SPELLINGS.map((q) =>
+      shelfSectionsFromProducts(snapshot, q, "KW", false),
+    );
+    const primaryIds = sections.map((s) => s.primary.map((p) => p.productId));
+    for (const ids of primaryIds.slice(1)) expect(ids).toEqual(primaryIds[0]);
+    // The OOS card survives honestly (REEA-822/758 lead guard) on every
+    // spelling, and no accessory card enters primary.
+    expect(primaryIds[0]).toContain(oosDevice.productId);
+    for (const s of sections) {
+      expect(
+        s.primary.every((p) => !isAccessoryTitle(p.title)),
+        "an accessory card entered the primary shelf",
+      ).toBe(true);
+    }
+  });
+
+  it("the exact-SKU stock keep folds the raw spelling to one dispatch identity", () => {
+    // Every spelling of the dispatched query yields the same keep predicate.
+    for (const q of SPELLINGS) {
+      expect(exactSkuKeep(q), `${q}: no keep predicate`).toBeTypeOf("function");
+    }
+    // The REEA-822 contract is untouched for genuine part numbers and plain
+    // phrases: a pasted code keeps its OOS card, a normal query does not.
+    expect(exactSkuKeep("ps931cbegww")).toBeTypeOf("function");
+    expect(exactSkuKeep("iPhone 17 Pro")).toBeUndefined();
   });
 
   it("passes an accessory-only answer set through untouched (an accessory query keeps its accessories)", () => {
