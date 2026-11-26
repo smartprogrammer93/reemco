@@ -1260,30 +1260,24 @@ async function shopifyJsonHop(
       return await once();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // REEA-1221 — a 503 is the same class of transient answer as a 429 (the
-      // storefront is busy, not gone): measured 2026-11-26, Amazon.eg answered
-      // HTTP 503 on 8 of 12 panel queries in one run and 0 on the next, which is
-      // exactly the shape of a rate-limit/overload window rather than a dead
-      // lane. Both are retried; anything else still fails straight through.
+      // REEA-1221 — a 429 or a 503 is a transient answer (the storefront is
+      // busy, not gone): measured 2026-11-26, Amazon.eg answered HTTP 503 on 8
+      // of 12 panel queries in one run and 0 in the next, and every cluster
+      // failure in the bad runs was a throttle of that shape. ONE polite pause
+      // and one retry is the budget the lane can afford — five Shopify lanes
+      // share the 8 s ceiling, so an escalating second pause spent the window
+      // and turned a clean "HTTP 429" report into "aborted due to timeout",
+      // which is a worse record of the same throttle.
       if (!/HTTP (429|503)/.test(message) || signal.aborted) throw err;
-      // REEA-1221 — AC-3 measured on the served head 2026-11-26: the cluster's
-      // failure share swung between 0% and 83% across runs on the same head,
-      // and every failure was `HTTP 429` from the store's own suggest edge. One
-      // 700 ms pause clears a short window but not the tighter one Blink and
-      // Switch serve, so a throttled hop gave up while the store was merely
-      // busy. Two escalating pauses stay inside the lane's doubled window and
-      // turn a throttle into a wait instead of a recorded failure.
-      for (const waitMs of [SHOPIFY_THROTTLE_BACKOFF_MS, SHOPIFY_THROTTLE_BACKOFF_MS * 2]) {
-        await new Promise((r) => setTimeout(r, waitMs));
-        if (signal.aborted) throw err;
-        try {
-          return await once();
-        } catch (retryErr) {
-          const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
-          if (!/HTTP (429|503)/.test(retryMessage)) throw retryErr;
-        }
+      await new Promise((r) => setTimeout(r, SHOPIFY_THROTTLE_BACKOFF_MS));
+      if (signal.aborted) throw err;
+      try {
+        return await once();
+      } catch (retryErr) {
+        const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        if (/HTTP (429|503)/.test(retryMessage)) throw err;
+        throw retryErr;
       }
-      throw err;
     }
   } finally {
     release();

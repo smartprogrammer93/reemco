@@ -113,7 +113,14 @@ const main = async () => {
       console.error(`CANARY: ${query} answered HTTP ${res.status}`);
       continue;
     }
+    // The follow-up route answers `null` when the fan-out had nothing to settle
+    // for that query; that is a measurement gap, not a lane verdict, so it is
+    // reported and skipped rather than crashing the run.
     const payload = await res.json();
+    if (!payload || typeof payload !== "object") {
+      console.error(`CANARY: ${query} answered no payload — skipped`);
+      continue;
+    }
     for (const note of payload.notes ?? []) {
       const lane = lanes.get(note.merchant) ?? { attempts: 0, failures: 0, offers: 0, errors: new Set() };
       lane.attempts += 1;
