@@ -83,14 +83,18 @@ let browserVersion = "";
  * forward: once a set has proven to kill the browser on this host, retrying it
  * is wasted time.
  */
-let argSetIndex = 0;
+let argSetIndex = 1;
 
 /**
- * The launch ladder. Set 0 is the package's serverless shape (right on Lambda).
- * Set 1 drops the single-process/zygote pair and the in-process GPU, which is
- * what killed the browser on the self-hosted box at navigation time
- * ("Target page, context or browser has been closed", measured 2026-11-26).
- * Set 2 is a plain headless shell with the GPU disabled outright.
+ * The launch ladder. Set 0 is the package's serverless shape (right on Lambda,
+ * but its --single-process renderer never clears this zone's managed challenge
+ * on the self-hosted box: measured 2026-11-26, 25 s of waiting still left the
+ * 4.7 KB "Just a moment" shell). Set 1 drops the single-process/zygote pair and
+ * the in-process GPU, which is the full-browser shape a challenge can actually
+ * solve. Set 2 is a plain headless shell with the GPU disabled outright.
+ *
+ * The process starts at set 1: the challenge is the reason this tier exists, and
+ * set 0 is the one that cannot solve it here.
  */
 function launchArgSets(base: string[]): string[][] {
   const noSingle = base.filter(
