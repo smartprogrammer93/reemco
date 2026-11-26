@@ -116,6 +116,16 @@ function startFakeRedis(store: FakeStore, ttls: Map<string, number>): Promise<Se
               out += array(rest.map((k) => store.get(k) ?? null));
               break;
             }
+            // REEA-1241 — DEL removes the key and answers the count removed.
+            case "DEL": {
+              let removed = 0;
+              for (const key of rest) {
+                if (store.delete(key)) removed += 1;
+                ttls.delete(key);
+              }
+              out += `:${removed}\r\n`;
+              break;
+            }
             default:
               out += `-ERR unknown command '${name}'\r\n`;
           }
@@ -242,6 +252,15 @@ describe("native redis store", () => {
   it("returns null from MGET when the store is unreachable", async () => {
     const kv = makeRedisKv("redis://127.0.0.1:1", { timeoutMs: 400 })!;
     expect(await kv.mget(["a", "b"])).toBeNull();
+  });
+
+  it("deletes a key and reports a missing key as a failed delete", async () => {
+    // REEA-1241 — the clearance cache drops pre-cap entries with DEL.
+    const kv = makeRedisKv(url)!;
+    await kv.set("relay-cleared:https://x.test/p", "body", 60);
+    expect(await kv.del("relay-cleared:https://x.test/p")).toBe(true);
+    expect(await kv.get("relay-cleared:https://x.test/p")).toBeNull();
+    expect(await kv.del("relay-cleared:https://x.test/p")).toBe(false);
   });
 });
 

@@ -201,6 +201,8 @@ export interface RedisKv {
   getChecked(key: string): Promise<KvGetOutcome>;
   keys(pattern: string): Promise<string[] | null>;
   mget(keys: string[]): Promise<(string | null)[] | null>;
+  /** REEA-1241 — drop a key (the clearance cache evicts pre-cap entries). */
+  del(key: string): Promise<boolean>;
 }
 
 function isError(reply: Reply | undefined): reply is { kind: "error"; message: string } | undefined {
@@ -299,6 +301,14 @@ export function makeRedisKv(url: string, options: { timeoutMs?: number } = {}): 
         });
       }
       return values;
+    },
+    // REEA-1241 — DEL for the clearance cache's pre-cap eviction. True only
+    // when a key was actually removed; an unreachable store is a failed
+    // delete, never an exception.
+    async del(key) {
+      const replies = await run([["DEL", key]]);
+      const reply = replies?.[0];
+      return reply !== undefined && reply.kind === "number" && reply.value > 0;
     },
   };
 

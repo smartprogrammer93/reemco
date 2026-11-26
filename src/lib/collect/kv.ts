@@ -105,6 +105,16 @@ export interface SharedKv {
    * Optional so existing test fakes keep compiling.
    */
   mget?(keys: string[]): Promise<(string | null)[] | null>;
+  /**
+   * REEA-1241 — remove a key. Resolves true when the key existed and was
+   * removed, false when it was absent or the store was unreachable. The
+   * clearance cache uses this to drop entries that predate its value cap: a
+   * raw page written before the cap would otherwise hold its whole size in the
+   * shared allkeys-lru keyspace until the old TTL expires, still competing
+   * with `ratelimit:*` / `metrics:*`.
+   * Optional so existing test fakes that only need get/set keep compiling.
+   */
+  del?(key: string): Promise<boolean>;
 }
 
 let cached: SharedKv | null | undefined;
@@ -287,6 +297,13 @@ function makeKv(base: string, token: string): SharedKv {
         });
       }
       return values;
+    },
+    // REEA-1241 — Upstash REST `del/<key>`; true only when a key was actually
+    // removed, false on a missing key or an unreachable store.
+    async del(key) {
+      const data = await request(`del/${encodeURIComponent(key)}`);
+      if (data === null || data.ok === false) return false;
+      return typeof data.result === "number" ? data.result > 0 : true;
     },
   };
 }
