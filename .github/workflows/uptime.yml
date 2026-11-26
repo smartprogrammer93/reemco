@@ -73,7 +73,11 @@ jobs:
           # ceilings stricter than the thing they observe burn error budget on
           # noise (MTTR). Keep-warm's own ping already uses --max-time 60.
           probe() { # <path> -> writes body to /tmp/body, echoes "<code> <seconds>"
-            curl -s -o /tmp/body -w '%{http_code} %{time_total}' --max-time 45 "$BASE$1" 2>/dev/null || echo "000 0"
+            local res
+            : > /tmp/body
+            res=$(curl -s -o /tmp/body -w '%{http_code} %{time_total}' --max-time 45 "$BASE$1" 2>/dev/null || true)
+            [ -n "$res" ] || res="000 0"
+            printf '%s' "$res"
           }
           record() { # <path> <code> <seconds> <verdict>
             RECORD="$RECORD$TS $BASE$1 code=$2 s=$3 verdict=$4"$'\n'
@@ -123,6 +127,10 @@ jobs:
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
+          # REEA-1194: this job has NO checkout, so gh cannot infer the repo
+          # ("fatal: not a git repository") and every gh call in the alert step
+          # failed — the uptime alert path never fired. GH_REPO pins it.
+          GH_REPO: ${{ github.repository }}
           BASE: ${{ steps.probe.outputs.base }}
           FAILED: ${{ steps.probe.outputs.failed }}
         run: |

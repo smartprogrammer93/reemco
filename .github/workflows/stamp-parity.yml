@@ -128,6 +128,9 @@ jobs:
         if: env.STALE == '1'
         env:
           GH_TOKEN: ${{ github.token }}
+          # REEA-1194: no checkout in this job, so gh had no repo context and
+          # the label/issue/comment calls in this step failed. GH_REPO pins it.
+          GH_REPO: ${{ github.repository }}
         run: |
           gh label create stamp-parity-alert --color D93F0B \
             --description "Served stamp diverged from origin/main past the 15-min window (REEA-991)" --force || true
