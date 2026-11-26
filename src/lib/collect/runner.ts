@@ -249,6 +249,17 @@ export async function startProductCollectionStaged(
   const onStage = (snap: CollectJob) => {
     if (snap.offers.length > 0 || snap.status !== "collecting") resolveFirst?.(snap);
   };
+  // REEA-1192 — when the identity already carries the shelf collection's
+  // rows, the conversion page has its answer on the first byte: resolve the
+  // stage immediately so the hero/table paint the card's set (the merge in
+  // ProductHero renders those inherited rows) while the client continues the
+  // SAME job by polling. Waiting for the first live re-check here was the
+  // 4-11 s cold render measured on a7236a4, with no benefit: the rows were
+  // already in the payload.
+  const inherited = (product.offers ?? []).some(
+    (o) => typeof (o as { collectedAt?: string }).collectedAt === "string" && (o as { collectedAt?: string }).collectedAt !== "",
+  );
+  if (inherited) resolveFirst?.(stageSnapshot(job));
   // Dedupe hit (REEA-92): an earlier request already owns this in-flight run —
   // attach its current snapshot and let the client's polling converge; never
   // fan out a duplicate scrape of the same retailers.

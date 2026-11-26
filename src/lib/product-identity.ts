@@ -99,6 +99,18 @@ export async function resolveProductIdentity(
     }
     const exact = products.find((p) => p.productId === productId);
     if (exact) return exact;
+    // REEA-1192 — a card->PDP click can arrive while the shelf's finalize
+    // write is still in flight. Re-read the memo once, briefly, so the PDP
+    // lands on the card's exact group instead of a canonical neighbour
+    // (measured: hp-probook4 resolved to the HP OMEN card's group, and
+    // philips-5000s to Quadra Stores, when the first lookup raced the write).
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const late = readLiveQueryMemo(attempt, { country: scopeCountry, retiredLanes });
+    if (late) {
+      const lateExact = late.products.find((p) => p.productId === productId);
+      if (lateExact) return lateExact;
+      if (fallbackPool.length === 0) fallbackPool = late.products;
+    }
     if (fallbackPool.length === 0) fallbackPool = products;
   }
 
