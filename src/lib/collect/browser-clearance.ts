@@ -519,19 +519,32 @@ const JINA_TTL_S = 6 * 60 * 60;
 const JINA_TIMEOUT_MS = 20_000;
 let jinaCooldownUntil = 0;
 
-export async function jinaClearedHtml(url: string, contentSelector: string): Promise<string> {
+export async function jinaClearedHtml(
+  url: string,
+  /**
+   * REEA-1235 — the signature that proves the relay returned the lane's OWN
+   * page. Pass every shape that counts as an answer: a lane whose storefront
+   * answers a query with "0 results found" ships no product rows at all, and
+   * gating on the row selector alone rejected that page as "no page" — Nest's
+   * 11-of-12 blocked panel settle (REEA-1229). Any listed marker matches.
+   */
+  marker: string | readonly string[],
+): Promise<string> {
   if (!relayTierEnabled()) return "";
   if (Date.now() < jinaCooldownUntil) {
     lastFailure = "reader relay cooling down after a rate-limit answer";
     return "";
   }
-  const token = contentSelector.replace(/^[.#]/, "");
+  const markers = (Array.isArray(marker) ? marker : [marker])
+    .map((m) => m.replace(/^[.#]/, ""))
+    .filter((m) => m !== "");
+  const carries = (body: string): boolean => markers.some((m) => body.includes(m));
   const kv = getSharedKv();
   const key = `jina-cleared:${url}`;
   if (kv) {
     try {
       const cached = await kv.get(key);
-      if (cached && cached.includes(token)) return cached;
+      if (cached && carries(cached)) return cached;
     } catch {
       // store hiccup — pay the relay once
     }
@@ -547,7 +560,7 @@ export async function jinaClearedHtml(url: string, contentSelector: string): Pro
       return "";
     }
     const html = await res.text();
-    if (!html.includes(token)) {
+    if (!carries(html)) {
       lastFailure = "reader relay answered without the lane's content selector";
       return "";
     }

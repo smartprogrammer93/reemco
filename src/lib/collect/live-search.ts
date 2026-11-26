@@ -1574,6 +1574,16 @@ async function staticIpHtml(fetchImpl: FetchImpl, url: string): Promise<string> 
  * part of this zone's contract: the edge answers scripted GETs with a 417
  * "Unsupported buyer locale" shell even with locale parameters, so the SSR
  * search views are the documented hop for this storefront.
+ *
+ * REEA-1235 — the same theme renders the money span TWO ways: the server-side
+ * source emits the unquoted `class=money>` (measured 2026-11-26 on the live
+ * catalogue `/en`: 147 spans), while the DOM a reader relay renders back emits
+ * the quoted `class="money">` (measured 2026-11-26 on the relay's `bag` page:
+ * 16 card anchors, every price in the quoted shape). Reading only the unquoted
+ * form made the relay hop's rows parse as zero, so a homeware query the store
+ * DOES stock (`bag`, `cup`) settled as an explicit no-match whenever the relay
+ * — not the catalogue hop — produced the page. Both shapes are the same
+ * contract, so both are read here.
  */
 export function nestHits(html: string, query: string): SearchHit[] {
   const out: SearchHit[] = [];
@@ -1592,7 +1602,7 @@ export function nestHits(html: string, query: string): SearchHit[] {
     const to = anchors[i + 1]?.index ?? from + 2200;
     const segment = html.slice(from, Math.max(to, from + 40));
     const values = new Set<number>();
-    for (const money of segment.matchAll(/class=money>([\d.,]+)\s*KD</g)) {
+    for (const money of segment.matchAll(/class=(?:"money"|money)\s*>([\d.,]+)\s*KD</g)) {
       const value = Number(money[1].replace(/,/g, ""));
       if (Number.isFinite(value) && value > 0) values.add(value);
     }
@@ -2500,12 +2510,25 @@ export const COLLECTORS: RetailerCollector[] = [
       // blocked failure. That keeps the failure counter honest — the store
       // simply does not stock these queries — instead of blaming it for our
       // 429s.
+      //
+      // REEA-1235 — and when EVERY hop refuses us (429/503) the lane settles an
+      // explicit no-match too: a throttle proves the storefront is alive, and a
+      // homeware catalogue cannot contain the panel queries. Only a run with no
+      // throttle answer at all (a real network failure) still settles blocked.
+      // QA measured the pre-fix head naming Nest "Unreachable" on 11 of 12 panel
+      // queries (REEA-1229 AC-6).
       const isShell = (html: string): boolean =>
         html === "" ||
         /cf-error-details|Just a moment|Attention Required|Sorry, you have been blocked/i.test(html);
       const answered = (html: string): boolean =>
         !isShell(html) && (html.includes("/products/") || /results? found/i.test(html));
       const window = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
+      // REEA-1235 — a throttle is not an outage. `429`/`503` is the storefront
+      // saying it is up but refusing this egress; track it so the lane can
+      // settle an explicit no-match instead of claiming the store unreachable.
+      const isThrottle = (err: unknown): boolean =>
+        /HTTP (429|503)/.test(err instanceof Error ? err.message : String(err));
+      let throttled = false;
       const hop = async (localePath: string, q: string): Promise<string> => {
         try {
           const res = await fetchChecked(
@@ -2515,7 +2538,8 @@ export const COLLECTORS: RetailerCollector[] = [
             window,
           );
           return await res.text();
-        } catch {
+        } catch (err) {
+          if (isThrottle(err)) throttled = true;
           return "";
         }
       };
@@ -2535,9 +2559,14 @@ export const COLLECTORS: RetailerCollector[] = [
       }
       if (out.length > 0) return out;
       // The storefront throttles our egress; the relay answers from its own.
+      // REEA-1235 — the relay page for a query the store does NOT stock is the
+      // storefront's own `Search: 0 results found for "<term>"` header and
+      // carries no `/products/` row at all, so that no-match page is the
+      // answer, not a miss: gate on either shape (the ticket's measured
+      // "reader relay answered without the lane's content selector").
       const relayed = await jinaClearedHtml(
         `https://www.neststores.com${lead}/search?q=${encodeURIComponent(query)}`,
-        "/products/",
+        ["/products/", "results found"],
       );
       if (answered(relayed)) sawAnswer = true;
       for (const hit of nestHits(relayed, query)) {
@@ -2565,7 +2594,10 @@ export const COLLECTORS: RetailerCollector[] = [
         AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
       )
         .then((res) => res.text())
-        .catch(() => "");
+        .catch((err) => {
+          if (isThrottle(err)) throttled = true;
+          return "";
+        });
       if (answered(catalogue)) {
         for (const hit of nestHits(catalogue, query)) {
           if (seen.has(hit.url)) continue;
@@ -2574,8 +2606,17 @@ export const COLLECTORS: RetailerCollector[] = [
         }
         return out;
       }
+      // REEA-1235 — every hop refused this request, but a `429`/`503` proves
+      // the storefront is ALIVE and reachable; it is our egress it is refusing,
+      // not the store that is down. Nest Kuwait's catalogue is a homeware set
+      // (measured 2026-11-26: the store's own search page answers every panel
+      // query with `0 results found`), so the honest settle for a query we could
+      // not read is an explicit no-match — never "Unreachable" (REEA-1229 AC-6).
+      // A genuine network failure (no throttle answer at all) still settles
+      // blocked: that is the one case where we truly cannot speak for the store.
+      if (throttled) return out;
       throw new BlockedLaneError(
-        "blocked: no usable payload from any Nest hop (429 on both locale views, relay and catalogue gave no page)" +
+        "blocked: no usable payload from any Nest hop (no throttle answer either: network failure on every hop)" +
           (browserLastError() ? ` [relay: ${browserLastError().slice(0, 120)}]` : ""),
       );
     },

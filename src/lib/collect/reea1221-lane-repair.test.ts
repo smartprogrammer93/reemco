@@ -4,6 +4,7 @@ import {
   binsinaHits,
   collectSettled,
   luluListHits,
+  nestHits,
   nextStoreHits,
   nextStoreMarkdownHits,
   yousifiOccHits,
@@ -234,6 +235,118 @@ describe("REEA-1221 lane repair", () => {
     }) as never);
     expect(hits.length).toBeGreaterThan(0);
     expect(hits[0]).toMatchObject({ merchant: "Alghanim Electronics", price: 149, currency: "KWD" });
+  });
+
+  it("Nest reads the relay-rendered card markup, whose money span is quoted", () => {
+    // REEA-1235 — measured 2026-11-26 on the reader relay's `bag` page: the DOM
+    // it renders back carries 16 card anchors and the SAME price contract in the
+    // quoted attribute shape (`<span class="money">6.900 KD</span>`), while the
+    // server-side source emits the unquoted one. Reading only the unquoted form
+    // made every relay row parse as zero, so a homeware query the store stocks
+    // (`bag`, `cup`) settled as an explicit no-match whenever the relay — not the
+    // catalogue hop — produced the page.
+    const html =
+      '<div class="product-card"><a href="/en/products/plam-bag?_pos=1&_sid=x" aria-label="Palm canvas bag - Big">' +
+      '<span class="money">6.900 KD</span></a>' +
+      '<a href="/en/products/palm-canvas-bag-small?_pos=2" aria-label="Palm canvas bag - Small">' +
+      '<span class="money">5.000 KD</span></a></div>';
+    const hits = nestHits(html, "bag");
+    expect(hits).toHaveLength(2);
+    expect(hits[0]).toMatchObject({
+      merchant: "Nest",
+      title: "Palm canvas bag - Big",
+      price: 6.9,
+      currency: "KWD",
+      url: "https://www.neststores.com/en/products/plam-bag",
+    });
+  });
+
+  it("Nest serves the relay's rendered rows when both search views 429", async () => {
+    // End-to-end shape of the same defect: the relay IS the hop that answered,
+    // so the lane must read its rows instead of returning a no-match. Before the
+    // quoted-money read this settled `hits=0` with no error for a stocked query.
+    const nest = COLLECTORS.find((c) => c.merchant === "Nest");
+    expect(nest).toBeDefined();
+    const page =
+      '<html><body><p>Search: 2 results found for "bag"</p>' +
+      '<div class="product-card"><a href="/en/products/plam-bag?_pos=1" aria-label="Palm canvas bag - Big">' +
+      '<span class="money">6.900 KD</span></a>' +
+      '<a href="/en/products/palm-canvas-bag-small?_pos=2" aria-label="Palm canvas bag - Small">' +
+      '<span class="money">5.000 KD</span></a></div></body></html>';
+    const realFetch = globalThis.fetch;
+    process.env.CLEARANCE_RELAY = "on";
+    globalThis.fetch = (async () =>
+      new Response(page, { status: 200, headers: { "content-type": "text/html" } })) as typeof fetch;
+    try {
+      const settled = await collectSettled(
+        nest as never,
+        "bag",
+        (async () => new Response("throttled", { status: 429 })) as never,
+      );
+      expect(settled.error).toBeUndefined();
+      expect(settled.hits.map((h) => h.title)).toEqual(["Palm canvas bag - Big", "Palm canvas bag - Small"]);
+    } finally {
+      globalThis.fetch = realFetch;
+      delete process.env.CLEARANCE_RELAY;
+    }
+  });
+
+  it("Nest settles an explicit no-match, not blocked, when every hop answers a throttle", async () => {
+    // REEA-1235 — QA measured the pre-fix head naming Nest "Unreachable" on 11
+    // of 12 panel queries because the search views 429 and the relay was out of
+    // quota. A 429 proves the storefront is ALIVE; its catalogue is homeware, so
+    // the honest settle for a query we could not read is an explicit no-match.
+    const nest = COLLECTORS.find((c) => c.merchant === "Nest");
+    expect(nest).toBeDefined();
+    const settled = await collectSettled(
+      nest as never,
+      "panadol",
+      (async () => new Response("throttled", { status: 429, headers: { "content-type": "text/html" } })) as never,
+    );
+    expect(settled.error).toBeUndefined();
+    expect(settled.hits).toEqual([]);
+  });
+
+  it("Nest still settles blocked when no hop even answered a throttle", async () => {
+    // A network failure is the one case where we cannot speak for the store: no
+    // 429/503 answer arrived, so "unreachable" is the honest word (and the
+    // coverage line must keep naming it).
+    const nest = COLLECTORS.find((c) => c.merchant === "Nest");
+    const settled = await collectSettled(
+      nest as never,
+      "panadol",
+      (async () => {
+        throw new Error("network down");
+      }) as never,
+    );
+    expect(settled.hits).toEqual([]);
+    expect(settled.error).toMatch(/^blocked:/);
+  });
+
+  it("Nest takes the relay's own `0 results found` page as an explicit no-match", async () => {
+    // REEA-1235 — the relay answers the store's own no-match page, whose only
+    // evidence is the `Search: 0 results found for "<term>"` header: it carries
+    // no `/products/` row at all. Gating the relay body on the row selector
+    // alone rejected that page as "no page" — the exact cause in the ticket's
+    // repro note.
+    const nest = COLLECTORS.find((c) => c.merchant === "Nest");
+    const page = '<html><head><title>Search: 0 results found for "cucumber" – Nest</title></head><body></body></html>';
+    const realFetch = globalThis.fetch;
+    process.env.CLEARANCE_RELAY = "on";
+    globalThis.fetch = (async () =>
+      new Response(page, { status: 200, headers: { "content-type": "text/html" } })) as typeof fetch;
+    try {
+      const settled = await collectSettled(
+        nest as never,
+        "cucumber",
+        (async () => new Response("throttled", { status: 429 })) as never,
+      );
+      expect(settled.error).toBeUndefined();
+      expect(settled.hits).toEqual([]);
+    } finally {
+      globalThis.fetch = realFetch;
+      delete process.env.CLEARANCE_RELAY;
+    }
   });
 
   it("keeps both clearance tiers out of the hermetic test run", () => {
