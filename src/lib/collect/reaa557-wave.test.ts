@@ -17,8 +17,11 @@ describe("REEA-557 Alghanim Electronics lane", () => {
     // Shape captured live off alghanim-store.com 2026-09-10: the loop-title
     // h2 wraps the link, `<del>/<ins>` carry list/sale amounts through the
     // nested sar-currency-symbol wrapper (empty symbol span, figure before
-    // </bdi>), a plain amount when no promo runs. Empty symbol → the theme's
-    // SAR stamp; KD-style labels join KWD like the shared Woo scanner.
+    // </bdi>), a plain amount when no promo runs. Empty symbol → the STORE's
+    // stamp, which is KWD: the class is named `sar-currency-symbol` but this is
+    // the Kuwaiti Alghanim storefront (REEA-1221, measured 2026-11-26 — a 55"
+    // Samsung TV at 2,599 and a window AC at 1,949 are dinar); KD-style labels
+    // join KWD like the shared Woo scanner.
     const html =
       '<h2 class="woocommerce-loop-product__title"><a class="woocommerce-loop-product__link" href="https://alghanim-store.com/product/coffee-a/">Coffee A 50g</a></h2>' +
       '<span class="price"><del><span class="woocommerce-Price-amount amount"><bdi>' +
@@ -39,7 +42,7 @@ describe("REEA-557 Alghanim Electronics lane", () => {
       title: "Coffee A 50g",
       price: 2.4,
       wasPrice: 2.8,
-      currency: "SAR",
+      currency: "KWD",
       url: "https://alghanim-store.com/product/coffee-a/",
       inStock: true,
     });
@@ -60,7 +63,7 @@ describe("REEA-557 Alghanim Electronics lane", () => {
       return new Response(cardPage, { headers: { "content-type": "text/html" } });
     });
     expect(seenQ).toEqual(["coffee"]);
-    expect(hits[0]).toMatchObject({ title: "Coffee X 50g", price: 3.1, currency: "SAR" });
+    expect(hits[0]).toMatchObject({ title: "Coffee X 50g", price: 3.1, currency: "KWD" });
   });
 
   it("empty whole-query answer gets one bounded per-word round, gate scores the ORIGINAL query", async () => {

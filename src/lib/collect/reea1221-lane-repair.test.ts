@@ -10,6 +10,7 @@ import {
 } from "@/lib/collect/live-search";
 import { browserTierEnabled, relayTierEnabled } from "@/lib/collect/browser-clearance";
 import { coverageParts, type LiveSearchResult } from "@/lib/collect/coverage";
+import { arabicQueryForms } from "@/lib/collect/search-fallback";
 
 /**
  * REEA-1221 — lane repair guardrails. Each case pins one measured cause the
@@ -209,6 +210,30 @@ describe("REEA-1221 lane repair", () => {
     }) as never);
     expect(settled.error).toBeUndefined();
     expect(settled.hits.length).toBeGreaterThan(0);
+  });
+
+  it("Alghanim asks for the Arabic category form and stamps KWD on its rows", async () => {
+    // REEA-1221 — the archive titles rows in Arabic and its own theme class is
+    // named `sar-currency-symbol`, but it is the Kuwaiti store: `غسالة` answers a
+    // real washing-machine grid while `washing machine` answers nothing, and the
+    // prices are dinar. Before this fix every Alghanim row was stamped SAR,
+    // failed the KW currency-mis-map check and was excluded from comparison.
+    expect(arabicQueryForms("washing machine")).toEqual(["غسالة"]);
+    expect(arabicQueryForms("iphone 17 pro")).toEqual([]);
+    const card =
+      '<h2 class="woocommerce-loop-product__title"><a href="https://alghanim-store.com/product/washer-a/">' +
+      "غسالة سوبر جنرال أوتوماتيك 7 كجم</a></h2>" +
+      '<span class="price"><span class="woocommerce-Price-amount amount"><bdi>' +
+      '<span class="sar-currency-symbol"><span class="woocommerce-Price-currencySymbol"></span></span> 149</bdi></span></span>';
+    const lane = COLLECTORS.find((c) => c.merchant === "Alghanim Electronics");
+    const hits = await lane!.collect("washing machine", (async (url: string) => {
+      const q = decodeURIComponent(url.match(/[?&]s=([^&]*)/)?.[1] ?? "");
+      return new Response(q === "غسالة" ? card : "<html><body>nothing</body></html>", {
+        headers: { "content-type": "text/html" },
+      });
+    }) as never);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits[0]).toMatchObject({ merchant: "Alghanim Electronics", price: 149, currency: "KWD" });
   });
 
   it("keeps both clearance tiers out of the hermetic test run", () => {

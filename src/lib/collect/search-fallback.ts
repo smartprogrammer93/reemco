@@ -827,12 +827,18 @@ export function scanAlghanimStoreCards(html: string): WooCard[] {
     const was = amountOf(del);
     const symbol = windowHtml.match(/woocommerce-Price-currencySymbol[^>]*>([^<]*)</)?.[1]?.trim() ?? "";
     // Same label rules as the shared Woo scanner: KD is the local spelling of
-    // KWD; an empty symbol span falls back to the theme's own stamp.
+    // KWD; an empty symbol span falls back to the store's own stamp.
+    //
+    // REEA-1221 — that stamp is KWD, not SAR. The theme's class is literally
+    // named `sar-currency-symbol` (a legacy class name), but alghanim-store.com
+    // is the KUWAITI Alghanim storefront and its prices are Kuwaiti dinar
+    // (measured 2026-11-26: a 55" Samsung smart TV at 2,599, a window AC at
+    // 1,949). Stamping SAR on those rows made every Alghanim offer fail the
+    // shared currency-mis-map check against a KW host, so the whole lane's rows
+    // were flagged and excluded from comparison — 18 of 18 on `air fryer`.
     const currency =
       symbol === ""
-        ? windowHtml.includes("sar-currency-symbol")
-          ? "SAR"
-          : "KWD"
+        ? "KWD"
         : symbol.toUpperCase() === "KD"
           ? "KWD"
           : symbol.toUpperCase();
@@ -898,6 +904,54 @@ export function scanNextStoreMarkdown(markdown: string): NextStoreCard[] {
     out.push({ title, url, price, currency: "KWD", inStock: true });
   }
   return out;
+}
+
+/**
+ * REEA-1221 — Latin→Arabic query bridge for the Arabic-first catalogues.
+ *
+ * The reverse of `latinQueryForms`: some Kuwait storefronts title their rows in
+ * Arabic only (Alghanim Electronics measured 2026-11-26: `غسالة` answers a real
+ * washing-machine grid while the Latin `washing machine` answers the theme's
+ * empty shell), and the shared gate cannot match an Arabic title against a Latin
+ * query. The bridge carries the CATEGORY vocabulary only — a brand or model
+ * query (`dyson`, `iphone 17 pro`, `s25 ultra`) is left alone, because its
+ * Arabic brand word is too loose to keep the row on-scope.
+ *
+ * This maps QUERY TERMS, never products: every offer still comes from a live
+ * fetch and is scored by the shared gate against the bridged form.
+ */
+const ARABIC_QUERY_FORMS: Readonly<Record<string, readonly string[]>> = {
+  "washing machine": ["غسالة"],
+  washer: ["غسالة"],
+  "air fryer": ["قلاية هوائية", "قلاية"],
+  headphones: ["سماعات"],
+  earphones: ["سماعات"],
+  cucumber: ["خيار"],
+  laptop: ["لابتوب", "كمبيوتر محمول"],
+  fridge: ["ثلاجة"],
+  refrigerator: ["ثلاجة"],
+  tv: ["تلفزيون"],
+  television: ["تلفزيون"],
+  oven: ["فرن"],
+  microwave: ["مايكروويف"],
+  vacuum: ["مكنسة"],
+  "vacuum cleaner": ["مكنسة"],
+  "air conditioner": ["مكيف"],
+  ac: ["مكيف"],
+};
+
+/** Arabic forms worth asking this catalogue for, longest phrase first. */
+export function arabicQueryForms(query: string): string[] {
+  const q = query.trim().toLowerCase().replace(/\s+/g, " ");
+  const out = new Set<string>();
+  const exact = ARABIC_QUERY_FORMS[q];
+  if (exact) for (const form of exact) out.add(form);
+  // A multi-word query that contains a mapped category ("samsung washing
+  // machine") still gets that category's form, scored against the whole query.
+  for (const [term, forms] of Object.entries(ARABIC_QUERY_FORMS)) {
+    if (term.includes(" ") && q.includes(term)) for (const form of forms) out.add(form);
+  }
+  return [...out];
 }
 
 export function scanLuluListCards(html: string): NextStoreCard[] {

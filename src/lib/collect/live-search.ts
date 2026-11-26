@@ -27,6 +27,7 @@ import {
   queryGatePasses,
   scanAlghanimStoreCards,
   scanBinsinaCards,
+  arabicQueryForms,
   scanLuluListCards,
   scanNextStoreCards,
   scanNextStoreMarkdown,
@@ -2365,7 +2366,7 @@ export const COLLECTORS: RetailerCollector[] = [
       // the empty-answer cells on these Woo archives), merge bodies, and the
       // shared gate scores every merged row against the ORIGINAL query.
       const window = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
-      const hop = async (q: string): Promise<string> => {
+      const hop = async (q: string): Promise<string> =>
         // REA-666 — shared identity hop: ride the SAME identity-alternating
         // handshake the sibling CF-fronted lanes use (verified-crawler leads,
         // scripted-browser follows, plain rides third, clearance jar replayed
@@ -2375,24 +2376,60 @@ export const COLLECTORS: RetailerCollector[] = [
         // answered; sharing the handshake gives this hop the same verified
         // pass shape plus the mirrored clearance replay. Yousifi rides the
         // identical handshake on the same Woo `post_type=product` shape.
-        const res = await fetchThroughChallenge(
+        challengeHtmlHop(
           fetchImpl,
           `https://alghanim-store.com/?s=${encodeURIComponent(q)}&post_type=product`,
-          {},
-          window,
         );
-        return await res.text();
-      };
+      const bridgedHits: SearchHit[] = [];
       const bodies = [await hop(query)];
       if (alghanimHits(bodies[0], query).length === 0 && !window.aborted) {
+        // REEA-1221 — the archive matches MODEL CODES and specific terms, not
+        // generic brand/category words: measured 2026-11-26, `S25` and `17 Pro`
+        // answer priced cards while `Galaxy`, `iPhone`, `Dyson`, `PlayStation`
+        // and `Headphones` answer the empty shell, and the whole phrase
+        // `iphone 17 pro` answers unrelated rows (an AC, a mixer) because the
+        // archive matches "17"/"pro" loosely. The model code inside the query is
+        // therefore the strongest single token to ask for, so it leads the
+        // bounded fallback round; the shared gate still scores every merged row
+        // against the ORIGINAL query, so a loose answer cannot smuggle an
+        // off-scope card onto the shelf.
+        const modelCodes = (query.match(/[a-z]*\d+[a-z0-9]*/gi) ?? []).map((t) => t.trim());
         const words = Array.from(
-          new Set([...latinQueryForms(query), ...query.split(/\s+/).filter((w) => w.length > 1)]),
-        ).slice(0, 3);
+          new Set([
+            ...modelCodes,
+            ...latinQueryForms(query),
+            ...query.split(/\s+/).filter((w) => w.length > 1),
+          ]),
+        ).slice(0, 4);
         const hops = await Promise.allSettled(words.map((word) => hop(word)));
         for (const hopRes of hops) if (hopRes.status === "fulfilled") bodies.push(hopRes.value);
+        // REEA-1221 — the archive titles its rows in Arabic, and the shared gate
+        // cannot match an Arabic title against a Latin query, so a Latin
+        // category query answers the empty shell even though the store stocks
+        // the class (measured 2026-11-26: غسالة answers a real washing-machine
+        // grid while "washing machine" answers nothing). Ask for the curated
+        // Arabic form and score those rows against THAT form — a faithful
+        // translation of the shopper's query, never a different one.
+        const bridged = arabicQueryForms(query).slice(0, 2);
+        if (bridged.length > 0 && !window.aborted) {
+          const arabicHops = await Promise.allSettled(
+            bridged.map(async (form) => ({ form, body: await hop(form) })),
+          );
+          for (const hopRes of arabicHops) {
+            if (hopRes.status !== "fulfilled") continue;
+            for (const hit of alghanimHits(hopRes.value.body, hopRes.value.form)) {
+              bridgedHits.push(hit);
+            }
+          }
+        }
       }
       const seen = new Set<string>();
       const out: SearchHit[] = [];
+      for (const hit of bridgedHits) {
+        if (seen.has(hit.url)) continue;
+        seen.add(hit.url);
+        out.push(hit);
+      }
       for (const body of bodies) {
         for (const hit of alghanimHits(body, query)) {
           if (seen.has(hit.url)) continue;
