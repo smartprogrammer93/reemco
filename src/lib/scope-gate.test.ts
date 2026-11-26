@@ -169,6 +169,9 @@ describe("AC 7a-5 — laptop: laptops primary, bags/trolleys/backpacks accessory
       // Neutral row: no "laptop" word, but the retailer ranked it under the
       // class — it stays primary (AC 7a-5 requires the pool's laptops render).
       "Acer Aspire 3 A315-24P-R7VH 15.6-inch Ryzen 3 7320U 8GB 128GB SSD",
+      // Live over-suppression pin: the bundled "+ Pen" is a stylus, not the
+      // stationery aisle — a Yoga 7 laptop must stay primary.
+      "Lenovo Yoga 7 2-in-1 14IML9 Intel Ultra 7 155U, AI PC, 14\" WUXGA IPS Multi-Touch Laptop, 16 GB RAM, 512 GB SSD, Windows 11 Home, Backlit, English/Arabic + Pen, 2 Years Warranty - Storm Grey",
     ]) {
       expect(isPrimaryShelfScope(verdict(query, title))).toBe(true);
     }

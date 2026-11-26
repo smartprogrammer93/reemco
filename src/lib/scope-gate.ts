@@ -139,8 +139,11 @@ const CLASS_PATTERNS: readonly { id: string; re: RegExp }[] = [
     re: /\b(bags?|backpacks?|trolleys?|suitcases?|luggage|pouches?|totes?)\b/i,
   },
   {
+    // "pen"/"pencil" stay OUT: a bundled stylus ("... + Pen") is a laptop
+    // accessory, not stationery, and demoting the Yoga 7 to the band was the
+    // over-suppression this gate must not produce (measured live).
     id: "stationery",
-    re: /\b(books?|textbooks?|cookbooks?|recipes?|papers?|card mat|craft|stationery|pens?|pencils?)\b/i,
+    re: /\b(books?|textbooks?|cookbooks?|recipes?|papers?|card mat|craft|stationery)\b/i,
   },
   {
     id: "apparel",
