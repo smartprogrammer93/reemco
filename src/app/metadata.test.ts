@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import robots from "@/app/robots";
 import sitemap from "@/app/sitemap";
 import { generateMetadata as productMetadata } from "@/app/product/[productId]/page";
@@ -12,6 +12,16 @@ import {
   selectSitemapQueries,
 } from "@/lib/sitemap-queries";
 import type { FunnelEvent } from "@/lib/events";
+
+// REEA-1192 — the sitemap now checks each catalog identity's own listings
+// live before advertising its /product/* URL. This file pins URL shape, not
+// live data, so the scraper is stubbed to always answer one offer.
+vi.mock("@/lib/collect/scraper", () => ({
+  scrapeOffer: async () => ({
+    offers: [{ merchant: "Xcite", price: 1, currency: "KWD", url: "https://xcite.com/x" }],
+    timedOut: false,
+  }),
+}));
 
 /**
  * REEA-278 / REEA-1168 — guardrails for the metadata route handlers. These

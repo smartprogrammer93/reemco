@@ -12,11 +12,21 @@ import type { NormalizedProduct } from "@/types/product";
 
 const mocks = vi.hoisted(() => ({
   collectLiveResults: vi.fn(),
+  collectLiveResultsStagedAdmitted: vi.fn(),
+  readLiveQueryMemo: vi.fn(),
   readRetiredLanes: vi.fn(),
 }));
 
+// REEA-1192 — the PDP now inherits a query memo when the shelf just served it
+// and otherwise takes the admitted staged path bounded to the page completion
+// budget. These pins exercise the dispatch half, so the memo is a miss and the
+// staged entry resolves to the same canned fan-out answer the old mock returned.
 vi.mock("@/lib/collect/live-search", () => ({
   collectLiveResults: mocks.collectLiveResults,
+  collectLiveResultsStagedAdmitted: mocks.collectLiveResultsStagedAdmitted,
+  readLiveQueryMemo: mocks.readLiveQueryMemo,
+  RESULTS_COMPLETION_BUDGET_MS: 1_800,
+  STAGE_TAIL_HEADROOM_MS: 6_200,
 }));
 vi.mock("@/lib/collect/lane-health", () => ({
   readRetiredLanes: mocks.readRetiredLanes,
@@ -104,8 +114,15 @@ const HD16 = product(
 
 beforeEach(() => {
   mocks.collectLiveResults.mockReset();
+  mocks.collectLiveResultsStagedAdmitted.mockReset();
+  mocks.readLiveQueryMemo.mockReset();
   mocks.readRetiredLanes.mockReset();
   mocks.readRetiredLanes.mockResolvedValue(new Set<string>());
+  mocks.readLiveQueryMemo.mockReturnValue(null);
+  mocks.collectLiveResultsStagedAdmitted.mockImplementation(async (query: string) => {
+    const answer = await mocks.collectLiveResults(query);
+    return { final: Promise.resolve(answer), converged: Promise.resolve(answer) };
+  });
 });
 
 describe("REEA-1140 — the PDP re-runs the card's query, not a slug guess", () => {
