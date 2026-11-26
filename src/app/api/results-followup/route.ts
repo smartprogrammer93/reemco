@@ -37,7 +37,7 @@
  */
 import type { LiveSearchResult } from "@/lib/collect/live-search";
 // REEA-1078 S2 — dead-lane retirement applies to this cross-worker fan-out too.
-import { readRetiredLanes } from "@/lib/collect/lane-health";
+import { readLaneRetirement } from "@/lib/collect/lane-health";
 import {
   collectLiveResultsStagedAdmitted,
   followUpSnapshot,
@@ -123,10 +123,14 @@ export async function GET(req: Request): Promise<Response> {
     // immediately; past it the fan-out runs again — always live-at-query-time.
     // REEA-1133 — this fallback is a page-path fan-out too, so it takes the
     // same bounded FAIL-CLOSED admission instead of bypassing the cap.
+    // REEA-1207 — same retirement snapshot as the page: static retirement is
+    // not permanent, so a canary-readmitted lane is dispatched here too.
+    const { retired: retiredLanes, readmitted: readmittedLanes } = await readLaneRetirement();
     const staged = await collectLiveResultsStagedAdmitted(query, {
       locale,
       // REEA-1078 S2 — same dead-lane retirement set as the page's fan-out.
-      retiredLanes: await readRetiredLanes(),
+      retiredLanes,
+      readmittedLanes,
     });
     fallbackFinal = staged.final;
     pending = followUpSnapshot(query, locale);

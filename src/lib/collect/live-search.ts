@@ -4057,6 +4057,14 @@ export interface StagedCollectOptions {
    * working, minus the retired lanes).
    */
   retiredLanes?: readonly string[];
+  /**
+   * REEA-1207 — lanes the daily canary has returned to the fan-out. A
+   * code-level `DEFAULT_RETIRED_LANES` entry is not a permanent veto: the
+   * serve path subtracts this set so a lane re-admitted after
+   * `LANE_CANARY_SUCCESS_STREAK` consecutive real answers is dispatched again.
+   * Callers read both halves from one `readLaneRetirement()` snapshot.
+   */
+  readmittedLanes?: readonly string[];
 }
 
 /** Always-miss cache used when the caller injects its own fetchImpl: a
@@ -4217,7 +4225,15 @@ function probeStagedRun(query: string, opts: StagedCollectOptions): StagedRunPro
   // (possibly silent-zero) note never reaches the coverage sentence. The
   // adapter and its parser stay declared/tested in COLLECTORS; re-admission is
   // the canary path in ./lane-health.ts.
-  const retired = new Set<string>([...DEFAULT_RETIRED_LANES, ...(opts.retiredLanes ?? [])]);
+  // REEA-1207 — a canary re-admission overrides the STATIC retirement only;
+  // a dynamically retired lane (read from the same snapshot) stays out even
+  // if a caller also lists it as readmitted. Re-admission requires
+  // LANE_CANARY_SUCCESS_STREAK consecutive real answers, never a store blip.
+  const readmitted = new Set<string>(opts.readmittedLanes ?? []);
+  const retired = new Set<string>([
+    ...DEFAULT_RETIRED_LANES.filter((m) => !readmitted.has(m)),
+    ...(opts.retiredLanes ?? []),
+  ]);
   const collectors = (country
     ? COLLECTORS.filter((c) => c.country === country)
     : COLLECTORS

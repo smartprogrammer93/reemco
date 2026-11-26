@@ -40,8 +40,37 @@ import { getSharedKv } from "@/lib/collect/kv";
  * Re-admission tripwire: `/api/echo` `zones["www.nextstore.com.kw"]` reports a
  * real 200 answer, or the daily canary succeeds `LANE_CANARY_SUCCESS_STREAK`
  * times in a row — the runner re-admits automatically on the latter.
+ *
+ * REEA-1207 (Bet 7B Addition 1, 2026-11-26) — the dead lanes below were
+ * dispatched on every search and produced ZERO shopper offers for the week.
+ * `/api/metrics/weekly` W48, stamp `14819423ccfe`:
+ *
+ *   | lane                | attempts | failures | offers |
+ *   |---------------------|----------|----------|--------|
+ *   | Lulu Hypermarket    | 19,447   | 17,094   | 0      |
+ *   | BinSina             | 19,447   | 6,071    | 0      |
+ *   | Yousifi             | 19,447   | 26       | 0      |
+ *   | YasO                | 19,447   | 0        | 0      |
+ *   | Hobby Center        | 19,447   | 0        | 0      |
+ *   | Bomai               | 19,447   | 0        | 0      |
+ *
+ * That is ~117k adapter calls a week with no offer to show for it, plus a
+ * coverage line that named Lulu Hypermarket unreachable on every serve. The
+ * lane stays declared and tested; the daily canary still probes it and returns
+ * it to the fan-out on `LANE_CANARY_SUCCESS_STREAK` consecutive real answers,
+ * so nothing here is a silent, permanent removal — a lane is re-admitted by a
+ * canary, not by drift. (Ounass was retired earlier by removal from COLLECTORS;
+ * its 48/48 W48 attempts are history only.)
  */
-export const DEFAULT_RETIRED_LANES: readonly string[] = ["Next Store"];
+export const DEFAULT_RETIRED_LANES: readonly string[] = [
+  "Next Store",
+  "Lulu Hypermarket",
+  "BinSina",
+  "Yousifi",
+  "YasO",
+  "Hobby Center",
+  "Bomai",
+];
 
 /** A lane must have failed every attempt for at least this many days. */
 export const LANE_RETIRE_WINDOW_DAYS = 7;
@@ -287,6 +316,10 @@ export function applyCanaryOutcome(
     return { state, readmitted: false };
   }
   lane.canaryStreak += 1;
+  // REEA-1207 — a STATICALLY retired lane is retired in the same persisted
+  // shape (the daily runner seeds `retiredAt` for DEFAULT_RETIRED_LANES), so
+  // the streak clears it here exactly like a dynamically retired lane. Without
+  // this a canary could never return a code-level retired lane to the fan-out.
   if (lane.canaryStreak >= LANE_CANARY_SUCCESS_STREAK && lane.retiredAt) {
     lane.retiredAt = undefined;
     lane.retiredReason = undefined;
@@ -303,6 +336,20 @@ export function applyCanaryOutcome(
 export function retiredLanesOf(state: LaneHealthState): string[] {
   return Object.entries(state.lanes)
     .filter(([, l]) => Boolean(l.retiredAt))
+    .map(([m]) => m)
+    .sort();
+}
+
+/**
+ * REEA-1207 — lanes a canary has returned to the fan-out. The dispatch layer
+ * subtracts these from DEFAULT_RETIRED_LANES so a code-level retirement is not
+ * a permanent veto: re-admission happens only through
+ * `LANE_CANARY_SUCCESS_STREAK` consecutive real answers, and the 7-day rule can
+ * retire the lane again afterwards.
+ */
+export function readmittedLanesOf(state: LaneHealthState): string[] {
+  return Object.entries(state.lanes)
+    .filter(([, l]) => Boolean(l.readmittedAt) && !l.retiredAt)
     .map(([m]) => m)
     .sort();
 }
@@ -344,20 +391,45 @@ export async function writeLaneHealth(
  * static `DEFAULT_RETIRED_LANES` are applied separately by the dispatch layer,
  * so even a cold store still keeps Next Store out.
  */
-let memo: { at: number; lanes: string[] } | null = null;
+let memo: { at: number; lanes: string[]; readmitted: string[] } | null = null;
+
+export interface LaneRetirementRead {
+  /** Lanes the persisted state says are out of the default fan-out right now. */
+  retired: string[];
+  /** Lanes a canary returned to the fan-out (static retirement must not veto). */
+  readmitted: string[];
+}
+
+/**
+ * REEA-1207 — one read for both halves of the retirement decision. The serve
+ * path needs `retired` (do not dispatch) and `readmitted` (a code-level
+ * DEFAULT_RETIRED_LANES entry is not permanent), and they must come from the
+ * same snapshot so a canary that just re-admitted a lane is never applied to a
+ * stale retired list. Fail-open: a store problem yields the memoized view
+ * (or nothing extra retired) rather than retiring everything.
+ */
+export async function readLaneRetirement(opts: {
+  now?: number;
+  kv?: ReturnType<typeof getSharedKv>;
+} = {}): Promise<LaneRetirementRead> {
+  const now = opts.now ?? Date.now();
+  if (memo && now - memo.at < RETIRED_LANES_MEMO_MS) {
+    return { retired: memo.lanes, readmitted: memo.readmitted };
+  }
+  const read = await readLaneHealth({ kv: opts.kv });
+  // Fail open AND memoize the failure: a store blip must not re-pay the KV
+  // timeout on every serve for the next minute (AC-8 latency budget).
+  const retired = read.reachable ? retiredLanesOf(read.state) : (memo?.lanes ?? []);
+  const readmitted = read.reachable ? readmittedLanesOf(read.state) : (memo?.readmitted ?? []);
+  memo = { at: now, lanes: retired, readmitted };
+  return { retired, readmitted };
+}
 
 export async function readRetiredLanes(opts: {
   now?: number;
   kv?: ReturnType<typeof getSharedKv>;
 } = {}): Promise<string[]> {
-  const now = opts.now ?? Date.now();
-  if (memo && now - memo.at < RETIRED_LANES_MEMO_MS) return memo.lanes;
-  const read = await readLaneHealth({ kv: opts.kv });
-  // Fail open AND memoize the failure: a store blip must not re-pay the KV
-  // timeout on every serve for the next minute (AC-8 latency budget).
-  const lanes = read.reachable ? retiredLanesOf(read.state) : (memo?.lanes ?? []);
-  memo = { at: now, lanes };
-  return lanes;
+  return (await readLaneRetirement(opts)).retired;
 }
 
 /** Test hook: drop the serve-path memo. */

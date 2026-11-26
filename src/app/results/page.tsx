@@ -15,7 +15,7 @@ import { paintedShelfCardsAcrossStages, duplicateCardsOf } from "@/lib/results-s
 import { hiddenMatchReport, hiddenMatchTotal } from "@/lib/hidden-matches";
 // REEA-1078 S2 — the serve path applies the persisted dead-lane retirement set
 // on top of the static retirement (see lib/collect/lane-health.ts).
-import { readRetiredLanes, recordLaneAttempts } from "@/lib/collect/lane-health";
+import { readLaneRetirement, recordLaneAttempts } from "@/lib/collect/lane-health";
 // REEA-1078 AC9 — lane reachability from the same zone status /api/echo reports.
 import { readUnreachableLanes } from "@/lib/collect/zone-status";
 import { MARKET_COOKIE, resolveResultsMarket } from "@/lib/country";
@@ -204,17 +204,18 @@ export default async function ResultsPage({
   // they cannot serialize extra latency onto the fan-out (AC-8); either one
   // fails OPEN (nothing extra retired / no label) so instrumentation can never
   // blank a search.
-  const [retiredLanes, unreachableLanes] = await Promise.all([
-    readRetiredLanes(),
+  const [retirement, unreachableLanes] = await Promise.all([
+    readLaneRetirement(),
     readUnreachableLanes(),
   ]);
+  const { retired: retiredLanes, readmitted: readmittedLanes } = retirement;
   // REEA-1133 — the page-path fan-out goes through the process-wide admission
   // cap with a bounded, FAIL-CLOSED wait (src/lib/collect/inflight.ts), so N
   // distinct queries queue behind the ceiling instead of each multiplying the
   // retailer lanes. A render that cannot be admitted serves an honest pending
   // shell and the same run is deferred behind the response: the follow-up feed
   // (REEA-398) still folds its live answer into the open page.
-  const staged = await collectLiveResultsStagedAdmitted(query, { refresh: hint.refresh, locale, retiredLanes });
+  const staged = await collectLiveResultsStagedAdmitted(query, { refresh: hint.refresh, locale, retiredLanes, readmittedLanes });
   // REEA-398 — keep the hops still in flight alive BEHIND the finalized
   // response: after() runs the run's allSettled chain once the document is
   // sent, so late offers converge into the cache and the follow-up feed
