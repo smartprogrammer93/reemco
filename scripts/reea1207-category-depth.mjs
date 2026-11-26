@@ -224,13 +224,27 @@ async function main() {
       for (const locale of LOCALES) {
         const url = `${BASE}/results?q=${encodeURIComponent(query)}`;
         const { status, body } = await fetchText(url, {
-          // REEA-1207 — `rc_refresh=1` forces the page to run its OWN fan-out
-          // instead of serving a memo/stale replay (QUERY_CACHE_MAX_AGE_MS is
-          // 5 min, so a head deployed minutes ago would otherwise be measured
-          // through the previous build's snapshot). Clean run = current build.
-          cookie: `rc_locale=${locale}; rc_refresh=1`,
+          // The page is measured exactly as it is served: a memo/stale replay
+          // is still a page produced by the CURRENT build (only its snapshot is
+          // older), and forcing `rc_refresh=1` on every hop made the probe
+          // itself trip the edge's 429s (66 cold fan-outs per run). The stamp is
+          // recorded before each run so a mid-rollout head is visible.
+          cookie: `rc_locale=${locale}`,
           "accept-language": locale === "ar" ? "ar" : "en",
         });
+        if (status === 429) {
+          // One polite retry: the edge rate-limits page requests in bursts.
+          await sleep(2000);
+          const retry = await fetchText(url, {
+            cookie: `rc_locale=${locale}`,
+            "accept-language": locale === "ar" ? "ar" : "en",
+          });
+          if (retry.status === 200) {
+            byLocale[locale] = measure(retry.body);
+            await sleep(QUERY_GAP_MS);
+            continue;
+          }
+        }
         if (status !== 200) {
           console.log(`  ${query} [${locale}]: HTTP ${status} — no measurement`);
           byLocale[locale] = null;
