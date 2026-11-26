@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedProduct } from "@/types/product";
+import { OVERALL_BUDGET_MS } from "@/lib/collect/types";
 
 const cacheDir = mkdtempSync(join(tmpdir(), "reemco-staged-test-"));
 process.env.COLLECT_CACHE_DIR = cacheDir;
@@ -70,20 +71,30 @@ describe("startProductCollectionStaged", () => {
   it("dedupes onto the in-flight job without re-running the scrape", async () => {
     // Never-settling first fetch keeps the first job `collecting` for the
     // duration of the assertion (the runner's own budget bounds it later).
-    const firstFetch = vi.fn(
-      () => new Promise<Response>(() => {}),
-    );
-    const staged = await startProductCollectionStaged(product("staged-248-dedup"), {
-      fetchImpl: firstFetch,
-    });
-    // Attach while the first run is still collecting: the second call must
-    // reuse the job id and must NOT fan out a second scrape.
-    const secondFetch = vi.fn(() => Promise.resolve(new Response(okHtml, { status: 200 })));
-    const attached = await startProductCollectionStaged(product("staged-248-dedup"), {
-      fetchImpl: secondFetch,
-    });
-    const snap = await attached.firstStage;
-    expect(snap.jobId).toBe(staged.jobId);
-    expect(secondFetch).toHaveBeenCalledTimes(0);
+    // REEA-1211 — the attach now waits for the run's terminal state, bounded
+    // by its own budget (OVERALL_BUDGET_MS), not the old 4.5 s per-lane
+    // ceiling, so drive the clock instead of sleeping through it.
+    vi.useFakeTimers();
+    try {
+      const firstFetch = vi.fn(
+        () => new Promise<Response>(() => {}),
+      );
+      const staged = await startProductCollectionStaged(product("staged-248-dedup"), {
+        fetchImpl: firstFetch,
+      });
+      // Attach while the first run is still collecting: the second call must
+      // reuse the job id and must NOT fan out a second scrape.
+      const secondFetch = vi.fn(() => Promise.resolve(new Response(okHtml, { status: 200 })));
+      const attached = await startProductCollectionStaged(product("staged-248-dedup"), {
+        fetchImpl: secondFetch,
+      });
+      const firstStage = attached.firstStage;
+      await vi.advanceTimersByTimeAsync(OVERALL_BUDGET_MS + 1_000);
+      const snap = await firstStage;
+      expect(snap.jobId).toBe(staged.jobId);
+      expect(secondFetch).toHaveBeenCalledTimes(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -15,7 +15,7 @@
  * the budgets above are enforced here regardless.
  */
 import type { CollectJob, LiveOffer, RetailerSubtask } from "@/lib/collect/types";
-import { OVERALL_BUDGET_MS, PER_RETAILER_TIMEOUT_MS, isStaleCollectingJob, normalizedListingUrlOf } from "@/lib/collect/types";
+import { OVERALL_BUDGET_MS, isStaleCollectingJob, normalizedListingUrlOf } from "@/lib/collect/types";
 import { effectivePriceKwd } from "@/lib/format";
 import type { NormalizedProduct } from "@/types/product";
 import { scrapeOffer, subtaskFor, type FetchImpl } from "@/lib/collect/scraper";
@@ -184,17 +184,30 @@ export async function reapStaleCollectingJob(
 
 
 /**
- * REEA-1192 — a dedupe hit must not serve an empty first paint.
+ * REEA-1192 / REEA-1211 — a dedupe hit must not serve an empty first paint.
  *
  * Attaching to an in-flight run is right (one scrape per retailer, REEA-92),
  * but that run may still be collecting with zero offers — the first lane
- * settled as a failure. Wait, bounded by the per-lane ceiling, for the
- * attached run to land an offer or reach a terminal state so the conversion
- * page renders a real answer instead of an empty table.
+ * settled as a failure. Wait, bounded by the RUN's budget, for the attached
+ * run to land an offer or reach a terminal state so the conversion page
+ * renders a real answer instead of an empty table.
+ *
+ * REEA-1211 — the bound was PER_RETAILER_TIMEOUT_MS + 500 (4.5 s), but a lane
+ * is not bounded by its own fetch: after a failed direct fetch the scraper
+ * spends the REEA-67 search fallback (two 8 s attempts) and the runner races
+ * the whole scrape against OVERALL_BUDGET_MS. A single-listing identity whose
+ * only lane takes 6 s therefore resolved `firstStage` at 4.5 s with the empty
+ * intermediate snapshot — exactly the "first paint waits for a first offer or
+ * terminal" contract a7236a4 set out to enforce. The dedupe path was the hole.
  */
 async function attachToInflight(job: CollectJob): Promise<CollectJob> {
   if (job.status !== "collecting" || job.offers.length > 0) return stageSnapshot(job);
-  const deadline = Date.now() + PER_RETAILER_TIMEOUT_MS + 500;
+  // Bound the wait by when the ATTACHED run must already be terminal (its own
+  // startedAt + budget), never longer than one budget from now: an attach to a
+  // run that began 9 s ago waits ~1.5 s, not another 10 s.
+  const startedMs = Date.parse(job.startedAt);
+  const runDeadline = (Number.isFinite(startedMs) ? startedMs : Date.now()) + OVERALL_BUDGET_MS + 500;
+  const deadline = Math.min(Date.now() + OVERALL_BUDGET_MS + 500, runDeadline);
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 250));
     const current = await getJob(job.jobId);
