@@ -10,6 +10,7 @@ import {
 import { getTrendingChips } from "@/lib/trending-chips";
 import { lastVerifiedObservation } from "@/lib/collect/last-observation";
 import { scrapeOffer } from "@/lib/collect/scraper";
+import { OFFER_STATUS_STALE_MS } from "@/lib/offer-status";
 import { OVERALL_BUDGET_MS } from "@/lib/collect/types";
 import type { NormalizedProduct } from "@/types/product";
 
@@ -86,14 +87,31 @@ export function withinBudget<T>(check: Promise<T>, fallback: T, budgetMs: number
  * whose PDP run the budget cut off, painting an empty table.
  *
  * Two sources, the same two the page renders from (lib/collect/last-observation):
- *  1. a stored COMPLETED observation, which the page now paints with its own
- *     collectedAt stamp — cheap, and no retailer fetch (rate-limit citizenship);
+ *  1. a stored COMPLETED observation whose own stamp is inside the site's
+ *     freshness window, which the page paints with its own collectedAt stamp
+ *     — cheap, and no retailer fetch (rate-limit citizenship);
  *  2. a live re-check of the listing URLs, bounded by the PDP's per-lane
  *     ceiling and overall budget. Fail-closed: a check that throws or overruns
  *     is a "no".
+ *
+ * REEA-1168 AC-7 — the stored observation must also be FRESH: the PDP emits
+ * no price claim from a row older than the window, so a URL whose only row is
+ * stale must not be advertised as a structured-data product page.
  */
 async function productWouldPaintOffer(product: NormalizedProduct): Promise<boolean> {
-  if (await lastVerifiedObservation(product.productId)) return true;
+  const stored = await lastVerifiedObservation(product.productId);
+  const nowMs = Date.now();
+  if (
+    stored?.some((offer) => {
+      const observedAtMs = Date.parse(offer.collectedAt ?? "");
+      return (
+        Number.isFinite(observedAtMs) &&
+        Math.max(0, nowMs - observedAtMs) <= OFFER_STATUS_STALE_MS
+      );
+    })
+  ) {
+    return true;
+  }
   const listings = product.offers ?? [];
   if (listings.length === 0) return false;
   const outcomes = await withinBudget(

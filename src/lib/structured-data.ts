@@ -18,6 +18,7 @@
  * second fetch, no client work — the script tag is rendered by a server
  * component (components/ResultsStructuredData.tsx).
  */
+import type { LiveOffer } from "@/lib/collect/types";
 import type { CountryCode } from "@/lib/country";
 import { fill, getStrings, type Locale } from "@/lib/i18n";
 import { proxiedImageSrc } from "@/lib/image-proxy";
@@ -265,6 +266,99 @@ export function buildResultsStructuredData(args: BuildStructuredDataArgs): Produ
   }
 
   return nodes;
+}
+
+export interface BuildProductStructuredDataArgs {
+  /** The product identity the page painted (title/brand/image/id). */
+  product: NormalizedProduct;
+  /** The offer rows the page rendered, already merged/scoped/deduped by the
+   *  same helpers the PDP uses. */
+  offers: readonly LiveOffer[];
+  locale: Locale;
+  country: CountryCode | null;
+  /** One baked server render clock, same value threaded through the page. */
+  nowMs: number;
+  origin: string;
+  /** The URL the page's canonical tag declares (one URL per product). */
+  canonicalProductId: string;
+}
+
+/**
+ * REEA-1168 AC-7 (2026-11-26 scope delta) — Product/Offer JSON-LD for a PDP.
+ *
+ * The PDP is the URL organic traffic lands on, so it must describe the same
+ * live-collected offer rows it paints. This builder takes the rows the page
+ * already rendered (inherited stamped observations + this run's live re-checks,
+ * merged/deduped by the PDP's own helpers) and emits one Product node with one
+ * Offer per row that carries its own observation stamp inside the freshness
+ * window. No fresh row → null, so a zero-offer page makes no price claim.
+ *
+ * Pure projection: no second fan-out, no client fetch, no clock of its own.
+ */
+export function buildProductStructuredData(
+  args: BuildProductStructuredDataArgs,
+): ProductJsonLd | null {
+  const { product, offers, locale, country, nowMs, origin, canonicalProductId } = args;
+  const eligible: { offer: LiveOffer; observedAtMs: number; price: number }[] = [];
+  for (const offer of offers) {
+    const observedAtMs = Date.parse(offer.collectedAt ?? "");
+    if (!Number.isFinite(observedAtMs)) continue;
+    // Future stamps (clock skew) are treated as just-observed, never stale.
+    if (Math.max(0, nowMs - observedAtMs) > STRUCTURED_DATA_FRESHNESS_MS) continue;
+    // REEA-1212 — price the row at the same "You pay" figure the PDP prints,
+    // never a second subtraction of the was-price/coupon evidence.
+    const price = payableNativePrice(offer);
+    if (price === null) continue;
+    if (!offer.currency?.trim()) continue;
+    eligible.push({ offer, observedAtMs, price });
+  }
+  if (eligible.length === 0) return null;
+
+  const cheapest = eligible.reduce((best, row) =>
+    row.price < best.price ? row : best,
+  );
+  const currency = cheapest.offer.currency.trim().toUpperCase();
+  const price = roundPrice(cheapest.price, currency);
+  const url = productPageUrl(origin, canonicalProductId);
+  const offersJson: OfferJsonLd[] = eligible.map(({ offer, observedAtMs, price }) => ({
+    "@type": "Offer",
+    url: safeHref(offer.url) ?? url,
+    price: roundPrice(price, offer.currency),
+    priceCurrency: offer.currency.trim().toUpperCase(),
+    availability: offer.inStock
+      ? `${SCHEMA_ORG}/InStock`
+      : `${SCHEMA_ORG}/OutOfStock`,
+    seller: { "@type": "Organization", name: offer.merchant },
+    validFrom: new Date(observedAtMs).toISOString(),
+    priceValidUntil: isoDate(observedAtMs + STRUCTURED_DATA_FRESHNESS_MS),
+  }));
+
+  const title = product.title?.trim() || product.productId;
+  const image = absoluteImage(
+    product.image ?? product.offers.find((offer) => offer.image)?.image,
+    origin,
+  );
+  const brand = product.brand?.trim();
+  const t = getStrings(locale);
+  const market = countryLabel(country, locale);
+
+  return {
+    "@context": SCHEMA_ORG,
+    "@type": "Product",
+    name: fill(t.jsonLdProductName, { title, country: market }),
+    description: fill(t.jsonLdProductDescription, {
+      title,
+      country: market,
+      n: offersJson.length,
+      price,
+      cur: currency,
+    }),
+    sku: product.productId,
+    url,
+    ...(brand ? { brand: { "@type": "Brand" as const, name: brand } } : {}),
+    ...(image ? { image: [image] } : {}),
+    offers: offersJson,
+  };
 }
 
 /** Serialize one JSON-LD block for a <script> tag. `<` is escaped so a

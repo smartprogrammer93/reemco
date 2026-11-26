@@ -12,11 +12,13 @@
 import { describe, expect, it } from "vitest";
 import {
   STRUCTURED_DATA_FRESHNESS_MS,
+  buildProductStructuredData,
   buildResultsStructuredData,
   serializeJsonLd,
   type StructuredDataSnapshot,
 } from "@/lib/structured-data";
 import { visibleShelfOffers } from "@/lib/results-offers";
+import type { LiveOffer } from "@/lib/collect/types";
 import type { Coupon, NormalizedProduct, PriceOffer } from "@/types/product";
 
 const NOW = Date.parse("2026-11-25T12:00:00.000Z");
@@ -346,5 +348,84 @@ describe("REEA-1212 — JSON-LD describes the card's visible offer set", () => {
     const raw = { name: "Apple </script> iPhone" };
     expect(serializeJsonLd(raw)).toBe('{"name":"Apple \\u003c/script> iPhone"}');
     expect(() => JSON.parse(serializeJsonLd(raw))).not.toThrow();
+  });
+});
+
+describe("REEA-1168 AC-7 product-page structured data", () => {
+  const pdpProduct: NormalizedProduct = {
+    productId: "apple-iphone17-pro-256gb",
+    title: "Apple iPhone 17 Pro 256Gb Silver",
+    brand: "Apple",
+    offers: [],
+    coupons: [],
+    variations: [],
+    alternatives: [],
+  };
+
+  function liveOffer(overrides: Partial<LiveOffer> = {}): LiveOffer {
+    return {
+      merchant: "Wibi",
+      domain: "wibi.com.kw",
+      price: 314.9,
+      currency: "KWD",
+      url: "https://wibi.com.kw/products/apple-iphone-17-pro-256gb",
+      inStock: true,
+      collectedAt: new Date(NOW - 60 * 1000).toISOString(),
+      method: "live",
+      ...overrides,
+    };
+  }
+
+  function buildPdp(
+    offers: LiveOffer[],
+    locale: "en" | "ar" = "en",
+  ) {
+    return buildProductStructuredData({
+      product: pdpProduct,
+      offers,
+      locale,
+      country: null,
+      nowMs: NOW,
+      origin: ORIGIN,
+      canonicalProductId: "iphone-17-pro",
+    });
+  }
+
+  it("emits one Product/Offer node for the painted fresh offer set", () => {
+    const freshAt = new Date(NOW - 2 * 60 * 1000).toISOString();
+    const node = buildPdp([
+      liveOffer({ collectedAt: freshAt }),
+      liveOffer({
+        merchant: "Xcite",
+        price: 319.9,
+        url: "https://www.xcite.com/apple-iphone-17-pro-256gb/p",
+        collectedAt: freshAt,
+      }),
+    ]);
+    expect(node).not.toBeNull();
+    expect(node!["@type"]).toBe("Product");
+    expect(node!.url).toBe(`${ORIGIN}/product/iphone-17-pro`);
+    expect(node!.sku).toBe("apple-iphone17-pro-256gb");
+    expect(node!.offers).toHaveLength(2);
+    expect(node!.offers[0].validFrom).toBe(freshAt);
+    expect(node!.offers[0].priceValidUntil).toBe(
+      new Date(Date.parse(freshAt) + STRUCTURED_DATA_FRESHNESS_MS).toISOString().slice(0, 10),
+    );
+    expect(node!.offers[0].seller.name).toBe("Wibi");
+    expect(node!.description).toContain("314.9");
+  });
+
+  it("emits Arabic name/description on an Arabic PDP", () => {
+    const node = buildPdp([liveOffer()], "ar");
+    expect(node!.name).toContain("أسعار");
+    expect(node!.description).toContain("الكويت");
+    expect(node!.offers).toHaveLength(1);
+  });
+
+  it("emits no price claim when every row is stale or unstamped", () => {
+    const staleAt = new Date(NOW - 2 * 24 * 60 * 60 * 1000).toISOString();
+    expect(buildPdp([liveOffer({ collectedAt: staleAt })])).toBeNull();
+    expect(buildPdp([liveOffer({ collectedAt: "" })])).toBeNull();
+    expect(buildPdp([])).toBeNull();
   });
 });

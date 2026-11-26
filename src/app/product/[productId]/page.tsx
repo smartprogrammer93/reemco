@@ -1,7 +1,9 @@
+import { Suspense } from "react";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { after } from "next/server";
 import ProductHero from "@/components/ProductHero";
+import ProductStructuredData from "@/components/ProductStructuredData";
 import { seedCatalogPageWithLastObservation } from "@/lib/collect/last-observation";
 import { startProductCollectionStaged } from "@/lib/collect/runner";
 import type { StagedProductCollection } from "@/lib/collect/runner";
@@ -141,6 +143,11 @@ export default async function ProductPage({
           () => null,
         );
   const firstStage = stagedCollection?.then((s) => s?.firstStage ?? null);
+  // REEA-1168 AC-7 — the PDP JSON-LD awaits the SAME staged run's terminal
+  // snapshot (no second fan-out). It renders in its own Suspense boundary so
+  // the shell/hero flush first and the script lands when the run settles.
+  const finalStage = stagedCollection?.then((s) => s?.finalStage ?? null);
+  const canonicalProductId = canonicalProductIdForSlug(productId);
 
   // REEA-882 — keep the invocation alive past the streamed response until the
   // run's tail finalizes: the page-level counterpart of the results page's
@@ -158,13 +165,27 @@ export default async function ProductPage({
   }
 
   return (
-    <ProductHero
-      product={painted}
-      country={country}
-      locale={locale}
-      query={carriedQuery ?? ""}
-      firstStage={firstStage}
-      renderStartMs={renderStartMs}
-    />
+    <>
+      <ProductHero
+        product={painted}
+        country={country}
+        locale={locale}
+        query={carriedQuery ?? ""}
+        firstStage={firstStage}
+        renderStartMs={renderStartMs}
+      />
+      {finalStage ? (
+        <Suspense fallback={null}>
+          <ProductStructuredData
+            final={finalStage}
+            product={painted}
+            country={country}
+            locale={locale}
+            nowMs={renderStartMs}
+            canonicalProductId={canonicalProductId}
+          />
+        </Suspense>
+      ) : null}
+    </>
   );
 }
