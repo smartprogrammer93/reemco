@@ -755,6 +755,18 @@ export default function ProductResultCard({
     // alternatives band that reuses this same card component. Non-visual:
     // attribute only.
     "data-product-scope": product.productScope ?? "unscoped",
+    // REEA-1207 AC 7B-1R — the rev-2 gate counts only IN-MARKET (Kuwait)
+    // retailers: a card carrying one Kuwait store and one cross-market row is
+    // a single-retailer card, and a cross-market-only card is never depth. The
+    // card's own comparison count follows the viewer's market selection (null
+    // = all markets on the default surface), so the probe needs this
+    // Kuwait-scoped figure to measure the gate the product is judged on.
+    // Non-visual: attribute only.
+    "data-comparison-kw":
+      comparisonMerchantCount(offers, HOME_MARKET) >= 2 ? "1" : "0",
+    "data-in-market-retailers-kw": String(
+      comparisonMerchantCount(offers, HOME_MARKET),
+    ),
   } as const;
 
   if (detail) {

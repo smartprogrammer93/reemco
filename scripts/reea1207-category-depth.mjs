@@ -112,6 +112,8 @@ function productNodes(html) {
  * cards the page actually painted, including snapshot replays that emit no
  * JSON-LD, and never re-derives merchants from prose.
  */
+let sawKwBasis = false;
+
 function measureRendered(html) {
   const tagRe = /<article\b[^>]*>/g;
   const cards = new Map();
@@ -129,15 +131,28 @@ function measureRendered(html) {
       skipped += 1;
       continue;
     }
-    const comparison = /data-comparison="1"/.test(tag);
-    const retailers = Number(/data-in-market-retailers="(\d+)"/.exec(tag)?.[1] ?? "0");
+    // REEA-1207 AC 7B-1R — the rev-2 gate counts IN-MARKET (Kuwait)
+    // retailers only: a card with one Kuwait store and one cross-market row is
+    // a single-retailer card. The card emits the Kuwait-scoped figure; on a
+    // head that predates it, fall back to the viewer-scoped count and label
+    // the basis.
+    const kw = /data-comparison-kw="(1|0)"/.exec(tag)?.[1];
+    const comparison = kw !== undefined ? kw === "1" : /data-comparison="1"/.test(tag);
+    const retailers = Number(
+      (/data-in-market-retailers-kw="(\d+)"/.exec(tag)?.[1] ??
+        /data-in-market-retailers="(\d+)"/.exec(tag)?.[1] ??
+        "0"),
+    );
+    if (kw !== undefined) sawKwBasis = true;
     const multi = comparison || retailers >= 2 ? 1 : 0;
     cards.set(id, Math.max(cards.get(id) ?? 0, multi));
   }
   const total = cards.size;
   const multi = [...cards.values()].filter((v) => v === 1).length;
   return {
-    source: "rendered-card-attributes",
+    source: sawKwBasis
+      ? "rendered-card-attributes (in-market Kuwait basis, rev-2)"
+      : "rendered-card-attributes (viewer-scope basis — pre-rev-2 head)",
     skippedRelated: skipped,
     cards: total,
     multi,
