@@ -435,8 +435,17 @@ const RELAY_ENDPOINT = "https://api.microlink.io/";
 // answered, then 429'd a few calls later — the cached answer is the point).
 const RELAY_TTL_S = 6 * 60 * 60;
 const RELAY_TIMEOUT_MS = 12_000;
-/** After a 429, skip the relay for this long instead of paying the refusal. */
-const RELAY_COOLDOWN_MS = 10 * 60 * 1000;
+/**
+ * After a 429, skip the relay for this long instead of paying the refusal.
+ *
+ * REEA-1221 — measured 2026-11-26: a ten-minute cooldown amplified ONE 429 into
+ * ten minutes of failures across every relay-dependent lane (Nest 83%,
+ * Next Store 80% on a 12-query panel), because the cooldown is process-wide and
+ * shared by the lanes that use the same provider. A rate-limit answer is
+ * normally a per-minute budget, so the pause is now 90 s: long enough to stop
+ * hammering, short enough that the rest of the panel still gets served.
+ */
+const RELAY_COOLDOWN_MS = 90 * 1000;
 let relayCooldownUntil = 0;
 
 /**
