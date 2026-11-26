@@ -15,7 +15,7 @@
  * the budgets above are enforced here regardless.
  */
 import type { CollectJob, LiveOffer, RetailerSubtask } from "@/lib/collect/types";
-import { OVERALL_BUDGET_MS, isStaleCollectingJob, normalizedListingUrlOf } from "@/lib/collect/types";
+import { OVERALL_BUDGET_MS, PER_RETAILER_TIMEOUT_MS, isStaleCollectingJob, normalizedListingUrlOf } from "@/lib/collect/types";
 import { effectivePriceKwd } from "@/lib/format";
 import type { NormalizedProduct } from "@/types/product";
 import { scrapeOffer, subtaskFor, type FetchImpl } from "@/lib/collect/scraper";
@@ -182,6 +182,30 @@ export async function reapStaleCollectingJob(
   return job;
 }
 
+
+/**
+ * REEA-1192 — a dedupe hit must not serve an empty first paint.
+ *
+ * Attaching to an in-flight run is right (one scrape per retailer, REEA-92),
+ * but that run may still be collecting with zero offers — the first lane
+ * settled as a failure. Wait, bounded by the per-lane ceiling, for the
+ * attached run to land an offer or reach a terminal state so the conversion
+ * page renders a real answer instead of an empty table.
+ */
+async function attachToInflight(job: CollectJob): Promise<CollectJob> {
+  if (job.status !== "collecting" || job.offers.length > 0) return stageSnapshot(job);
+  const deadline = Date.now() + PER_RETAILER_TIMEOUT_MS + 500;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const current = await getJob(job.jobId);
+    if (!current) break;
+    if (current.offers.length > 0 || current.status !== "collecting") {
+      return stageSnapshot(current);
+    }
+  }
+  return stageSnapshot(job);
+}
+
 /** Staged product collection for the /product/... server render (REEA-248). */
 export interface StagedProductCollection {
   jobId: string;
@@ -214,14 +238,22 @@ export async function startProductCollectionStaged(
   const firstStage = new Promise<CollectJob>((resolve) => {
     resolveFirst = resolve;
   });
+  // REEA-1192 — first paint is the FIRST OFFER (or the run's terminal
+  // state), never the first lane that merely settled. Resolving on an empty
+  // intermediate stage rendered "All offers" with zero rows on every catalog
+  // PDP whose first lane failed (e.g. a search-fallback 403) while the other
+  // lanes were still answering — a sitemap URL advertised because its listing
+  // answers live could still serve an empty conversion page. The runner's
+  // per-lane ceiling (4 s) and budget watchdog bound this wait, so the page
+  // cannot hang on a lane that never settles.
   const onStage = (snap: CollectJob) => {
-    resolveFirst?.(snap);
+    if (snap.offers.length > 0 || snap.status !== "collecting") resolveFirst?.(snap);
   };
   // Dedupe hit (REEA-92): an earlier request already owns this in-flight run —
   // attach its current snapshot and let the client's polling converge; never
   // fan out a duplicate scrape of the same retailers.
   const run = deduped
-    ? Promise.resolve(stageSnapshot(job))
+    ? attachToInflight(job)
     : runCollection(job, product, { fetchImpl: opts.fetchImpl, onStage }).then(
         (final) => stageSnapshot(final),
         () => stageSnapshot(job), // bounded: the runner swallows failures itself
