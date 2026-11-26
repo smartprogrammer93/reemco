@@ -23,7 +23,7 @@ import type { CountryCode } from "@/lib/country";
 import {
   HOME_MARKET,
   cheapestCrossMarketOffer,
-  crossMarketHeadline,
+  crossMarketHeadlineParts,
   headlineOfferFor,
   isCrossMarketOffer,
   marketName,
@@ -394,7 +394,9 @@ function ProductHeroBody({
   const crossBest = cheapestCrossMarketOffer(offers as unknown as NormalizedProduct["offers"], scope);
   const best = (localBest ?? crossBest ?? offers[0] ?? null) as LiveOffer | null;
   const hasLocalOffer = localBest !== null;
-  const headline = hasLocalOffer ? null : crossMarketHeadline(offers as unknown as NormalizedProduct["offers"], scope, locale);
+  // REEA-1198 — same split as the shelf card: the sentence wraps, the price
+  // token ("KD 0.47") stays one unbroken figure on the disclosed-fallback path.
+  const headlineParts = hasLocalOffer ? null : crossMarketHeadlineParts(offers as unknown as NormalizedProduct["offers"], scope, locale);
   const displayTitle = cleanDisplayTitle(product.title);
   const titleChanged = displayTitleChanged(product.title, displayTitle);
   // REEA-1162 / REEA-1192 — the answered line is a RETAILER count and it must
@@ -478,13 +480,13 @@ function ProductHeroBody({
           )}
           {best && heroPrice ? (
             <>
-              {headline && (
+              {headlineParts && (
                 <p
                   className="rc-market-headline"
                   role="status"
                   style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)", marginBlock: "0 4px" }}
                 >
-                  <bdi>{headline}</bdi>
+                  <bdi>{headlineParts.prefix}<span className="rc-price-token">{headlineParts.price}</span>{headlineParts.suffix}</bdi>
                 </p>
               )}
               <div className="rc-product-best">

@@ -236,6 +236,20 @@ export function crossMarketRowLabel(
 }
 
 /**
+ * REEA-1198 — the headline split into the wrapping sentence and the price
+ * token, so the UI can render `KD 0.47` in ONE non-breaking span while the
+ * sentence itself still wraps. The price token is a single figure: splitting
+ * it across lines ("KD" / "0.47") reads as a broken number on the exact
+ * disclosed-fallback path. `prefix` ends with the template's lead-in word
+ * ("from " / "من ") and `price` is the converted figure.
+ */
+export interface CrossMarketHeadlineParts {
+  prefix: string;
+  price: string;
+  suffix: string;
+}
+
+/**
  * AC2 — the honest headline when the card has no offer in the selected
  * market: "No Kuwait offer · Saudi price from KD 0.47" (EN+AR). Returns null
  * when a local offer exists (the normal headline is used instead).
@@ -245,6 +259,16 @@ export function crossMarketHeadline(
   scope: CountryCode | null,
   locale?: Locale,
 ): string | null {
+  const parts = crossMarketHeadlineParts(offers, scope, locale);
+  return parts === null ? null : `${parts.prefix}${parts.price}${parts.suffix}`;
+}
+
+/** REEA-1198 — the same headline as its two render parts (sentence, price). */
+export function crossMarketHeadlineParts(
+  offers: readonly PriceOffer[],
+  scope: CountryCode | null,
+  locale?: Locale,
+): CrossMarketHeadlineParts | null {
   if (scope === null) return null; // ALL view: no single foreign market to name
   // A local offer exists → the normal headline is used, not this line.
   if (headlineOfferFor(offers, scope) !== null) return null;
@@ -253,11 +277,19 @@ export function crossMarketHeadline(
   const market = offerMarket(cross.currency);
   if (market === null) return null;
   const t = getStrings(locale ?? "en");
-  return fill(t.crossMarketHeadline, {
+  const values = {
     market: marketName(scope, locale),
     marketOther: marketLabelForCopy(market, locale),
+  };
+  // Fill the sentence and the price separately: the {price} slot is the ONLY
+  // place a line break could split the figure, and it is rendered as its own
+  // nowrap token by the card/hero.
+  const [head, tail] = t.crossMarketHeadline.split("{price}");
+  return {
+    prefix: fill(head, values),
     price: convertedLabel(cross.price, cross.currency, scope, { approx: false }),
-  });
+    suffix: fill(tail ?? "", values),
+  };
 }
 
 /** The lead-CTA sentence for a cross-market-only card: "Saudi price KD 0.47". */

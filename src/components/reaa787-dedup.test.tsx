@@ -149,8 +149,9 @@ describe("ProductResultCard rendered guards", () => {
     expect(html).toContain("View all 4 offers");
     // REEA-1142 — every Danube listing is a SAUDI offer on the Kuwait
     // surface, so the rollup is the honest no-local-offer headline, never a
-    // "from KD" Kuwait price claim.
-    expect(html).toContain("No Kuwait offer · Saudi price from KD");
+    // "from KD" Kuwait price claim. REEA-1198 renders the price as its own
+    // non-breaking token span, so read the tag-stripped text, not the markup.
+    expect(html.replace(/<[^>]+>/g, "")).toContain("No Kuwait offer · Saudi price from KD 424.24");
     // REEA-1147 AC2 — the card's ONE store is not a cross-store comparison:
     // with no Kuwait retailer the basis names the market ("Saudi price"), never
     // "best effective price". (The "N retailers" footer needs a local offer, so

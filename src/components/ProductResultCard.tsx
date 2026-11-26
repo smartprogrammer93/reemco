@@ -13,7 +13,7 @@ import {
 import {
   HOME_MARKET,
   cheapestCrossMarketOffer,
-  crossMarketHeadline,
+  crossMarketHeadlineParts,
   crossMarketLeadLabel,
   headlineOfferFor,
   isCrossMarketOffer,
@@ -671,7 +671,10 @@ export default function ProductResultCard({
   // never a blank hero.
   const best = localBest ?? crossBest ?? offers[0] ?? null;
   const hasLocalOffer = localBest !== null;
-  const headline = hasLocalOffer ? null : crossMarketHeadline(offers, scope, locale);
+  // REEA-1198 — the headline is rendered as its two parts so the price token
+  // ("KD 0.47") is its own nowrap span: the sentence may wrap, the figure may
+  // not split ("KD" / "0.47") at 375 AR on the disclosed-fallback path.
+  const headlineParts = hasLocalOffer ? null : crossMarketHeadlineParts(offers, scope, locale);
   const kuwaitChecking =
     kuwaitBatchPending &&
     (kuwaitPendingStatus ||
@@ -898,13 +901,14 @@ export default function ProductResultCard({
 
       {best && heroPrice && (
         <>
-          {headline && (
+          {headlineParts && (
             <p
               className="rc-market-headline"
               role="status"
               style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)", marginBlock: "0 4px" }}
             >
-              <bdi>{headline}</bdi>
+              {/* REEA-1198 — the sentence wraps, the price token never does. */}
+              <bdi>{headlineParts.prefix}<span className="rc-price-token">{headlineParts.price}</span>{headlineParts.suffix}</bdi>
             </p>
           )}
           {!hasLocalOffer && best && offerMarket(best.currency) ? (
@@ -1088,9 +1092,9 @@ export default function ProductResultCard({
               </span>
             </p>
           )}
-          {best && !hasLocalOffer && headline && (
+          {best && !hasLocalOffer && headlineParts && (
             <p style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
-              <bdi>{headline}</bdi>
+              <bdi>{headlineParts.prefix}<span className="rc-price-token">{headlineParts.price}</span>{headlineParts.suffix}</bdi>
             </p>
           )}
           {best && hasLocalOffer && cheapestListed == null && offers.length > 0 && (

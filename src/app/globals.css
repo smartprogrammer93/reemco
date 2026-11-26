@@ -1881,6 +1881,19 @@ html[lang="ar"] .coupon-via {
   letter-spacing: -0.02em;
 }
 
+/* REEA-1198 — ONE price token is ONE figure. A currency code and its amount
+   never split across lines: at 375 AR the disclosed-fallback headline broke
+   "KD 0.47" into "KD" / "0.47", which reads as a broken number. The headline
+   renders its price in `.rc-price-token` (the sentence around it still wraps);
+   `.price-cur` carries the hero and offer-row figures, so "KD 0.47" and
+   "≈KD 0.47" stay unbroken there too. The token is a flex item on
+   `.rc-price-line`/`.rc-offer-line`, so it still wraps as a WHOLE unit and no
+   horizontal overflow is introduced. */
+.rc-price-token,
+.price-cur {
+  white-space: nowrap;
+}
+
 .rc-price-was {
   font: var(--rc-text-small);
   color: var(--rc-muted);
