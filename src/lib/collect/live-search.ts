@@ -1260,7 +1260,12 @@ async function shopifyJsonHop(
       return await once();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (!/HTTP 429/.test(message) || signal.aborted) throw err;
+      // REEA-1221 — a 503 is the same class of transient answer as a 429 (the
+      // storefront is busy, not gone): measured 2026-11-26, Amazon.eg answered
+      // HTTP 503 on 8 of 12 panel queries in one run and 0 on the next, which is
+      // exactly the shape of a rate-limit/overload window rather than a dead
+      // lane. Both are retried; anything else still fails straight through.
+      if (!/HTTP (429|503)/.test(message) || signal.aborted) throw err;
       // REEA-1221 — AC-3 measured on the served head 2026-11-26: the cluster's
       // failure share swung between 0% and 83% across runs on the same head,
       // and every failure was `HTTP 429` from the store's own suggest edge. One
@@ -1275,7 +1280,7 @@ async function shopifyJsonHop(
           return await once();
         } catch (retryErr) {
           const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
-          if (!/HTTP 429/.test(retryMessage)) throw retryErr;
+          if (!/HTTP (429|503)/.test(retryMessage)) throw retryErr;
         }
       }
       throw err;
