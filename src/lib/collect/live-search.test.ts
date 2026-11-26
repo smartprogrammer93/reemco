@@ -1760,8 +1760,16 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     expect(Object.keys(telemetry.attempts)).toEqual(
       expect.arrayContaining(["Xcite", "Blink", "Eureka", "Sultan Center"]),
     );
-    // Every hop answered in this fixture: no failures.
-    expect(telemetry.failures).toEqual({});
+    // REEA-1207 AC 7B-3 — the fixture answers every hop with a body, but the
+    // lanes that cannot prove they parsed a payload settle as blocked failures
+    // (that is the defect this AC names: 0 offers was reading as 0 failures).
+    // Every lane that DID parse a payload keeps a clean 0-failure record.
+    for (const merchant of ["Xcite", "Blink", "Eureka", "Sultan Center", "Jarir", "Amazon.eg"]) {
+      expect(telemetry.failures[merchant] ?? 0, `${merchant} has no failure`).toBe(0);
+    }
+    expect(Object.keys(telemetry.failures).sort()).toEqual(
+      ["BinSina", "Bomai", "Hobby Center", "Nest", "YasO"],
+    );
   });
 
   it("counts a failing adapter as attempt + failure after its bounded retry (REEA-871)", async () => {

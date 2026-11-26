@@ -255,7 +255,11 @@ describe("REEA-1143 AC3/AC4 — aggregate coverage on thin and zero pages", () =
     // Aggregate copy: counts only, no per-store records (AC4).
     expect(line.startsWith("22 stores checked · 1 carries this · 2 failed · 19 empty.")).toBe(true);
     // The shipped named sentences still follow.
-    expect(line).toContain("No response from Amazon.eg and Lulu Hypermarket.");
+    // REEA-1207 AC 7B-4 — a "blocked:" cause is named in the UNREACHABLE
+    // sentence, not as a plain "no response": the lane was dispatched and
+    // produced nothing usable, which is not the same as answering no match.
+    expect(line).toContain("Unreachable: Lulu Hypermarket.");
+    expect(line).toContain("No response from Amazon.eg.");
     expect(line).toContain("Prices from Danube Home.");
     // The aggregate clause names no retailer.
     const aggregate = line.split(". ")[0];

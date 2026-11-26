@@ -357,9 +357,17 @@ export function coverageParts(
     for (const p of rendered) for (const o of p.offers) seen.add(o.merchant);
   }
   const blocked: string[] = [];
+  // REEA-1207 AC 7B-4 — a note whose cause is a BLOCKED settle (no usable
+  // payload from any hop, `blocked:` prefix from the shared settle point) is
+  // named in the same UNREACHABLE sentence as a zone-recorded lane: the lane
+  // was dispatched and produced nothing usable, so it is not "no match".
+  // A lane that answered with zero rows carries no error and stays in
+  // `answeredEmpty` ("No match at …") — the distinction the AC requires.
   for (const n of ordered) {
-    if (!unreachableSet.has(n.merchant)) continue;
     if (seen.has(n.merchant)) continue;
+    const zoneBlocked = unreachableSet.has(n.merchant);
+    const blockedCause = typeof n.error === "string" && n.error.startsWith("blocked:");
+    if (!zoneBlocked && !blockedCause) continue;
     if (!rendered && n.hits > 0 && !n.error) continue;
     blocked.push(n.merchant);
   }
@@ -419,11 +427,12 @@ export function coverageParts(
   }
   // A lane spoken for as UNREACHABLE is not ALSO reported as "no response":
   // one honest statement per lane.
+  const blockedSet = new Set(blocked);
   for (let i = failed.length - 1; i >= 0; i--) {
-    if (unreachableSet.has(failed[i])) failed.splice(i, 1);
+    if (blockedSet.has(failed[i])) failed.splice(i, 1);
   }
   for (let i = answeredEmpty.length - 1; i >= 0; i--) {
-    if (unreachableSet.has(answeredEmpty[i])) answeredEmpty.splice(i, 1);
+    if (blockedSet.has(answeredEmpty[i])) answeredEmpty.splice(i, 1);
   }
   // REEA-279: the sentence shapes live in the static table so the stamp
   // matches the shell language; EN keeps the exact figures it had before.

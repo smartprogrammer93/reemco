@@ -322,6 +322,20 @@ interface RetailerCollector {
   /** REEA-170 — storefront country this adapter answers from. */
   country: CountryCode;
   collect: (query: string, fetchImpl: FetchImpl) => Promise<SearchHit[]>;
+  /**
+   * REEA-1207 AC 7B-3 — true when this lane CANNOT prove it answered: its hop
+   * swallows a failed/shell fetch and returns `[]` for both "the storefront
+   * says it has no match" and "we never got a usable payload". Those settles
+   * are counted as a blocked failure with a named cause instead of a quiet
+   * zero, so `retailer_adapter_failures` stops reading 0 for a lane that
+   * delivered nothing (Bomai/Hobby Center/YasO/Nest/BinSina measured 19,447
+   * attempts / 0 failures / 0 offers in W48).
+   *
+   * A lane WITHOUT this flag returns `[]` only after parsing a payload it
+   * trusts, so an empty answer there is an explicit "no match" — it stays
+   * counted as answered, never as unreachable (AC 7B-4).
+   */
+  silentWhenEmpty?: boolean;
 }
 
 /**
@@ -2254,6 +2268,7 @@ export const COLLECTORS: RetailerCollector[] = [
   {
     merchant: "BinSina",
     country: "KW",
+    silentWhenEmpty: true,
     collect: async (query, fetchImpl) => {
       // REEA-557 — Magento Cloud storefront on Fastly; the locale-prefixed
       // search view carries the results. The zone answers per connection
@@ -2278,6 +2293,7 @@ export const COLLECTORS: RetailerCollector[] = [
   {
     merchant: "Nest",
     country: "KW",
+    silentWhenEmpty: true,
     collect: async (query, fetchImpl) => {
       // REEA-723 — Shopify storefront whose search views render server-side
       // per locale: the English shape rides /en/search, Arabic-script
@@ -2319,16 +2335,19 @@ export const COLLECTORS: RetailerCollector[] = [
   {
     merchant: "Bomai",
     country: "KW",
+    silentWhenEmpty: true,
     collect: (query, fetchImpl) => ladderCollect(fetchImpl, "https://bomai.com", query, "Bomai"),
   },
   {
     merchant: "Hobby Center",
     country: "KW",
+    silentWhenEmpty: true,
     collect: (query, fetchImpl) => ladderCollect(fetchImpl, "https://hobbycenter.com.kw", query, "Hobby Center"),
   },
   {
     merchant: "YasO",
     country: "KW",
+    silentWhenEmpty: true,
     collect: (query, fetchImpl) => {
       // REEA-723 — Arabic-first RTL zone: Arabic-script queries ride the
       // root locale, Latin queries the /en English shape — crawled per
@@ -3627,7 +3646,25 @@ export async function collectSettled(
   // keep their spelling; only a whole word+digit query folds here.
   const dq = compactDispatchQuery(latinBridgeDispatch(q));
   try {
-    return { merchant: c.merchant, hits: stampCollected(await c.collect(dq, fetchImpl)) };
+    const hits = stampCollected(await c.collect(dq, fetchImpl));
+    // REEA-1207 AC 7B-3 — a lane that cannot prove it answered (its hop
+    // swallows a failed/shell fetch and returns []) settles as a BLOCKED
+    // failure with a named cause, not as a quiet zero. This is the same
+    // aggregate shape BlockedLaneError already uses, so
+    // `retailer_adapter_failures` and the coverage sentence read it without a
+    // new bucket, and the failure share stays failures/attempts. No REEA-290
+    // second attempt: the ladder already spent its bounded hops and a shell
+    // answers the same way (rate-limit citizenship). A lane WITHOUT the flag
+    // returned [] only after parsing a payload it trusts — an explicit "no
+    // match", which stays counted as answered (AC 7B-4).
+    if (hits.length === 0 && c.silentWhenEmpty) {
+      return {
+        merchant: c.merchant,
+        hits: [],
+        error: `blocked: no usable payload (0 hits, no explicit no-match from ${c.merchant})`,
+      };
+    }
+    return { merchant: c.merchant, hits };
   } catch (err) {
     const firstError = asError(err);
     // REEA-1099 — a zone-blocked lane (no usable payload from any hop) is a
