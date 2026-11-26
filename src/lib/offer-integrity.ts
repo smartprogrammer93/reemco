@@ -44,69 +44,27 @@
 import type { CountryCode } from "@/lib/country";
 import { offerMarket } from "@/lib/market";
 import { normalizedListingUrlOf } from "@/lib/collect/types";
+// REEA-1178 — the ONE sanity predicate, dependency-free so lib/market.ts can
+// read it too (headline eligibility) without an import cycle.
+import {
+  POSSIBLE_MISMATCH_RATIO,
+  isFlaggedOffer,
+  isPossibleMismatchOffer,
+  type SanityBearing,
+} from "@/lib/sanity-verdict";
 
-/**
- * AC3 — the ticket's possible-mismatch threshold. A KWD-space price at less
- * than a tenth of the cohort median is not a comparison figure for this
- * product: it is a cheaper thing that got merged into the card (an accessory,
- * a case, a screen protector).
- */
-export const POSSIBLE_MISMATCH_RATIO = 0.1;
+export { POSSIBLE_MISMATCH_RATIO, isFlaggedOffer, isPossibleMismatchOffer };
 
-/**
- * The minimum a served offer must carry for the integrity rules to read it.
- * `PriceOffer` satisfies this shape, so the renderer can pass its rows
- * directly; the metrics fold maps its looser aggregate input onto it instead
- * of casting.
- */
-export interface ComparisonOffer {
+/** The comparison-offer shape the integrity rules read. `PriceOffer`
+ *  satisfies it, so the renderer can pass its rows directly; the metrics fold
+ *  maps its looser aggregate input onto it instead of casting. */
+export interface ComparisonOffer extends SanityBearing {
   merchant: string;
   price: number;
   currency: string;
   url: string;
   /** REEA-1142 market tag when the payload carries one. */
   market?: string;
-  sanity?: { status?: string; reason?: string; ratioToMedian?: number };
-}
-
-type SanityBearing = Pick<ComparisonOffer, "sanity">;
-
-/** True when the query-time sanity pass flagged this offer. */
-export function isFlaggedOffer(offer: SanityBearing): boolean {
-  return offer.sanity?.status === "flagged";
-}
-
-/**
- * AC3 — an offer that is not comparable evidence for the card.
- *
- * The ticket names the wrong-product signal precisely: an `outlier_low` price
- * below a tenth of the cohort median (and the same rule for an `ok` verdict
- * that still sits below it — the live Anker accessory was 0.09997 and `ok`
- * under the collector's 15× bound). A price-integrity failure
- * (`currency_mis_map`, `price_unavailable`) is never comparison evidence
- * either: the figure itself is not trustworthy.
- *
- * `outlier_high` is deliberately NOT a mismatch: it is the SAME product
- * priced above a skewed cohort. Live `fold 7` measured every phone at ratio
- * 65–107× because the cohort median is set by KD 4.9 cases — excluding those
- * would blank the retailer count on a card with four real stores, which is a
- * worse outcome than a high price. An offer with NO verdict (a surface that
- * never ran the pass) is not called a mismatch — absent evidence is not a
- * defect.
- */
-export function isPossibleMismatchOffer(offer: SanityBearing): boolean {
-  const sanity = offer.sanity;
-  if (!sanity) return false;
-  const ratio = sanity.ratioToMedian;
-  if (sanity.reason === "currency_mis_map" || sanity.reason === "price_unavailable") return true;
-  if (sanity.reason === "outlier_low") {
-    return ratio == null || ratio < POSSIBLE_MISMATCH_RATIO;
-  }
-  if (sanity.status === "ok") {
-    return typeof ratio === "number" && ratio < POSSIBLE_MISMATCH_RATIO;
-  }
-  // `outlier_high` (and any other flagged reason) stays a comparison lane.
-  return false;
 }
 
 /**

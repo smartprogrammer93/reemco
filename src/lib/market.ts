@@ -32,6 +32,9 @@ import {
   toKwdNumeric,
 } from "@/lib/format";
 import { effectiveKwdOfOffer } from "@/lib/price-composition";
+// REEA-1178 AC3 — the ONE sanity predicate (dependency-free, so no cycle with
+// lib/offer-integrity.ts which imports offerMarket from this module).
+import { isPossibleMismatchOffer } from "@/lib/sanity-verdict";
 import { fill, getStrings, type Locale } from "@/lib/i18n";
 import type { NormalizedProduct, PriceOffer } from "@/types/product";
 
@@ -129,7 +132,11 @@ export function sortOffersByMarket<T extends PriceOffer>(
 }
 
 function eligibleHeadline(offer: PriceOffer): boolean {
-  return offer.inStock && offer.sanity?.status !== "flagged";
+  // REEA-1178 AC3 — the headline price is the card's own product. A
+  // possible-mismatch offer (low outlier / price-integrity flag) is not
+  // comparable evidence: live `fb1747d2` the KD 2.9 Amazon.eg accessory would
+  // otherwise have led the Anker earbuds card's price.
+  return offer.inStock && !isPossibleMismatchOffer(offer);
 }
 
 /** Cheapest in-stock, unflagged offer of the SELECTED market — the headline
@@ -138,9 +145,14 @@ export function headlineOfferFor<T extends PriceOffer>(
   offers: readonly T[],
   scope: CountryCode | null,
 ): T | null {
-  const local = offers.filter((o) => !isCrossMarketOffer(o, scope) && eligibleHeadline(o));
-  if (local.length === 0) return null;
-  return local.reduce((a, b) => (effectiveKeyOf(a) <= effectiveKeyOf(b) ? a : b));
+  const localOffers = offers.filter((o) => !isCrossMarketOffer(o, scope));
+  const local = localOffers.filter(eligibleHeadline);
+  // REEA-1178 — a card whose every local offer is flagged/mismatch still
+  // renders its own cheapest local figure (with its warning) instead of
+  // falling through to the cross-market "no local offer" copy.
+  const pool = local.length > 0 ? local : localOffers.filter((o) => o.inStock);
+  if (pool.length === 0) return null;
+  return pool.reduce((a, b) => (effectiveKeyOf(a) <= effectiveKeyOf(b) ? a : b));
 }
 
 /** Cheapest in-stock, unflagged cross-market offer — the honest fallback when

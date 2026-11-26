@@ -355,7 +355,11 @@ export function cheapestListedKwd(
     null,
   );
   // REEA-1142 — the base is a local figure; cross-market offers never set it.
-  const priced = offers.filter((o) => !offerFlagged(o) && !isCrossMarketOffer(o, scope));
+  // REEA-1178 AC3 — a possible-mismatch offer never sets the "from" figure
+  // either: a KD 2.9 accessory must not print as this card's lowest price.
+  const priced = offers.filter(
+    (o) => !isPossibleMismatchOffer(o) && !isCrossMarketOffer(o, scope),
+  );
   return priced.length > 0
     ? Math.min(...priced.map((o) => effectiveKwdOfOffer(o)))
     : null;
