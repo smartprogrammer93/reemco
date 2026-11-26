@@ -44,7 +44,12 @@ export async function resolveProductIdentity(
   const decodedQuery = productId.replace(/-/g, " ").trim();
   if (!carriedQuery && !decodedQuery) return null;
 
-  const { collectLiveResults } = await import("@/lib/collect/live-search");
+  const {
+    readLiveQueryMemo,
+    collectLiveResultsStagedAdmitted,
+    RESULTS_COMPLETION_BUDGET_MS,
+    STAGE_TAIL_HEADROOM_MS,
+  } = await import("@/lib/collect/live-search");
   const retiredLanes = await readRetiredLanes();
   // REEA-1140 — a carried query must reproduce the results page's fan-out.
   // The results page collects the whole market set and applies the country
@@ -56,13 +61,42 @@ export async function resolveProductIdentity(
   const attempts = [...new Set([carriedQuery, decodedQuery].filter((q) => q !== ""))];
   let fallbackPool: NormalizedProduct[] = [];
   for (const attempt of attempts) {
-    const { products } = await collectLiveResults(attempt, {
+    // REEA-1192 — collection continuity: when the shelf just served this same
+    // query, its answer is already in the query memo (live fan-out answers
+    // only, with their own scrapedAt provenance). Inheriting it gives the PDP
+    // the EXACT offer set, freshness and merge map the shopper clicked, with
+    // no second 22-lane fan-out and no chance of resolving against a
+    // different map than the card served.
+    const memo = readLiveQueryMemo(attempt, {
       country: scopeCountry,
       // REEA-1078 S2 — the product page's live answer skips retired lanes too.
       retiredLanes,
     });
-    // REEA-1140 — exact canonical-slug match first: the same merge map that
-    // produced the card's link produces this group's productId.
+    if (memo) {
+      // REEA-1140 — exact canonical-slug match first: the same merge map that
+      // produced the card's link produces this group's productId.
+      const exact = memo.products.find((p) => p.productId === productId);
+      if (exact) return exact;
+      if (fallbackPool.length === 0) fallbackPool = memo.products;
+    }
+    // REEA-1192 — no inherited answer (a cold visit: sitemap, shared link,
+    // first request after a restart). Dispatch the same query through the
+    // REEA-1133 page-path admission gate and bound the wait to the page
+    // completion budget instead of the 16 s blocking ceiling, so the PDP's
+    // cold render stays inside the shelf's budget without raising the
+    // fan-out bound.
+    const staged = await collectLiveResultsStagedAdmitted(attempt, {
+      country: scopeCountry,
+      retiredLanes,
+      deadlineMs: RESULTS_COMPLETION_BUDGET_MS,
+      signal: AbortSignal.timeout(RESULTS_COMPLETION_BUDGET_MS + STAGE_TAIL_HEADROOM_MS),
+    });
+    let { products } = await staged.final;
+    if (products.length === 0) {
+      // Capacity-deferred shell (or a budget-finalized empty set): take the
+      // run's converged answer, already bounded by the same hop ceiling.
+      products = (await staged.converged).products;
+    }
     const exact = products.find((p) => p.productId === productId);
     if (exact) return exact;
     if (fallbackPool.length === 0) fallbackPool = products;

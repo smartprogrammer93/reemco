@@ -4246,6 +4246,27 @@ function probeStagedRun(query: string, opts: StagedCollectOptions): StagedRunPro
 }
 
 /**
+ * REEA-1192 — read the query memo WITHOUT starting a fan-out.
+ *
+ * The product page resolves its identity from the same query the shelf
+ * collected. When the shelf just served that query, its answer is in the
+ * memo (only live fan-out answers are ever written there, with their own
+ * `scrapedAt` provenance), so the PDP can inherit the EXACT offer set and
+ * freshness the shopper clicked — instead of re-dispatching 22 lanes for
+ * 16 s and resolving against a different merge map than the shelf served.
+ *
+ * Returns the memo entry (fresh or stale-within-ceiling) or null on a miss.
+ * Callers that need a live refresh still take the staged/admitted path.
+ */
+export function readLiveQueryMemo(
+  query: string,
+  opts: StagedCollectOptions = {},
+): LiveSearchResult | null {
+  const probe = probeStagedRun(query, opts);
+  return probe.cached ? probe.cached.value : null;
+}
+
+/**
  * REEA-1133 — the pending shell served when a render cannot be admitted.
  *
  * It carries NO products and one honest note per lane the fan-out would have
