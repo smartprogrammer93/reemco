@@ -276,7 +276,13 @@ export const LIVE_SEARCH_HITS_PER_PAGE = 24;
  * limiter; 200 ms is enough for a clean answer on the live host (measured)
  * while keeping attempt+backoff+attempt inside the TIMEOUT×2 hop window.
  */
-export const AMAZON_RETRY_BACKOFF_MS = 200;
+// REEA-1221 — 200 ms does not clear amazon.eg's edge throttle. Measured
+// 2026-11-26 on the served head: the lane answered HTTP 503 on 5 of 10 panel
+// queries from the box while the same request answered HTTP 200 from a second
+// egress, and the 200 ms retry landed inside the same window. 700 ms is the
+// pause that clears the sibling Shopify edges (REEA-1147) and still fits the
+// lane's two-attempt budget.
+export const AMAZON_RETRY_BACKOFF_MS = 700;
 
 export interface SearchHit {
   title: string;
