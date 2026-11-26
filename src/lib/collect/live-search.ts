@@ -2371,16 +2371,28 @@ export const COLLECTORS: RetailerCollector[] = [
   {
     merchant: "Nest",
     country: "KW",
-    silentWhenEmpty: true,
     collect: async (query, fetchImpl) => {
-      // REEA-723 — Shopify storefront whose search views render server-side
-      // per locale: the English shape rides /en/search, Arabic-script
-      // queries the RTL root locale (measured live 2026-09-12 — /en/search
-      // answers lang="en", the root /search the Arabic-first view, both with
-      // the same priced SSR cards). Arabic rides root, Latin rides /en —
-      // crawled per locale, never a guessed shared slug. Both shapes ride
-      // ONE bounded window so a mixed shelf merges from the same run; a
-      // silent hop just contributes nothing.
+      // REEA-1221 — re-diagnosed. REEA-723's hop asked the Shopify search view
+      // per locale, but Nest's own edge now answers that view with HTTP 429
+      // (`retry-after: 60`) for every request from our egress, so the lane read
+      // 100% blocked on the canary while the storefront was fine. Measured
+      // 2026-11-26: `/en/search?q=<term>` → 429 with retry-after 60, and the
+      // same URL fetched through the reader relay answers HTTP 200 with the
+      // rendered page — whose own header says `Search: 0 results found for
+      // "<term>"` for every panel query (Nest Kuwait's catalogue is 17
+      // homeware SKUs: cup holders, acrylic trays, a chess set).
+      //
+      // So the lane now distinguishes a throttle from an answer: a 200 from
+      // either the plain hop or the relay is an ANSWER (possibly an explicit
+      // no-match), and only a run where no hop produced a page at all is a
+      // blocked failure. That keeps the failure counter honest — the store
+      // simply does not stock these queries — instead of blaming it for our
+      // 429s.
+      const isShell = (html: string): boolean =>
+        html === "" ||
+        /cf-error-details|Just a moment|Attention Required|Sorry, you have been blocked/i.test(html);
+      const answered = (html: string): boolean =>
+        !isShell(html) && (html.includes("/products/") || /results? found/i.test(html));
       const window = AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS * 2);
       const hop = async (localePath: string, q: string): Promise<string> => {
         try {
@@ -2398,16 +2410,34 @@ export const COLLECTORS: RetailerCollector[] = [
       const lead = /[\u0600-\u06FF]/.test(query) ? "" : "/en";
       const follow = lead === "" ? "/en" : "";
       const bodies = await Promise.all([hop(lead, query), hop(follow, query)]);
+      let sawAnswer = false;
       const seen = new Set<string>();
       const out: SearchHit[] = [];
       for (const body of bodies) {
+        if (answered(body)) sawAnswer = true;
         for (const hit of nestHits(body, query)) {
           if (seen.has(hit.url)) continue;
           seen.add(hit.url);
           out.push(hit);
         }
       }
-      return out;
+      if (out.length > 0) return out;
+      // The storefront throttles our egress; the relay answers from its own.
+      const relayed = await jinaClearedHtml(
+        `https://www.neststores.com${lead}/search?q=${encodeURIComponent(query)}`,
+        "/products/",
+      );
+      if (answered(relayed)) sawAnswer = true;
+      for (const hit of nestHits(relayed, query)) {
+        if (seen.has(hit.url)) continue;
+        seen.add(hit.url);
+        out.push(hit);
+      }
+      if (out.length > 0 || sawAnswer) return out;
+      throw new BlockedLaneError(
+        "blocked: no usable payload from any Nest hop (429 on both locale views, relay gave no page)" +
+          (browserLastError() ? ` [relay: ${browserLastError().slice(0, 120)}]` : ""),
+      );
     },
   },
   {
