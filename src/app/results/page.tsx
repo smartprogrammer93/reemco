@@ -326,7 +326,11 @@ export default async function ResultsPage({
       // serves the capped collection clock. Never re-read here.
       await recordSearchOutcome({
         ...(pageSnap
-          ? searchOutcomeFromSnapshot(pageSnap, shelfCards)
+          ? // REEA-1178 AC3/AC5 — the depth fold reads the SAME market view the
+            // shelf speaks for (REEA-1177's marketViewScope: null on the "All"
+            // selection), so a foreign accessory row can never become a
+            // comparison lane on a Kuwait card.
+            searchOutcomeFromSnapshot(pageSnap, shelfCards, marketViewScope(country))
           : { zeroOffers: false, offersByRetailer: {} }),
         serveOutcome: serveOutcomeOf(served, convSnap),
         // REEA-1078 — serve kind from the collection layer (only it knows

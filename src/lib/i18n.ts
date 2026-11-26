@@ -75,6 +75,10 @@ const en = {
   // chip, designer brief: must NOT look like an error state); the per-reason
   // explanation rides the native title attribute (one hover/tap away).
   priceVerifyBadge: "Price needs verification",
+  // REEA-1178 AC3 — the possible-mismatch marker on an offer row whose figure
+  // is not comparable evidence for this card (flagged, or below a tenth of the
+  // cohort median). Short chip text, reason sentence in the title attribute.
+  mismatchBadge: "Possible mismatch",
   priceUnavailable: "Price unavailable",
   verifyOutlier:
     "This figure is far from the typical price for this search, so it may not be comparable.",
@@ -426,6 +430,8 @@ const ar: typeof en = {
   // REEA-963 — AR side of the sanity warning affordance (EN above). The badge
   // stays short; the per-reason sentences ride the title attribute.
   priceVerifyBadge: "السعر يحتاج إلى تحقق",
+  // REEA-1178 AC3 — AR side of the possible-mismatch marker.
+  mismatchBadge: "احتمال عدم تطابق",
   priceUnavailable: "السعر غير متوفر",
   verifyOutlier: "هذا الرقم بعيد عن السعر المعتاد لهذا البحث، لذا قد لا يكون قابلًا للمقارنة.",
   verifyCurrency: "لم نتمكن من التحقق من عملة هذا العرض، لذا قد يكون الرقم غير دقيق.",

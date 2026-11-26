@@ -62,6 +62,10 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { getSharedKv, type SharedKv } from "@/lib/collect/kv";
+// REEA-1178 — the ONE offer-row integrity definition: the depth fold reads the
+// same merchant/dedupe/mismatch rules the results card renders.
+import { comparisonMerchantsOf } from "@/lib/offer-integrity";
+import type { CountryCode } from "@/lib/country";
 
 /** Weeks kept in the store (raw counters older than this are pruned on write). */
 export const RETENTION_WEEKS = 26;
@@ -662,9 +666,34 @@ export function applyLinkSmoke(
  *  card a comparison, so it is ignored (never counted as a second retailer).
  *  Aggregate-only — the caller passes the exact shelf slice the page paints
  *  (resultsShelfCards), and only the two totals are stored (no card ids, no
- *  per-query data). */
+ *  per-query data).
+ *
+ *  REEA-1178 AC2/AC3/AC5 — the depth definition the ticket asks the payload
+ *  to state, enforced here: "distinct in-market merchants with a non-flagged
+ *  offer". The fold now reads the SAME integrity helper as the card renderer
+ *  (lib/offer-integrity.ts):
+ *   - duplicate offer rows (same merchant + price + URL) count once, so a
+ *     re-fetched listing cannot manufacture a second comparison lane;
+ *   - an offer whose query-time sanity verdict is not `ok`, or whose
+ *     ratioToMedian is below POSSIBLE_MISMATCH_RATIO (0.1), is a possible
+ *     mismatch — live `fb1747d2`: the Anker AeroFit 2 card's Amazon.eg
+ *     accessory at ratio 0.09997 was `ok` and still inflated this counter;
+ *   - when a market scope is given, only that market's merchants count (a
+ *     Saudi row is not a Kuwait comparison lane, REEA-1147 AC2). Callers that
+ *     pass no scope keep the pre-change all-market fold for aggregate
+ *     comparability of historical reads. */
 export function comparisonDepthOf(
-  products: readonly { offers?: readonly { merchant?: string }[] }[],
+  products: readonly {
+    offers?: readonly {
+      merchant?: string;
+      currency?: string;
+      price?: number;
+      url?: string;
+      market?: string;
+      sanity?: { status?: string; reason?: string; ratioToMedian?: number };
+    }[];
+  }[],
+  scope?: CountryCode | null,
 ): ComparisonDepth {
   let cardsTotal = 0;
   let cardsMultiRetailer = 0;
@@ -672,11 +701,21 @@ export function comparisonDepthOf(
     if (!p || typeof p !== "object") continue;
     cardsTotal += 1;
     const merchants = new Set<string>();
-    for (const o of p.offers ?? []) {
-      const name = sanitizeMerchant(typeof o?.merchant === "string" ? o.merchant : "");
-      // REEA-787's case-folded merchant identity: "Xcite" and "xcite" are
-      // the same retailer spelling, never a second comparison lane.
-      if (name) merchants.add(name.toLowerCase());
+    for (const merchant of comparisonMerchantsOf(
+      (p.offers ?? []).map((o) => ({
+        merchant: typeof o?.merchant === "string" ? sanitizeMerchant(o.merchant) : "",
+        price: typeof o?.price === "number" ? o.price : 0,
+        currency: typeof o?.currency === "string" ? o.currency : "",
+        url: typeof o?.url === "string" ? o.url : "",
+        ...(typeof o?.market === "string" ? { market: o.market } : {}),
+        ...(o?.sanity ? { sanity: o.sanity } : {}),
+      })),
+      scope ?? null,
+    )) {
+      // REEA-787's case-folded merchant identity: "Xcite" and "xcite" are the
+      // same retailer spelling, never a second comparison lane. The helper
+      // already case-folds and drops blank names.
+      merchants.add(merchant);
     }
     if (merchants.size >= 2) cardsMultiRetailer += 1;
   }
@@ -702,7 +741,20 @@ export function searchOutcomeFromSnapshot(
     products: { offers?: readonly { merchant?: string }[] }[];
     notes: { merchant: string; hits: number; error?: string }[];
   },
-  cards: readonly { offers?: readonly { merchant?: string }[] }[],
+  cards: readonly {
+    offers?: readonly {
+      merchant?: string;
+      currency?: string;
+      price?: number;
+      url?: string;
+      market?: string;
+      sanity?: { status?: string; reason?: string; ratioToMedian?: number };
+    }[];
+  }[],
+  // REEA-1178 AC3/AC5 — the market the card set speaks for, so the depth fold
+  // counts only in-market comparison lanes. Omitted → pre-change all-market
+  // fold (aggregate callers without a selection).
+  scope?: CountryCode | null,
 ): SearchOutcomeBase {
   const offersByRetailer: Record<string, number> = {};
   for (const n of snap.notes ?? []) {
@@ -712,7 +764,7 @@ export function searchOutcomeFromSnapshot(
   return {
     zeroOffers: (snap.products?.length ?? 0) === 0,
     offersByRetailer,
-    comparisonDepth: comparisonDepthOf(cards),
+    comparisonDepth: comparisonDepthOf(cards, scope ?? null),
   };
 }
 

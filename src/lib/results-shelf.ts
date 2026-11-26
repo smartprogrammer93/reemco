@@ -52,7 +52,24 @@ export function shelfSectionsFromProducts(
     exactSkuKeep(query),
   );
   const sections = partitionByConfidence(query, filtered);
-  return { ...sections, primary: rankPrimaryByEffective(sections.primary, marketViewScope(country)) };
+  // REEA-1177 AC 6a-4 — the primary shelf ranks by the SAME effective price
+  // the card headline prints (lowest in-market effective first).
+  const ranked = {
+    ...sections,
+    primary: rankPrimaryByEffective(sections.primary, marketViewScope(country)),
+  };
+  // REEA-1178 AC1 — the page-level invariant: no two shelf cards share a
+  // productId. The collector resolves group collisions (a "+ Wireless
+  // Charger" bundle reusing the base phone's tuple got its own "-bundle"
+  // identity), and this is the guardrail that keeps the invariant true for
+  // every future merge pass: a twin id is painted once, first-ranked wins,
+  // and the counter folds the SAME chain so depth can never count an artefact
+  // the shopper does not see. Applied AFTER the REEA-1177 ranking so the
+  // survivor is the card the page would have led with.
+  return {
+    primary: uniqueCardsByProductId(ranked.primary),
+    related: uniqueCardsByProductId(ranked.related),
+  };
 }
 
 /**
@@ -80,6 +97,25 @@ export function rankPrimaryByEffective(
     if (kb == null) return -1;
     return ka - kb;
   });
+}
+
+/**
+ * REEA-1178 AC1 — one card per productId: drop any repeat of an id already in
+ * the set (the first occurrence is the highest-ranked card). Pure and
+ * client-safe; shared by the renderer chain and the depth fold so the painted
+ * shelf and the counted shelf stay one population.
+ */
+export function uniqueCardsByProductId(
+  cards: readonly NormalizedProduct[],
+): NormalizedProduct[] {
+  const seen = new Set<string>();
+  const out: NormalizedProduct[] = [];
+  for (const card of cards) {
+    if (seen.has(card.productId)) continue;
+    seen.add(card.productId);
+    out.push(card);
+  }
+  return out;
 }
 
 /** The shelf cards one page of a live snapshot renders (page 1 = default). */

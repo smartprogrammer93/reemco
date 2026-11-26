@@ -66,8 +66,12 @@ import {
   mergeCompatible,
   productSlugFor,
   storageFromListingUrl,
+  uniqueGroupSlugs,
   type CanonicalFields,
 } from "@/lib/collect/canonical-product";
+// REEA-1178 — the ONE offer-row integrity definition, shared with the results
+// card's retailer count and the weekly comparison-depth fold.
+import { dedupeOfferRows, distinguishSamePriceRows } from "@/lib/offer-integrity";
 import {
   arabicBrandIntent,
   brandIsNamed,
@@ -3033,6 +3037,25 @@ function finalizeGroups(
   const scrapedAt = new Date().toISOString(); // real collection completion time
   const scrapedAtEpochMs = Date.parse(scrapedAt);
 
+  // REEA-1178 AC1 — ONE productId per card, guaranteed. A "+ Wireless Charger"
+  // bundle is accessory-classed (the REEA-192 gate sees "charger") so it forms
+  // its own group, but its canonical tuple is the base phone's: the slug
+  // collided and the same phone painted twice at two prices (live `fb1747d2`:
+  // 10 cards for 8 productIds). The class is part of identity, so the served
+  // payload resolves collisions here — device group keeps the plain slug, the
+  // bundle takes a deterministic "-bundle" identity from its own evidence.
+  // The PDP resolves the SAME map, so a card link still lands on its group.
+  const groupSlugs = new Map<HitGroup, string>();
+  const uniqueSlugs = uniqueGroupSlugs(
+    groups.map((g) => ({
+      slug: slugOfGroup(g, canonicalGroupTitle(g, locale)),
+      accessory: g.accessory,
+      titles: [...g.titles],
+      urls: g.offers.map((o) => o.url),
+    })),
+  );
+  groups.forEach((g, i) => groupSlugs.set(g, uniqueSlugs[i]));
+
   // REEA-254 payload trim, REEA-488 shape — cheaper same-family alternatives.
   // Every card's row list re-references ONE computed entry per referenced
   // group, so the RSC flight payload serializes each distinct object once and
@@ -3051,8 +3074,10 @@ function finalizeGroups(
       m = {
         // REEA-1140 — the alternative links to the SAME canonical slug the
         // product card uses for that merged SKU, so a click-through lands on
-        // the merged group instead of a title-spelling fork.
-        productId: slugOfGroup(g, otherTitle),
+        // the merged group instead of a title-spelling fork. REEA-1178 — read
+        // the collision-resolved map so a bundle alternative never links to
+        // the device card's productId.
+        productId: groupSlugs.get(g) ?? slugOfGroup(g, otherTitle),
         title: otherTitle,
         // KWD-space numeric (REEA-254 item B): alternatives rows render this
         // through formatPrimaryPrice(x, "KWD"), so mixed-currency groups show
@@ -3271,12 +3296,23 @@ function finalizeGroups(
     // Colour/capacity/grade differences carry no label (their own slots on
     // the card), so those still fold to the merchant's best row exactly as
     // before.
-    const offers: PriceOffer[] = perListing.filter(
-      (o, i, arr) =>
-        arr.findIndex(
-          (x) => x.merchant === o.merchant && (x.label ?? "") === (o.label ?? ""),
-        ) === i,
+    const offers: PriceOffer[] = dedupeOfferRows(
+      distinguishSamePriceRows(
+        perListing.filter(
+          (o, i, arr) =>
+            arr.findIndex(
+              (x) => x.merchant === o.merchant && (x.label ?? "") === (o.label ?? ""),
+            ) === i,
+        ),
+      ),
     );
+    // REEA-1178 AC2 — the final row identity is the purchasable unit the
+    // shopper can act on: same merchant + price + listing URL renders ONCE
+    // (dedupeOfferRows). AC4 — before that, rows of one merchant at the SAME
+    // price that would otherwise look identical are made distinguishable from
+    // their own listing reference: live `fb1747d2` painted two Eureka 1TB rows
+    // at KD 489.90 with only "Japanese VR" on one, so the shopper could not
+    // tell the regional versions apart.
     // REEA-281 AC-1: the card thumbnail is the FIRST member listing that
     // actually carries a photo — live hits only, never invented.
     const photo = offers.find((o) => o.image)?.image;
@@ -3304,7 +3340,10 @@ function finalizeGroups(
       // shortest member title: the same merged SKU resolves to the same
       // `/product/<slug>` across collections, and the PDP can match it back
       // to this exact group instead of a raw-identity neighbour.
-      productId: slugOfGroup(group, title) || `live-${idx}`,
+      // REEA-1178 AC1 — the collision-resolved slug: a bundle group that
+      // shares the device's tuple keeps its own identity instead of painting
+      // the same productId twice on one page.
+      productId: groupSlugs.get(group) ?? (slugOfGroup(group, title) || `live-${idx}`),
       title,
       brand: resolveBrand(group.brandRaw, title),
       ...(photo ? { image: photo } : {}),

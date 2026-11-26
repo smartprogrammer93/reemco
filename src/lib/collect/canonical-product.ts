@@ -554,6 +554,48 @@ function computeCanonicalFields(title: string): CanonicalFields {
     }
   }
 
+  // REEA-1178 — a title whose brand token is its LAST word leaves the
+  // post-brand scan empty ("Soundcore AeroFit 2 Open-Ear Wireless Earbuds -
+  // Anker"), so the tuple had no model line and every merge comparison fell
+  // back to the partial-match rule. The card's identity was then borrowed
+  // from whichever other member title carried one — live `fb1747d2`: the
+  // Anker AeroFit 2 card's slug was derived from an Amazon.eg accessory
+  // ("… P47M Cat LED Over Stereo Music Card Support Kids Girls PC") and
+  // changed between collection runs. When nothing follows the brand, the
+  // head words BEFORE it ARE the product line the shopper sees; read them
+  // through the same attribute filters so the title yields its own stable
+  // model line instead of borrowing a neighbour's.
+  if (line.length === 0 && brandIdx > 0) {
+    for (let i = 0; i < brandIdx; i++) {
+      const t = tokens[i];
+      if (noised(t) || brandOf(t) !== "") continue;
+      if (RAM_QUANTITY_RE.test(t)) continue;
+      const glued = /^(\d{2,4})phone$/.exec(t);
+      if (glued) {
+        if (!storage) storage = `${glued[1]}gb`;
+        continue;
+      }
+      if (STORAGE_RE.test(t)) {
+        if (!storage) storage = t;
+        continue;
+      }
+      if (COLORS.has(t)) {
+        if (!color) color = t;
+        continue;
+      }
+      if (GRADE_WORDS.has(t) || t === "open-box") {
+        if (!gradeWord) gradeWord = t;
+        continue;
+      }
+      if (GRADE_LETTERS.has(t) && gradeWord && !gradeLetter) {
+        gradeLetter = t;
+        continue;
+      }
+      if (/^\d+(?:\.\d+)?$/.test(t)) continue;
+      line.push(t);
+    }
+  }
+
   // Grade parts join with "-" so "Renewed Grade B" lands on the spec value
   // renewed-grade-b; absent grade means new; a lone grade letter stands alone.
   const gradeParts: string[] = [];
@@ -1044,3 +1086,79 @@ export function productSlugFor(
   const slug = slugifyIdentity(parts.join(" "));
   return slug || slugifyIdentity(fallbackTitle);
 }
+
+/* ---------------------------------------------------------------------------
+ * REEA-1178 — one card per productId: the collision pass.
+ *
+ * Root cause of the duplicate cards on `/results?q=iphone%2017%20pro` (10
+ * cards for 8 productIds on `fb1747d2`): a "+ Wireless Charger" bundle is
+ * ACCESSORY-classed (the REEA-192 class gate sees "charger"), so it forms its
+ * own group — but the slug is built from the canonical tuple only, and the
+ * bundle's tuple IS the base phone's (brand apple / iphone 17 pro / 256gb).
+ * Two groups, one productId: the same phone painted twice at two prices.
+ *
+ * The class gate is part of identity, so the slug must be too. When two groups
+ * collide, the DEVICE-class group keeps the plain slug (that is the product
+ * the shopper searched for) and each accessory-class group takes its own
+ * deterministic class suffix — "bundle" when its own titles or listing URLs
+ * say so (Wibi serves `bundle-offer-apple-iphone-17-pro-…`), else
+ * "accessory". A further collision between two same-class groups gets a
+ * stable ordinal ordered by their own titles, so the same fetched set always
+ * produces the same ids.
+ * ------------------------------------------------------------------------- */
+
+/** The class suffix that separates an accessory-classed group from the device
+ *  card it shares a canonical tuple with. Reads the REEA-787 BUNDLE_WORDS
+ *  vocabulary above (titles AND listing URLs — Wibi spells the bundle in the
+ *  URL: `/products/bundle-offer-…`). */
+export function identityClassToken(
+  titles: readonly string[],
+  urls: readonly string[] = [],
+): string {
+  const tokens = [...titles, ...urls].flatMap((text) => canonicalTokens(text));
+  return tokens.some((t) => BUNDLE_WORDS.has(t)) ? "bundle" : "accessory";
+}
+
+export interface GroupSlugInput {
+  /** The base slug the group's canonical tuple produces. */
+  slug: string;
+  /** REEA-192 class of the group (accessory titles never fold into a device). */
+  accessory: boolean;
+  /** The group's own member titles and listing URLs — its live evidence. */
+  titles: readonly string[];
+  urls: readonly string[];
+}
+
+/**
+ * REEA-1178 AC1 — the served payload's productIds, guaranteed pairwise
+ * distinct: the device-class group wins a contested slug, accessory groups
+ * are disambiguated from their own evidence, and any residual tie (two
+ * bundles of one SKU) breaks on a stable ordinal. Pure and deterministic on
+ * the fetched set — no ids leave the payload, nothing is bundled.
+ */
+export function uniqueGroupSlugs(groups: readonly GroupSlugInput[]): string[] {
+  const out: string[] = groups.map(() => "");
+  const taken = new Set<string>();
+  const order = groups
+    .map((group, index) => ({ group, index }))
+    .sort(
+      (a, b) =>
+        Number(a.group.accessory) - Number(b.group.accessory) ||
+        a.group.titles.slice().sort().join("|").localeCompare(b.group.titles.slice().sort().join("|")) ||
+        a.index - b.index,
+    );
+  for (const { group, index } of order) {
+    const base = group.slug || `live-${index}`;
+    let slug = base;
+    if (taken.has(slug)) {
+      const cls = identityClassToken(group.titles, group.urls);
+      slug = `${base}-${cls}`;
+      let ordinal = 2;
+      while (taken.has(slug)) slug = `${base}-${cls}-${ordinal++}`;
+    }
+    taken.add(slug);
+    out[index] = slug;
+  }
+  return out;
+}
+

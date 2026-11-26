@@ -237,9 +237,26 @@ export function weeklyResponse(
       // REEA-1078 — comparison depth: one aggregate per week, never per query
       // or per card (Data Minimization). ratio is derived, 0 when no cards.
       comparison_depth: {
+        // REEA-1178 AC5 — the payload states its OWN definition, so a reader
+        // never has to infer the population behind the ratio: distinct
+        // in-market merchants with a non-flagged offer, over the results-page
+        // shelf the shopper's page painted (one card per productId, duplicate
+        // offer rows folded, possible-mismatch offers excluded).
+        definition:
+          "cards_multi_retailer ÷ cards_total over the served results-page shelf: a card counts when it carries ≥2 distinct in-market merchants with a non-flagged offer (sanity status ok and ratioToMedian ≥ 0.1). Cards are deduped by productId and offer rows by merchant+price+URL, so duplicate rows, bundle twins and possible-mismatch accessory offers never inflate the number.",
         cards_total: w.comparison_cards_total,
         cards_multi_retailer: w.comparison_cards_multi_retailer,
         ratio: w.comparison_cards_total > 0 ? w.comparison_cards_multi_retailer / w.comparison_cards_total : 0,
+        // REEA-1178 AC5 — the pre-change weekly panel read 17.13% under the
+        // old (contaminated) fold: flagged accessory merges and duplicate rows
+        // counted as comparison depth. It is published BESIDE the post-change
+        // number, never compared across the change — the population and the
+        // merchant rule both moved.
+        pre_change_reference: {
+          ratio: 0.1713,
+          basis:
+            "W48 weekly panel before REEA-1178: cards_multi_retailer ÷ cards_total counted flagged accessory merges and duplicate rows. Read it beside the post-change ratio, never as a trend across this change.",
+        },
         // REEA-1141 AC-4 — duplicate cards the served streamed shelf painted
         // (same paint chain as the renderer, aggregate integer only) and the
         // derived dedupe ratio (unique cards ÷ painted cards, 1 when clean).

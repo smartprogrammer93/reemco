@@ -40,6 +40,9 @@ import { clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
 import FreshnessBadge from "@/components/FreshnessBadge";
 import OfferStatusToken from "@/components/OfferStatus";
 import { offerStatusForOffer } from "@/lib/offer-status";
+// REEA-1178 — the ONE offer-row integrity definition (merchant count, mismatch
+// marker), shared with the weekly comparison-depth fold.
+import { comparisonMerchantCount, isPossibleMismatchOffer } from "@/lib/offer-integrity";
 
 /**
  * REEA-963 R1 FR-1 — the query-time sanity verdict helpers. A flagged offer
@@ -438,6 +441,13 @@ function ShelfOfferRow({
   const market = offerMarket(offer.currency);
   const rowReason = offerFlagged(offer) ? offer.sanity?.reason : undefined;
   const rowUnavailable = rowReason === "price_unavailable";
+  // REEA-1178 AC3 — an offer that is not comparable evidence for this card
+  // (flagged by the cohort pass, or a price below a tenth of the median — the
+  // live Anker/Amazon.eg accessory at ratio 0.09997) keeps its own row and its
+  // own price, but is MARKED as a possible mismatch so it never reads as a
+  // like-for-like comparison. It is excluded from the retailer count and from
+  // comparison_depth (lib/offer-integrity.ts).
+  const possibleMismatch = isPossibleMismatchOffer(offer);
   // REEA-1100 — the legacy offer-row age rides the same localized age helper
   // as the shelf CTA and ProductHero: sub-minute reads "Checked just now" /
   // "حُدِّث الآن", never a raw "0s ago"; invalid stamps keep the localized
@@ -489,6 +499,21 @@ function ShelfOfferRow({
             style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px solid var(--rc-line)" }}
           >
             {gradeBadgeLabel(offer.grade)}
+          </span>
+        ) : null}
+        {possibleMismatch ? (
+          // REEA-1178 AC3 — the marker the ticket asks for: a distinct chip on
+          // the row itself (not only the tooltip) so a shopper scanning prices
+          // sees that this figure may be a different product. Same quiet chip
+          // styling as the label tokens; the reason sentence rides the native
+          // title attribute.
+          <span
+            className="label-token rc-mismatch-badge shrink-0 whitespace-nowrap rounded px-2 py-0.5"
+            role="note"
+            title={verifyTitleFor(offer.sanity?.reason, t)}
+            style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px dashed var(--rc-line)" }}
+          >
+            {t.mismatchBadge}
           </span>
         ) : null}
         <span className={`rc-stock${offer.inStock ? "" : " is-out"}`}>
@@ -714,13 +739,15 @@ export default function ProductResultCard({
       : null;
   // REEA-1147 AC2 — a card is a cross-store comparison only when at least two
   // distinct retailers answer IN the surface's market. REEA-1177 AC 6a-4 adds
-  // the second condition: the claim rests only when the effective price is
-  // known; otherwise the card states the retailer count, not "best effective".
-  const inMarketRetailers = new Set(
-    scopedOffers
-      .filter((o) => offerMarket(o.currency) === scope)
-      .map((o) => o.merchant),
-  ).size;
+  // the second condition (the claim rests only when the effective price is
+  // known) below.
+  // REEA-1178 AC2/AC3 — the count reads the ONE integrity definition
+  // (lib/offer-integrity.ts), the same one the weekly depth fold uses: rows
+  // deduped by merchant+price+URL, in-market only, and a possible-mismatch
+  // offer (outlier_low, a price-integrity flag, or any ratioToMedian < 0.1)
+  // never becomes a comparison lane. Live `fb1747d2`: the Anker AeroFit 2
+  // card's Amazon.eg accessory at ratio 0.09997 counted as a second retailer.
+  const inMarketRetailers = comparisonMerchantCount(offers, scope);
   const comparison = inMarketRetailers >= 2;
   const bestEffectiveClaim = comparison && bestKnown;
 

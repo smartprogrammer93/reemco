@@ -127,21 +127,27 @@ describe("weekly fold exposes the duplicate-card aggregate (AC-4)", () => {
     const res = weeklyResponse({ weeks: { [week]: counters }, source: "local", kvReadFailed: false }, {}, 8);
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      weeks: Record<string, { comparison_depth: Record<string, number> }>;
+      weeks: Record<string, { comparison_depth: Record<string, unknown> & { cards_total: number; duplicate_cards: number; dedupe_ratio: number } }>;
     };
     const depth = body.weeks[week].comparison_depth;
     expect(depth.cards_total).toBe(40);
     expect(depth.duplicate_cards).toBe(5);
     // unique ÷ painted = (40 − 5) / 40 — the correction the PM can apply.
     expect(depth.dedupe_ratio).toBeCloseTo(35 / 40);
-    // No per-card records, no identifiers: integers + one derived ratio.
+    // No per-card records, no identifiers: integers + one derived ratio, plus
+    // REEA-1178 AC-5's definition and pre-change reference (still aggregate).
     expect(Object.keys(depth).sort()).toEqual([
       "cards_multi_retailer",
       "cards_total",
       "dedupe_ratio",
+      "definition",
       "duplicate_cards",
+      "pre_change_reference",
       "ratio",
     ]);
+    expect((depth as unknown as { definition: string }).definition).toContain(
+      "distinct in-market merchants with a non-flagged offer",
+    );
   });
 
   it("reads a clean week as 0 duplicates and a full dedupe ratio", async () => {
@@ -151,7 +157,7 @@ describe("weekly fold exposes the duplicate-card aggregate (AC-4)", () => {
     counters.comparison_cards_multi_retailer = 1;
     const res = weeklyResponse({ weeks: { [week]: counters }, source: "local", kvReadFailed: false }, {}, 8);
     const body = (await res.json()) as {
-      weeks: Record<string, { comparison_depth: Record<string, number> }>;
+      weeks: Record<string, { comparison_depth: Record<string, unknown> & { cards_total: number; duplicate_cards: number; dedupe_ratio: number } }>;
     };
     expect(body.weeks[week].comparison_depth.duplicate_cards).toBe(0);
     expect(body.weeks[week].comparison_depth.dedupe_ratio).toBe(1);

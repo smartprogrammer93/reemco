@@ -133,13 +133,20 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
     expect(body.methodology!.counter_naming).toContain("RENAMED");
     // REEA-1078 — comparison depth is one aggregate block, never per card.
     // REEA-1141 AC-4 — duplicate_cards + dedupe_ratio ride the same block.
+    // REEA-1178 AC-5 — the block states its own definition and publishes the
+    // pre-change panel reference beside the post-change number.
     expect(week.comparison_depth).toEqual({
+      definition: expect.any(String),
       cards_total: 0,
       cards_multi_retailer: 0,
       ratio: 0,
+      pre_change_reference: expect.objectContaining({ ratio: 0.1713 }),
       duplicate_cards: 0,
       dedupe_ratio: 1,
     });
+    expect((week.comparison_depth as { definition: string }).definition).toContain(
+      "distinct in-market merchants with a non-flagged offer",
+    );
   });
 
   it("caps the requested window at the retention ceiling", async () => {
@@ -168,19 +175,25 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
     expect(week.latency_warm_band_lt_1s).toBe(1);
     expect(week.latency_band_lt_1s).toBe(0); // warm is not a cold collection
     expect(week.comparison_depth).toEqual({
+      definition: expect.any(String),
       cards_total: 4,
       cards_multi_retailer: 2,
       ratio: 0.5,
+      pre_change_reference: expect.objectContaining({ ratio: 0.1713 }),
       duplicate_cards: 0,
       dedupe_ratio: 1,
     });
     // Aggregate only: two integers and a derived ratio, plus the REEA-1141
-    // duplicate-card aggregate and its derived dedupe ratio.
+    // duplicate-card aggregate and its derived dedupe ratio. REEA-1178 AC-5
+    // adds the definition and the pre-change reference — still no per-card,
+    // no per-query, no identifiers.
     expect(Object.keys(week.comparison_depth as object).sort()).toEqual([
       "cards_multi_retailer",
       "cards_total",
       "dedupe_ratio",
+      "definition",
       "duplicate_cards",
+      "pre_change_reference",
       "ratio",
     ]);
   });
