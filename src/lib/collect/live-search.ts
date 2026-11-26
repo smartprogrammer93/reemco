@@ -74,7 +74,11 @@ import {
 } from "@/lib/collect/canonical-product";
 // REEA-1178 — the ONE offer-row integrity definition, shared with the results
 // card's retailer count and the weekly comparison-depth fold.
-import { dedupeOfferRows, distinguishSamePriceRows } from "@/lib/offer-integrity";
+import {
+  comparisonMerchantCount,
+  dedupeOfferRows,
+  distinguishSamePriceRows,
+} from "@/lib/offer-integrity";
 import {
   arabicBrandIntent,
   arabicQueryAlias,
@@ -87,6 +91,7 @@ import {
   isModelExtended,
   latinBridgeDispatch,
   latinQueryForms,
+  modelIdentityTokens,
   narrowCategoryLead,
   narrowDeviceLead,
   narrowSkuLead,
@@ -2442,17 +2447,32 @@ export function groupHits(
   // ONE card; the card still carries its variations and colour chips, and the
   // bet accepts "some of them wrong" (no relevance gate).
   const familyMerged = familyMerge ? mergeModelFamilies(groups) : groups;
-  const products = finalizeGroups(
-    rankByRelevance(query, familyMerged),
-    includeAlternatives,
-    query,
-    locale,
-    sanity,
-  );
+  const ranked = rankByRelevance(query, familyMerged);
+  const products = finalizeGroups(ranked, includeAlternatives, query, locale, sanity);
+  // REEA-1207 AC 7B-1/7B-2 — a category shelf is a COMPARISON surface: the
+  // ranker now leads with cards that carry >=2 in-market retailers, and the
+  // shelf stops at the category budget so the shopper's first screen is not
+  // twenty single-store rows with the comparisons buried. Exact-model queries
+  // keep the wider page (they already compare one model across stores).
+  // REEA-1175 measured the gap as a CATEGORY problem: exact-model queries
+  // already compare one model across stores, so they keep the wider page. A
+  // category or brand-only query (no model identity token) is the surface that
+  // was a directory of single-store rows.
+  const exactModelQuery = modelIdentityTokens(query).length > 0;
+  const shelf = exactModelQuery
+    ? products
+    : products.slice(0, CATEGORY_SHELF_CARDS);
   // AC-7 — one structured summary line per render cohort evaluation.
   logSanitySummary(sanity.summary);
-  return products;
+  return shelf;
 }
+
+/**
+ * REEA-1207 — the category shelf budget. Twenty single-retailer cards are a
+ * directory; the comparisons lead and the shelf stops here so the page's slots
+ * are spent on rows that answer "which store is cheaper".
+ */
+const CATEGORY_SHELF_CARDS = 10;
 
 /** AC-7 query id: the normalized query + locale fork of the render. */
 function queryIdForSanity(query: string, locale?: "en" | "ar"): string {
@@ -2531,6 +2551,8 @@ function rankByRelevance(query: string, groups: HitGroup[]): HitGroup[] {
     /** 0 = class product, 1 = neutral, 2 = complement (only meaningful when
      *  the query is category-intent; otherwise every row is 1). */
     categoryClass: number;
+    /** REEA-1207 AC 7B-1 — distinct in-market retailers on the card. */
+    comparison: number;
   };
   const ranked: Ranked[] = kept.map((group, arrival) => {
     // A merged card qualifies through ANY of its member titles; the visible
@@ -2552,6 +2574,9 @@ function rankByRelevance(query: string, groups: HitGroup[]): HitGroup[] {
       // one normalized KWD-based key — mixed-currency cards rank comparable.
       cheapest: Math.min(...group.offers.map((o) => effectiveKeyOf(o))),
       categoryClass: rowClass === "product" ? 0 : rowClass === "complement" ? 2 : 1,
+      // Same integrity definition the card and the weekly fold read, scoped to
+      // the Kuwait market this shelf compares for.
+      comparison: comparisonMerchantCount(group.offers, "KW"),
     };
   });
   const insideTier = (a: Ranked, b: Ranked): number =>
@@ -2571,6 +2596,12 @@ function rankByRelevance(query: string, groups: HitGroup[]): HitGroup[] {
     Number(a.extended) - Number(b.extended) ||
     Number(!a.named) - Number(!b.named) ||
     Number(!a.stocked) - Number(!b.stocked) ||
+    // REEA-1207 AC 7B-1 — within a tier, a card the shelf can actually COMPARE
+    // (>=2 in-market retailers) leads a single-retailer card. The shopper's job
+    // is "which store is cheaper"; a directory of one-store cards spends the
+    // top slots on rows that cannot answer it. Relevance is untouched: the
+    // tier ladder, class block and device/accessory order still decide first.
+    Number(a.comparison < 2) - Number(b.comparison < 2) ||
     a.cheapest - b.cheapest ||
     a.arrival - b.arrival;
 
