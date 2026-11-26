@@ -99,6 +99,9 @@ const en = {
   // "Seen recently: KD 4,099–KD 4,350 · last 14 days".
   seenRecentlyLead: "Seen recently:",
   seenRecentlyWindow: "last 14 days",
+  // REEA-1167 — a single scoped observation is honest on its own:
+  // "First seen: KD 94.95" (no 14-day window claim).
+  firstSeenLead: "First seen:",
   viewAtLead: "View at",
   goToStore: "Go to store",
   // REEA-930 scope 1 — freshness-anchored offer CTA. The age ladder mirrors
@@ -429,6 +432,8 @@ const ar: typeof en = {
   // REEA-540 Bet A — AR counterpart of the results-card confidence pair.
   seenRecentlyLead: "شوهد مؤخرًا:",
   seenRecentlyWindow: "آخر 14 يومًا",
+  // REEA-1167 — AR counterpart of the single-observation line.
+  firstSeenLead: "شوهد لأول مرة:",
   viewAtLead: "افتح لدى",
   goToStore: "إلى المتجر",
   // REEA-930 — AR CTA pair (see the EN block for the composition rules).

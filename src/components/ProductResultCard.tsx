@@ -998,9 +998,11 @@ export default function ProductResultCard({
 
           {product.seenRange != null && (
             <p style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
-              {`${t.seenRecentlyLead} `}
+              {/* REEA-1167 — one scoped observation is a "first seen" figure,
+                  not a 14-day range claim. */}
+              {`${product.seenRange.firstSeen ? t.firstSeenLead : t.seenRecentlyLead} `}
               <span className="tabular"><bdi>{formatSeenRangeLabel(product.seenRange, country)}</bdi></span>
-              {` · ${t.seenRecentlyWindow}`}
+              {product.seenRange.firstSeen ? null : ` · ${t.seenRecentlyWindow}`}
             </p>
           )}
 

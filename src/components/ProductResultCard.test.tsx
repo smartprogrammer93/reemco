@@ -381,6 +381,42 @@ describe("REEA-540 Bet A — seen-recently confidence line", () => {
     );
     expect(container.textContent).not.toContain("Seen recently");
   });
+
+  it("REEA-1167 — a single scoped observation renders first-seen, not a 14-day range", () => {
+    const firstSeen: NormalizedProduct = {
+      ...product(false),
+      seenRange: {
+        min: { price: 94.95, currency: "KWD" },
+        max: { price: 94.95, currency: "KWD" },
+        firstSeen: true,
+      },
+    };
+    const { container } = render(
+      <ProductResultCard product={firstSeen} query="wh-1000xm6" rank={0} locale="en" />,
+    );
+    expect(container.textContent).toContain("First seen:");
+    expect(container.textContent).toContain("KD 94.95");
+    expect(container.textContent).not.toContain("last 14 days");
+    expect(container.textContent).not.toContain("Seen recently:");
+  });
+
+  it("REEA-1167 — the Arabic first-seen line is localized and keeps the KD figure", () => {
+    const firstSeen: NormalizedProduct = {
+      ...product(false),
+      seenRange: {
+        min: { price: 94.95, currency: "KWD" },
+        max: { price: 94.95, currency: "KWD" },
+        firstSeen: true,
+      },
+    };
+    const { container } = render(
+      <ProductResultCard product={firstSeen} query="سماعات" rank={0} locale="ar" />,
+    );
+    expect(container.textContent).toContain("شوهد لأول مرة:");
+    expect(container.textContent).toContain("KD 94.95");
+    expect(container.textContent).not.toContain("آخر 14 يومًا");
+    expect(container.textContent).not.toContain("Seen recently");
+  });
 });
 
 describe("REEA-592 — Alternatives / Pairs-with rows (REEA-575 spec R2/R4)", () => {

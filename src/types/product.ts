@@ -173,6 +173,12 @@ export interface NormalizedProduct {
 export interface SeenRange {
   min: { price: number; currency: string };
   max: { price: number; currency: string };
+  /**
+   * REEA-1167 — true when exactly one scoped observation survived the
+   * product/market fold. The card then renders "First seen: <price>" (a
+   * single observation is honest) instead of a 14-day range.
+   */
+  firstSeen?: boolean;
 }
 
 export interface SearchResult {
