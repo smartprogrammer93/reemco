@@ -48,6 +48,10 @@ import SearchForm from "@/components/SearchForm";
 import { coverageParts, type LiveSearchResult } from "@/lib/collect/coverage";
 import { markLiveRefresh, withRefreshBypass } from "@/lib/query-cache";
 import { collectedAgeLabel, clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
+// REEA-1218 (Bet 8) — the static AR↔EN lexicon is browser-safe (no I/O); the
+// results surface reads it only for the substitution line and the Arabic
+// empty-state suggestions, so the lexicon ships as one static asset (AC-7).
+import { ARABIC_EMPTY_SUGGESTIONS, arabicQueryAlias } from "@/lib/arabic-lexicon";
 import type { NormalizedProduct } from "@/types/product";
 
 /**
@@ -187,12 +191,20 @@ function EmptyState({
   /** REEA-1114 AC4 — reveal in place (client selection), query kept. */
   onReveal?: () => void;
 }) {
-  const t = getStrings(locale ?? clientLocale());
+  const resolvedLocale = locale ?? clientLocale();
+  const t = getStrings(resolvedLocale);
   const filterLabel = hidden
     ? hidden.filter === "stock"
       ? t.inStock
       : countryLabel(country, t)
     : "";
+  // REEA-1218 AC-4 — the Arabic empty state's three suggestions come from the
+  // same curated lexicon the matcher uses (غسالة / لابتوب / بانادول), not from
+  // generic English examples. EN keeps its shipped FR-1.1 pills.
+  const suggestions =
+    resolvedLocale === "ar"
+      ? ARABIC_EMPTY_SUGGESTIONS
+      : [t.emptyExample1, t.emptyExample2, t.emptyExample3];
   return (
     <div
       className="result-card empty-state rc-empty mx-auto w-full max-w-xl"
@@ -246,8 +258,8 @@ function EmptyState({
           A filter-hidden zero does not ask that question, so case (b) drops
           them; the reveal action is the onward path. */}
       {hidden ? null : (
-        <div className="mt-4 flex flex-wrap gap-2">
-          {[t.emptyExample1, t.emptyExample2, t.emptyExample3].map((q) => (
+        <div className="mt-4 flex flex-wrap gap-2" data-empty-suggestions="true">
+          {suggestions.map((q) => (
             <Link key={q} href={buildResultsHref(q, 1, country)} className="query-pill query-pill-on-light">
               {q}
             </Link>
@@ -261,6 +273,30 @@ function EmptyState({
         <SearchForm defaultValue={query} country={country} locale={locale} />
       </div>
     </div>
+  );
+}
+
+/**
+ * REEA-1218 AC-3 — the explicit Arabic substitution line. When an Arabic query
+ * is served under its curated Latin alias (the same alias the live fan-out is
+ * dispatched under), the shelf names both spellings instead of silently
+ * substituting. The copy is Arabic by AC-3 even on an English-chrome view,
+ * because the line is about the shopper's Arabic query.
+ */
+function AliasSubstitutionLine({ query }: { query: string }) {
+  const alias = arabicQueryAlias(query);
+  if (!alias) return null;
+  const t = getStrings("ar");
+  return (
+    <p
+      data-alias-substitution="true"
+      data-alias-from={alias.from}
+      data-alias-to={alias.to}
+      className="mt-2"
+      style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}
+    >
+      {fill(t.aliasSubstitution, { alias: alias.to, query: alias.from })}
+    </p>
   );
 }
 
@@ -1458,6 +1494,10 @@ function StagedResults(props: {
           <Suspense fallback={<StampGhost locale={locale} />}>
             <ResultsSubline stage={finalPromise} query={query} page={page} country={country} showOutOfStock={showOutOfStock} renderStartMs={props.renderStartMs} locale={locale} />
           </Suspense>
+          {/* REEA-1218 AC-3 — the alias disclosure survives the provisional
+              zero view too, so a still-converging Arabic query never looks
+              like it silently swapped the shopper's language. */}
+          <AliasSubstitutionLine query={query} />
           {/* REEA-793 — pending row ahead of the stamp boundary in this view too. */}
           <Suspense fallback={null}>
             <StagePendingRow stages={stages} locale={locale} />
@@ -1499,6 +1539,10 @@ function StagedResults(props: {
         </ResultsHead>
         <StatusLegend locale={locale} />
         <ResultsMeta products={products} query={query} renderStartMs={props.renderStartMs} locale={locale} />
+        {/* REEA-1218 AC-3 — the Arabic substitution line sits above the count
+            line, so the shopper sees which Latin spelling answered their
+            Arabic query before reading the true offer count. */}
+        <AliasSubstitutionLine query={query} />
         {/* REEA-1201 AC 7b-1/7b-3 — the honest in-scope count and, when every
             card is single-retailer, the thin-shelf sentence. Both sit above
             the shelf and read the payload's own scope decision. */}
@@ -1883,6 +1927,9 @@ function ResultsInner(props: {
       </ResultsHead>
       <StatusLegend locale={locale} />
       <ResultsMeta products={products} query={query} renderStartMs={props.renderStartMs} locale={locale} />
+      {/* REEA-1218 AC-3 — the same Arabic substitution disclosure on the
+          static-host / blocking fallback path. */}
+      <AliasSubstitutionLine query={query} />
       {/* REEA-1201 AC 7b-1/7b-3 — honest count and thin-shelf sentence on the
           fallback path too, from the same scope-aware partition. */}
       {plainInScopeCount > 0 ? (

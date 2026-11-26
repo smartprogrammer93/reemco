@@ -205,6 +205,11 @@ const en = {
   // input (FR-1.2), not in the heading.
   emptyTitle: "No match found",
   emptyBody: "Check the spelling or try a broader search term.",
+  // REEA-1218 AC-3 — the AR substitution line. When an Arabic query is served
+  // under its curated Latin alias, the shelf says so explicitly; it is never a
+  // silent substitution. `{alias}` is the dispatched spelling, `{query}` the
+  // shopper's original Arabic text.
+  aliasSubstitution: "We searched for {alias} instead of “{query}”.",
   // REEA-1114 AC1/AC2 — the filter-aware empty state. A zero visible set
   // that an ACTIVE filter hid is not a no-match: name the filter, the count
   // and the one-tap reveal instead of blaming the spelling. `{filter}` is the
@@ -557,6 +562,9 @@ const ar: typeof en = {
   notFoundBody: "الصفحة التي تبحث عنها غير موجودة. جرّب إحدى عمليات البحث هذه:",
   emptyTitle: "لا توجد مطابقة",
   emptyBody: "تحقق من الإملاء أو جرّب مصطلح بحث أوسع.",
+  // REEA-1218 AC-3 — the explicit Arabic substitution line, e.g.
+  // «بحثنا عن washing machine بدلًا من غسالة».
+  aliasSubstitution: "بحثنا عن {alias} بدلًا من «{query}».",
   // REEA-1114 AC1/AC2 — AR side of the filter-aware empty state. The title
   // follows the AC template "N نتيجة مخفية بسبب <filter>"; the unit is the
   // shipped plural pair so 2+ reads naturally (نتائج).
