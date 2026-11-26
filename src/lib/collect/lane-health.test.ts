@@ -23,6 +23,7 @@ import {
   pruneLaneDays,
   readRetiredLanes,
   recordLaneAttempts,
+  STATIC_RETIREMENT_REASON,
   resetLaneHealthRunState,
   retiredLanesOf,
   utcDayOf,
@@ -66,6 +67,27 @@ describe("DEFAULT_RETIRED_LANES (AC-6 / REEA-1221)", () => {
     // through the browser tier; only the 7-day rule may retire a lane.
     expect(DEFAULT_RETIRED_LANES).toEqual([]);
     expect(DEFAULT_RETIRED_LANES).not.toContain("Next Store");
+  });
+});
+
+describe("stale static retirement records (REEA-1221)", () => {
+  it("does not veto a lane the policy list no longer holds", () => {
+    const state = emptyLaneHealthState();
+    // A record written by the old code-level policy for Next Store.
+    state.lanes["Next Store"] = {
+      ...emptyLaneHealth(),
+      retiredAt: new Date(Date.now() - DAY).toISOString(),
+      retiredReason: STATIC_RETIREMENT_REASON,
+    };
+    expect(retiredLanesOf(state)).not.toContain("Next Store");
+
+    // An evidence-based retirement (7-day rule) is untouched.
+    state.lanes.Lulu = {
+      ...emptyLaneHealth(),
+      retiredAt: new Date(Date.now() - DAY).toISOString(),
+      retiredReason: "no successful answer for 7 days",
+    };
+    expect(retiredLanesOf(state)).toContain("Lulu");
   });
 });
 

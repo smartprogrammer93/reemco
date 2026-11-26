@@ -76,7 +76,9 @@ describe("REEA-1207 — no lane is retired for failing", () => {
 describe("REEA-1207 — canary re-admission of a static retirement", () => {
   it("needs LANE_CANARY_SUCCESS_STREAK consecutive answers, then clears retiredAt", () => {
     let state = emptyLaneHealthState();
-    retireLane(state, "Next Store", Date.now(), "static retirement (no answer from this egress)");
+    // REEA-1221 — the static list is empty, so retire on evidence: the
+    // canary ladder itself is what this test pins.
+    retireLane(state, "Next Store", Date.now(), "no successful answer for 7 days");
     expect(retiredLanesOf(state)).toContain("Next Store");
 
     // A failure resets the streak: N successes must be consecutive.

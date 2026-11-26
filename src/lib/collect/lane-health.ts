@@ -50,6 +50,14 @@ import { getSharedKv } from "@/lib/collect/kv";
  */
 export const DEFAULT_RETIRED_LANES: readonly string[] = [];
 
+/**
+ * REEA-1221 — the reason string a code-level retirement carries. It is policy,
+ * not evidence, so a persisted record with this reason must not outlive the
+ * policy: when a lane leaves DEFAULT_RETIRED_LANES the stale record is ignored
+ * and the lane is dispatched again (Next Store, re-admitted 2026-11-26).
+ */
+export const STATIC_RETIREMENT_REASON = "static retirement (no answer from this egress)";
+
 /** A lane must have failed every attempt for at least this many days. */
 export const LANE_RETIRE_WINDOW_DAYS = 7;
 
@@ -313,7 +321,16 @@ export function applyCanaryOutcome(
 /** Lanes the persisted state says are out of the default fan-out. */
 export function retiredLanesOf(state: LaneHealthState): string[] {
   return Object.entries(state.lanes)
-    .filter(([, l]) => Boolean(l.retiredAt))
+    .filter(([m, l]) => {
+      if (!l.retiredAt) return false;
+      // REEA-1221 — a record that only reflects the old code-level policy is
+      // not evidence: once the lane is no longer in DEFAULT_RETIRED_LANES the
+      // stored static retirement stops vetoing the dispatch.
+      const staleStatic =
+        (l.retiredReason ?? "").startsWith(STATIC_RETIREMENT_REASON) &&
+        !DEFAULT_RETIRED_LANES.includes(m);
+      return !staleStatic;
+    })
     .map(([m]) => m)
     .sort();
 }
@@ -507,7 +524,7 @@ export async function maybeRunDailyLaneHealth(
     for (const merchant of DEFAULT_RETIRED_LANES) {
       state.lanes[merchant] ??= emptyLaneHealth();
       if (!state.lanes[merchant].retiredAt && !state.lanes[merchant].readmittedAt) {
-        retireLane(state, merchant, now(), "static retirement (no answer from this egress)");
+        retireLane(state, merchant, now(), STATIC_RETIREMENT_REASON);
       }
     }
     // (a) 7-day auto-retire over lanes still in the fan-out.
