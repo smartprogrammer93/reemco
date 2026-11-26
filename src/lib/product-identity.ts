@@ -116,6 +116,18 @@ export async function resolveProductIdentity(
       if (fallbackPool.length === 0) fallbackPool = late.products;
     }
     if (fallbackPool.length === 0) fallbackPool = products;
+    // REEA-1192 — the bounded page snapshot can legitimately miss a card whose
+    // lane had not answered yet (measured: philips-5000s resolved to an Xcite
+    // 2.90 neighbour, sony-wh-1000xm6-over to a Eureka 94.95 one). Falling
+    // back to a canonical neighbour there is the old wrong-product defect, so
+    // wait for the run's converged answer (bounded by the same hop ceiling)
+    // and only then accept a neighbour.
+    if (!fallbackPool.some((p) => p.productId === productId)) {
+      const converged = await staged.converged;
+      const convergedExact = converged.products.find((p) => p.productId === productId);
+      if (convergedExact) return convergedExact;
+      if (fallbackPool.length === 0) fallbackPool = converged.products;
+    }
   }
 
   // REEA-1140 — legacy / alias slugs (and a collection whose fetched set moved
