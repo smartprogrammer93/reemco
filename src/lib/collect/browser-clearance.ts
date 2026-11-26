@@ -389,7 +389,22 @@ const RELAY_ENDPOINT = "https://api.microlink.io/";
 const RELAY_TTL_S = 1_800;
 const RELAY_TIMEOUT_MS = 20_000;
 
+/**
+ * Gate for the relay hop. Same posture as the browser tier: an explicit opt-out
+ * wins, a test run is hermetic (the unit suite must not depend on the public
+ * internet — measured in CI 2026-11-26, a real relay call inside the fake-fetch
+ * tests turned 1 expected product into 10 and blew the 5 s per-test budget),
+ * and the self-hosted runtime runs it.
+ */
+export function relayTierEnabled(): boolean {
+  const flag = (process.env.CLEARANCE_RELAY ?? "").toLowerCase();
+  if (flag === "off") return false;
+  if (flag === "on") return true;
+  return process.env.NODE_ENV !== "test";
+}
+
 export async function relayClearedHtml(url: string, contentSelector: string): Promise<string> {
+  if (!relayTierEnabled()) return "";
   const token = contentSelector.replace(/^[.#]/, "");
   const kv = getSharedKv();
   const key = `relay-cleared:${url}`;

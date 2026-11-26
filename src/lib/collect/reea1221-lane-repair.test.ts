@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { binsinaHits, nextStoreHits } from "@/lib/collect/live-search";
-import { browserTierEnabled } from "@/lib/collect/browser-clearance";
+import { browserTierEnabled, relayTierEnabled } from "@/lib/collect/browser-clearance";
 
 /**
  * REEA-1221 — lane repair guardrails. Each case pins one measured cause the
@@ -76,10 +76,13 @@ describe("REEA-1221 lane repair", () => {
     });
   });
 
-  it("keeps the browser clearance tier out of the hermetic test run", () => {
-    // The unit suite must not pay a Chromium launch; the self-hosted runtime
-    // and local dev still run it (BROWSER_CLEARANCE=on/off overrides either way).
+  it("keeps both clearance tiers out of the hermetic test run", () => {
+    // The unit suite must not pay a Chromium launch OR a public-internet relay
+    // round trip: a real relay call inside the fake-fetch tests turned one
+    // expected product into ten and blew the 5 s budget in CI (2026-11-26).
+    // The self-hosted runtime and local dev still run both tiers.
     expect(process.env.NODE_ENV).toBe("test");
     expect(browserTierEnabled()).toBe(false);
+    expect(relayTierEnabled()).toBe(false);
   });
 });
