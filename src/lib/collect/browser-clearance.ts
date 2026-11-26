@@ -41,7 +41,7 @@ const NAV_TIMEOUT_MS = 12_000;
 /** Bound on waiting for the page to paint the lane's content selector. The
  *  self-hosted box needs longer than the old 12 s for the managed challenge to
  *  step aside (measured 2026-11-26: 4.7 KB shell still there at 12.4 s). */
-const CONTENT_WAIT_MS = 25_000;
+const CONTENT_WAIT_MS = 10_000;
 
 type BrowserLike = {
   newContext(options: Record<string, unknown>): Promise<ContextLike>;
@@ -84,6 +84,18 @@ let browserVersion = "";
  * is wasted time.
  */
 let argSetIndex = 1;
+/**
+ * REEA-1221 — a no-paint circuit breaker. Measured on the self-hosted box
+ * 2026-11-26: Chromium launches and navigates, but this zone's managed challenge
+ * never steps aside for it (25 s of waiting, 4.7 KB shell, on both the
+ * serverless set and the full-browser set). Paying that wait on every dispatch
+ * would starve the lane's relay fallback, so two consecutive no-paint results
+ * take the browser out of the ladder for ten minutes and the relays answer.
+ */
+const BROWSER_NO_PAINT_LIMIT = 2;
+const BROWSER_NO_PAINT_COOLDOWN_MS = 10 * 60 * 1000;
+let browserNoPaintStreak = 0;
+let browserCooldownUntil = 0;
 
 /**
  * The launch ladder. Set 0 is the package's serverless shape (right on Lambda,
@@ -196,6 +208,7 @@ function disabled(): boolean {
  */
 async function getSharedBrowser(): Promise<{ browser: BrowserLike; context: ContextLike } | null> {
   if (disabled()) return null;
+  if (Date.now() < browserCooldownUntil) return null;
   if (!launch) {
     launch = (async () => {
       try {
@@ -326,12 +339,19 @@ async function navigate(
         })
         .catch(() => undefined);
       const html = await page.content();
-      // REEA-1221 — measured on the self-hosted box 2026-11-26 after DevOps
-      // lifted the PID ceiling: the package's set launches and navigates but the
-      // managed challenge needs longer than the old 12 s window to step aside
-      // (`painted:false`, 4.7 KB shell at 12.4 s). The wait is the lever, not
-      // the arg set — escalating there reached the lean shell and crashed it
-      // (SIGTRAP), so the ladder still climbs only when a navigation DIES.
+      // REEA-1221 — a no-paint result feeds the circuit breaker above; the
+      // ladder still climbs only when a navigation DIES (escalating on no-paint
+      // reached the lean shell and crashed it with SIGTRAP).
+      const token = contentSelector.replace(/^[.#]/, "");
+      if (html.includes(token)) {
+        browserNoPaintStreak = 0;
+      } else {
+        browserNoPaintStreak += 1;
+        if (browserNoPaintStreak >= BROWSER_NO_PAINT_LIMIT) {
+          browserCooldownUntil = Date.now() + BROWSER_NO_PAINT_COOLDOWN_MS;
+          lastFailure = "browser painted nothing twice — relays take over for ten minutes";
+        }
+      }
       return { html };
     } catch (err) {
       lastFailure = err instanceof Error ? err.message : String(err);
