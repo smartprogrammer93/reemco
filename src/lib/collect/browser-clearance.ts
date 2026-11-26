@@ -28,6 +28,10 @@
  *    box can drop ~200 MB of Chromium when it needs the room).
  */
 
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { getSharedKv } from "./kv";
 
 /** Repeat queries inside this window replay the cached cleared body. */
@@ -148,12 +152,47 @@ async function getSharedBrowser(): Promise<{ browser: BrowserLike; context: Cont
     launch = (async () => {
       try {
         const { chromium } = await import("playwright-core");
-        const sparticuz = (await import("@sparticuz/chromium")).default;
+        const sparticuzMod = (await import("@sparticuz/chromium")) as unknown as {
+          default: { executablePath(): Promise<string>; args: string[] };
+          inflate(filePath: string): Promise<string>;
+          setupLambdaEnvironment(baseLibPath: string): void;
+        };
+        const sparticuz = sparticuzMod.default;
+        // REEA-1221 — on a non-AL2023 host (the self-hosted image is Debian
+        // bookworm-slim) the package does NOT extract its bundled shared
+        // libraries, so /tmp/chromium dies with
+        // "error while loading shared libraries: libnspr4.so" — measured on the
+        // served head 2026-11-26. Extract the al2023 tar and put its lib dir on
+        // the loader path before launching. Best-effort: a host that already
+        // has the libs system-wide (the coder container) simply skips this.
+        const libDir = join(tmpdir(), "al2023", "lib");
+        if (!existsSync(libDir)) {
+          // The package's own bin path is not exported, and a bundler rewrites
+          // import.meta.url, so probe the candidate roots this process can
+          // actually see (the standalone bundle and a plain repo checkout).
+          const candidates = [
+            join(process.cwd(), "node_modules", "@sparticuz", "chromium", "bin", "al2023.tar.br"),
+            join(process.cwd(), "..", "node_modules", "@sparticuz", "chromium", "bin", "al2023.tar.br"),
+          ];
+          try {
+            const entry = createRequire(import.meta.url).resolve("@sparticuz/chromium");
+            if (entry.startsWith("/")) {
+              candidates.push(join(dirname(entry), "..", "bin", "al2023.tar.br"));
+            }
+          } catch {
+            // bundler-resolved path — the cwd candidates above still apply
+          }
+          const archive = candidates.find((c) => existsSync(c));
+          if (archive) await sparticuzMod.inflate(archive);
+        }
+        if (existsSync(libDir)) sparticuzMod.setupLambdaEnvironment(libDir);
         const executablePath = await sparticuz.executablePath();
         const browser = (await chromium.launch({
           executablePath,
           args: sparticuz.args,
           headless: true,
+          // The child must see the lib path set above.
+          env: process.env,
         })) as unknown as BrowserLike;
         const context = await browser.newContext({
           userAgent: BROWSER_UA,
