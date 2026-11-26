@@ -3643,3 +3643,235 @@ html[lang="ar"] .coupon-via {
 :root[data-theme="dark"] .rc-chip.is-selected .check {
   color: var(--rc-dark-primary);
 }
+
+/* ==========================================================================
+ * REEA-1205 — responsive-spec rev 1 (§4/§5/§10): hero offer row + shelf card.
+ *
+ * The normative contract is `responsive-spec` rev 1 (REEA-1188, accepted by the
+ * Product Manager on REEA-1196). This block is CSS only — no DOM, class or
+ * token redesign. Numbers below are the spec's, not ad-hoc values:
+ *   §4.2 641–767 compact 5-cell hero row (stock word + price-alt suppressed)
+ *   §4.3/§4.4 768–1279 full six-cell hero row
+ *   §4.5 ≥1280 reference composition (signed off in REEA-1156/1173)
+ *   §5 shelf card two-line row, 72px at ≥641
+ *   §6.3 AR budgets (checked 104px, CTA 112px) through [dir="rtl"] templates
+ * Bare `fr` tracks are gone: a bare `fr` inherits a min-content minimum and is
+ * exactly what overflowed this row in REEA-1173. The reference composition at
+ * ≥1280 keeps the signed-off proportions as `minmax(0, …)`.
+ * ========================================================================== */
+
+/* §4.1/§5 — the two-line row is 92px at <641. The token is the floor; the
+   content (20px line-a + 12px line gap + 44px line-b + 7px block padding +
+   the 1px divider) resolves 91–93px, so every row in a set stays within the
+   §9.7 ±1 band and rows without a status token cannot collapse below 92. */
+:root {
+  --rc-row-h-mobile: 92px;
+}
+
+/* §4.6 — one baseline per row: centre alignment + a uniform 20px line box.
+   Baseline alignment next to a 44px CTA is what produced the 20px delta QA
+   measured at 900px (REEA-1173). */
+@media (min-width: 641px) {
+  .rc-offers-table .rc-offer-row,
+  .rc-product-hero .rc-offer-row {
+    display: grid;
+    /* 63px of content + the 1px divider is the 64px row box (§9.7). */
+    grid-template-rows: 63px;
+    align-items: center;
+    column-gap: var(--rc-space-3);
+    row-gap: 0;
+    min-block-size: var(--rc-row-h);
+    padding-block: 0;
+    overflow: visible;
+  }
+
+  /* §10 — every grid/flex child gets a 0 minimum so a long wordmark or a
+     "Checked N minutes ago" string cannot re-inflate its track. */
+  .rc-offers-table .rc-offer-row > *,
+  .rc-product-hero .rc-offer-row > *,
+  .rc-offers-table .rc-offer-row .rc-offer-line > *,
+  .rc-product-hero .rc-offer-row .rc-offer-line > * {
+    min-inline-size: 0;
+  }
+
+  /* §9.5 — the wordmark cell is a real 112px box at ≥641 (ellipsis only, never
+     0px). It used to be an inline <bdi>, whose rect was the glyph run (42px),
+     so the cell could collapse to nothing under a narrow track. */
+  .rc-offers-table .rc-offer-row .rc-retailer-name .logo,
+  .rc-product-hero .rc-offer-row .rc-retailer-name .logo,
+  .rc-card .rc-offer-row .rc-retailer-name .logo {
+    display: block;
+    min-inline-size: 112px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* §4.2–4.5 — price, checked and stock never wrap at any width. */
+  .rc-offer-row .price-cur,
+  .rc-offer-row .rc-price-sm,
+  .rc-offer-row .rc-checked {
+    white-space: nowrap;
+  }
+}
+
+/* ---------- §4.2 — 641–767: compact 5-cell hero row ---------- */
+@media (min-width: 641px) and (max-width: 767px) {
+  .rc-offers-table .rc-offer-row,
+  .rc-product-hero .rc-offer-row {
+    grid-template-columns: minmax(112px, 1.15fr) minmax(96px, 1.35fr) 22px minmax(100px, 0.95fr) minmax(102px, auto);
+    grid-template-areas: "retailer price status checked cta";
+  }
+  [dir="rtl"] .rc-offers-table .rc-offer-row,
+  [dir="rtl"] .rc-product-hero .rc-offer-row {
+    grid-template-columns: minmax(112px, 1.15fr) minmax(96px, 1.35fr) 22px minmax(104px, 0.95fr) minmax(112px, auto);
+  }
+  /* The stock word is suppressed in this variant; only the 7px availability
+     dot survives, inline at the retailer cell's inline start. The real .dot
+     element is kept (font-size:0 collapses the word to zero width), so the
+     out-of-stock colour state and the DOM's stock semantics still apply. */
+  .rc-offers-table .rc-offer-row .rc-stock,
+  .rc-product-hero .rc-offer-row .rc-stock {
+    grid-area: retailer;
+    grid-row: 1;
+    justify-self: start;
+    align-self: center;
+    font-size: 0;
+    line-height: 20px;
+    z-index: 1;
+  }
+  .rc-offers-table .rc-offer-row .rc-retailer-name,
+  .rc-product-hero .rc-offer-row .rc-retailer-name {
+    padding-inline-start: 13px; /* 7px dot + 6px gap */
+  }
+  .rc-offers-table .rc-offer-row .price-alt,
+  .rc-product-hero .rc-offer-row .price-alt {
+    display: none;
+  }
+  /* The decorative table head follows the row's five columns. */
+  .rc-offers-table .rc-table-head {
+    grid-template-columns: minmax(112px, 1.15fr) minmax(96px, 1.35fr) 22px minmax(100px, 0.95fr) minmax(102px, auto);
+  }
+  [dir="rtl"] .rc-offers-table .rc-table-head {
+    grid-template-columns: minmax(112px, 1.15fr) minmax(96px, 1.35fr) 22px minmax(104px, 0.95fr) minmax(112px, auto);
+  }
+  .rc-offers-table .rc-table-head > span:nth-child(3) {
+    display: none;
+  }
+}
+
+/* ---------- §4.3/§4.4 — 768–1279: full six-cell hero row ---------- */
+@media (min-width: 768px) and (max-width: 1279px) {
+  .rc-offers-table .rc-offer-row,
+  .rc-product-hero .rc-offer-row,
+  .rc-offers-table .rc-table-head {
+    grid-template-columns: minmax(112px, 1.05fr) minmax(96px, 1.4fr) minmax(64px, 0.65fr) minmax(96px, 0.9fr) minmax(100px, 0.95fr) minmax(102px, auto);
+  }
+  [dir="rtl"] .rc-offers-table .rc-offer-row,
+  [dir="rtl"] .rc-product-hero .rc-offer-row,
+  [dir="rtl"] .rc-offers-table .rc-table-head {
+    grid-template-columns: minmax(112px, 1.05fr) minmax(96px, 1.4fr) minmax(64px, 0.65fr) minmax(96px, 0.9fr) minmax(104px, 0.95fr) minmax(112px, auto);
+  }
+}
+
+/* §2.2 — the hero media box is 240px at 1024–1279 and 320px at ≥1280. The
+   token is breakpoint-scoped, not re-paletted; the existing ≥1024 two-column
+   hero rule and the ≥641 media rule both resolve it, so 1024 gets the 712px
+   offer row the contract requires instead of a 632px one. */
+@media (min-width: 1024px) and (max-width: 1279px) {
+  :root {
+    --rc-image-hero: 240px;
+  }
+}
+
+/* ---------- §4.5 — ≥1280: the signed-off reference composition ---------- */
+@media (min-width: 1280px) {
+  .rc-offers-table .rc-offer-row,
+  .rc-product-hero .rc-offer-row,
+  .rc-offers-table .rc-table-head {
+    grid-template-columns: minmax(0, 114.75fr) minmax(0, 160.67fr) minmax(0, 80.34fr) minmax(0, 103.28fr) minmax(0, 103.30fr) minmax(0, 101.66fr);
+  }
+  /* §6.3 — the AR reference override: price 150fr, checked 104fr, CTA 112fr;
+     total still 664fr, same 728px row. The EN 101.66px CTA track clips the
+     Arabic label. */
+  [dir="rtl"] .rc-offers-table .rc-offer-row,
+  [dir="rtl"] .rc-product-hero .rc-offer-row,
+  [dir="rtl"] .rc-offers-table .rc-table-head {
+    grid-template-columns: minmax(0, 114.75fr) minmax(0, 150fr) minmax(0, 80.34fr) minmax(0, 103.28fr) minmax(0, 104fr) minmax(0, 112fr);
+  }
+}
+
+/* ---------- §2.3 — shelf: two columns from 768, 20px gap ---------- */
+@media (min-width: 768px) {
+  .rc-shelf {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--rc-space-5); /* 20px */
+  }
+}
+
+/* ---------- §5.2–5.4 — shelf card offer row at ≥641 ---------- */
+@media (min-width: 641px) {
+  .rc-card .rc-offer-row {
+    /* 1px divider + 22px line-a + 5px line gap + 44px line-b = the 72px box
+       §9.7 measures. The status token is 22px tall, so line-a is 22px and the
+       two lines stay in their own rows. */
+    grid-template-rows: 22px 44px;
+    row-gap: 5px;
+    padding-block: 0;
+    block-size: 72px;
+    min-block-size: 72px;
+    align-items: center;
+  }
+  .rc-card .rc-offer-row .rc-offer-cta {
+    block-size: var(--rc-tap);
+    min-block-size: var(--rc-tap);
+    min-inline-size: 60px; /* "Go" — §5.2 */
+  }
+  .rc-card .rc-offer-row .rc-checked {
+    min-inline-size: 100px; /* §6.3 EN budget */
+  }
+  [dir="rtl"] .rc-card .rc-offer-row .rc-checked {
+    min-inline-size: 104px; /* §6.3 AR budget */
+  }
+}
+
+/* ---------- §4.1/§5.1 — <641: wordmark floor, AR checked/CTA budgets ---------- */
+@media (max-width: 640px) {
+  .rc-offer-row .rc-retailer-name .logo {
+    display: block;
+    min-inline-size: 96px; /* §9.5 floor at every breakpoint */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .rc-offer-row .rc-checked {
+    min-inline-size: 104px;
+  }
+  .rc-card .rc-offer-row .rc-offer-cta {
+    min-inline-size: 60px;
+  }
+  /* §4.1/§5.1 — the 375 two-line row is a fixed 92px box. A row that carries a
+     label/grade chip resolves a 22.8px line-a instead of the 20px the spec's
+     §5.1 model assumes; the extra 1.8px stays inside the row's own 7px block
+     padding, so the measured box is 92px for every row (a min-height alone let
+     chip rows resolve 93.8px, outside the §9.7 ±1 band). */
+  .rc-offer-row {
+    block-size: var(--rc-row-h-mobile);
+    min-block-size: var(--rc-row-h-mobile);
+  }
+}
+
+/* ---------- §6.2 — LTR isolation inside the AR row ----------
+   The price numerals and the Latin wordmarks keep their own direction even
+   inside an RTL row; the Arabic font stack is not applied to a Latin brand. */
+[dir="rtl"] .rc-offer-row .price-cur bdi,
+[dir="rtl"] .rc-offer-row .price-alt bdi,
+[dir="rtl"] .rc-offer-row .rc-row-was bdi,
+[dir="rtl"] .rc-offer-row .rc-retailer-name .logo {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+[dir="rtl"] .rc-offer-row .rc-retailer-name .logo {
+  font-family: var(--font-space-grotesk), "Space Grotesk", ui-sans-serif, sans-serif;
+}
