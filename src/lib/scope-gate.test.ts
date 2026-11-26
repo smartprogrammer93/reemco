@@ -259,3 +259,21 @@ describe("negative controls — a different model is never the queried product",
     expect(isPackVariant("Samsung S25 Ultra 6.9-inch")).toBe(false);
   });
 });
+
+describe("AC 7a-6 — in-scope cards are never `related` (no related card fills a slot)", () => {
+  it("every primary/variant verdict carries a real match reason", () => {
+    const cases: [string, string][] = [
+      ["panadol", "Panadol Pain Relief Tablets 24Tablets"],
+      ["cucumber", "Cucumber 1kg"],
+      ["laptop", "Acer Aspire 3 A315-24P-R7VH 15.6-inch Ryzen 3 7320U 8GB 128GB SSD"],
+      ["headphones", "Sony Wireless Noise Cancelling Headphones, WH1000XM5 - Black"],
+      ["samsung galaxy s25 ultra", "Samsung S25 Ultra 6.9-inch,"],
+      ["iphone 17 pro", "Apple iPhone 17 Pro 256Gb Silver"],
+    ];
+    for (const [query, title] of cases) {
+      const v = verdict(query, title);
+      expect(isPrimaryShelfScope(v)).toBe(true);
+      expect(v.matchReason).not.toBe("related");
+    }
+  });
+});
