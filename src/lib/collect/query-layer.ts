@@ -54,23 +54,31 @@ export async function replaySharedQuerySnapshot<T>(
 
 /**
  * REEA-1154 D4 — replay this query's mirrored answer ONLY while it is still
- * inside the memo's fresh window, judged by the snapshot's own live-fetch
- * stamp (`collectedAtEpochMs`, else `collectedAt`). The shared layer keeps the
- * memo CEILING as TTL (minutes), so an un-aged replay can be far older than
- * the fresh window; serving that as the answer to a NEW dispatch would present
- * aged prices as fresh. Inside the window it is exactly what a warm memo hit
- * would have served: one dispatched query, one live answer — across worker
- * threads, not just within one. A snapshot with no usable stamp is treated as
- * aged (the caller keeps its live path / first-flush-only role).
+ * inside the memo's fresh window AND is a settled answer, judged by the
+ * snapshot's own live-fetch stamp (`collectedAtEpochMs`, else `collectedAt`).
+ * The shared layer keeps the memo CEILING as TTL (minutes), so an un-aged
+ * replay can be far older than the fresh window; serving that as the answer to
+ * a NEW dispatch would present aged prices as fresh. Inside the window it is
+ * exactly what a warm memo hit would have served: one dispatched query, one
+ * live answer — across worker threads, not just within one. A snapshot with no
+ * usable stamp is treated as aged (the caller keeps its live path /
+ * first-flush-only role).
+ *
+ * `settled === false` is a BUDGET-FINALIZED PARTIAL (the write-through mirrors
+ * it too, so the shared entry can hold the 4-card first flush for a second or
+ * two). It is a first paint, not the answer: serving it to the follow-up feed
+ * would tell an open page "this is converged" and keep its shallow shelf. Only
+ * a settled (or unmarked, i.e. converged) snapshot may answer the fold.
  */
 export async function replayFreshSharedQuerySnapshot<T>(
   cacheKey: string,
   nowMs: number = Date.now(),
 ): Promise<T | null> {
-  const snap = await replaySharedQuerySnapshot<T & { collectedAt?: string; collectedAtEpochMs?: number }>(
-    cacheKey,
-  );
+  const snap = await replaySharedQuerySnapshot<
+    T & { collectedAt?: string; collectedAtEpochMs?: number; settled?: boolean }
+  >(cacheKey);
   if (!snap) return null;
+  if (snap.settled === false) return null;
   const stamp =
     snap.collectedAtEpochMs ?? (snap.collectedAt ? Date.parse(snap.collectedAt) : Number.NaN);
   if (!Number.isFinite(stamp)) return null;

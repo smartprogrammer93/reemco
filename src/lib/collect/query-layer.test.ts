@@ -50,6 +50,7 @@ interface Snapshot {
   scrapedAt: string;
   collectedAt?: string;
   collectedAtEpochMs?: number;
+  settled?: boolean;
 }
 
 describe("shared-layer warm (REEA-602)", () => {
@@ -117,6 +118,16 @@ describe("shared-layer fresh replay (REEA-1154 D4)", () => {
   it("treats a snapshot with no usable live-fetch stamp as aged", async () => {
     table.set("pc:q:fold7-unstamped", JSON.stringify({ products: [{ title: "Fold7" }], scrapedAt: "x" }));
     expect(await replayFreshSharedQuerySnapshot<Snapshot>("fold7-unstamped", T0)).toBeNull();
+  });
+
+  it("never serves a budget-finalized partial as the answer (settled:false is a first flush)", async () => {
+    // The write-through mirrors the truncated 4-card finalize too, so the
+    // shared entry can hold it while the run is still deepening. The fold must
+    // keep waiting for the settled answer, not pin the page to the partial.
+    await mirrorSharedQuerySnapshot("fold7-partial", { ...fresh, settled: false });
+    expect(await replayFreshSharedQuerySnapshot<Snapshot>("fold7-partial", T0)).toBeNull();
+    await mirrorSharedQuerySnapshot("fold7-partial", { ...fresh, settled: true });
+    expect(await replayFreshSharedQuerySnapshot<Snapshot>("fold7-partial", T0)).toEqual({ ...fresh, settled: true });
   });
 
   it("misses cleanly when the shared layer has nothing (no binding / unknown key)", async () => {
