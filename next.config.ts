@@ -53,7 +53,16 @@ const nextConfig: NextConfig = {
   // that package-relative binary path, so the standalone image would launch
   // nothing without an explicit include.
   outputFileTracingIncludes: {
-    "/*": ["./node_modules/@sparticuz/chromium/bin/**/*"],
+    "/*": [
+      "./node_modules/@sparticuz/chromium/bin/**/*",
+      // playwright-core reads browsers.json (and the per-driver json files)
+      // from its own package root at run time; the tracer only follows the JS
+      // imports, so the deployed runtime failed with
+      // "Cannot find module '/app/node_modules/playwright-core/browsers.json'"
+      // (measured on the served head 2026-11-26). Ship the package's data
+      // files with the bundle.
+      "./node_modules/playwright-core/**/*.json",
+    ],
   },
   headers: async () => {
     const windowHeaders = sharedWindowHeaders();
