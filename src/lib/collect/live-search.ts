@@ -2073,14 +2073,18 @@ export const COLLECTORS: RetailerCollector[] = [
       // its own egress. Reached only when the local browser could not finish
       // the navigation (measured on the self-hosted box), and KV-cached per URL
       // so a repeat query spends nothing.
-      const relayed = await relayClearedHtml(searchUrl, ".product-item-link");
-      if (hasGrid(relayed)) return nextStoreHits(relayed, query);
-      // REEA-1221 — second relay: its markdown render is the one that paints the
-      // grid (its html mode returns the challenge shell), so the lane has two
-      // independent capacities instead of one daily-capped one.
+      // REEA-1221 — the markdown render is tried FIRST because it is the relay
+      // mode that actually paints this zone's grid (measured 2026-11-26: 81 KB
+      // of priced rows, while the same relay's html mode hands back the 5.9 KB
+      // "Just a moment" shell). Ordering the working hop first keeps the lane
+      // inside its window instead of spending it on a daily-capped html call.
       const markdown = await relayMarkdown(searchUrl, "KD");
       const mdHits = nextStoreMarkdownHits(markdown, query);
       if (mdHits.length > 0) return mdHits;
+      // Second, independent capacity: the rendered-HTML relay, kept as the
+      // fallback for the rounds where the markdown render is rate-limited.
+      const relayed = await relayClearedHtml(searchUrl, ".product-item-link");
+      if (hasGrid(relayed)) return nextStoreHits(relayed, query);
       // A lane that never got a grid is a coverage loss, not an "answered
       // empty": settle it as a blocked failure so the counter stops reading 0
       // for a lane that delivered nothing (REEA-1207 AC 7B-3).
