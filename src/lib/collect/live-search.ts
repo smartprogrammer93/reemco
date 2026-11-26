@@ -4240,6 +4240,8 @@ function stagedSnapshot(
   settledSoFar: SettledAdapter[],
   locale?: "en" | "ar",
   observations: SeenRow[] = [],
+  /** REEA-1238 — labeled last-seen rows for the SERVED document only. */
+  fill: SearchHit[] = [],
 ): LiveSearchResult {
   const { hits, notes } = filterNotes(country, settledSoFar);
   // REEA-254 payload trim + REEA-488 item 1: staged flushes render through
@@ -4250,7 +4252,11 @@ function stagedSnapshot(
   // REEA-510: intermediate flushes stay pure-live on purpose — a merchant
   // that has not answered yet at flush time is still in flight, not silent;
   // the last-seen fill lands with the converged snapshot only (finalSnapshot).
-  const products = groupHits(q, hits, true, locale, true);
+  // REEA-1238 extends that to the finalized-at-budget document: it is the
+  // served answer, not an in-flight flush, so a silent lane's labeled rows
+  // may join it (the caller passes them in `fill`). Intermediate flushes pass
+  // nothing, so their pure-live contract is unchanged.
+  const products = groupHits(q, fill.length > 0 ? [...hits, ...fill] : hits, true, locale, true);
   // REEA-540 Bet A — confidence-line roll-up over the STORED observations
   // (window/dedup/threshold in lib/seen-range.ts). Purely additive: the
   // best-price badge and cheapest-first sort above are untouched. An empty
@@ -4273,8 +4279,17 @@ function stagedSnapshot(
  * note's error field — the same diagnosable shape a failed hop gets). A late
  * hop that lands later folds into the page through the follow-up feed, which
  * re-renders this line honestly from its own settled set.
+ *
+ * REEA-1238 AC 7B-2b — the served document is the answer, not an in-flight
+ * flush, so a lane still in flight at the budget (or one that errored) may
+ * carry its ≤24 h labeled last-seen rows here, exactly as the converged path
+ * already does. Without it a flaky partner lane blanked a pinned cross-
+ * retailer pair on every EN serve even though the pair's other retailer had
+ * answered; with it the pair still renders as one card, its snapshot clock
+ * visible on the row, and the follow-up replaces the rows with the live ones.
+ * The lane's note is upgraded to "answered" because its rows did render.
  */
-function finalizedSnapshot(
+async function finalizedSnapshot(
   q: string,
   country: CountryCode | null,
   collectors: RetailerCollector[],
@@ -4282,18 +4297,46 @@ function finalizedSnapshot(
   deadlineMs: number,
   locale?: "en" | "ar",
   observations: SeenRow[] = [],
-): LiveSearchResult {
-  const snap = stagedSnapshot(q, country, settledSoFar, locale, observations);
+): Promise<LiveSearchResult> {
+  // The fill targets every collector, not only the settled set: the lanes
+  // still in flight at the budget are the ones whose partner rows the shelf
+  // is missing. `fillSilentFromLastSeen` never competes with live answers —
+  // a merchant with hits is skipped.
+  const settledByMerchant = new Map(settledSoFar.map((s) => [s.merchant, s] as const));
+  const fillTargets = collectors.map((c) => ({
+    merchant: c.merchant,
+    hits: settledByMerchant.get(c.merchant)?.hits ?? [],
+  }));
+  const fill = await fillSilentFromLastSeen(q, country, fillTargets);
+  const filledByMerchant = new Map<string, number>();
+  for (const h of fill) {
+    filledByMerchant.set(h.merchant, (filledByMerchant.get(h.merchant) ?? 0) + 1);
+  }
+  const snap = stagedSnapshot(q, country, settledSoFar, locale, observations, fill);
+  // A lane whose labeled rows joined the page answered for this document:
+  // reflect that on its note so the responder truth and the coverage line
+  // agree with the rows the shopper can see.
+  for (const n of snap.notes) {
+    const filled = filledByMerchant.get(n.merchant);
+    if (!filled) continue;
+    n.hits = Math.max(n.hits, filled);
+    n.error = undefined;
+  }
   const answered = new Set(snap.notes.map((n) => n.merchant));
   for (const c of collectors) {
-    if (!answered.has(c.merchant)) {
-      snap.notes.push({
-        merchant: c.merchant,
-        hits: 0,
-        coupons: 0,
-        error: `no answer within the ${deadlineMs} ms completion budget`,
-      });
+    if (answered.has(c.merchant)) continue;
+    const filled = filledByMerchant.get(c.merchant);
+    if (filled) {
+      snap.notes.push({ merchant: c.merchant, hits: filled, coupons: 0 });
+      answered.add(c.merchant);
+      continue;
     }
+    snap.notes.push({
+      merchant: c.merchant,
+      hits: 0,
+      coupons: 0,
+      error: `no answer within the ${deadlineMs} ms completion budget`,
+    });
   }
   // REEA-1070 AC2 — re-derive the responder truth after the missing-adapter
   // notes were appended, so the finalized snapshot names every gap it owns.

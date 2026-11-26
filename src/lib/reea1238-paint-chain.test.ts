@@ -8,7 +8,10 @@
  *    Danube Home + BinSina) was classed as a single and dropped by the
  *    two-single category tail, so AC 7B-2b missed in EN;
  *  - the coverage aggregate's failed count could exceed the lanes it named
- *    when an errored lane still rendered prices (AC 7B-4 copy defect).
+ *    when an errored lane still rendered prices (AC 7B-4 copy defect);
+ *  - a lane still in flight at the completion budget could blank a pinned
+ *    cross-retailer pair on every serve, so the finalized document now carries
+ *    its ≤24 h labeled last-seen rows (AC 7B-2b determinism).
  */
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,6 +23,8 @@ process.env.METRICS_DIR = mkdtempSync(join(tmpdir(), "reemco-test-metrics-1238-"
 process.env.EVENTS_DIR = mkdtempSync(join(tmpdir(), "reemco-test-events-1238-"));
 process.env.KV_REST_API_URL = "";
 process.env.KV_REST_API_TOKEN = "";
+const cacheDir = mkdtempSync(join(tmpdir(), "reemco-test-collect-1238-"));
+process.env.COLLECT_CACHE_DIR = cacheDir;
 
 const {
   CATEGORY_SHELF_CARDS,
@@ -28,7 +33,8 @@ const {
   paintedShelfCardsAcrossStages,
 } = await import("@/lib/results-shelf");
 const { coverageLine } = await import("@/lib/collect/coverage");
-const { groupHits } = await import("@/lib/collect/live-search");
+const { collectLiveResultsStaged, groupHits } = await import("@/lib/collect/live-search");
+const { rememberRound, resetLastSeenForTests } = await import("@/lib/collect/last-seen");
 
 type P = NormalizedProduct;
 
@@ -274,5 +280,90 @@ describe("REEA-1238 AC 7B-4 — the coverage failed count matches the named lane
     expect(line).toContain("2 failed");
     expect(line).toContain("Unreachable: Next Store and Ounass");
     expect(line).not.toContain("No response from Amazon.eg");
+  });
+});
+
+describe("REEA-1238 AC 7B-2b — the served document fills a lane still in flight", () => {
+  const jsonResponse = (body: unknown): Response =>
+    new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+
+  it("merges the pinned Sony pair from live + labeled last-seen rows", async () => {
+    resetLastSeenForTests(cacheDir);
+    const stamp = new Date(Date.now() - 60_000).toISOString();
+    await rememberRound(
+      "headphones",
+      [
+        {
+          merchant: "Blink",
+          hits: [
+            {
+              title: "Sony WH-1000XM5 Wireless Industry Leading Noise Canceling Headphones - Midnight Blue",
+              merchant: "Blink",
+              price: 89.9,
+              currency: "KWD",
+              url: "https://blink.example/xm5-blue",
+              inStock: true,
+              country: "KW",
+              collectedAt: stamp,
+            },
+          ],
+        },
+      ],
+      Date.now() - 60_000,
+      cacheDir,
+    );
+    // Xcite answers live at once; Blink is still in flight at the 40 ms
+    // completion budget, so only the labeled last-seen rows can carry it.
+    const fetchImpl = async (url: string): Promise<Response> => {
+      if (url.includes("xcite.com")) {
+        return jsonResponse({
+          results: [
+            {
+              hits: [
+                {
+                  name: "Sony Wireless Noise Cancelling Headphones, WH1000XM5 - Black",
+                  slug: "xm5-black",
+                  price: 94.9,
+                  currency: "KWD",
+                  inStock: true,
+                },
+              ],
+            },
+          ],
+        });
+      }
+      if (url.includes("blink.com.kw")) {
+        return new Promise((res) =>
+          setTimeout(
+            () =>
+              res(
+                jsonResponse({
+                  products: [
+                    { title: "Sony WH-1000XM5 Headphones", handle: "xm5", variants: [{ price: "89.90", available: true }] },
+                  ],
+                }),
+              ),
+            300,
+          ),
+        );
+      }
+      return jsonResponse({});
+    };
+    const staged = collectLiveResultsStaged("headphones", {
+      fetchImpl,
+      country: "KW",
+      deadlineMs: 40,
+    });
+    const snap = await staged.final;
+    expect(snap.settled).toBe(false);
+    const pair = snap.products.find((p) => p.offers.some((o) => o.merchant === "Blink"));
+    expect(pair).toBeDefined();
+    expect(new Set(pair!.offers.map((o) => o.merchant))).toEqual(
+      new Set(["Blink", "Xcite"]),
+    );
+    // The lane's rows rendered, so its note is "answered", not a budget gap.
+    const blinkNote = snap.notes.find((n) => n.merchant === "Blink");
+    expect(blinkNote?.error).toBeUndefined();
+    expect(blinkNote?.hits).toBeGreaterThanOrEqual(1);
   });
 });
