@@ -21,6 +21,7 @@ import { readUnreachableLanes } from "@/lib/collect/zone-status";
 import { MARKET_COOKIE, resolveResultsMarket } from "@/lib/country";
 import {
   countCrossMarketOffers,
+  HOME_MARKET,
   marketViewScope,
   scopeProductsByMarket,
 } from "@/lib/market";
@@ -331,7 +332,16 @@ export default async function ResultsPage({
             // shelf speaks for (REEA-1177's marketViewScope: null on the "All"
             // selection), so a foreign accessory row can never become a
             // comparison lane on a Kuwait card.
-            searchOutcomeFromSnapshot(pageSnap, shelfCards, marketViewScope(country))
+            // REEA-1207 (Bet 7B Addition 2) — the DEFAULT surface is the
+            // Kuwait market even when the viewer has not picked one ("All"):
+            // a Saudi-only card is a cross-market card, not a comparison lane,
+            // and the counter must record it that way. An explicit market
+            // selection still wins.
+            searchOutcomeFromSnapshot(
+              pageSnap,
+              shelfCards,
+              marketViewScope(country) ?? HOME_MARKET,
+            )
           : { zeroOffers: false, offersByRetailer: {} }),
         serveOutcome: serveOutcomeOf(served, convSnap),
         // REEA-1078 — serve kind from the collection layer (only it knows
