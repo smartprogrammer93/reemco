@@ -21,6 +21,13 @@ vi.mock("@/lib/collect/scraper", () => ({
   },
 }));
 
+// REEA-1211 — the stored-observation branch has its own pins
+// (reea1211-sitemap-liveness.test.ts); keep this file on the live path only so
+// a developer's shared .collect-cache cannot leak a completed job into it.
+vi.mock("@/lib/collect/last-observation", () => ({
+  lastVerifiedObservation: async () => null,
+}));
+
 const { default: sitemap } = await import("@/app/sitemap");
 
 describe("REEA-1192 — sitemap lists only product URLs that render an offer", () => {

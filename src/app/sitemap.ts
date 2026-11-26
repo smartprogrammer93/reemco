@@ -8,7 +8,9 @@ import {
   selectSitemapQueries,
 } from "@/lib/sitemap-queries";
 import { getTrendingChips } from "@/lib/trending-chips";
+import { lastVerifiedObservation } from "@/lib/collect/last-observation";
 import { scrapeOffer } from "@/lib/collect/scraper";
+import { OVERALL_BUDGET_MS } from "@/lib/collect/types";
 import type { NormalizedProduct } from "@/types/product";
 
 // REEA-1051 — sitemap handlers are cached/prerendered at build by default, so
@@ -50,31 +52,61 @@ async function indexableQuerySet(nowMs: number): Promise<Set<string> | null> {
 
 /** Bounded concurrency for the sitemap's live product check. */
 const SITEMAP_PRODUCT_CHECK_CONCURRENCY = 4;
-/** Per-listing ceiling: a crawler-facing check must not hold the response. */
-const SITEMAP_PRODUCT_CHECK_TIMEOUT_MS = 2_500;
 /** Re-check window: a listed/unlisted answer is reused for this long. */
 const SITEMAP_PRODUCT_CHECK_TTL_MS = 10 * 60 * 1000;
 const productCheckMemo = new Map<string, { at: number; hasOffer: boolean }>();
 
+/** Race a check against a ceiling; a check that overruns is a "no".
+ *  Exported for the focused REEA-1211 pin. */
+export function withinBudget<T>(check: Promise<T>, fallback: T, budgetMs: number): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), budgetMs);
+    void check.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
+}
+
 /**
- * REEA-1192 — does this catalog identity's product page render at least one
- * offer right now? Runs the same live listing re-check the PDP runs (catalog
- * seeds carry no collectedAt, so only a real fetch counts) with a short
- * per-listing ceiling. Fail-closed: a product whose check throws is omitted.
+ * REEA-1192 / REEA-1211 — would this catalog identity's product page render
+ * at least one offer right now?
+ *
+ * REEA-1211 — the check must use the SAME predicate and budget as the PDP's
+ * first paint, or the sitemap and the page disagree. The old check granted
+ * each listing a 2.5 s direct fetch plus the scraper's own search fallback
+ * (two 8 s attempts) with no overall ceiling, while the PDP races every lane
+ * against OVERALL_BUDGET_MS (10 s) — so the sitemap could advertise a URL
+ * whose PDP run the budget cut off, painting an empty table.
+ *
+ * Two sources, the same two the page renders from (lib/collect/last-observation):
+ *  1. a stored COMPLETED observation, which the page now paints with its own
+ *     collectedAt stamp — cheap, and no retailer fetch (rate-limit citizenship);
+ *  2. a live re-check of the listing URLs, bounded by the PDP's per-lane
+ *     ceiling and overall budget. Fail-closed: a check that throws or overruns
+ *     is a "no".
  */
-async function productHasLiveOffer(product: NormalizedProduct): Promise<boolean> {
+async function productWouldPaintOffer(product: NormalizedProduct): Promise<boolean> {
+  if (await lastVerifiedObservation(product.productId)) return true;
   const listings = product.offers ?? [];
   if (listings.length === 0) return false;
-  const outcomes = await Promise.all(
-    listings.map((offer) =>
-      scrapeOffer(
-        { ...offer, titleQuery: product.title },
-        { timeoutMs: SITEMAP_PRODUCT_CHECK_TIMEOUT_MS },
-      ).then(
-        (outcome) => outcome.offers.length > 0,
-        () => false,
+  const outcomes = await withinBudget(
+    Promise.all(
+      listings.map((offer) =>
+        scrapeOffer({ ...offer, titleQuery: product.title }).then(
+          (outcome) => outcome.offers.length > 0,
+          () => false,
+        ),
       ),
     ),
+    [] as boolean[],
+    OVERALL_BUDGET_MS,
   );
   return outcomes.some(Boolean);
 }
@@ -88,7 +120,7 @@ async function sitemapProducts(products: readonly NormalizedProduct[]): Promise<
       chunk.map(async (product) => {
         const memo = productCheckMemo.get(product.productId);
         if (memo && nowMs - memo.at < SITEMAP_PRODUCT_CHECK_TTL_MS) return { product, hasOffer: memo.hasOffer };
-        const hasOffer = await productHasLiveOffer(product);
+        const hasOffer = await productWouldPaintOffer(product);
         productCheckMemo.set(product.productId, { at: nowMs, hasOffer });
         return { product, hasOffer };
       }),
@@ -133,13 +165,15 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     priority: 0.9,
   }));
 
-  // REEA-1192 — sitemap honesty: a /product/* URL is listed only when its
-  // page actually has an offer to show. The catalog is an identity source,
-  // not a price source (every /product page re-collects live), and a catalog
-  // seed whose listing URLs have gone stale renders an empty table — a URL
-  // advertised to crawlers and shoppers that answers "no offers" is a broken
-  // promise. Check the same live listing set the PDP would re-check, bounded
-  // and cached so crawlers do not re-pay it on every request.
+  // REEA-1192 / REEA-1211 — sitemap honesty: a /product/* URL is listed only
+  // when its page actually has an offer to show. The catalog is an identity
+  // source, not a price source (every /product page re-collects live), and a
+  // catalog seed whose listing URLs have gone stale renders an empty table — a
+  // URL advertised to crawlers and shoppers that answers "no offers" is a
+  // broken promise. The check asks the question the PDP itself answers
+  // (lib/collect/last-observation): a stored verified observation OR a live
+  // re-check inside the PDP's first-paint budget. Bounded and cached so
+  // crawlers do not re-pay it on every request.
   const listed = await sitemapProducts(PRODUCTS);
   const productPages: MetadataRoute.Sitemap = listed.map((product) => ({
     url: `${origin}/product/${encodeURIComponent(product.productId)}`,
