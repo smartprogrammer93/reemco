@@ -193,6 +193,53 @@ describe("REEA-1238 AC 7B-2b — a cross-market pinned pair stays on the shelf",
       new Set(["Danube Home", "BinSina"]),
     );
   });
+
+  it("keeps ONE single tail slot so a one-comparison query clears the 40% gate", () => {
+    // REEA-1238 AC 7B-2R — the median serve painted one comparison plus two
+    // singles (1/3 = 33%). The comparison band owns the second slot instead,
+    // so the same evidence paints 1/2 = 50% and the per-query gate passes.
+    const products = groupHits(
+      "headphones",
+      [
+        hit({
+          title: "Sony WH-1000XM5 Wireless Headphones",
+          merchant: "Blink",
+          price: 89.9,
+          currency: "KWD",
+          url: "https://blink.example/xm5",
+        }),
+        hit({
+          title: "Sony Wireless Noise Cancelling Headphones, WH1000XM5 - Black",
+          merchant: "Xcite",
+          price: 94.9,
+          currency: "KWD",
+          url: "https://xcite.example/xm5",
+        }),
+        hit({
+          title: "JBL Tune 520BT Wireless Headphones",
+          merchant: "Jarir",
+          price: 15,
+          currency: "SAR",
+          url: "https://jarir.example/jbl",
+        }),
+        hit({
+          title: "Anker Soundcore Q30 Headphones",
+          merchant: "Wibi",
+          price: 24.9,
+          currency: "KWD",
+          url: "https://wibi.example/anker",
+        }),
+      ],
+      true,
+      "en",
+      true,
+    );
+    // One comparison (Blink+Xcite) + ONE single tail (not two).
+    expect(products).toHaveLength(2);
+    expect(new Set(products[0].offers.map((o) => o.merchant))).toEqual(
+      new Set(["Blink", "Xcite"]),
+    );
+  });
 });
 
 describe("REEA-1238 AC 7B-4 — the coverage failed count matches the named lanes", () => {

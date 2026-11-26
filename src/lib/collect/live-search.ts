@@ -2776,7 +2776,7 @@ const CATEGORY_SHELF_CARDS = 6;
 /**
  * REEA-1207 rev-2 — the category shelf order. Comparisons (>=2 in-market
  * retailers, the same integrity definition the card and the weekly fold read)
- * lead; two single-retailer rows follow so the page still shows alternatives.
+ * lead; a single-retailer row follows so the page still shows an alternative.
  * No comparison at all = the ordinary category page, never a near-empty shelf.
  *
  * REEA-1238 AC 7B-2b — a card that carries TWO distinct retailers across the
@@ -2787,7 +2787,17 @@ const CATEGORY_SHELF_CARDS = 6;
  * two-single tail dropped it. It now leads in a second band after the
  * in-market comparisons; the card's own `data-comparison-kw` still reports the
  * Kuwait-only basis the gate reads.
+ *
+ * REEA-1238 AC 7B-2R — the single tail is ONE, not two. A query whose lanes
+ * produced exactly one comparison painted that comparison plus two singles,
+ * i.e. 1/3 = 33% on the median serve, and the per-query gate needs 40%. The
+ * second alternative slot is the slot the comparison band gets instead, so a
+ * one-comparison query clears the gate (1/2) and a two-comparison query keeps
+ * a full comparison-led page. A query with no comparison still keeps the
+ * ordinary six-card category page.
  */
+const CATEGORY_SHELF_SINGLES = 1;
+
 function comparisonLedShelf(products: NormalizedProduct[]): NormalizedProduct[] {
   const inMarket: NormalizedProduct[] = [];
   const crossMarketPairs: NormalizedProduct[] = [];
@@ -2800,7 +2810,11 @@ function comparisonLedShelf(products: NormalizedProduct[]): NormalizedProduct[] 
   if (inMarket.length === 0 && crossMarketPairs.length === 0) {
     return products.slice(0, CATEGORY_SHELF_CARDS);
   }
-  return [...inMarket, ...crossMarketPairs, ...singles.slice(0, 2)].slice(0, CATEGORY_SHELF_CARDS);
+  return [
+    ...inMarket,
+    ...crossMarketPairs,
+    ...singles.slice(0, CATEGORY_SHELF_SINGLES),
+  ].slice(0, CATEGORY_SHELF_CARDS);
 }
 
 /** AC-7 query id: the normalized query + locale fork of the render. */
