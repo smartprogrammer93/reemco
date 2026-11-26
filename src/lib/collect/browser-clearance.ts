@@ -26,16 +26,39 @@
  *    return `""`, and the caller keeps its existing degraded path.
  *  - `BROWSER_CLEARANCE=off` disables the tier without a code change (the
  *    box can drop ~200 MB of Chromium when it needs the room).
+ *
+ * REEA-1241 — the relay/page bodies are untrusted upstream input, so every
+ * hop now rides the bounded body reader (`readBodyCapped`, 2 MB here) and the
+ * shared-store cache refuses any value above 256 KB. Measured 2026-11-26 on
+ * the served head: `jina-cleared:*` alone held 641 keys / 371.8 MB of a 384 MB
+ * `allkeys-lru` keyspace that also carries `ratelimit:*` and `metrics:*`, so
+ * cache churn could evict the per-IP gate or a weekly counter. A page too big
+ * to cache still answers THIS query from memory (live-data fidelity); it just
+ * no longer occupies the shared store.
  */
 
 import { existsSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { getSharedKv } from "./kv";
+import { getSharedKv, type SharedKv } from "./kv";
+import { readBodyCapped } from "./read-body";
 
 /** Repeat queries inside this window replay the cached cleared body. */
 const CLEARED_CACHE_TTL_S = 1_800;
+/** REEA-1241 — hard cap on any relay answer (2 MiB). A fatter body is
+ *  cancelled mid-stream and degrades to `""` instead of being buffered whole
+ *  into the process. */
+export const RELAY_MAX_RESPONSE_BODY_BYTES = 2 * 1024 * 1024;
+/** REEA-1241 — a browser-painted document is materialized by playwright, so
+ *  it cannot be streamed; it is trimmed to this cap before the lane parses it
+ *  or the cache sees it. */
+export const BROWSER_MAX_CONTENT_BYTES = 2 * 1024 * 1024;
+/** REEA-1241 — no clearance answer larger than this enters the shared KV
+ *  store. 256 KB keeps the cache namespace bounded well under half of the
+ *  384 MB allkeys-lru ceiling even at the measured key counts, so `allkeys-lru`
+ *  can no longer evict `ratelimit:*` / `metrics:*` because of page churn. */
+export const CLEARANCE_CACHE_MAX_VALUE_BYTES = 256 * 1024;
 /** Hard bound on one navigation. */
 const NAV_TIMEOUT_MS = 12_000;
 /** Bound on waiting for the page to paint the lane's content selector. The
@@ -54,7 +77,7 @@ type ContextLike = {
   newPage(): Promise<PageLike>;
   close(): Promise<void>;
 };
-type PageLike = {
+export type PageLike = {
   goto(url: string, options: Record<string, unknown>): Promise<unknown>;
   waitForFunction(fn: (arg: string) => boolean, arg: string, options: Record<string, unknown>): Promise<unknown>;
   content(): Promise<string>;
@@ -202,6 +225,95 @@ function disabled(): boolean {
 }
 
 /**
+ * REEA-1241 — byte length as the shared store would hold the value. The caps
+ * are byte caps, not character counts: a page of Arabic or CJK text can be
+ * three bytes per UTF-16 unit, so a length-only check would under-count it.
+ */
+function storedBytes(value: string): number {
+  return Buffer.byteLength(value, "utf8");
+}
+
+/** REEA-1241 — trim a materialized document to at most `maxBytes` of UTF-8. */
+export function capContent(text: string, maxBytes: number = BROWSER_MAX_CONTENT_BYTES): string {
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= maxBytes) return text;
+  return bytes.subarray(0, maxBytes).toString("utf8");
+}
+
+/**
+ * REEA-1241 — read a relay answer through the shared bounded reader. An
+ * oversized answer aborts mid-stream and degrades to `""` (the lane keeps its
+ * existing blocked/degraded note) instead of buffering the whole document.
+ */
+async function readCappedBody(res: Response, maxBytes: number, label: string): Promise<string> {
+  try {
+    return await readBodyCapped(res, maxBytes);
+  } catch {
+    lastFailure = `${label} answer exceeded the ${maxBytes}-byte cap`;
+    return "";
+  }
+}
+
+/**
+ * REEA-1241 — replay a cached clearance body, and drop any entry that
+ * predates the value cap. Deleting instead of returning it keeps the store
+ * draining on replay: an old 1 MB page would otherwise sit in the
+ * `allkeys-lru` keyspace until its original TTL expired, still competing with
+ * the control keys.
+ *
+ * `accepts` is the lane's own presence gate (REEA-1235 made the reader-relay
+ * signature a marker SET, so the caller passes its predicate instead of one
+ * literal token); omit it for the browser tier, which caches any painted body.
+ */
+async function readClearedBody(
+  kv: SharedKv | null,
+  key: string,
+  accepts?: (body: string) => boolean,
+): Promise<string | null> {
+  if (!kv) return null;
+  try {
+    const cached = await kv.get(key);
+    if (!cached) return null;
+    if (storedBytes(cached) > CLEARANCE_CACHE_MAX_VALUE_BYTES && kv.del) {
+      // Best-effort: a store hiccup must not fail the lane.
+      await kv.del(key).catch(() => false);
+    }
+    return accepts === undefined || accepts(cached) ? cached : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * REEA-1241 — write a clearance body only when it fits the value cap. A
+ * larger body still served this query (it is the live page the lane parses);
+ * it simply never enters the shared store.
+ */
+async function cacheClearedBody(
+  kv: SharedKv | null,
+  key: string,
+  value: string,
+  ttlSeconds: number,
+): Promise<boolean> {
+  if (!kv) return false;
+  if (storedBytes(value) > CLEARANCE_CACHE_MAX_VALUE_BYTES) return false;
+  return kv.set(key, value, ttlSeconds).catch(() => false);
+}
+
+/**
+ * REEA-1241 — the browser tier's only body read. playwright materializes the
+ * whole document before handing it back, so the cap is enforced on the string:
+ * an oversized page is trimmed to the cap rather than parsed (and cached) in
+ * full.
+ */
+export async function readPageContent(page: PageLike): Promise<string> {
+  const html = await page.content();
+  if (storedBytes(html) <= BROWSER_MAX_CONTENT_BYTES) return html;
+  lastFailure = `browser page exceeded the ${BROWSER_MAX_CONTENT_BYTES}-byte cap; trimmed`;
+  return capContent(html);
+}
+
+/**
  * Launch the shared browser once per process. Any failure (package missing on
  * a trimmed deploy, no executable for the platform) resolves to null and the
  * tier degrades to the existing hops.
@@ -338,7 +450,9 @@ async function navigate(
           timeout: CONTENT_WAIT_MS,
         })
         .catch(() => undefined);
-      const html = await page.content();
+      // REEA-1241 — bounded: a page bigger than the cap is trimmed before the
+      // presence gate, the lane parser, and the cache ever see it.
+      const html = await readPageContent(page);
       // REEA-1221 — a no-paint result feeds the circuit breaker above; the
       // ladder still climbs only when a navigation DIES (escalating on no-paint
       // reached the lean shell and crashed it with SIGTRAP).
@@ -398,19 +512,10 @@ export async function browserClearedHtml(url: string, contentSelector: string): 
   if (disabled()) return "";
   const kv = getSharedKv();
   const key = cacheKey(url);
-  if (kv) {
-    try {
-      const cached = await kv.get(key);
-      if (cached) return cached;
-    } catch {
-      // store hiccup — fall through to the browser
-    }
-  }
+  const cached = await readClearedBody(kv, key);
+  if (cached) return cached;
   const { html } = await navigate(url, contentSelector);
-  if (html && kv) {
-    // Best-effort write: a store hiccup must not fail the lane.
-    await kv.set(key, html, CLEARED_CACHE_TTL_S).catch(() => false);
-  }
+  if (html) await cacheClearedBody(kv, key, html, CLEARED_CACHE_TTL_S);
   return html;
 }
 
@@ -433,7 +538,10 @@ const RELAY_ENDPOINT = "https://api.microlink.io/";
 // REEA-1221 — a relay answer is a live page, so it stays valid for a while; a
 // longer TTL is what keeps the free tier polite (measured 2026-11-26: the relay
 // answered, then 429'd a few calls later — the cached answer is the point).
-const RELAY_TTL_S = 6 * 60 * 60;
+// REEA-1241 — shortened from 6 h to 30 min: only bodies under the cache value
+// cap are stored now, and a shorter residency keeps the cache namespace small
+// even when many distinct queries are in flight.
+const RELAY_TTL_S = 30 * 60;
 const RELAY_TIMEOUT_MS = 12_000;
 /**
  * After a 429, skip the relay for this long instead of paying the refusal.
@@ -471,14 +579,8 @@ export async function relayClearedHtml(url: string, contentSelector: string): Pr
   const token = contentSelector.replace(/^[.#]/, "");
   const kv = getSharedKv();
   const key = `relay-cleared:${url}`;
-  if (kv) {
-    try {
-      const cached = await kv.get(key);
-      if (cached && cached.includes(token)) return cached;
-    } catch {
-      // store hiccup — pay the relay once
-    }
-  }
+  const cached = await readClearedBody(kv, key, (body) => body.includes(token));
+  if (cached) return cached;
   try {
     const target = `${RELAY_ENDPOINT}?url=${encodeURIComponent(url)}&meta=false&data.html.selector=body`;
     const res = await fetch(target, { signal: AbortSignal.timeout(RELAY_TIMEOUT_MS) });
@@ -487,13 +589,23 @@ export async function relayClearedHtml(url: string, contentSelector: string): Pr
       if (res.status === 429 || res.status === 503) relayCooldownUntil = Date.now() + RELAY_COOLDOWN_MS;
       return "";
     }
-    const payload = (await res.json()) as { data?: { html?: unknown } } | null;
+    // REEA-1241 — bounded read: a fat microlink answer aborts at the cap and
+    // degrades to "" instead of buffering the whole document.
+    const text = await readCappedBody(res, RELAY_MAX_RESPONSE_BODY_BYTES, "relay");
+    if (!text) return "";
+    let payload: { data?: { html?: unknown } } | null = null;
+    try {
+      payload = JSON.parse(text) as { data?: { html?: unknown } } | null;
+    } catch {
+      lastFailure = "relay answered non-JSON";
+      return "";
+    }
     const html = typeof payload?.data?.html === "string" ? payload.data.html : "";
     if (!html.includes(token)) {
       lastFailure = "relay answered without the lane's content selector";
       return "";
     }
-    if (kv) await kv.set(key, html, RELAY_TTL_S).catch(() => false);
+    await cacheClearedBody(kv, key, html, RELAY_TTL_S);
     return html;
   } catch (err) {
     lastFailure = err instanceof Error ? err.message : String(err);
@@ -515,7 +627,8 @@ export async function relayClearedHtml(url: string, contentSelector: string): Pr
  * existing degraded note.
  */
 const JINA_ENDPOINT = "https://r.jina.ai/";
-const JINA_TTL_S = 6 * 60 * 60;
+// REEA-1241 — shortened from 6 h to 30 min (see RELAY_TTL_S).
+const JINA_TTL_S = 30 * 60;
 const JINA_TIMEOUT_MS = 20_000;
 let jinaCooldownUntil = 0;
 
@@ -541,14 +654,8 @@ export async function jinaClearedHtml(
   const carries = (body: string): boolean => markers.some((m) => body.includes(m));
   const kv = getSharedKv();
   const key = `jina-cleared:${url}`;
-  if (kv) {
-    try {
-      const cached = await kv.get(key);
-      if (cached && carries(cached)) return cached;
-    } catch {
-      // store hiccup — pay the relay once
-    }
-  }
+  const cached = await readClearedBody(kv, key, carries);
+  if (cached) return cached;
   try {
     const res = await fetch(`${JINA_ENDPOINT}${url}`, {
       headers: { "x-respond-with": "html", "x-timeout": "40", accept: "text/html" },
@@ -559,12 +666,14 @@ export async function jinaClearedHtml(
       if (res.status === 429 || res.status === 503) jinaCooldownUntil = Date.now() + RELAY_COOLDOWN_MS;
       return "";
     }
-    const html = await res.text();
+    // REEA-1241 — bounded read: an oversized reader-relay answer degrades to
+    // "" at the cap instead of being buffered whole.
+    const html = await readCappedBody(res, RELAY_MAX_RESPONSE_BODY_BYTES, "reader relay");
     if (!carries(html)) {
       lastFailure = "reader relay answered without the lane's content selector";
       return "";
     }
-    if (kv) await kv.set(key, html, JINA_TTL_S).catch(() => false);
+    await cacheClearedBody(kv, key, html, JINA_TTL_S);
     return html;
   } catch (err) {
     lastFailure = err instanceof Error ? err.message : String(err);
@@ -580,7 +689,7 @@ export async function jinaClearedHtml(
  * html 5.9 KB "Just a moment"). Lanes whose parser can read markdown use this
  * hop; it shares the relay cooldown and is KV-cached per URL.
  */
-const MARKDOWN_TTL_S = 6 * 60 * 60;
+const MARKDOWN_TTL_S = 30 * 60;
 
 export async function relayMarkdown(url: string, marker: string): Promise<string> {
   if (!relayTierEnabled()) return "";
@@ -595,14 +704,8 @@ export async function relayMarkdown(url: string, marker: string): Promise<string
   }
   const kv = getSharedKv();
   const key = `relay-md:${url}`;
-  if (kv) {
-    try {
-      const cached = await kv.get(key);
-      if (cached && cached.includes(marker)) return cached;
-    } catch {
-      // store hiccup — pay the relay once
-    }
-  }
+  const cached = await readClearedBody(kv, key, (body) => body.includes(marker));
+  if (cached) return cached;
   try {
     const res = await fetch(`https://r.jina.ai/${url}`, {
       headers: { "x-respond-with": "markdown", "x-timeout": "45", accept: "text/plain" },
@@ -613,12 +716,13 @@ export async function relayMarkdown(url: string, marker: string): Promise<string
       if (res.status === 429 || res.status === 503) jinaCooldownUntil = Date.now() + RELAY_COOLDOWN_MS;
       return "";
     }
-    const md = await res.text();
+    // REEA-1241 — bounded read: an oversized markdown render degrades to "".
+    const md = await readCappedBody(res, RELAY_MAX_RESPONSE_BODY_BYTES, "markdown relay");
     if (!md.includes(marker)) {
       lastFailure = "reader relay markdown carried no product rows";
       return "";
     }
-    if (kv) await kv.set(key, md, MARKDOWN_TTL_S).catch(() => false);
+    await cacheClearedBody(kv, key, md, MARKDOWN_TTL_S);
     return md;
   } catch (err) {
     lastFailure = err instanceof Error ? err.message : String(err);
