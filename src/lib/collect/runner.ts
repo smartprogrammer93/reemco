@@ -234,9 +234,14 @@ export async function startProductCollectionStaged(
   opts: { fetchImpl?: FetchImpl } = {},
 ): Promise<StagedProductCollection> {
   const { job, deduped } = await startCollection(product);
-  let resolveFirst: ((job: CollectJob) => void) | null = null;
+  // REEA-1201 — the resolver rides a mutable holder instead of a `let`: TS 6
+  // narrows a `let x: Fn | null = null` assigned only inside the Promise
+  // executor to `never` at the later call sites (TS2349), which failed the
+  // production build. The holder keeps the declared callable type; behaviour
+  // is unchanged (the executor assigns synchronously before any use).
+  const firstStageRef: { resolve: ((job: CollectJob) => void) | null } = { resolve: null };
   const firstStage = new Promise<CollectJob>((resolve) => {
-    resolveFirst = resolve;
+    firstStageRef.resolve = resolve;
   });
   // REEA-1192 — first paint is the FIRST OFFER (or the run's terminal
   // state), never the first lane that merely settled. Resolving on an empty
@@ -247,7 +252,7 @@ export async function startProductCollectionStaged(
   // per-lane ceiling (4 s) and budget watchdog bound this wait, so the page
   // cannot hang on a lane that never settles.
   const onStage = (snap: CollectJob) => {
-    if (snap.offers.length > 0 || snap.status !== "collecting") resolveFirst?.(snap);
+    if (snap.offers.length > 0 || snap.status !== "collecting") firstStageRef.resolve?.(snap);
   };
   // REEA-1192 — when the identity already carries the shelf collection's
   // rows, the conversion page has its answer on the first byte: resolve the
@@ -259,7 +264,7 @@ export async function startProductCollectionStaged(
   const inherited = (product.offers ?? []).some(
     (o) => typeof (o as { collectedAt?: string }).collectedAt === "string" && (o as { collectedAt?: string }).collectedAt !== "",
   );
-  if (inherited) resolveFirst?.(stageSnapshot(job));
+  if (inherited) firstStageRef.resolve?.(stageSnapshot(job));
   // Dedupe hit (REEA-92): an earlier request already owns this in-flight run —
   // attach its current snapshot and let the client's polling converge; never
   // fan out a duplicate scrape of the same retailers.
@@ -270,7 +275,7 @@ export async function startProductCollectionStaged(
         () => stageSnapshot(job), // bounded: the runner swallows failures itself
       );
   const finalStage = run.then((snap) => {
-    resolveFirst?.(snap); // a dedupe/single-flush run still feeds stage one
+    firstStageRef.resolve?.(snap); // a dedupe/single-flush run still feeds stage one
     return snap;
   });
   return { jobId: job.jobId, firstStage, finalStage };
