@@ -76,13 +76,10 @@ describe("REEA-1099 blocked-lane failure accounting", () => {
 
   it("records Lulu as a failure while a healthy lane stays at zero", async () => {
     const { impl } = egress();
-    // REEA-1207 - Lulu is retired from the default fan-out now; this test is
-    // about the blocked-lane settle, so the canary-readmitted lane is injected.
     const staged = collectLiveResultsStaged("iphone 17", {
       fetchImpl: impl,
       country: "KW",
       deadlineMs: 120,
-      readmittedLanes: ["Lulu Hypermarket"],
     });
     await staged.allSettled;
     const telemetry = await staged.adapterTelemetry;

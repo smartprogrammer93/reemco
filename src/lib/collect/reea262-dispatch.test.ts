@@ -177,24 +177,14 @@ const fetchImpl = async (url: string): Promise<Response> => {
 describe("REEA-262 staged adapter dispatch", () => {
   it("settles a note with live hits for every retailer in the fan-out", async () => {
     resetDiscoveryCache();
-    // REEA-1207 - Lulu and BinSina are retired from the default fan-out; this
-    // test pins their adapters dispatch shape, so they are readmitted here.
-    const staged = collectLiveResultsStaged("nescafe coffee", {
-      fetchImpl,
-      readmittedLanes: ["Lulu Hypermarket", "BinSina"],
-      // REEA-1207 - a full-suite run loads this fixture past the default
-      // completion clock; give every lane room to settle so the assertion
-      // measures the adapter shapes, not scheduler load.
-      deadlineMs: 8000,
-    });
+    const staged = collectLiveResultsStaged("nescafe coffee", { fetchImpl });
     const snap = await staged.final;
 
     // Every adapter of the nineteen-store set (REA-270 batch, the
     // REEA-378 batch three and the REEA-557 batch five first wave included)
     // must appear in the converged notes.
-    const readmitted = new Set(["Lulu Hypermarket", "BinSina"]);
     const expected = COLLECTORS.map((c) => c.merchant).filter(
-      (m) => !DEFAULT_RETIRED_LANES.includes(m) || readmitted.has(m),
+      (m) => !DEFAULT_RETIRED_LANES.includes(m),
     );
     expect(new Set(snap.notes.map((n) => n.merchant))).toEqual(new Set(expected));
 

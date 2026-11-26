@@ -1,12 +1,11 @@
 /**
- * REEA-1207 (Bet 7B Addition 1) — dead-lane retirement and canary re-admission.
+ * REEA-1207 (Bet 7B) — lane retirement boundaries.
  *
- * The AC for this slice: the lanes that answered every search with zero usable
- * offers leave the default fan-out, a lane returns only through
- * LANE_CANARY_SUCCESS_STREAK consecutive real canary answers, and the dispatch
- * layer honours that re-admission (a code-level retirement is not a permanent
- * veto). These tests pin the dispatch decision and the persisted-state shapes
- * the daily runner writes.
+ * CEO directive on REEA-1216: a lane that returns no offers is FIXED, not
+ * killed (the repair is REEA-1221). 7B therefore must not retire the six
+ * zero-offer lanes; the only code-level retirement stays Next Store, and a
+ * lane that IS retired must be able to come back through the canary — a static
+ * retirement is not a permanent veto.
  */
 import "./test-cache-dir";
 import { describe, expect, it } from "vitest";
@@ -36,66 +35,63 @@ function recordingFetch(seen: string[]) {
   };
 }
 
-describe("REEA-1207 — dead-lane retirement", () => {
-  it("retires the lanes that produced zero shopper offers in W48", () => {
+describe("REEA-1207 — no lane is retired for failing", () => {
+  it("keeps the six zero-offer lanes in the fan-out (fixed, not killed)", () => {
     for (const lane of ["Lulu Hypermarket", "BinSina", "Yousifi", "YasO", "Hobby Center", "Bomai"]) {
-      expect(DEFAULT_RETIRED_LANES).toContain(lane);
+      expect(DEFAULT_RETIRED_LANES).not.toContain(lane);
     }
-    // Next Store stays retired (REEA-1078 S2).
+    // Next Store stays retired on its own evidence (REEA-1078 S2).
     expect(DEFAULT_RETIRED_LANES).toContain("Next Store");
-    // A lane that answers (Nest: 932 W48 offers) is NOT retired by this slice.
-    expect(DEFAULT_RETIRED_LANES).not.toContain("Nest");
   });
 
-  it("does not dispatch a retired lane, and dispatches it again once readmitted", async () => {
+  it("dispatches a lane a canary readmitted, and keeps a dynamic retirement out", async () => {
     resetDiscoveryCache();
     const seenDefault: string[] = [];
     await collectLiveResults("dyson", { fetchImpl: recordingFetch(seenDefault) as never, snapshots: false });
-    expect(seenDefault.some((u) => u.includes("bomai.com"))).toBe(false);
+    // Next Store is statically retired: never contacted by default.
+    expect(seenDefault.some((u) => u.includes("nextstore"))).toBe(false);
 
     const seenReadmitted: string[] = [];
     await collectLiveResults("dyson", {
       fetchImpl: recordingFetch(seenReadmitted) as never,
       snapshots: false,
-      readmittedLanes: ["Bomai"],
+      readmittedLanes: ["Next Store"],
     });
-    expect(seenReadmitted.some((u) => u.includes("bomai.com"))).toBe(true);
-  });
+    expect(seenReadmitted.some((u) => u.includes("nextstore"))).toBe(true);
 
-  it("keeps a dynamically retired lane out even when the caller lists it as readmitted", async () => {
-    resetDiscoveryCache();
-    const seen: string[] = [];
+    // A dynamic retirement outranks a readmitted list: the 7-day rule wins.
+    const seenDynamic: string[] = [];
     await collectLiveResults("dyson", {
-      fetchImpl: recordingFetch(seen) as never,
+      fetchImpl: recordingFetch(seenDynamic) as never,
       snapshots: false,
       retiredLanes: ["Eureka"],
       readmittedLanes: ["Eureka"],
     });
-    expect(seen.some((u) => u.includes("eureka"))).toBe(false);
+    expect(seenDynamic.some((u) => u.includes("eureka"))).toBe(false);
   });
 });
 
 describe("REEA-1207 — canary re-admission of a static retirement", () => {
   it("needs LANE_CANARY_SUCCESS_STREAK consecutive answers, then clears retiredAt", () => {
     let state = emptyLaneHealthState();
-    retireLane(state, "Bomai", Date.now(), "static retirement (no answer from this egress)");
-    expect(retiredLanesOf(state)).toContain("Bomai");
+    retireLane(state, "Next Store", Date.now(), "static retirement (no answer from this egress)");
+    expect(retiredLanesOf(state)).toContain("Next Store");
 
     // A failure resets the streak: N successes must be consecutive.
-    let outcome = applyCanaryOutcome(state, "Bomai", false);
+    let outcome = applyCanaryOutcome(state, "Next Store", false);
     state = outcome.state;
     expect(outcome.readmitted).toBe(false);
 
     for (let i = 1; i < LANE_CANARY_SUCCESS_STREAK; i += 1) {
-      outcome = applyCanaryOutcome(state, "Bomai", true);
+      outcome = applyCanaryOutcome(state, "Next Store", true);
       state = outcome.state;
       expect(outcome.readmitted).toBe(false);
     }
-    outcome = applyCanaryOutcome(state, "Bomai", true);
+    outcome = applyCanaryOutcome(state, "Next Store", true);
     state = outcome.state;
     expect(outcome.readmitted).toBe(true);
-    expect(retiredLanesOf(state)).not.toContain("Bomai");
-    expect(readmittedLanesOf(state)).toContain("Bomai");
+    expect(retiredLanesOf(state)).not.toContain("Next Store");
+    expect(readmittedLanesOf(state)).toContain("Next Store");
   });
 
   it("reports retired and readmitted from one snapshot", async () => {
@@ -103,14 +99,14 @@ describe("REEA-1207 — canary re-admission of a static retirement", () => {
     const blob = JSON.stringify({
       version: 1,
       lanes: {
-        Bomai: { days: [], canaryStreak: 0, readmittedAt: "2026-11-26T10:00:00.000Z" },
+        "Next Store": { days: [], canaryStreak: 0, readmittedAt: "2026-11-26T10:00:00.000Z" },
         "Lulu Hypermarket": { days: [], canaryStreak: 0, retiredAt: "2026-11-26T09:00:00.000Z" },
       },
     });
     const kv = { get: async () => blob, set: async () => true };
     const read = await readLaneRetirement({ kv: kv as never, now: Date.now() });
     expect(read.retired).toEqual(["Lulu Hypermarket"]);
-    expect(read.readmitted).toEqual(["Bomai"]);
+    expect(read.readmitted).toEqual(["Next Store"]);
     resetRetiredLanesMemo();
   });
 });

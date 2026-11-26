@@ -7,7 +7,7 @@
  */
 import "./test-cache-dir";
 import { describe, expect, it } from "vitest";
-import { COLLECTORS, collectLiveResults, collectLiveResultsStaged, resetDiscoveryCache } from "@/lib/collect/live-search";
+import { COLLECTORS, collectLiveResults, resetDiscoveryCache } from "@/lib/collect/live-search";
 
 describe("REEA-550 collector lanes", () => {
   it("Quadra hop merges bounded per-word rounds when the whole-query suggest is empty", async () => {
@@ -132,16 +132,9 @@ describe("REEA-550 collector lanes", () => {
         },
       ],
     })}</script></head><body>ok</body></html>`;
-    // REEA-1207 - Lulu is retired by default now; readmit it for this
-    // adapter-shape test.
-    // REEA-1207 - the clearance replay lands on the converged chain, behind
-    // the budget-finalized snapshot, so read the converged notes here.
-    const staged = collectLiveResultsStaged("\u062f\u0648\u0641 \u0635\u0627\u0648\u0646", {
-      readmittedLanes: ["Lulu Hypermarket"],
+    const { notes } = await collectLiveResults("\u062f\u0648\u0641 \u0635\u0627\u0648\u0646", {
       fetchImpl: async (url) => {
-        // REEA-1207 - match every Lulu hop shape (identity, IP-form and the
-        // clearance replay) so the ladder, not the tier race, decides.
-        if (url.includes("luluhypermarket") || /^http:\/\/\d/.test(url)) {
+        if (url.includes("luluhypermarket.com/en/search")) {
           luluCalls += 1;
           const shell = luluCalls === 1;
           return new Response(
@@ -152,7 +145,6 @@ describe("REEA-550 collector lanes", () => {
         return new Response("{}");
       },
     });
-    const { notes } = await staged.converged;
     const note = notes.find((n) => n.merchant === "Lulu Hypermarket");
     // The identity hop answered the shell — too thin to count under the
     // REEA-526 ld+json presence gate — and the clearance hop carried the

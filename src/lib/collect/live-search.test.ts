@@ -1573,7 +1573,7 @@ describe("collectLiveResults page width (REEA-156)", () => {
         }
         return new Response('<html><head><script>document.cookie="cf_clearance=t"</script></head><body>cf-error-details</body></html>');
       };
-      const { notes } = await collectLiveResults("\u0627\u0631\u0632 \u0628\u0633\u0645\u062a\u064a", { fetchImpl, country: "KW", readmittedLanes: ["Lulu Hypermarket"] });
+      const { notes } = await collectLiveResults("\u0627\u0631\u0632 \u0628\u0633\u0645\u062a\u064a", { fetchImpl, country: "KW" });
       const lulu = notes.find((n) => n.merchant === "Lulu Hypermarket");
       expect(lulu?.hits ?? 0).toBeGreaterThanOrEqual(1);
       expect(seen.some((u) => /^http:\/\/\d/.test(u))).toBe(true);
@@ -1616,7 +1616,7 @@ describe("collectLiveResults page width (REEA-156)", () => {
         // cookie script lets the bounded clearance pass settle quickly.
         return new Response('<html><head><script>document.cookie="cf_clearance=t"</script></head><body>Verifying your browser</body></html>');
       };
-      const { notes } = await collectLiveResults("\u0627\u0631\u0632 \u0628\u0633\u0645\u062a\u064a", { fetchImpl, country: "KW", readmittedLanes: ["Lulu Hypermarket"] });
+      const { notes } = await collectLiveResults("\u0627\u0631\u0632 \u0628\u0633\u0645\u062a\u064a", { fetchImpl, country: "KW" });
       const lulu = notes.find((n) => n.merchant === "Lulu Hypermarket");
       expect(lulu?.hits ?? 0).toBeGreaterThanOrEqual(1);
       expect(lulu?.error).toBeUndefined();

@@ -41,35 +41,15 @@ import { getSharedKv } from "@/lib/collect/kv";
  * real 200 answer, or the daily canary succeeds `LANE_CANARY_SUCCESS_STREAK`
  * times in a row — the runner re-admits automatically on the latter.
  *
- * REEA-1207 (Bet 7B Addition 1, 2026-11-26) — the dead lanes below were
- * dispatched on every search and produced ZERO shopper offers for the week.
- * `/api/metrics/weekly` W48, stamp `14819423ccfe`:
- *
- *   | lane                | attempts | failures | offers |
- *   |---------------------|----------|----------|--------|
- *   | Lulu Hypermarket    | 19,447   | 17,094   | 0      |
- *   | BinSina             | 19,447   | 6,071    | 0      |
- *   | Yousifi             | 19,447   | 26       | 0      |
- *   | YasO                | 19,447   | 0        | 0      |
- *   | Hobby Center        | 19,447   | 0        | 0      |
- *   | Bomai               | 19,447   | 0        | 0      |
- *
- * That is ~117k adapter calls a week with no offer to show for it, plus a
- * coverage line that named Lulu Hypermarket unreachable on every serve. The
- * lane stays declared and tested; the daily canary still probes it and returns
- * it to the fan-out on `LANE_CANARY_SUCCESS_STREAK` consecutive real answers,
- * so nothing here is a silent, permanent removal — a lane is re-admitted by a
- * canary, not by drift. (Ounass was retired earlier by removal from COLLECTORS;
- * its 48/48 W48 attempts are history only.)
+ * REEA-1207 (Bet 7B, 2026-11-26) — the six zero-offer lanes (Lulu
+ * Hypermarket, BinSina, Yousifi, YasO, Hobby Center, Bomai: 19,447 attempts
+ * each, 0 offers in W48) are NOT retired. The CEO directive on REEA-1216 is
+ * explicit: "it needs to be fixed. not killed." The repair lives on
+ * REEA-1221; 7B keeps only the honest counting and the coverage line. A lane
+ * still leaves the fan-out only when the 7-day rule or the canary says so.
  */
 export const DEFAULT_RETIRED_LANES: readonly string[] = [
   "Next Store",
-  "Lulu Hypermarket",
-  "BinSina",
-  "Yousifi",
-  "YasO",
-  "Hobby Center",
-  "Bomai",
 ];
 
 /** A lane must have failed every attempt for at least this many days. */
