@@ -458,3 +458,61 @@ export async function relayClearedHtml(url: string, contentSelector: string): Pr
     return "";
   }
 }
+
+/**
+ * REEA-1221 — reader-relay hop for LuLu Kuwait. Its zone answers every plain
+ * hop from our egress with Cloudflare's "Sorry, you have been blocked" page,
+ * and its list page is server-rendered (923 KB, 20 priced cards measured
+ * 2026-11-26), so a reader relay that renders the page from ITS egress returns
+ * exactly the HTML the lane's card scanner reads. The relay's own free tier
+ * allows ~20 requests/minute with no daily cap, which is why this hop — not the
+ * per-day-capped one — carries LuLu.
+ *
+ * Politeness: KV-cached per URL, one cooldown after a rate-limit answer, and
+ * every call bounded. Best-effort: any miss returns "" and the lane keeps its
+ * existing degraded note.
+ */
+const JINA_ENDPOINT = "https://r.jina.ai/";
+const JINA_TTL_S = 6 * 60 * 60;
+const JINA_TIMEOUT_MS = 20_000;
+let jinaCooldownUntil = 0;
+
+export async function jinaClearedHtml(url: string, contentSelector: string): Promise<string> {
+  if (!relayTierEnabled()) return "";
+  if (Date.now() < jinaCooldownUntil) {
+    lastFailure = "reader relay cooling down after a rate-limit answer";
+    return "";
+  }
+  const token = contentSelector.replace(/^[.#]/, "");
+  const kv = getSharedKv();
+  const key = `jina-cleared:${url}`;
+  if (kv) {
+    try {
+      const cached = await kv.get(key);
+      if (cached && cached.includes(token)) return cached;
+    } catch {
+      // store hiccup — pay the relay once
+    }
+  }
+  try {
+    const res = await fetch(`${JINA_ENDPOINT}${url}`, {
+      headers: { "x-respond-with": "html", "x-timeout": "40", accept: "text/html" },
+      signal: AbortSignal.timeout(JINA_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      lastFailure = `reader relay HTTP ${res.status}`;
+      if (res.status === 429 || res.status === 503) jinaCooldownUntil = Date.now() + RELAY_COOLDOWN_MS;
+      return "";
+    }
+    const html = await res.text();
+    if (!html.includes(token)) {
+      lastFailure = "reader relay answered without the lane's content selector";
+      return "";
+    }
+    if (kv) await kv.set(key, html, JINA_TTL_S).catch(() => false);
+    return html;
+  } catch (err) {
+    lastFailure = err instanceof Error ? err.message : String(err);
+    return "";
+  }
+}

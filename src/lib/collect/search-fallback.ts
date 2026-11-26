@@ -859,6 +859,50 @@ export function scanAlghanimStoreCards(html: string): WooCard[] {
  * carries them, the storefront's own AED stamp otherwise). Shared by the
  * live collector and the per-product fallback below.
  */
+/**
+ * REEA-1221 — LuLu Kuwait's list page cards. Measured live 2026-11-26 on
+ * `https://gcc.luluhypermarket.com/en-kw/list/?search_text=laptop` (923 KB,
+ * 20 cards): each card is a `app-product-card` block whose anchor carries the
+ * product path (`/en-kw/<slug>/p/<id>/`) and whose first `<img alt>` carries
+ * the title; the selling price rides `data-testid="product-price"` as
+ * `2.900 KWD`, with the struck-through original as the next one in the same
+ * block. The old JSON-LD contract is gone from this page (only WebSite +
+ * Organization remain), which is why the lane answered zero on every query
+ * even when its hop got through.
+ */
+export function scanLuluListCards(html: string): NextStoreCard[] {
+  const out: NextStoreCard[] = [];
+  const seen = new Set<string>();
+  for (const seg of html.split("app-product-card").slice(1)) {
+    const href = seg.match(/href="(\/en-kw\/[^"]+?\/p\/\d+\/)"/)?.[1] ?? "";
+    // The card's hover image carries the same alt with a " hover image"
+    // suffix (measured live), so the title is trimmed of that marker.
+    const title = decodeEntities(seg.match(/<img[^>]*alt="([^"]{3,200})"/)?.[1] ?? "").replace(
+      /\s*hover image\s*$/i,
+      "",
+    );
+    if (!href || !title) continue;
+    const url = `https://gcc.luluhypermarket.com${href}`;
+    if (seen.has(url)) continue;
+    const prices = [...seg.matchAll(/data-testid="product-price">\s*([\d.,]+)\s*(?:KWD|KD)?/g)].map((m) =>
+      priceNumber(m[1]),
+    );
+    const price = prices.find((p) => Number.isFinite(p) && p > 0);
+    if (price === undefined) continue;
+    const wasPrice = prices.slice(1).find((p) => Number.isFinite(p) && p > price);
+    seen.add(url);
+    out.push({
+      title,
+      url,
+      price,
+      currency: "KWD",
+      inStock: !/out of stock|غير متوفر/i.test(seg),
+      ...(wasPrice !== undefined ? { wasPrice } : {}),
+    });
+  }
+  return out;
+}
+
 export function scanBinsinaCards(html: string): NextStoreCard[] {
   const out: NextStoreCard[] = [];
   const segments = html.split('class="product-item-link"').slice(1);

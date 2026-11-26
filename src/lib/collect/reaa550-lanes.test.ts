@@ -134,7 +134,10 @@ describe("REEA-550 collector lanes", () => {
     })}</script></head><body>ok</body></html>`;
     const { notes } = await collectLiveResults("\u062f\u0648\u0641 \u0635\u0627\u0648\u0646", {
       fetchImpl: async (url) => {
-        if (url.includes("luluhypermarket.com/en/search")) {
+        // REEA-1221 — the lane now asks the Kuwait list route the storefront's
+        // own SearchAction names (/en-kw/list/?search_text=), so the fixture
+        // matches the host rather than the retired /en/search path.
+        if (url.includes("luluhypermarket.com")) {
           luluCalls += 1;
           const shell = luluCalls === 1;
           return new Response(

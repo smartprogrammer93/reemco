@@ -1770,8 +1770,11 @@ describe("collectLiveResultsStaged (REEA-178)", () => {
     // REEA-1221 — Next Store rejoined the fan-out, so a hop that never paints
     // its grid now settles as a blocked failure too (the honest count for a
     // lane that delivered nothing), never as a quiet zero.
+    // REEA-1221 — Lulu's hop shapes are WAF-blocked from every egress, so a
+    // fake fetch that answers a body-less JSON for it now settles as a blocked
+    // failure (the relay is off in tests) rather than a quiet zero.
     expect(Object.keys(telemetry.failures).sort()).toEqual(
-      ["BinSina", "Bomai", "Hobby Center", "Nest", "Next Store", "YasO"],
+      ["BinSina", "Bomai", "Hobby Center", "Lulu Hypermarket", "Nest", "Next Store", "YasO"],
     );
   });
 

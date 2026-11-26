@@ -27,6 +27,7 @@ import {
   queryGatePasses,
   scanAlghanimStoreCards,
   scanBinsinaCards,
+  scanLuluListCards,
   scanNextStoreCards,
   scanWooCards,
   titleMatchScore,
@@ -36,7 +37,12 @@ import {
 import { bet2FailFastEnabled } from "@/lib/collect/bet2-flag";
 // REEA-1221 — real-browser clearance tier for the lanes whose origin sits
 // behind a JavaScript challenge no plain hop can solve (Next Store).
-import { browserClearedHtml, browserLastError, relayClearedHtml } from "@/lib/collect/browser-clearance";
+import {
+  browserClearedHtml,
+  browserLastError,
+  jinaClearedHtml,
+  relayClearedHtml,
+} from "@/lib/collect/browser-clearance";
 import {
   defaultQueryCache,
   queryCacheKey,
@@ -706,6 +712,30 @@ export function nextStoreHits(html: string, query: string): SearchHit[] {
       ...(card.brand ? { brand: card.brand } : {}),
       price: card.price,
       currency: "KWD",
+      url: card.url,
+      inStock: card.inStock,
+      ...(card.wasPrice != null ? { wasPrice: card.wasPrice } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * REEA-1221 — LuLu Kuwait's list page (`/en-kw/list/?search_text=`) cards.
+ * The page no longer ships Product JSON-LD (only WebSite + Organization), so
+ * the old `luluHits` contract answers zero on every query even when the hop
+ * gets through; the cards themselves are server-rendered and priced in KWD.
+ */
+export function luluListHits(html: string, query: string): SearchHit[] {
+  const out: SearchHit[] = [];
+  for (const card of scanLuluListCards(html)) {
+    if (!queryGatePasses(card.title, query, MIN_SCORE)) continue;
+    out.push({
+      title: card.title,
+      merchant: "Lulu Hypermarket",
+      country: "KW",
+      price: card.price,
+      currency: card.currency,
       url: card.url,
       inStock: card.inStock,
       ...(card.wasPrice != null ? { wasPrice: card.wasPrice } : {}),
@@ -2003,83 +2033,67 @@ export const COLLECTORS: RetailerCollector[] = [
     merchant: "Lulu Hypermarket",
     country: "KW",
     collect: async (query, fetchImpl) => {
-      // Kuwait storefront — luluwebstore.com is a plain 301 onto this host,
-      // so this is the one that answers Kuwait prices. JSON-LD comes off the
-      // SSR search page; same identity-alternating managed-challenge retry
-      // as the Next Store hop (verified live 2026-09-08), and on a still-
-      // blocked answer the note explains the gap while the other retailers
-      // serve (graceful degradation). REEA-369 addendum: rides the same
-      // cache-first replay — measured 2026-09-09, this zone answers the
-      // managed challenge differently per egress (from this container all
-      // three rotating identities landed on the interstitial; the cleared
-      // replay lets the first hop that passes keep the merchant serving for
-      // the revalidate window instead of re-paying the handshake per query).
-      const searchUrl = `https://www.luluhypermarket.com/en/search?query=${encodeURIComponent(query)}`;
-      // REEA-408 — this zone's CF rules answer every rotating identity from
-      // cloud egress with the JS-Detection block page (confirmed the same day
-      // from both the coder container and the deployed edge's /api/echo): the
-      // handshake ends its rotation on a thrown HTTP status and the collector
-      // would otherwise record a standing zero-hit note for the whole page.
-      // The JSD clearance hop is therefore the FIRST thing that runs behind a
-      // shell-or-blank answer — including the case where the handshake threw.
-      // REEA-550 — tiers START together, join in tier order. Sequential tier
-      // chaining measured ~5–6 s on the deploy compute (REA-572 builder log),
-      // so the finalize cutoff closed before the tier that could answer even
-      // began; concurrent starts keep the hop near a single tier round-trip
-      // while the early return keeps the tier preference unchanged. Each tier
-      // carries its own bounded window, and every join below still applies
-      // the same qualification gates.
-      let html = "";
-      const identityP = challengeHtmlHop(fetchImpl, searchUrl).catch(() => {
-        // Handshake spent its window on the block-page shapes — the bounded
-        // clearance hop below still gets its own window.
-        return "";
-      });
-      const clearedP = jsdClearedHtml(fetchImpl, searchUrl);
-      const viaIpP = staticIpHtml(fetchImpl, searchUrl);
-      html = await identityP;
-      // REEA-526 — hop BEFORE parse: this zone's CF interstitial (~5.5 KB,
-      // ZERO application/ld+json blocks) passes a plain length check and
-      // would return a silent zero-hit column before the clearance hops
-      // ever run — the shape QA measured on every round. Only a body that
-      // already carries the contract's ld+json blocks may answer from the
-      // identity hop; anything else falls through to the bounded clearance
-      // and per-IP hops, which keep the first body with real content (the
-      // same presence rule staticIpHtml applies to its own passes).
-      const answersWithLdJson = (h: string) =>
-        h !== "" && !h.includes("cf-error-details") && h.includes("application/ld+json");
-      if (answersWithLdJson(html)) return luluHits(html, query);
-      const cleared = await clearedP;
-      if (answersWithLdJson(cleared)) return luluHits(cleared, query);
-      // REEA-416 — Static-IPs fallback per the batch-4 recipe: both identity
-      // paths missed on this egress, the per-IP passes still get fresh CF
-      // decisions. Whatever answers rides the same luluHits gate; a miss
-      // here keeps the old degraded-note shape unchanged.
-      const viaIp = await viaIpP;
-      // REEA-1099 — the lane was dispatched and NOT ONE hop produced a usable
-      // payload: a Cloudflare block/challenge shell (measured 2026-11-23 from
-      // the deployed egress: HTTP 403, 5.6 KB, zero application/ld+json) or a
-      // body-less hop. That is a coverage loss, not an "answered empty" zero —
-      // settle it as a failure so the plan's failure share stops reading Lulu
-      // at 0% while the shopper's page calls it unreachable. A genuine Akinon
-      // search page always ships the ld+json contract; a real page that merely
-      // has no matching products still answers with its ld+json blocks and
-      // keeps the honest empty note below.
-      const usable = [html, cleared, viaIp].find(answersWithLdJson);
-      if (!usable) {
-        const lastBody = viaIp !== "" ? viaIp : cleared !== "" ? cleared : html;
-        const challengeShell =
-          lastBody === "" ||
-          /cf-error-details|Just a moment|Attention Required|cf-challenge|Enable JavaScript and cookies/i.test(
-            lastBody,
-          );
-        if (challengeShell) {
-          throw new BlockedLaneError(
-            "blocked: no usable payload from any Lulu hop (Cloudflare 403/challenge)",
-          );
-        }
+      // REEA-1221 — the route was the defect as much as the WAF. The Kuwait
+      // storefront's own WebSite JSON-LD (read live 2026-11-26) names its
+      // search entry point:
+      //   urlTemplate = https://gcc.luluhypermarket.com/en-kw/list/?search_text={term}
+      // The adapter had been asking https://www.luluhypermarket.com/en/search?query=
+      // — a route that does not exist on this storefront (its client router
+      // renders "404 Page Not Found" for it), so even a hop that got through
+      // could only ever answer zero. The list route is server-rendered with
+      // priced cards (923 KB, 20 cards on `laptop`), which is what
+      // luluListHits reads. A page that still ships Product JSON-LD (a PDP, an
+      // older render) keeps answering through luluHits, so the contract is
+      // additive rather than replaced.
+      //
+      // The zone also answers EVERY plain hop from our egress with Cloudflare's
+      // "Sorry, you have been blocked" page (403, 1.9 KB, verified from both the
+      // coder container and the deployed box; even a real Chrome on the same IP
+      // earns cf_clearance and still 403s), so the ladder ends on a reader relay
+      // that renders the page from its own egress. Cheap hops stay first: they
+      // answer instantly on the rounds where the WAF has stepped aside.
+      const searchUrl = `https://gcc.luluhypermarket.com/en-kw/list/?search_text=${encodeURIComponent(query)}`;
+      const isShell = (html: string): boolean =>
+        html === "" ||
+        /cf-error-details|Sorry, you have been blocked|Just a moment|Attention Required|Enable JavaScript and cookies/i.test(
+          html,
+        );
+      // A body we trust to be the storefront's answer, either contract.
+      const answered = (html: string): boolean =>
+        !isShell(html) &&
+        (html.includes("app-product-card") || html.includes("application/ld+json"));
+      const parse = (html: string): SearchHit[] =>
+        html.includes("app-product-card") ? luluListHits(html, query) : luluHits(html, query);
+      let answeredEmpty = false;
+      for (const hop of [
+        () => challengeHtmlHop(fetchImpl, searchUrl).catch(() => ""),
+        () => jsdClearedHtml(fetchImpl, searchUrl).catch(() => ""),
+        () => staticIpHtml(fetchImpl, searchUrl).catch(() => ""),
+      ]) {
+        const body = await hop();
+        if (!answered(body)) continue;
+        const hits = parse(body);
+        if (hits.length > 0) return hits;
+        // A real page with no matching rows is the storefront saying "no match"
+        // — keep the first one and let a later hop/relay try to answer.
+        answeredEmpty = true;
       }
-      return luluHits(viaIp !== "" ? viaIp : cleared !== "" ? cleared : html, query);
+      // Last hop: a reader relay renders the page from its own egress, and the
+      // answer is KV-cached per URL so a repeat query spends no relay call.
+      const relayed = await jinaClearedHtml(searchUrl, "app-product-card");
+      if (answered(relayed)) {
+        const hits = parse(relayed);
+        if (hits.length > 0) return hits;
+        answeredEmpty = true;
+      }
+      if (answeredEmpty) return [];
+      // Nothing produced a page we trust: that is a coverage loss, not an
+      // "answered empty" zero (REEA-1207 AC 7B-3), so the counter sees it and
+      // the note names the cause.
+      throw new BlockedLaneError(
+        "blocked: no usable payload from any Lulu hop (Cloudflare block on every plain hop, relay gave no page)" +
+          (browserLastError() ? ` [relay: ${browserLastError().slice(0, 120)}]` : ""),
+      );
     },
   },
   {

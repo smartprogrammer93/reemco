@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { binsinaHits, nextStoreHits } from "@/lib/collect/live-search";
+import { binsinaHits, luluListHits, nextStoreHits } from "@/lib/collect/live-search";
 import { browserTierEnabled, relayTierEnabled } from "@/lib/collect/browser-clearance";
 
 /**
@@ -73,6 +73,30 @@ describe("REEA-1221 lane repair", () => {
       title: "Razer Laptop Sleeve 16",
       price: 34,
       currency: "KWD",
+    });
+  });
+
+  it("Lulu reads the Kuwait list page's priced cards, not the retired JSON-LD contract", () => {
+    // Measured live 2026-11-26 on
+    // https://gcc.luluhypermarket.com/en-kw/list/?search_text=laptop: the page
+    // ships no Product JSON-LD any more (only WebSite + Organization), and the
+    // cards carry app-product-card with the selling price in
+    // data-testid="product-price" as "2.900 KWD".
+    const html =
+      '<div class="relative rounded-v2-xs border app-product-card justify-start">' +
+      '<a class="relative z-0 flex flex-col" href="/en-kw/wagon-r-vibes-laptop-bag-5001/p/1641941/">' +
+      '<img alt="Wagon R Vibes Laptop Bag 5001 15.6 inches hover image" /></a>' +
+      '<div class="app-card-price"><span class="text-black" data-testid="product-price">2.900 KWD</span>' +
+      '<span class="line-through" data-testid="product-price">4.900</span></div></div>';
+    const hits = luluListHits(html, "laptop");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({
+      merchant: "Lulu Hypermarket",
+      title: "Wagon R Vibes Laptop Bag 5001 15.6 inches",
+      price: 2.9,
+      currency: "KWD",
+      url: "https://gcc.luluhypermarket.com/en-kw/wagon-r-vibes-laptop-bag-5001/p/1641941/",
+      wasPrice: 4.9,
     });
   });
 
