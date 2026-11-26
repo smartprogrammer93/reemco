@@ -64,6 +64,14 @@ describe("REEA-1207 — the same model at two retailers is one identity", () => 
     expect(compatibleFields(xm6, ch720)).toBe(false);
   });
 
+  it("folds a console class word onto the same shelf item", () => {
+    // Live: "Nintendo Switch 2 Console - Black" (Blink) and "Nintendo
+    // Switch 2" (Eureka) are the same console at two retailers.
+    const a = canonicalFields("Nintendo Switch 2 Console - Black");
+    const b = canonicalFields("Nintendo Switch 2");
+    expect(compatibleFields(a, b)).toBe(true);
+  });
+
   it("still separates an accessory from the device it fits", () => {
     const phone = canonicalFields("Apple iPhone 17 Pro 256GB");
     const kase = canonicalFields("Apple iPhone 17 Pro Silicone Case");

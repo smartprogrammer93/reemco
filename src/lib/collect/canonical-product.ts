@@ -182,6 +182,10 @@ const NOISE = new Set([
   "phone", "smartphone", "mobile", "tablet", "laptop", "notebook", "monitor",
   "keyboard", "mouse", "headphones", "headphone", "headset", "earbuds",
   "speaker", "tv",
+  // REEA-1207 — a console/system class word is the product class, not an
+  // identity: "Nintendo Switch 2 Console - Black" and "Nintendo Switch 2"
+  // are the same shelf item at two retailers.
+  "console", "system",
   "5g", "4g", "3g", "lte", "gprs", "wifi", "wi", "fi", "esim", "sim",
   "snapdragon", "elite", "exynos", "dimensity", "helios", "octa", "core",
   "with", "pen", "global", "version", "unlocked", "ram", "memory", "mem",
