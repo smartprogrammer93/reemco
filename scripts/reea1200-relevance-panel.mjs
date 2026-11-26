@@ -260,6 +260,7 @@ async function probe(query, locale) {
     title: p.title,
     brand: p.brand,
     ...scopeOf(p),
+    offers: p.offers || [],
     merchants: [...new Set((p.offers || []).map((o) => o.merchant))],
   }));
   const missing = cards.filter((c) => c.matchReason === null || c.productScope === null);

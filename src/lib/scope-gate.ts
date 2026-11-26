@@ -247,6 +247,30 @@ export function carriesQueryIdentity(query: string, title: string): boolean {
 }
 
 /**
+ * REEA-1200 — curated same-family aliases for a query that names one member
+ * of a well-known product family. `panadol` is the paracetamol family the AC
+ * names (Panadol, Panadrex, paracetamol): a shopper asking for Panadol gets
+ * the same active ingredient from another brand, and the AC treats those rows
+ * as in scope. Curated and small on purpose — an alias never widens a query
+ * into a whole category (that is the class table's job).
+ */
+const QUERY_FAMILY_ALIASES: ReadonlyMap<string, readonly string[]> = new Map([
+  ["panadol", ["panadol", "panadrex", "paracetamol"]],
+  ["panadrex", ["panadol", "panadrex", "paracetamol"]],
+  ["paracetamol", ["panadol", "panadrex", "paracetamol"]],
+]);
+
+/** True when a title carries a curated same-family alias of the query. */
+export function carriesFamilyAlias(query: string, title: string): boolean {
+  const tokens = tierQueryTokens(query);
+  if (tokens.length !== 1) return false;
+  const aliases = QUERY_FAMILY_ALIASES.get(tokens[0]);
+  if (!aliases) return false;
+  const foldedTitle = normalizeArabicText(normalizedTitle(title)).toLowerCase();
+  return aliases.some((alias) => new RegExp(`\\b${alias}\\b`, "i").test(foldedTitle));
+}
+
+/**
  * REEA-1200 — model-identity guard for an exact-model query. When the query
  * names a model token ("s25", "iphone17", "tune500"), a title that does not
  * answer it is a different product, whatever else it shares: S25 ≠ S26,
@@ -272,6 +296,9 @@ export function isPackVariant(title: string): boolean {
 
 function inScopeReason(query: string, title: string): MatchReason {
   if (carriesQueryIdentity(query, title)) return "query_token";
+  // A curated same-family alias (Panadrex for Panadol) is a brand-family
+  // match, not a token match: the title never spelled the queried word.
+  if (carriesFamilyAlias(query, title)) return "brand_family";
   const brand = curatedBrandInTitle(query);
   if (brand && titleMatchesBrand(title, brand)) return "brand_family";
   // The retailer's own ranking placed a neutral class product under the
@@ -341,9 +368,10 @@ export function classifyProductScope(query: string, title: string): ScopeVerdict
   }
 
   // 3. Exact-model / unknown-class query: only a card that answers the
-  //    query's identity is in scope. A same-class row that misses the model
+  //    query's identity (or a curated same-family alias, e.g. Panadrex under
+  //    `panadol`) is in scope. A same-class row that misses the model
   //    (S26 under `s25 ultra`) is related, not a primary slot.
-  if (carries && modelIdentityPasses(query, title)) {
+  if ((carries || carriesFamilyAlias(query, title)) && modelIdentityPasses(query, title)) {
     return {
       matchReason: inScopeReason(query, title),
       productScope: isPackVariant(title) ? "variant" : "primary",

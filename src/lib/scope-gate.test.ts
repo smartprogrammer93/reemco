@@ -83,7 +83,17 @@ describe("AC 7a-2 — panadol: only the paracetamol family is in scope", () => {
 
   it("does not let an unrelated medicine become primary", () => {
     expect(isPrimaryShelfScope(verdict(query, "NeoCell Grassfed Collagen + Vit C & Biotin Tablets"))).toBe(false);
-    expect(isPrimaryShelfScope(verdict(query, "Panadrex Paracetamol Tablets"))).toBe(false);
+    expect(isPrimaryShelfScope(verdict(query, "Advanced Medication Administration Skills"))).toBe(false);
+  });
+
+  it("keeps the curated paracetamol family in scope (Panadrex, paracetamol)", () => {
+    // AC 7a-2 names the family: Panadol, Panadrex, paracetamol. A family alias
+    // is a brand-family match, never a token match.
+    for (const title of ["Panadrex Pure Tablets 48 Pcs", "Paracetamol 500mg Tablets"]) {
+      const v = verdict(query, title);
+      expect(isPrimaryShelfScope(v)).toBe(true);
+      expect(v.matchReason).toBe("brand_family");
+    }
   });
 });
 
