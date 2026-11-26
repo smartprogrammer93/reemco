@@ -36,7 +36,7 @@ import {
 import { bet2FailFastEnabled } from "@/lib/collect/bet2-flag";
 // REEA-1221 — real-browser clearance tier for the lanes whose origin sits
 // behind a JavaScript challenge no plain hop can solve (Next Store).
-import { browserClearedHtml } from "@/lib/collect/browser-clearance";
+import { browserClearedHtml, browserLastError } from "@/lib/collect/browser-clearance";
 import {
   defaultQueryCache,
   queryCacheKey,
@@ -1978,7 +1978,8 @@ export const COLLECTORS: RetailerCollector[] = [
       // empty": settle it as a blocked failure so the counter stops reading 0
       // for a lane that delivered nothing (REEA-1207 AC 7B-3).
       throw new BlockedLaneError(
-        "blocked: no usable payload from any Next Store hop (challenge shell, no Magento grid)",
+        "blocked: no usable payload from any Next Store hop (challenge shell, no Magento grid)" +
+          (browserLastError() ? ` [browser: ${browserLastError().slice(0, 160)}]` : ""),
       );
     },
   },

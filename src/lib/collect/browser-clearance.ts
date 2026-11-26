@@ -59,6 +59,69 @@ const BROWSER_UA =
 let launch: Promise<{ browser: BrowserLike; context: ContextLike } | null> | null = null;
 
 /**
+ * The last thing that went wrong in this process's browser tier, or "".
+ * Surfaced by the lane's blocked note and by the /api/echo probe so a
+ * deployed-runtime failure is diagnosable from the served payload instead of
+ * needing another guess-and-deploy cycle.
+ */
+let lastFailure = "";
+
+export function browserLastError(): string {
+  return lastFailure;
+}
+
+export interface BrowserProbe {
+  enabled: boolean;
+  ok: boolean;
+  bytes: number;
+  painted: boolean;
+  ms: number;
+  error?: string;
+}
+
+/** Read-only probe of the tier for /api/echo (no KV write, no lane state). */
+export async function browserProbe(url: string, contentSelector: string): Promise<BrowserProbe> {
+  const started = Date.now();
+  if (!browserTierEnabled()) {
+    return { enabled: false, ok: false, bytes: 0, painted: false, ms: 0 };
+  }
+  const shared = await getSharedBrowser();
+  if (!shared) {
+    return {
+      enabled: true,
+      ok: false,
+      bytes: 0,
+      painted: false,
+      ms: Date.now() - started,
+      error: lastFailure || "browser launch failed",
+    };
+  }
+  let page: PageLike | null = null;
+  try {
+    page = await shared.context.newPage();
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+    await page
+      .waitForFunction((sel: string) => document.querySelector(sel) !== null, contentSelector, {
+        timeout: CONTENT_WAIT_MS,
+      })
+      .catch(() => undefined);
+    const html = await page.content();
+    return {
+      enabled: true,
+      ok: html.length > 0,
+      bytes: html.length,
+      painted: html.includes(contentSelector.replace(/^[.#]/, "")),
+      ms: Date.now() - started,
+    };
+  } catch (err) {
+    lastFailure = err instanceof Error ? err.message : String(err);
+    return { enabled: true, ok: false, bytes: 0, painted: false, ms: Date.now() - started, error: lastFailure };
+  } finally {
+    if (page) await page.close().catch(() => undefined);
+  }
+}
+
+/**
  * Gate for the tier. Explicit opt-out wins; a test run is hermetic by default
  * (the unit suite must not pay a Chromium launch), and anything else — the
  * self-hosted runtime, local dev — runs the browser.
@@ -99,7 +162,8 @@ async function getSharedBrowser(): Promise<{ browser: BrowserLike; context: Cont
           extraHTTPHeaders: { "accept-language": "en-US,en;q=0.9" },
         });
         return { browser, context };
-      } catch {
+      } catch (err) {
+        lastFailure = err instanceof Error ? err.message : String(err);
         return null;
       }
     })();
@@ -165,7 +229,8 @@ export async function browserClearedHtml(url: string, contentSelector: string): 
       await kv.set(key, html, CLEARED_CACHE_TTL_S).catch(() => false);
     }
     return html;
-  } catch {
+  } catch (err) {
+    lastFailure = err instanceof Error ? err.message : String(err);
     return "";
   } finally {
     if (page) await page.close().catch(() => undefined);

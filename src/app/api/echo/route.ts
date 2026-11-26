@@ -41,6 +41,10 @@ import {
   jarirFallbackKey,
 } from "@/lib/collect/search-fallback";
 import { jarirHits, jsdClearedHtml } from "@/lib/collect/live-search";
+// REEA-1221 — the real-browser clearance tier is the Next Store lane's last
+// hop; this probe reports whether it launches and paints from THIS runtime, so
+// a failed lane is diagnosable from the served payload without another deploy.
+import { browserProbe } from "@/lib/collect/browser-clearance";
 // REEA-782 — GET /api/echo rides the shared rate limiter (REEA-37 bucket,
 // REEA-827 deployment-wide counter: the namespaced `echo:` budget counts
 // across instances on the shared KV when bound, degrading to the per-process
@@ -369,6 +373,9 @@ export async function GET(req: Request): Promise<Response> {
     // REEA-1051 — Jarir discovery tripwire (see probeJarir above).
     probeJarir(fetch),
   ]);
+  // REEA-1221 — the browser tier probe rides the Next Store collector's own
+  // URL + content selector, bounded by the tier's own windows.
+  const browser = await browserProbe(NEXTSTORE_URL, ".product-item-link");
   const [lulu, pckuwait] = await Promise.all([
     withClearanceTier(fetch, luluRaw, LULU_URL),
     withClearanceTier(fetch, pckRaw, PCK_URL),
@@ -406,6 +413,8 @@ export async function GET(req: Request): Promise<Response> {
       zones,
       // REEA-1051 — per-route Jarir discovery shape from this egress.
       jarir,
+      // REEA-1221 — real-browser clearance tier status on this egress.
+      browser,
       pinned: {
         "www.luluhypermarket.com": luluPinned,
         "pckuwait.com": pckPinned,
