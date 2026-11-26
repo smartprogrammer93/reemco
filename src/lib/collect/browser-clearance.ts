@@ -949,7 +949,11 @@ export async function jinaClearedHtml(
   const key = `jina-cleared:${url}`;
   const cached = await readClearedBody(kv, key, carries);
   if (cached) return cached;
-  if (!(await acquireRelaySlot("jina-html", jinaLimits()))) return "";
+  // REEA-1242 — ONE provider budget for both reader modes: the 20/60 s quota is
+  // per egress, not per mode, so counting each hop separately doubled the
+  // allowed rate and the provider answered 429 (measured 2026-11-26 on the
+  // 12-query panel).
+  if (!(await acquireRelaySlot("jina", jinaLimits()))) return "";
   try {
     const res = await fetch(`${JINA_ENDPOINT}${url}`, {
       headers: jinaHeaders("html"),
@@ -958,7 +962,7 @@ export async function jinaClearedHtml(
     if (!res.ok) {
       lastFailure = `reader relay HTTP ${res.status}`;
       if (res.status === 429 || res.status === 503) {
-        applyRelayCooldown("jina-html", retryAfterSeconds(res), jinaLimits().windowMs);
+        applyRelayCooldown("jina", retryAfterSeconds(res), jinaLimits().windowMs);
       }
       return "";
     }
@@ -983,8 +987,8 @@ export async function jinaClearedHtml(
  * `markdown` renders the page with a browser and carries the painted grid
  * (measured 2026-11-26 on Next Store: markdown 81 KB with ten priced rows vs
  * html 5.9 KB "Just a moment"). Lanes whose parser can read markdown use this
- * hop; it has its OWN budget and cooldown because it rides a different quota
- * than the html hop.
+ * hop. It shares the reader tier's provider budget and cooldown with the html
+ * hop (one quota per egress), and the meta-relay's budget is separate.
  */
 const MARKDOWN_TTL_S = 30 * 60;
 
@@ -994,7 +998,7 @@ export async function relayMarkdown(url: string, marker: string): Promise<string
   const key = `relay-md:${url}`;
   const cached = await readClearedBody(kv, key, (body) => body.includes(marker));
   if (cached) return cached;
-  if (!(await acquireRelaySlot("jina-markdown", jinaLimits()))) return "";
+  if (!(await acquireRelaySlot("jina", jinaLimits()))) return "";
   try {
     const res = await fetch(`${JINA_ENDPOINT}${url}`, {
       headers: jinaHeaders("markdown"),
@@ -1003,7 +1007,7 @@ export async function relayMarkdown(url: string, marker: string): Promise<string
     if (!res.ok) {
       lastFailure = `markdown relay HTTP ${res.status}`;
       if (res.status === 429 || res.status === 503) {
-        applyRelayCooldown("jina-markdown", retryAfterSeconds(res), jinaLimits().windowMs);
+        applyRelayCooldown("jina", retryAfterSeconds(res), jinaLimits().windowMs);
       }
       return "";
     }

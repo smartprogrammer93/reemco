@@ -2113,9 +2113,18 @@ export const COLLECTORS: RetailerCollector[] = [
       // of priced rows, while the same relay's html mode hands back the 5.9 KB
       // "Just a moment" shell). Ordering the working hop first keeps the lane
       // inside its window instead of spending it on a daily-capped html call.
-      const markdown = await relayMarkdown(searchUrl, "KD");
-      const mdHits = nextStoreMarkdownHits(markdown, query);
-      if (mdHits.length > 0) return mdHits;
+      // REEA-1242 — the marker is the storefront's OWN results-page title, not
+      // a price token: a query the store simply does not stock renders a real
+      // page with zero matching rows (measured 2026-11-26: `panadol` answers a
+      // 48 KB "Search results for: 'panadol'" page), and that is an explicit
+      // no-match — not the blocked zero the lane used to record.
+      const markdown = await relayMarkdown(searchUrl, "Search results for");
+      if (markdown) {
+        const mdHits = nextStoreMarkdownHits(markdown, query);
+        if (mdHits.length > 0) return mdHits;
+        // A real page with no matching rows is the store saying "no match".
+        return [];
+      }
       // Second, independent capacity: the rendered-HTML relay, kept as the
       // fallback for the rounds where the markdown render is rate-limited.
       const relayed = await relayClearedHtml(searchUrl, ".product-item-link");
