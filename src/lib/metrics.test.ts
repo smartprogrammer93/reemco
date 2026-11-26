@@ -316,7 +316,7 @@ describe("REEA-807 searchOutcomeFromSnapshot", () => {
       zeroOffers: false,
       offersByRetailer: { Xcite: 4 },
       // REEA-1078 — two empty products: zero multi-retailer cards.
-      comparisonDepth: { cardsTotal: 2, cardsMultiRetailer: 0 },
+      comparisonDepth: { cardsTotal: 2, cardsMultiRetailer: 0, cardsCrossMarket: 0 },
     });
     expect(searchOutcomeFromSnapshot({ products: [], notes: [] }, []).zeroOffers).toBe(true);
   });
@@ -375,6 +375,7 @@ describe("REEA-807 store round-trip", () => {
       "bot_serves",
       "cold_serves_full",
       "cold_serves_pending",
+      "comparison_cards_cross_market",
       "comparison_cards_multi_retailer",
       "comparison_cards_total",
       // REEA-1141 AC-4 — duplicate-card aggregate, integer only.
@@ -585,7 +586,7 @@ describe("REEA-1078 comparison depth", () => {
         { offers: [{ merchant: "Eureka" }, { merchant: "Eureka" }] },
         { offers: [] },
       ]),
-    ).toEqual({ cardsTotal: 4, cardsMultiRetailer: 1 });
+    ).toEqual({ cardsTotal: 4, cardsMultiRetailer: 1, cardsCrossMarket: 0 });
   });
 
   it("folds the totals per week and never lets multi exceed total", () => {
@@ -595,14 +596,14 @@ describe("REEA-1078 comparison depth", () => {
       offersByRetailer: {},
       serveOutcome: "full",
       serveLatencyMs: 900,
-      comparisonDepth: { cardsTotal: 3, cardsMultiRetailer: 2 },
+      comparisonDepth: { cardsTotal: 3, cardsMultiRetailer: 2, cardsCrossMarket: 0 },
     });
     applySearchOutcome(weeks, "2026-W37", {
       zeroOffers: false,
       offersByRetailer: {},
       serveOutcome: "full",
       serveLatencyMs: 900,
-      comparisonDepth: { cardsTotal: 2, cardsMultiRetailer: 9 }, // hostile
+      comparisonDepth: { cardsTotal: 2, cardsMultiRetailer: 9, cardsCrossMarket: 0 }, // hostile
     });
     const w = weeks["2026-W37"];
     expect(w.comparison_cards_total).toBe(5);

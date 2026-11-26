@@ -243,9 +243,14 @@ export function weeklyResponse(
         // shelf the shopper's page painted (one card per productId, duplicate
         // offer rows folded, possible-mismatch offers excluded).
         definition:
-          "cards_multi_retailer ÷ cards_total over the served results-page shelf: a card counts when it carries ≥2 distinct in-market merchants with a non-flagged offer (sanity status ok and ratioToMedian ≥ 0.1). Cards are deduped by productId and offer rows by merchant+price+URL, so duplicate rows, bundle twins and possible-mismatch accessory offers never inflate the number.",
+          "cards_multi_retailer ÷ cards_total over the served results-page shelf: a card counts when it carries ≥2 distinct in-market merchants with a non-flagged offer (sanity status ok and ratioToMedian ≥ 0.1). Cards are deduped by productId and offer rows by merchant+price+URL, so duplicate rows, bundle twins and possible-mismatch accessory offers never inflate the number. cross_market_cards counts cards with no in-market retailer at all (a foreign-only card), recorded separately and never as depth.",
         cards_total: w.comparison_cards_total,
         cards_multi_retailer: w.comparison_cards_multi_retailer,
+        // REEA-1207 (Bet 7B Addition 2) — cards whose only offers are
+        // cross-market. They are recorded HERE and never in
+        // cards_multi_retailer: a Saudi-only panadol shelf is a price list with
+        // a foreign storefront, not a Kuwait comparison.
+        cross_market_cards: w.comparison_cards_cross_market,
         ratio: w.comparison_cards_total > 0 ? w.comparison_cards_multi_retailer / w.comparison_cards_total : 0,
         // REEA-1178 AC5 — the pre-change weekly panel read 17.13% under the
         // old (contaminated) fold: flagged accessory merges and duplicate rows

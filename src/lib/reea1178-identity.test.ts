@@ -222,7 +222,11 @@ describe("AC3/AC5 — comparison depth excludes artefacts and states its definit
         offer({ merchant: "Amazon.eg", currency: "EGP", price: 245, url: "https://www.amazon.eg/dp/B0FQFL2G9X", sanity: { status: "ok", ratioToMedian: 0.09996655518394651 } }),
       ],
     };
-    expect(comparisonDepthOf([card], "KW")).toEqual({ cardsTotal: 1, cardsMultiRetailer: 0 });
+    expect(comparisonDepthOf([card], "KW")).toEqual({
+      cardsTotal: 1,
+      cardsMultiRetailer: 0,
+      cardsCrossMarket: 0,
+    });
     // Two clean in-market lanes still count.
     const real = {
       productId: "iphone",
@@ -232,7 +236,11 @@ describe("AC3/AC5 — comparison depth excludes artefacts and states its definit
         offer({ merchant: "Eureka", currency: "KWD", url: "https://eureka.example/a", sanity: { status: "flagged", reason: "outlier_low", ratioToMedian: 0.05 } }),
       ],
     };
-    expect(comparisonDepthOf([real], "KW")).toEqual({ cardsTotal: 1, cardsMultiRetailer: 1 });
+    expect(comparisonDepthOf([real], "KW")).toEqual({
+      cardsTotal: 1,
+      cardsMultiRetailer: 1,
+      cardsCrossMarket: 0,
+    });
   });
 
   it("the weekly payload carries the definition and the pre-change reference", async () => {

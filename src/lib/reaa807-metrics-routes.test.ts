@@ -142,6 +142,7 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
       definition: expect.any(String),
       cards_total: 0,
       cards_multi_retailer: 0,
+      cross_market_cards: 0,
       ratio: 0,
       pre_change_reference: expect.objectContaining({ ratio: 0.1713 }),
       duplicate_cards: 0,
@@ -168,7 +169,7 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
         serveOutcome: "full",
         serveLatencyMs: 800,
         serveKind: "warm",
-        comparisonDepth: { cardsTotal: 4, cardsMultiRetailer: 2 },
+        comparisonDepth: { cardsTotal: 4, cardsMultiRetailer: 2, cardsCrossMarket: 0 },
       },
       { now: WEEK_MS },
     );
@@ -181,6 +182,7 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
       definition: expect.any(String),
       cards_total: 4,
       cards_multi_retailer: 2,
+      cross_market_cards: 0,
       ratio: 0.5,
       pre_change_reference: expect.objectContaining({ ratio: 0.1713 }),
       duplicate_cards: 0,
@@ -193,6 +195,7 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
     expect(Object.keys(week.comparison_depth as object).sort()).toEqual([
       "cards_multi_retailer",
       "cards_total",
+      "cross_market_cards",
       "dedupe_ratio",
       "definition",
       "duplicate_cards",

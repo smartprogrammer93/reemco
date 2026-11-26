@@ -237,8 +237,16 @@ export type ServeKind = "cold" | "warm";
 export interface ComparisonDepth {
   /** Results-page shelf cards painted for this serve. */
   cardsTotal: number;
-  /** Cards carrying offers from ≥2 DISTINCT retailers. */
+  /** Cards carrying offers from ≥2 DISTINCT in-market retailers. */
   cardsMultiRetailer: number;
+  /**
+   * REEA-1207 (Bet 7B Addition 2) — cards whose ONLY offers are cross-market
+   * (no in-market retailer at all). They are a price list with a foreign
+   * storefront, not a comparison: the card states the market and the converted
+   * price, and this counter records them separately so they never read as
+   * depth. Zero on a serve with no cross-market-only card.
+   */
+  cardsCrossMarket?: number;
 }
 
 /** REEA-871 — how the converged answer stood at after() recording time:
@@ -282,6 +290,8 @@ export interface WeekCounters {
    *  cards (see ComparisonDepth). cards_multi_retailer ≤ cards_total by
    *  construction. */
   comparison_cards_total: number;
+  /** REEA-1207 — cards whose only offers are cross-market (never depth). */
+  comparison_cards_cross_market: number;
   comparison_cards_multi_retailer: number;
   /**
    * REEA-1114 AC6 — served searches whose visible results were zero but an
@@ -352,6 +362,7 @@ export function emptyWeek(): WeekCounters {
     latency_warm_band_3_10s: 0,
     latency_warm_band_gt_10s: 0,
     comparison_cards_total: 0,
+    comparison_cards_cross_market: 0,
     comparison_cards_multi_retailer: 0,
     filtered_empty_searches: 0,
     duplicate_cards: 0,
@@ -434,6 +445,7 @@ function backfillWeek(week: WeekCounters): WeekCounters {
     "latency_warm_band_3_10s",
     "latency_warm_band_gt_10s",
     "comparison_cards_total",
+    "comparison_cards_cross_market",
     "comparison_cards_multi_retailer",
     // REEA-1114 — the filter-aware empty-state counter. Weeks stored before
     // this extension backfill 0, like every earlier aggregate addition.
@@ -614,6 +626,12 @@ export function applySearchOutcome(
   const cardsMulti = Math.min(clampCount(outcome.comparisonDepth?.cardsMultiRetailer), cardsTotal);
   w.comparison_cards_total += cardsTotal;
   w.comparison_cards_multi_retailer += cardsMulti;
+  // REEA-1207 — cross-market-only cards are counted, never folded into depth:
+  // they are clamped to the card total like every other sub-count.
+  w.comparison_cards_cross_market += Math.min(
+    clampCount(outcome.comparisonDepth?.cardsCrossMarket),
+    cardsTotal,
+  );
   // REEA-1141 AC-4 — duplicate cards painted by the served streamed shelf.
   // Clamped per serve so a hostile payload can never inflate the week; the
   // reader subtracts this from cards_total when it is non-zero.
@@ -727,9 +745,13 @@ export function comparisonDepthOf(
 ): ComparisonDepth {
   let cardsTotal = 0;
   let cardsMultiRetailer = 0;
+  let cardsCrossMarket = 0;
   for (const p of products ?? []) {
     if (!p || typeof p !== "object") continue;
     cardsTotal += 1;
+    // REEA-1207 — a card with offers but ZERO in-market merchant is a
+    // cross-market card; it never contributes depth.
+    let crossMarketOnly = (p.offers ?? []).length > 0;
     const merchants = new Set<string>();
     for (const merchant of comparisonMerchantsOf(
       (p.offers ?? []).map((o) => ({
@@ -748,8 +770,10 @@ export function comparisonDepthOf(
       merchants.add(merchant);
     }
     if (merchants.size >= 2) cardsMultiRetailer += 1;
+    if (merchants.size > 0) crossMarketOnly = false;
+    if (crossMarketOnly) cardsCrossMarket += 1;
   }
-  return { cardsTotal, cardsMultiRetailer };
+  return { cardsTotal, cardsMultiRetailer, cardsCrossMarket };
 }
 
 /** Pure: map a converged LiveSearchResult onto the aggregate outcome.

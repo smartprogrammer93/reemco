@@ -100,7 +100,7 @@ describe("weekly fold exposes the duplicate-card aggregate (AC-4)", () => {
     const weeks = applySearchOutcome({}, week, {
       zeroOffers: false,
       offersByRetailer: {},
-      comparisonDepth: { cardsTotal: 4, cardsMultiRetailer: 1 },
+      comparisonDepth: { cardsTotal: 4, cardsMultiRetailer: 1, cardsCrossMarket: 0 },
       duplicateCards: 4,
       serveOutcome: "full",
       serveLatencyMs: 1200,
@@ -139,6 +139,7 @@ describe("weekly fold exposes the duplicate-card aggregate (AC-4)", () => {
     expect(Object.keys(depth).sort()).toEqual([
       "cards_multi_retailer",
       "cards_total",
+      "cross_market_cards",
       "dedupe_ratio",
       "definition",
       "duplicate_cards",

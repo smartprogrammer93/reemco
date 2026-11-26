@@ -133,7 +133,7 @@ describe("REEA-1099 AC2 comparison-depth increment == rendered shelf cards", () 
     // 3. Pinned equality — zero tolerance on a deterministic fixture.
     expect(painted).toHaveLength(3);
     expect(paintedMulti).toBe(1);
-    expect(depth).toEqual({ cardsTotal: 3, cardsMultiRetailer: 1 });
+    expect(depth).toEqual({ cardsTotal: 3, cardsMultiRetailer: 1, cardsCrossMarket: 0 });
     expect(depth.cardsTotal).toBe(painted.length);
     expect(depth.cardsMultiRetailer).toBe(paintedMulti);
 
