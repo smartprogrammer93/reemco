@@ -149,6 +149,31 @@ The workflow only invokes the rollback path when a deploy actually reached the b
 (`steps.deploy.outcome == 'success'`), so a CI-only failure (audit gate, hardening
 assertion) no longer reverts production for a failure that never touched it.
 
+### True-negative proof (REEA-1194, 2026-11-26)
+
+REEA-1184 proved that throttling no longer rolls healthy builds back; its other
+bar — that a genuinely dead link still fails the gate — was argued from the code
+path. It is now demonstrated on a run:
+
+- Test commit `dc571d3` changed one `src/lib/catalog.ts` offer URL to
+  `https://www.xcite.com/reea1194-deliberately-dead-link/p`; xcite answers that
+  slug with HTTP 200 and the title `404: Page Not Found - Xcite Alghanim`.
+- Deploy run `45758034793` attempt 2: build gate, audit and hardening assertions
+  green; `deploy.sh` deployed `dc571d3`; the public stamp and headers verified;
+  then the blocking smoke failed with
+  `SMOKE FAILED at step 6 (catalog offer URLs resolve (link-health)): 1/19 offer URL(s) dead: https://www.xcite.com/reea1194-deliberately-dead-link/p (HTTP 200 title="404: Page Not Found - Xcite Alghanim")`
+  and exited 1.
+- The workflow invoked the on-host rollback: `rollback: dc571d3 -> 76b8da11`,
+  `VERIFY PASSED for 76b8da11`, `rollback verified: 76b8da11`. Production was
+  back on the previous tag 64 s after the smoke failure (05:07:31Z → 05:08:34Z).
+- The dead-link commit was reverted in the next commit, which deployed green.
+
+Incidental true positive from the same window: attempt 1 of that run failed
+before the smoke because `assert-containers.sh` refused to pass while a
+restore-drill scratch container published `127.0.0.1:3100`. The container
+posture assertion works — but it also fails a *rollback* verify, so keep scratch
+containers out of deploy windows (see the drill gotcha under Backup and restore).
+
 ## Container hardening (REEA-1061)
 
 The stack is capability-minimal and its infrastructure images are immutable:
@@ -284,6 +309,62 @@ before any provider-side migration; moving to a bucket is a one-line
 `RESTIC_REPOSITORY` swap plus `restic init` and one green run, and the drill
 re-runs unchanged.
 
+### Inventory, RPO and RTO (REEA-1194 — measured 2026-11-26)
+
+| State | Host path | In the nightly snapshot | RPO |
+| --- | --- | --- | --- |
+| KV / price-history store (Valkey: `metrics:weekly:v2:*`, `seen:*`, `collect:*`, `pc:*`, `ratelimit`, lane health) | `reemco_redis` volume | yes — `BGSAVE` first, `dump.rdb` captured | ≤ 24 h |
+| Weekly metrics store | `reemco_metrics` volume (`metrics.json`) | yes | ≤ 24 h |
+| Funnel events | `reemco_events` volume (`events.jsonl`) | yes | ≤ 24 h |
+| Collect store (last-seen / job snapshots) | `reemco_collect` volume | yes | ≤ 24 h |
+| Server config, compose, Caddyfile, scripts | `/opt/reemco` | yes | ≤ 24 h |
+| Env + deploy state (`app.env`, `release.env`, `image-tag*.env`, `backup.env`) | `/etc/reemco` | yes (`restic.pass` excluded; its value is escrowed in Paperclip Secrets) | ≤ 24 h |
+| Container images | `/var/lib/docker` | **no** — rebuilt from the git SHA (`infra/Dockerfile`); the rollback tag stays cached on the box | n/a (reproducible) |
+| TLS certificate + Caddy state | `reemco_caddy-data`, `reemco_caddy-config` volumes | **no** — re-issued automatically by ACME/Let's Encrypt from `REEMCO_SITE_ADDRESS` | n/a (minutes, no data loss) |
+| The restic repository itself | `/var/backups/reemco-restic` (same RAID1) | n/a | **box loss = every snapshot lost** |
+
+Measured restore (drill, 2026-11-26, snapshot `2d4dd7d6` taken 03:26:48Z):
+`restic restore` of 538 files / 98.151 MiB into `/var/tmp/reea1194-restore`
+completed in **2 seconds**; the full drill (restore + all checks below) took
+**1 min 46 s**. End-to-end in-place recovery (restore + `compose up` + verify.sh)
+is estimated at **under 10 minutes** — the app start and `verify.sh` are the
+long poles, not the restore.
+
+Verified against the restored copy:
+
+- `metrics/metrics.json` and all three `collect/*.json` files byte-identical to
+  the live volumes.
+- `events/events.jsonl`: 22,720 restored lines, **all present** in the live
+  volume (live had 23,157 at drill time — the delta is post-snapshot traffic).
+- Restored Valkey keyspace: `DBSIZE` 32,800 (live 34,763 at drill time), and
+  `metrics:weekly:v2:*` count **146 = live 146**. Sampled key
+  `metrics:weekly:v2:2026-W48:att:Danube Home`: restored `16595`, live `17021`
+  (live advanced after the snapshot — the restored value is the snapshot-time
+  value, not a copy of live).
+- The weekly-metrics endpoint **read the restored store**: a scratch
+  `reemco/app` container with `METRICS_DIR`/`EVENTS_DIR`/`COLLECT_CACHE_DIR`
+  pointed at the restored directories and `REDIS_URL` pointed at a scratch
+  Valkey loaded from the restored `dump.rdb` answered
+  `GET /api/metrics/weekly` **HTTP 200** with W47 `searches=1338,
+  zero_offer_searches=11` (identical to live) and W48 `searches=17962` vs live
+  `18498` (post-snapshot growth).
+
+**Honest RPO answer: 24 hours for data loss/corruption on this box; unlimited
+for box loss.** Because the repository is on the same array, losing the host
+loses the snapshots too. The cheapest fix (≈ $0 at 193 MB, Backblaze B2 free
+tier is 10 GB) is a bucket + key from the board, then
+`restic init --repo s3:...` and `restic copy` (or point `RESTIC_REPOSITORY` at
+the bucket and re-run the nightly job). One env change, one green run, drill
+re-runs unchanged. This is the only backup item still open.
+
+Drill gotcha: the drill leaves scratch containers publishing `127.0.0.1:3100`.
+`assert-containers.sh` (run by `verify.sh` on every deploy) fails on any
+container outside the compose project publishing outside proxy 80/443 +
+loopback 3000, so a drill overlapping a deploy makes that deploy's rollback
+verification fail (observed in run `45758034793` attempt 1). Remove the scratch
+containers when the drill finishes, or run it outside a deploy window.
+
+
 Backup, on demand (the timer does this nightly):
 
 ```sh
@@ -312,6 +393,56 @@ sudo docker compose -f /opt/reemco/compose.prod.yml --env-file /etc/reemco/relea
 
 ## Observability
 
+### Availability record + alert path (REEA-1194)
+
+Two probes, because they answer different questions and one cannot replace the
+other:
+
+| | On-box record | External alert |
+| --- | --- | --- |
+| Unit / workflow | `reemco-uptime.timer` (every 10 min) → `reemco-uptime.service` → `/opt/reemco/scripts/uptime-probe.sh` | `.github/workflows/uptime.yml` (schedule `*/30`, plus `workflow_dispatch` with a `base_url` override) |
+| What it records | `/api/health` (code, seconds, build stamp, `ok`) and `/__commit.txt` (code, seconds, 40-char stamp), one JSON line per run | the same two routes **plus** `/`, `/search`, `/results` — one machine-readable line per check in the run log and the job summary |
+| Where the record lives | `/var/log/reemco/uptime.jsonl` (self-rotating at 20 MB, one previous file kept) | the Actions run log + step summary for that run id |
+| Where the alert lands | `/var/log/reemco/uptime-alerts.log` + a failed systemd unit (journal). Not a human channel by itself. | a GitHub issue labeled `uptime-alert` in this repo (deduped; later failures append to the open issue), i.e. the repo notification stream |
+| Survives the box dying | no | **yes** — this is the only probe that can report the box being down |
+
+Simulate the external alert path (does not touch production):
+
+```sh
+gh workflow run uptime.yml -f base_url=https://ns539626.ip-144-217-72.net:9
+gh run list --workflow=uptime.yml --limit 1
+gh issue list --label uptime-alert --state all
+```
+
+**Measured limitation — read this before relying on the alert.** GitHub
+throttles scheduled workflows on this repo: between 2026-11-19 and 2026-11-26
+the `*/30` uptime probe produced **15 runs** and the `*/15` stamp-parity probe
+**16 runs** (≈ 2–3/day instead of 48/96). Worst-case detection of a dead box is
+therefore hours, not 30 minutes. The 10-minute on-box record covers the
+resolution while the box is alive; the cheapest close for box-loss detection is
+a free external monitor (e.g. UptimeRobot free tier, 5-minute checks, email/SMS
+alert) pointed at `/api/health` and `/__commit.txt` — no secret on the box and
+no new server, so it stays inside the "no second server" constraint. Needs one
+human signup; flagged to the CEO in [REEA-1194](/REEA/issues/REEA-1194).
+
+### 7-day retrospective (best available evidence, 2026-11-19 → 26)
+
+The box is **3.4 days old as production** (cutover 2026-11-22 18:21Z), so no
+7-day on-box record can exist yet. What the existing evidence shows:
+
+| Window | `/api/health` | `/__commit.txt` | Source |
+| --- | --- | --- | --- |
+| 2026-11-19 → 11-21 | unreachable (`STAMP_UNREACHABLE`, `/` → 402) | unreachable | 7 stamp-parity runs, 6 uptime runs — the box was not production yet (Vercel era); expected, not an outage |
+| 2026-11-22 | box comes up 18:21Z; loopback health 200 at 19:47Z | served | journal + manual run |
+| 2026-11-23 → 11-26 | **200 on every probe** (health journal 2/day + 9 external runs, build stamp present) | **200 on every probe** (9 external runs, stamp read) | journal + stamp-parity/uptime run logs |
+
+No failed probe after the cutover; the only failures in the window are the
+pre-cutover "box not live yet" ones. Continuous production uptime observed:
+**3 days 9 hours**, 0 failed probes. The `reemco-uptime.timer` started
+2026-11-26 turns this into a durable 10-minute record going forward.
+
+Other observability that already exists:
+
 - `reemco-health.timer` hits `/api/health` at 08:17 and 14:57 UTC (the two
   legacy cron slots) via loopback.
 - `reemco-backup.timer` runs nightly at 03:23 UTC when `/etc/reemco/backup.env`
@@ -321,6 +452,7 @@ sudo docker compose -f /opt/reemco/compose.prod.yml --env-file /etc/reemco/relea
   are rotated by the daemon config (`20m × 5`).
 - External uptime probe (`uptime.yml`) probes this box through `PROD_BASE_URL`.
   It is the only production surface (REEA-1076 removed the Vercel alias).
+
 
 ## Still owned by the CEO (blocking cutover, not this commit)
 

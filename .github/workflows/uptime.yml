@@ -9,10 +9,32 @@ name: Uptime check
 # every push since (red run, zero jobs), so the hosted uptime probe has been
 # dead since 2026-09-08. Restores the trigger; keep-warm remains the
 # push-triggered lane.
+#
+# REEA-1194 — this is now the EXTERNAL half of the availability record and the
+# human alert path for BOTH routes the board asked about:
+#   * `/api/health` must answer 200 with `{"ok":true,"build":"<sha>"}`
+#   * `/__commit.txt` must answer 200 with the 40-char served stamp
+# plus the shopper pages it already probed. Each check writes a machine-readable
+# record line to the run log and the job summary (retained with the run), so
+# "was the site up at 03:00?" is answerable from the Actions history.
+# Why external: an on-box probe (reemco-uptime.timer) records every 10 minutes,
+# but it dies with the box. Only this probe can report the box being down.
+# Known limitation (measured 2026-11-19..26): GitHub throttles scheduled
+# workflows on this repo to ~3 runs/day instead of 48, so worst-case detection
+# here is hours. The 10-minute on-box record covers the resolution; the cheapest
+# close for box-loss detection is a free external monitor (see infra/README.md).
+#
+# The `base_url` input exists for two cases: simulating the alert path (point it
+# at a deliberately dead host) and pre-cutover checks against a new address.
 on:
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Override the base URL (empty = vars.PROD_BASE_URL / production)"
+        required: false
+        default: ""
 
 permissions:
   issues: write
@@ -32,11 +54,17 @@ jobs:
       - name: Probe public URL
         id: probe
         run: |
+          set -uo pipefail
           # REEA-1054: probe the self-hosted production box, not the Vercel
           # rollback alias. PROD_BASE_URL is the single switch flipped at the
           # DNS cutover; the default is the box's current hostname.
-          BASE="${{ vars.PROD_BASE_URL || 'https://ns539626.ip-144-217-72.net' }}"
+          BASE="${{ inputs.base_url || vars.PROD_BASE_URL || 'https://ns539626.ip-144-217-72.net' }}"
+          BASE="${BASE%/}"
+          TS=$(date -u +%FT%TZ)
           FAIL=""
+          RECORD=""
+          SUMMARY="$GITHUB_STEP_SUMMARY"
+
           # REEA-371: budget must sit above the measured funnel walk, not below
           # it. Cold-ish arrivals walk home + staged results + product hops in
           # ~30s (measured 04:20-06:10Z); with --max-time 15 the probe false-
@@ -44,24 +72,81 @@ jobs:
           # the smoke-check hop budgets were widened in REEA-369: monitoring
           # ceilings stricter than the thing they observe burn error budget on
           # noise (MTTR). Keep-warm's own ping already uses --max-time 60.
+          probe() { # <path> -> writes body to /tmp/body, echoes "<code> <seconds>"
+            curl -s -o /tmp/body -w '%{http_code} %{time_total}' --max-time 45 "$BASE$1" 2>/dev/null || echo "000 0"
+          }
+          record() { # <path> <code> <seconds> <verdict>
+            RECORD="$RECORD$TS $BASE$1 code=$2 s=$3 verdict=$4"$'\n'
+            printf '%s %s code=%s s=%s verdict=%s\n' "$TS" "$1" "$2" "$3" "$4"
+          }
+
+          # --- shopper pages (unchanged semantics) ---
           for CHECK in "/" "/search" "/results?q=iPhone%2017%20Pro"; do
-            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 45 "$BASE$CHECK" || echo 000)
-            echo "$CHECK -> $CODE"
-            case "$CODE" in 200|301|302) ;; *) FAIL="$FAIL $CHECK($CODE)";; esac
+            read -r CODE SECS <<<"$(probe "$CHECK")"
+            case "$CODE" in 200|301|302) V=ok ;; *) V=fail; FAIL="$FAIL $CHECK($CODE)" ;; esac
+            record "$CHECK" "$CODE" "$SECS" "$V"
           done
+
+          # --- /api/health: 200 AND ok:true AND a build stamp ---
+          read -r CODE SECS <<<"$(probe "/api/health")"
+          HOK=$(jq -r '.ok // false' /tmp/body 2>/dev/null || echo false)
+          HBUILD=$(jq -r '.build // empty' /tmp/body 2>/dev/null || true)
+          if [ "$CODE" = "200" ] && [ "$HOK" = "true" ] && printf '%s' "$HBUILD" | grep -Eq '^[0-9a-f]{12,40}$'; then
+            record "/api/health" "$CODE" "$SECS" "ok build=$HBUILD"
+          else
+            record "/api/health" "$CODE" "$SECS" "fail ok=$HOK build=${HBUILD:-none}"
+            FAIL="$FAIL /api/health($CODE,ok=$HOK,build=${HBUILD:-none})"
+          fi
+
+          # --- /__commit.txt: 200 AND the 40-char served stamp ---
+          read -r CODE SECS <<<"$(probe "/__commit.txt")"
+          SHA=$(tr -d '[:space:]' </tmp/body 2>/dev/null | head -c 64 || true)
+          if [ "$CODE" = "200" ] && printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            record "/__commit.txt" "$CODE" "$SECS" "ok sha=$SHA"
+          else
+            record "/__commit.txt" "$CODE" "$SECS" "fail sha=${SHA:-none}"
+            FAIL="$FAIL /__commit.txt($CODE,sha=${SHA:-none})"
+          fi
+
+          {
+            echo "### Uptime probe $TS against $BASE"
+            echo '```'
+            printf '%s' "$RECORD"
+            echo '```'
+          } >> "$SUMMARY"
+
           echo "failed=$FAIL" >> "$GITHUB_OUTPUT"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
           [ -z "$FAIL" ] || exit 1
 
-      - name: Open deduped downtime issue on failure
+      - name: Open or append the deduped downtime issue on failure
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.probe.outputs.base }}
+          FAILED: ${{ steps.probe.outputs.failed }}
         run: |
-          if gh issue list --label uptime-alert --state open --json url -q '.[0].url' | grep -q .; then
-            echo "open uptime-alert issue already exists - appending"
+          set -uo pipefail
+          gh label create uptime-alert --color D93F0B \
+            --description "Public availability probe failure" --force || true
+          BODY="Uptime probe failed at $(date -u +%FT%TZ) against \`${BASE}\`.
+
+          Failed checks: \`${FAILED}\`
+
+          Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          What to do: check \`docker ps\` and \`/opt/reemco/scripts/verify.sh\` on the
+          box; if the app is down, roll back with Actions > Deploy self-hosted >
+          Run workflow (rollback_sha = last known-good commit). If only this
+          probe is red and the box is serving, the runner's egress may be
+          blocked — re-run the workflow before paging anyone."
+          # REEA-1194: the old dedupe branch only printed a message and never
+          # appended, so the second and every later failure was invisible.
+          OPEN=$(gh issue list --label uptime-alert --state open --json number -q '.[0].number' || true)
+          if [ -n "$OPEN" ]; then
+            echo "open uptime-alert issue #$OPEN exists — appending"
+            gh issue comment "$OPEN" --body "$BODY"
           else
-            gh issue create \
-              --title "UP ALERT: public site failing uptime probe" \
-              --label uptime-alert \
-              --body "Uptime probe failed at $(date -u +%FT%TZ) for: ${{ steps.probe.outputs.failed }}. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            gh issue create --title "UP ALERT: public site failing uptime probe" \
+              --label uptime-alert --body "$BODY"
           fi

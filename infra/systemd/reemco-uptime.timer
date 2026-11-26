@@ -1,0 +1,18 @@
+[Unit]
+# REEA-1194 — 10-minute availability record for /api/health and /__commit.txt.
+# 10 min, not 5: each probe walks the live retailer adapters (18-26 s cold), so
+# 144 walks/day keeps a usable record without spending the box's egress on
+# monitoring. Detection for a dead app is therefore <= 10 min on the box, but a
+# box-level failure is caught by the external probe, not this timer.
+Description=Reemco availability probe schedule (every 10 minutes)
+
+[Timer]
+OnCalendar=*:0/10
+# Small jitter so the walk does not land on the same second as the deploy/verify
+# window or the backup BGSAVE.
+RandomizedDelaySec=20
+Persistent=false
+Unit=reemco-uptime.service
+
+[Install]
+WantedBy=timers.target

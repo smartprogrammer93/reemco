@@ -341,7 +341,7 @@ export const CATALOG: NormalizedProduct[] = [
         merchant: "Xcite",
         price: 139.9,
         currency: "KWD",
-        url: "https://www.xcite.com/reea1194-deliberately-dead-link/p",
+        url: "https://www.xcite.com/microsoft-xbox-series-s-all-digital-gaming-console-1tb-ssd-xxu-00013-carbon-black/p",
         inStock: false,
       },
     ],

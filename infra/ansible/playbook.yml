@@ -231,6 +231,8 @@
         - { src: "scripts/restore-drill.sh", dest: "/opt/reemco/scripts/restore-drill.sh", mode: "0755" }
         - { src: "scripts/assert-containers.sh", dest: "/opt/reemco/scripts/assert-containers.sh", mode: "0755" }
         - { src: "scripts/docker-user-firewall.sh", dest: "/opt/reemco/scripts/docker-user-firewall.sh", mode: "0755" }
+        # REEA-1194 — on-box availability record for /api/health + /__commit.txt.
+        - { src: "scripts/uptime-probe.sh", dest: "/opt/reemco/scripts/uptime-probe.sh", mode: "0755" }
       notify: reconcile stack
 
     # Secrets are injected by the operator (or a secrets manager) into
@@ -268,6 +270,9 @@
         - reemco-health.timer
         - reemco-backup.service
         - reemco-backup.timer
+        # REEA-1194 — availability record (10-min JSONL + failed unit on outage).
+        - reemco-uptime.service
+        - reemco-uptime.timer
         - reemco-docker-user-firewall.service
       notify: reload systemd
 
@@ -280,6 +285,8 @@
       loop:
         - reemco-health.timer
         - reemco-backup.timer
+        # REEA-1194 — the 10-minute availability record timer.
+        - reemco-uptime.timer
         # REEA-1087 (F9) — applies the DOCKER-USER allow-list now and re-applies
         # it on every docker restart (PartOf=docker.service).
         - reemco-docker-user-firewall.service

@@ -1,0 +1,20 @@
+[Unit]
+# REEA-1194 — availability record for /api/health and /__commit.txt.
+# The on-box half of the uptime evidence: a JSONL line every 10 minutes at
+# /var/log/reemco/uptime.jsonl, plus a failed unit and an alert line when either
+# route stops answering. The public/external half is
+# .github/workflows/uptime.yml (the only probe that survives this box dying).
+Description=Reemco availability probe record (/api/health + /__commit.txt)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/reemco/scripts/uptime-probe.sh
+# /api/health walks the live retailer adapters (18-26 s cold); 120 s bounds a
+# stuck walk without letting one run overlap the next timer tick.
+TimeoutStartSec=120
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
