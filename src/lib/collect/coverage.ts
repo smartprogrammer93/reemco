@@ -368,6 +368,15 @@ export function coverageParts(
     if (seen.has(n.merchant)) continue;
     const zoneBlocked = unreachableSet.has(n.merchant);
     const blockedCause = typeof n.error === "string" && n.error.startsWith("blocked:");
+    // REEA-1221 — a lane that simply did not settle inside the served
+    // completion budget is NOT proven unreachable: it is still being checked,
+    // and the follow-up feed replaces this first paint with the converged
+    // answer (measured 2026-11-26: the first paint named Lulu, Ounass and Next
+    // Store "Unreachable" while the same run's converged snapshot had all three
+    // answering). Only a real blocked cause or a zone record may claim the word.
+    const budgetMiss =
+      typeof n.error === "string" && /completion budget/i.test(n.error);
+    if (budgetMiss && !zoneBlocked) continue;
     if (!zoneBlocked && !blockedCause) continue;
     if (!rendered && n.hits > 0 && !n.error) continue;
     blocked.push(n.merchant);

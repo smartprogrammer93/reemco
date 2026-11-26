@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { binsinaHits, luluListHits, nextStoreHits } from "@/lib/collect/live-search";
 import { browserTierEnabled, relayTierEnabled } from "@/lib/collect/browser-clearance";
+import { coverageParts, type LiveSearchResult } from "@/lib/collect/coverage";
 
 /**
  * REEA-1221 — lane repair guardrails. Each case pins one measured cause the
@@ -98,6 +99,28 @@ describe("REEA-1221 lane repair", () => {
       url: "https://gcc.luluhypermarket.com/en-kw/wagon-r-vibes-laptop-bag-5001/p/1641941/",
       wasPrice: 4.9,
     });
+  });
+
+  it("does not call a lane that missed the completion budget unreachable", () => {
+    // Measured on the served head 2026-11-26: the first paint named Lulu,
+    // Ounass and Next Store "Unreachable" because their relay/browser hops had
+    // not settled inside the 1.8 s budget, while the same run's converged
+    // snapshot had all three answering. A budget miss is "still checking", not
+    // a blocked lane.
+    const notes = [
+      { merchant: "Lulu Hypermarket", hits: 0, coupons: 0, error: "no answer within the 1800 ms completion budget" },
+      { merchant: "Ounass", hits: 0, coupons: 0, error: "no answer within the 1800 ms completion budget" },
+      { merchant: "Bomai", hits: 0, coupons: 0, error: "blocked: no usable payload (0 hits, no explicit no-match from Bomai)" },
+      { merchant: "Xcite", hits: 3, coupons: 0 },
+    ] as unknown as LiveSearchResult["notes"];
+    const parts = coverageParts(notes, "en", [{ productId: "p1", offers: [{ merchant: "Xcite" }] }] as never, [], "laptop");
+    const text = parts.map((p) => (p.kind === "text" ? p.value : p.names.join(", "))).join("");
+    // Only the UNREACHABLE sentence is under test here — a budget miss may
+    // still ride "No response from …", which is the honest word for it.
+    const unreachable = text.slice(text.indexOf("Unreachable: "), text.indexOf(".", text.indexOf("Unreachable: ")));
+    expect(unreachable).toContain("Bomai");
+    expect(unreachable).not.toContain("Lulu Hypermarket");
+    expect(unreachable).not.toContain("Ounass");
   });
 
   it("keeps both clearance tiers out of the hermetic test run", () => {
