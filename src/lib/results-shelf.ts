@@ -18,7 +18,7 @@ import type { CountryCode } from "@/lib/country";
 import { isCrossMarketOffer, marketViewScope, scopeProductsByMarket } from "@/lib/market";
 import { effectiveKwdOfOffer } from "@/lib/price-composition";
 import { filterProductsByStock } from "@/lib/stock";
-import { exactSkuKeep } from "@/lib/relevance";
+import { exactSkuKeep, modelIdentityTokens } from "@/lib/relevance";
 import {
   CONFIDENCE_THRESHOLD,
   RELATED_CAP,
@@ -263,14 +263,37 @@ export function resultsShelfCards(
 
 /** What one streamed flush paints: nothing for a superseded replay, else the
  *  cards not already painted by an earlier flush. */
+/**
+ * REEA-1207 AC 7B-1/7B-2 — the shelf budget for this query. A category or
+ * brand-only query is a COMPARISON surface: it stops at the category budget
+ * (comparisons lead), so a long stream of single-retailer appends cannot bury
+ * the comparison cards the shopper came for. An exact-model query keeps the
+ * wider page (REEA-1175 measured those as already deep).
+ */
+export function shelfCardBudget(query: string): number {
+  return modelIdentityTokens(query).length > 0 ? RESULTS_PAGE_SIZE : CATEGORY_SHELF_CARDS;
+}
+
+/** REEA-1207 — the category shelf budget (cards painted for one query). */
+export const CATEGORY_SHELF_CARDS = 10;
+
 export function freshCardsForFlush(
   visible: readonly NormalizedProduct[],
   paintedIds: ReadonlySet<string>,
   replay: boolean,
+  budget: number = RESULTS_PAGE_SIZE,
 ): NormalizedProduct[] {
   if (replay) return [];
+  // The budget is CUMULATIVE: later flushes only fill the slots the page has
+  // left, so the served shelf cannot grow past the budget through appends.
+  const remaining = Math.max(0, budget - paintedIds.size);
+  if (remaining === 0) return [];
   const fresh: NormalizedProduct[] = [];
-  for (const p of visible) if (!paintedIds.has(p.productId)) fresh.push(p);
+  for (const p of visible) {
+    if (paintedIds.has(p.productId)) continue;
+    fresh.push(p);
+    if (fresh.length >= remaining) break;
+  }
   return fresh;
 }
 
@@ -386,6 +409,7 @@ export async function paintedShelfCardsAcrossStages(
       resultsShelfCards(snap, query, page, country, showOutOfStock),
       paintedIds,
       snap.replay === true,
+      shelfCardBudget(query),
     );
     painted.push(...fresh);
     paintedIds = paintedIdsAfter(paintedIds, fresh);

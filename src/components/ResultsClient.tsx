@@ -32,7 +32,7 @@ import {
 import { HeadingGhost, SkeletonCard, StampGhost, coverageLhTier } from "@/components/SkeletonSlots";
 import { PRODUCTS } from "@/lib/feed";
 import { realCouponsFor } from "@/lib/price-composition";
-import { resultsShelfCards, resultsShelfSections, shelfSectionsFromProducts, RESULTS_PAGE_SIZE, freshCardsForFlush, paintedIdsAfter, preferRicherSnapshot } from "@/lib/results-shelf";
+import { resultsShelfCards, resultsShelfSections, shelfSectionsFromProducts, RESULTS_PAGE_SIZE, freshCardsForFlush, paintedIdsAfter, preferRicherSnapshot, shelfCardBudget } from "@/lib/results-shelf";
 // REEA-1201 (Bet 7A-2) — the honest shelf's pure decisions: the in-scope count
 // plural ladder and the thin-shelf test (same comparison-merchant count the
 // card basis prints, so the page line can never contradict a card).
@@ -771,7 +771,9 @@ function StageAppend(props: {
   // contributes no cards and does not claim ids in the baseline, so the live
   // stage paints the newest version of those products (AC-3).
   const replay = snap.replay === true;
-  const fresh = freshCardsForFlush(visible, paintedIds, replay);
+  // REEA-1207 — the same cumulative budget the metrics fold uses, so the
+  // painted shelf and the counter can never describe different populations.
+  const fresh = freshCardsForFlush(visible, paintedIds, replay, shelfCardBudget(props.query));
   const nextPaintedIds = paintedIdsAfter(paintedIds, fresh);
   // REEA-222: badge ownership follows the first flush that actually RENDERS
   // cards, not index 0 blindly. When the earliest snapshots are empty under
