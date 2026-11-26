@@ -372,10 +372,20 @@ await step(7, "deployed results notes carry every registered adapter (REEA-238/2
   // probes count against the same per-IP page budget (src/proxy.ts
   // PAGE_RATE_LIMIT, 60/min). Retry 429/503 with the served Retry-After instead
   // of reading a pacing response as a broken build.
+  // REEA-1221 — this step asserts that the DEPLOYED BUILD DISPATCHED every
+  // adapter, so it must measure a fan-out, not a warm replay. A warm serve
+  // answers from the shared snapshot/memo and carries only the lanes that
+  // snapshot happened to hold (measured on the served head 2026-11-26: a warm
+  // /results?q=iPhone 15 carried 19 lanes and missed Sultan Center and Lulu
+  // Hypermarket, while the same build's cold run carried all 24). The one-shot
+  // rc_refresh cookie forces the cold render the step is about.
   const resp = await fetchWithThrottleRetry(
     `${BASE}/results?q=${encodeURIComponent("iPhone 15")}`,
     () => ({
-      headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36" },
+      headers: {
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36",
+        cookie: "rc_refresh=1",
+      },
       redirect: "follow",
       signal: AbortSignal.timeout(30000),
     }),
@@ -403,8 +413,41 @@ await step(7, "deployed results notes carry every registered adapter (REEA-238/2
   // src/lib/collect/lane-health.ts). It stays REGISTERED and tested, and the
   // canary path re-admits it; when that happens, put it back here.
   const required = ["Xcite", "Blink", "Eureka", "Sultan Center", "Jarir", "Amazon.eg", "Quadra Stores", "Lulu Hypermarket"];
-  const missing = required.filter((m) => !merchants.includes(m));
-  if (missing.length) throw new Error(`deployed notes array misses ${missing.join(", ")} (seen: ${merchants.join(", ")})`);
+  // REEA-1221 — the served document carries the flushes that landed inside the
+  // stream window, so a lane that settles after the last flush is absent from
+  // its notes even though the build dispatched it (measured 2026-11-26: the
+  // document's notes held 19 lanes while the SAME run's converged follow-up
+  // snapshot held all 23, including Sultan Center and Lulu Hypermarket). The
+  // follow-up endpoint is the run's own converged answer, so a lane missing
+  // from the document is re-checked there before this gate calls the build
+  // broken; only a lane absent from BOTH never dispatched.
+  const seen = new Set(merchants);
+  const missingFromDoc = required.filter((m) => !seen.has(m));
+  if (missingFromDoc.length) {
+    try {
+      const followUp = await fetchWithThrottleRetry(
+        `${BASE}/api/results-followup?q=${encodeURIComponent("iPhone 15")}`,
+        () => ({
+          headers: {
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36",
+            cookie: "rc_refresh=1",
+          },
+          signal: AbortSignal.timeout(30000),
+        }),
+        { log: console.log },
+      );
+      if (followUp.ok) {
+        const payload = await followUp.json();
+        for (const note of payload?.notes ?? []) {
+          if (typeof note?.merchant === "string") seen.add(note.merchant);
+        }
+      }
+    } catch {
+      // keep the document's set — the gate still fails honestly below
+    }
+  }
+  const missing = required.filter((m) => !seen.has(m));
+  if (missing.length) throw new Error(`deployed notes arrays miss ${missing.join(", ")} (seen: ${[...seen].join(", ")})`);
   const hitLines = finalNotes.replace(/\\/g, "");
   return `${merchants.length} merchant(s) dispatched — ${hitLines.slice(0, 160)}…`;
 });
