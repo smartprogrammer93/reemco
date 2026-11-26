@@ -237,6 +237,12 @@ jobs:
           SMOKE_BASE_URL: ${{ env.SITE_ADDRESS }}
         run: |
           set -uo pipefail
+          # REEA-1224: GitHub runs `run:` blocks as `bash -e`, and `set -uo
+          # pipefail` does not turn that off. A bare `npm run smoke` therefore
+          # aborted the step the moment the smoke exited 2, so `code=$?` never
+          # ran and the cooldown/rerun branch below was dead — run 45847672447
+          # exited 2 on step 5 and rolled a healthy build back 0.3 s later.
+          # Capture the exit through `|| code=$?` so the branch actually runs.
           # REEA-1184: the app gates /results and /product with a per-IP budget
           # (src/proxy.ts PAGE_RATE_LIMIT, 60 requests/minute) and answers a
           # burst with 429 + Retry-After. The smoke retries those with the
@@ -246,13 +252,12 @@ jobs:
           # smoke once before any rollback. Exit 1 is a real failure and rolls
           # back immediately. Before this, three healthy deploys of 641c2b7 were
           # rolled back by a burst 429 in step 7 (run 45728235136).
-          npm run smoke
-          code=$?
+          code=0
+          npm run smoke || code=$?
           if [ "$code" -eq 2 ]; then
             echo "::warning::funnel smoke throttled out by the per-IP page gate — cooling down 75s and rerunning before rollback"
             sleep 75
-            npm run smoke
-            code=$?
+            npm run smoke || code=$?
           fi
           if [ "$code" -ne 0 ]; then
             echo "::error::funnel smoke failed (exit $code)"

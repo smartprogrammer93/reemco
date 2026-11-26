@@ -190,6 +190,11 @@ describe("REEA-1184 gate wiring", () => {
     // A second run, then a real non-zero exit still rolls back.
     expect((smokeStep.match(/npm run smoke/g) ?? []).length).toBeGreaterThanOrEqual(2);
     expect(smokeStep).toContain('exit "$code"');
+    // REEA-1224: GitHub runs the step as `bash -e`, so an unguarded `npm run
+    // smoke` aborts on exit 2 before `code=$?` — the cooldown branch never ran
+    // (run 45847672447 rolled a healthy build back 0.3 s after the 429). Both
+    // invocations must capture the status through `|| code=$?`.
+    expect((smokeStep.match(/npm run smoke \|\| code=\$\?/g) ?? []).length).toBe(2);
     // The rollback step must still be gated on a successful deploy.
     expect(workflow).toContain("if: failure() && steps.deploy.outcome == 'success'");
   });
