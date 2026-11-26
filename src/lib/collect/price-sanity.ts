@@ -216,7 +216,20 @@ export function computeCohortSanity<H extends SanityInputHit>(
 
   // FR-1.5/E1 — tiny cohort: skip the outlier check, log it, flag nothing.
   const skipped = priceable.length < SANITY_MIN_COHORT;
-  const median = skipped ? null : medianOf(priceable.map((p) => p.kwd));
+  // REEA-1221 — the cohort median is taken over a TRIMMED slice. A query's
+  // cohort is not one product class: "galaxy z fold 7" collects the Fold7
+  // phones (KWD 380–530) beside cheap accessories (KWD 5–15, plus SAR/EGP
+  // rows converted down), so the plain median landed near KWD 6 and every real
+  // phone was flagged outlier_high at ratio 64–112 (measured 2026-11-26). Those
+  // flags are not wrong about the spread — they are wrong about the reference:
+  // trimming the cheapest and dearest quarter makes the median describe the
+  // bulk of the shelf, so a phone is compared with phones and an accessory with
+  // accessories. Small cohorts (< 4 priceable offers) keep the plain median —
+  // there is no quarter to trim there.
+  const trim = priceable.length >= 4 ? Math.floor(priceable.length * 0.25) : 0;
+  const sortedPrices = priceable.map((p) => p.kwd).sort((a, b) => a - b);
+  const trimmed = trim > 0 ? sortedPrices.slice(trim, sortedPrices.length - trim) : sortedPrices;
+  const median = skipped ? null : medianOf(trimmed);
   summary.medianKwd = median == null ? null : Math.round(median * 1000) / 1000;
   summary.outlierCheckSkipped = skipped;
 
