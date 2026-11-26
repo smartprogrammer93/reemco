@@ -20,6 +20,7 @@
 
 import {
   isAccessoryTitle,
+  isModelAliasShape,
   normalizeArabicText,
   normalizedTitle,
   relevanceTier,
@@ -81,10 +82,15 @@ export function isAccessoryQuery(query: string): boolean {
  * (an exact part-number query is about THAT listing, even when the title
  * says "Case") outranks the accessory demotion. Checked FIRST: a hyphenated
  * storefront code is ONE title word, so the per-token ladder scores it 0.
+ * REEA-1154 / REEA-1068 D4 — a compact model alias ("fold7", "iphone17") is
+ * code-SHAPED but names a model FAMILY, not one pasted part number, so it
+ * must NOT take that override: it falls through to the ladder below, where
+ * the accessory demotion keeps cases/protectors in the related band. Only a
+ * genuine part-number token keeps the override.
  */
 export function matchConfidence(query: string, title: string, metadata = ""): number {
-  const codes = skuCodeTokens(query);
-  if (codes.length > 0 && titleCarriesCode(title, codes)) return CONFIDENCE_THRESHOLD;
+  const exactCodes = skuCodeTokens(query).filter((c) => !isModelAliasShape(c));
+  if (exactCodes.length > 0 && titleCarriesCode(title, exactCodes)) return CONFIDENCE_THRESHOLD;
   const tokens = tierQueryTokens(query);
   const foldedTitle = normalizeArabicText(normalizedTitle(title)).toLowerCase();
   const fullCoverage =

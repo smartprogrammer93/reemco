@@ -22,6 +22,7 @@ import "./test-cache-dir";
 import { describe, expect, it } from "vitest";
 import { groupHits } from "@/lib/collect/live-search";
 import { queryCacheKey } from "@/lib/query-cache";
+import { shelfSectionsFromProducts } from "@/lib/results-shelf";
 import { isAccessoryTitle } from "@/lib/relevance";
 import type { SearchHit } from "@/lib/collect/live-search";
 
@@ -84,6 +85,34 @@ describe("REEA-1154 D4 — the served head of a model query", () => {
   it("serves one identical ordered set for all four spellings of the dispatched query", () => {
     const titles = SPELLINGS.map((q) => groupHits(q, LIVE_SHAPE).map((p) => p.title));
     for (const t of titles.slice(1)) expect(t).toEqual(titles[0]);
+  });
+
+  it("paints one identical primary shelf for every spelling — accessories demote to the related band", () => {
+    // QA's 23:28Z pass on served `1d496613`: the follow-up feed returned the
+    // same 10-product answer for all four spellings, but the RENDERED page
+    // showed 4 cards for `fold 7` / `Fold 7` / `فولد 7` and 10 for `fold7`,
+    // with the six accessory-only rows in the `fold7` primary shelf. The shelf
+    // split is matchConfidence() over the raw spelling: "fold7" is code-shaped,
+    // so the exact-SKU override kept its cases/protectors confident. The
+    // partition must be spelling-invariant for one dispatched query.
+    const snapshot = groupHits("fold7", LIVE_SHAPE);
+    const sections = SPELLINGS.map((q) =>
+      shelfSectionsFromProducts(snapshot, q, "KW", false),
+    );
+    const primaryIds = sections.map((s) => s.primary.map((p) => p.productId));
+    for (const ids of primaryIds.slice(1)) expect(ids).toEqual(primaryIds[0]);
+    // Primary is the device set only — every accessory row is below threshold.
+    expect(primaryIds[0].length).toBeGreaterThanOrEqual(3);
+    for (const s of sections) {
+      expect(
+        s.primary.every((p) => !isAccessoryTitle(p.title)),
+        "an accessory card entered the primary shelf",
+      ).toBe(true);
+      expect(
+        s.related.some((p) => isAccessoryTitle(p.title)),
+        "the accessory band was emptied",
+      ).toBe(true);
+    }
   });
 
   it("passes an accessory-only answer set through untouched (an accessory query keeps its accessories)", () => {

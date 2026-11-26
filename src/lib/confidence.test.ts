@@ -12,6 +12,7 @@ import {
   matchConfidence,
   partitionByConfidence,
 } from "@/lib/confidence";
+import { isModelAliasShape } from "@/lib/relevance";
 
 describe("threshold config (spec: one configuration value)", () => {
   it("exposes exactly one threshold and the FR-2.2 cap of 6", () => {
@@ -52,6 +53,28 @@ describe("matchConfidence", () => {
         "Samsung Galaxy S25 Silicone Case, EF-PS931CBEGWW – Black",
       ),
     ).toBe(CONFIDENCE_THRESHOLD);
+  });
+
+  it("a compact model alias does not take the exact-SKU override (REEA-1154 D4)", () => {
+    // "fold7" is code-SHAPED (>=5 chars, digit) but names a model FAMILY, so
+    // an accessory carrying it demotes exactly like the spaced spelling does.
+    // Before the fix the override returned CONFIDENT and kept every Fold7
+    // case/protector in the primary shelf: one dispatched query served a
+    // 10-card shelf for `fold7` and a 4-card shelf for `fold 7`.
+    const caseTitle =
+      "PanzerGlass Smartphone Screen Protector, for Samsung Galaxy Z Fold7, Tempered Glass";
+    expect(matchConfidence("fold7", caseTitle)).toBe(1);
+    expect(matchConfidence("fold 7", caseTitle)).toBe(1);
+    expect(matchConfidence("Fold 7", caseTitle)).toBe(1);
+    // The phone itself stays primary under the compact spelling.
+    expect(matchConfidence("fold7", "Samsung Galaxy Z Fold7, 5G, 12 GB RAM")).toBe(
+      CONFIDENCE_THRESHOLD,
+    );
+    // A genuine part number still keeps its REEA-822 override.
+    expect(isModelAliasShape("ps931cbegww")).toBe(false);
+    expect(isModelAliasShape("mr1qk2")).toBe(false);
+    expect(isModelAliasShape("fold7")).toBe(true);
+    expect(isModelAliasShape("iphone17")).toBe(true);
   });
 
   it("tier-3 partial coverage stays primary; metadata-only (tier 4) falls to the band", () => {

@@ -348,6 +348,21 @@ function isCodeShape(token: string): boolean {
   return /^[a-z][a-z0-9]{4,}$/i.test(token) && /\d/.test(token);
 }
 
+/** REEA-1154 / REEA-1068 D4 — compact model-family aliases ("fold7",
+ *  "iphone17", "pixel9"): a letter run ending in a SHORT digit run, with no
+ *  letters after the digits. These clear isCodeShape's >=5-char gate, but they
+ *  name a model FAMILY, not one pasted part number. A genuine storefront code
+ *  carries a long alphanumeric tail ("ps931cbegww", "uf966ctegww") or mixed
+ *  letter/digit runs ("mr1qk2"), so it does not match this shape. The
+ *  confidence ladder uses the distinction to keep the REEA-822 exact-SKU
+ *  override for part numbers only: treating "fold7" as exact-SKU intent
+ *  skipped the accessory demotion, so Fold7 cases/protectors stayed primary
+ *  while the spaced spelling ("fold 7") demoted them — one dispatched query
+ *  served two different shelves. */
+export function isModelAliasShape(token: string): boolean {
+  return /^[a-z]+\d{1,3}$/i.test(token);
+}
+
 export function skuCodeTokens(query: string): string[] {
   const tokens = queryMatchTokens(query);
   const codes = tokens.filter(isCodeShape);
