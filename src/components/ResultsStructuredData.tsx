@@ -1,21 +1,26 @@
 /**
- * REEA-1168 — server-only JSON-LD block for the live results surface.
+ * REEA-1168 / REEA-1212 — server-only JSON-LD block for the live results
+ * surface.
  *
- * It awaits the SAME `staged.final` promise the page already streams, so the
- * structured data describes the snapshot the page actually served and adds no
- * client fetch, no second fan-out and no extra admission slot. The parent
- * renders this inside a Suspense boundary, so the shell (query h1, canonical,
- * filter chrome) still flushes first and the script lands in the served
- * document as soon as the run finalizes.
+ * It awaits the SAME staged promises the page already streams, and folds them
+ * through the renderer's own paint chain (`paintedShelfCardsAcrossStages`), so
+ * the structured data describes the exact cards the shopper's document paints
+ * — not a different snapshot or a second offer definition. No client fetch,
+ * no second fan-out and no extra admission slot. The parent renders this
+ * inside a Suspense boundary, so the shell (query h1, canonical, filter
+ * chrome) still flushes first and the script lands once the run finalizes.
  */
 import { siteOrigin } from "@/lib/site-origin";
 import { buildResultsStructuredData, serializeJsonLd } from "@/lib/structured-data";
+import { paintedShelfCardsAcrossStages } from "@/lib/results-shelf";
 import type { LiveSearchResult } from "@/lib/collect/coverage";
 import type { CountryCode } from "@/lib/country";
 import type { Locale } from "@/lib/i18n";
+import type { NormalizedProduct } from "@/types/product";
 
 export interface ResultsStructuredDataProps {
-  final: Promise<LiveSearchResult>;
+  /** The same staged run ResultsClient paints (server-streamed promises). */
+  stages: readonly Promise<LiveSearchResult>[];
   query: string;
   country: CountryCode | null;
   locale: Locale;
@@ -26,17 +31,36 @@ export interface ResultsStructuredDataProps {
 }
 
 export default async function ResultsStructuredData(props: ResultsStructuredDataProps) {
-  let snapshot: LiveSearchResult;
+  // REEA-1212 — the shopper-visible card population, computed with the exact
+  // helper the renderer's paint chain and the metrics fold use. A rejected
+  // stage contributes nothing (the honest state of a flush that never landed).
+  let cards: NormalizedProduct[];
   try {
-    snapshot = await props.final;
+    cards = await paintedShelfCardsAcrossStages(
+      props.stages,
+      props.query,
+      props.page,
+      props.country,
+      props.showOutOfStock,
+    );
   } catch {
-    // A failed stage boundary has no price claim to make.
+    // A failed paint chain has no price claim to make.
     return null;
   }
-  if (!snapshot || !Array.isArray(snapshot.products)) return null;
+  if (cards.length === 0) return null;
+
+  // The last stage carries the run's collection stamp, used only as a
+  // fallback observation time for offers that carry none of their own.
+  let snapshot: LiveSearchResult | undefined;
+  try {
+    snapshot = await props.stages[props.stages.length - 1];
+  } catch {
+    snapshot = undefined;
+  }
 
   const nodes = buildResultsStructuredData({
-    snapshot,
+    cards,
+    snapshot: snapshot && Array.isArray(snapshot.products) ? snapshot : undefined,
     query: props.query,
     country: props.country,
     locale: props.locale,

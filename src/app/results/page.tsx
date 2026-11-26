@@ -414,15 +414,15 @@ export default async function ResultsPage({
       className="results-viewport-reserve mx-auto w-full py-6"
       style={{ maxWidth: "var(--rc-layout-max-w)", paddingInline: "var(--rc-gutter)" }}
     >
-      {/* REEA-1168 — Product/Offer JSON-LD for the offers this run actually
-          observed. It awaits the SAME `staged.final` promise the page already
-          streams (no second fan-out, no client fetch, no admission change);
-          the shell/heading flushes first and the script lands in the served
-          document when the run finalizes. Empty when nothing has a fresh
-          claimable observation. */}
+      {/* REEA-1168 / REEA-1212 — Product/Offer JSON-LD for the offers this run
+          actually painted. It folds the SAME staged promises ResultsClient
+          paints through the renderer's own paint chain (no second fan-out, no
+          client fetch, no admission change); the shell/heading flushes first
+          and the script lands in the served document when the run finalizes.
+          Empty when nothing is visible. */}
       <Suspense fallback={null}>
         <ResultsStructuredData
-          final={staged.final}
+          stages={staged.stages}
           query={query}
           country={country}
           locale={locale}

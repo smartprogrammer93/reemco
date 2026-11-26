@@ -1,30 +1,31 @@
 import Link from "next/link";
 import Image from "next/image";
 import type { NormalizedProduct, PriceOffer, ProductAlternative } from "@/types/product";
-import { buildProductHref, buildResultsHref, currencyForCountry, type CountryCode } from "@/lib/country";
+import { buildProductHref, buildResultsHref, type CountryCode } from "@/lib/country";
 import { formatCountryPrice, formatKWD, formatPrimaryPrice } from "@/lib/format";
 import {
   bestCouponForOffer,
   compositionOfOffer,
   effectiveKwdOfOffer,
-  realCouponsFor,
-  withCouponComposition,
 } from "@/lib/price-composition";
 import {
   HOME_MARKET,
-  cheapestCrossMarketOffer,
   crossMarketHeadlineParts,
   crossMarketLeadLabel,
-  headlineOfferFor,
   isCrossMarketOffer,
   marketName,
   marketPriceLabel,
   marketStockLabel,
   offerMarket,
-  scopeProductsByMarket,
-  sortOffersByMarket,
 } from "@/lib/market";
-import { canonicalKey, dedupVariantKey, gradeBadgeLabel } from "@/lib/collect/canonical-product";
+// REEA-1212 — the ONE visible-offer projection, shared with the results
+// JSON-LD so the structured data describes the rows this card paints.
+import {
+  SHELF_VISIBLE_OFFER_ROWS,
+  foldRetailerRows,
+  visibleShelfOffers,
+} from "@/lib/results-offers";
+import { canonicalKey, gradeBadgeLabel } from "@/lib/collect/canonical-product";
 import { ageSeconds, collectedClock, localizedAgeFromStamp } from "@/lib/relative-time";
 import CouponLine, { buildCouponRows } from "@/components/CouponLine";
 import PriceCompositionLine from "@/components/PriceCompositionLine";
@@ -56,12 +57,14 @@ function offerFlagged(o: PriceOffer): boolean {
 }
 
 /**
- * REEA-1096 D6 — the accepted shelf card anatomy caps the visible offer rows
- * at three (the pack's card height target assumes a bounded row set; the PM
- * brief for this ticket fixes the cap at 3). The rest stay reachable through
- * the product page's full offers table via the "view all N offers" link.
+ * REEA-1096 D6 — the shelf's visible-row cap lives in
+ * lib/results-offers.ts (SHELF_VISIBLE_OFFER_ROWS) so the card and the
+ * results JSON-LD cannot disagree about how many rows the page shows.
  */
-const MAX_SHELF_OFFERS = 3;
+
+/** Re-exported for the existing REEA-787 fold tests; the definition now
+ *  lives in lib/results-offers.ts so the structured data uses it too. */
+export { foldRetailerRows };
 
 /** The native title-attribute sentence for a flagged offer's reason. */
 function verifyTitleFor(reason: string | undefined, t: ReturnType<typeof getStrings>): string {
@@ -307,36 +310,6 @@ function LeadOfferCta({
 }
 
 /**
- * REEA-787 — variant-aware retailer-row fold, applied right AFTER sortOffers
- * so it inherits the single REEA-604 ordering key and the stable live-first
- * order. One row survives per (merchant(lower) | folded variant tier | grade
- * badge | effective figure).
- */
-export function foldRetailerRows(
-  offers: PriceOffer[],
-  coupon: { discount: string } | null,
-): PriceOffer[] {
-  void coupon; // the served composition already folds the card's real coupon
-  const seen = new Set<string>();
-  const rows: PriceOffer[] = [];
-  for (const o of offers) {
-    // REEA-1177 AC 6a-4 — the fold key is the SAME effectivePrice the card
-    // prints and ranks on, never a face-value subtraction.
-    const effective = effectiveKwdOfOffer(o);
-    const key = [
-      o.merchant.toLowerCase(),
-      dedupVariantKey(o.label ?? ""),
-      gradeBadgeLabel(o.grade ?? "") ?? "",
-      formatKWD(effective),
-    ].join("|");
-    if (seen.has(key)) continue;
-    seen.add(key);
-    rows.push(o);
-  }
-  return rows;
-}
-
-/**
  * REEA-1122 — the absolute price base a variant chip rides: the card's
  * cheapest listed offer after the same fold/sort the card renders, excluding
  * flagged offers (REEA-963 FR-1.4). Shared by the results card and the
@@ -349,11 +322,9 @@ export function cheapestListedKwd(
 ): number | null {
   // REEA-1177 AC 6a-4 — the "from" figure is the cheapest EFFECTIVE price of
   // the card's in-market offers, the same composition the card prints.
-  const coupons = realCouponsFor(product.coupons, product.offers);
-  const offers = foldRetailerRows(
-    sortOffersByMarket(withCouponComposition(product.offers, coupons), null, scope),
-    null,
-  );
+  // REEA-1212 — read the ONE visible-offer projection (market scope, real
+  // coupons, fold, ordering) instead of re-deriving a second chain.
+  const offers = visibleShelfOffers(product, scope).all;
   // REEA-1142 — the base is a local figure; cross-market offers never set it.
   // REEA-1178 AC3 — a possible-mismatch offer never sets the "from" figure
   // either: a KD 2.9 accessory must not print as this card's lowest price.
@@ -650,26 +621,16 @@ export default function ProductResultCard({
   // only when the product has no in-market offer (the AC 6d-3 exception).
   const viewCountry: CountryCode | null = country === undefined ? HOME_MARKET : country;
   const scope = viewCountry;
-  const scopedOffers = scopeProductsByMarket([product], scope)[0].offers;
-  // REEA-1177 AC 6a-3 — the derived was-price coupon entries (code:null, bare
-  // amount == savings.amount) are NOT coupons; only real coupons are applied
-  // to the composition and rendered as badges.
-  const realCoupons = realCouponsFor(product.coupons, scopedOffers);
-  const composedOffers = withCouponComposition(scopedOffers, realCoupons);
-  const offers = foldRetailerRows(
-    sortOffersByMarket(composedOffers, null, scope),
-    null,
-  );
-  // AC2 — the headline offer is the cheapest in-stock offer OF THE SELECTED
-  // MARKET, on the same effectivePrice the composition prints. A converted
-  // non-KWD offer can never lead it; when the card has no local offer at all
-  // the honest no-local-offer line renders instead.
-  const localBest = headlineOfferFor(offers, scope);
-  const crossBest = cheapestCrossMarketOffer(offers, scope);
-  // Display fallback: when every offer is flagged the headline claim is
-  // suppressed, but the card must still render a price (with its warning) —
-  // never a blank hero.
-  const best = localBest ?? crossBest ?? offers[0] ?? null;
+  // REEA-1212 — one shared projection with the results JSON-LD: market
+  // scoping, real-coupon composition, fold, ordering, headline offer and the
+  // visible-row cap all come from lib/results-offers.ts. This is the exact
+  // offer set the shopper sees, and the structured data derives from it.
+  const {
+    all: offers,
+    best,
+    localBest,
+    realCoupons,
+  } = visibleShelfOffers(product, scope);
   const hasLocalOffer = localBest !== null;
   // REEA-1198 — the headline is rendered as its two parts so the price token
   // ("KD 0.47") is its own nowrap span: the sentence may wrap, the figure may
@@ -1023,7 +984,7 @@ export default function ProductResultCard({
             {t.pricesHeading}
           </h3>
           <div className="rc-offer-list">
-            {offers.slice(0, MAX_SHELF_OFFERS).map((o) => (
+            {offers.slice(0, SHELF_VISIBLE_OFFER_ROWS).map((o) => (
               <ShelfOfferRow
                 key={`${o.merchant}-${o.url}`}
                 offer={o}
@@ -1039,7 +1000,7 @@ export default function ProductResultCard({
               />
             ))}
           </div>
-          {offers.length > MAX_SHELF_OFFERS && (
+          {offers.length > SHELF_VISIBLE_OFFER_ROWS && (
             <Link href={buildProductHref(product.productId, query, viewCountry)} className="rc-view-all">
               {fill(t.viewAllOffers, { n: offers.length })}
             </Link>
