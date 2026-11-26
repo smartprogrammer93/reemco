@@ -72,6 +72,17 @@ describe("REEA-1207 — the same model at two retailers is one identity", () => 
     expect(compatibleFields(a, b)).toBe(true);
   });
 
+  it("folds pharmacy pack descriptors onto one identity", () => {
+    // Live: the same 24-tablet pack at Danube Home and BinSina.
+    const danube = canonicalFields("Panadol Extra Pain Relief Tablets 24tablets");
+    const binsina = canonicalFields("Panadol Extra Optizorb Tablets 24's");
+    expect(compatibleFields(danube, binsina)).toBe(true);
+    // A different formulation stays a different product.
+    const sinus = canonicalFields("Panadol Sinus Caplets 24's");
+    const coldFlu = canonicalFields("Panadol Cold+Flu Day Caplets 24's");
+    expect(compatibleFields(sinus, coldFlu)).toBe(false);
+  });
+
   it("still separates an accessory from the device it fits", () => {
     const phone = canonicalFields("Apple iPhone 17 Pro 256GB");
     const kase = canonicalFields("Apple iPhone 17 Pro Silicone Case");

@@ -186,6 +186,13 @@ const NOISE = new Set([
   // identity: "Nintendo Switch 2 Console - Black" and "Nintendo Switch 2"
   // are the same shelf item at two retailers.
   "console", "system",
+  // REEA-1207 — pharmacy shelf descriptors: the same pack at two pharmacies is
+  // spelled "Panadol Extra Pain Relief Tablets 24tablets" / "Panadol Extra
+  // Optizorb Tablets 24's". These words are the product class and the
+  // formulation, never the identity; the pack count rides as a variation.
+  "pain", "relief", "tablets", "tablet", "caplets", "caplet", "capsules",
+  "capsule", "softgels", "softgel", "suspension", "liquid", "elixir", "syrup",
+  "optizorb", "pack",
   "5g", "4g", "3g", "lte", "gprs", "wifi", "wi", "fi", "esim", "sim",
   "snapdragon", "elite", "exynos", "dimensity", "helios", "octa", "core",
   "with", "pen", "global", "version", "unlocked", "ram", "memory", "mem",
@@ -286,6 +293,10 @@ function noised(token: string): boolean {
   return (
     NOISE.has(token) ||
     (/^\p{L}+\d+$/u.test(token) && NOISE.has(token.replace(/\d+$/g, ""))) ||
+    // A pack count glued to its class word ("24tablets") restates the same
+    // variation the bare number would; drop it so two pharmacies' spellings of
+    // one pack meet on the same model line.
+    (/^\d+\p{L}+$/u.test(token) && NOISE.has(token.replace(/^\d+/g, ""))) ||
     arabicNoise(token)
   );
 }
