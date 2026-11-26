@@ -285,6 +285,20 @@ export function compactDispatchQuery(query: string): string {
   return `${word}${digits}`;
 }
 
+/** REEA-1154 D4 — the DISPATCH identity of a shopper query: the compact Latin
+ *  spelling every adapter hop is actually sent, and the identity the memo,
+ *  follow-up registry and rank gate already key on (`fold 7`/`Fold 7`/`فولد 7`
+ *  → `fold7`). Every serve-side consumer that decides WHAT a query is about
+ *  must read this identity, not the shopper's spacing: QA measured one
+ *  dispatched query rendering 10 cards on the tight spelling and 4 on the
+ *  spaced one because the confidence partition still scored the raw tokens
+ *  (the spaced form has no code-shaped token, so the same accessory rows were
+ *  demoted to the related band). Longer phrases keep their own spelling, so
+ *  this is a no-op for everything that does not fold. */
+export function dispatchIdentity(query: string): string {
+  return compactDispatchQuery(latinBridgeDispatch(query)).trim();
+}
+
 /** REEA-1068 — gate-side token match. Plain words and Arabic tokens keep the
  *  historical path (substring / alias bridge: descriptive retailer titles and
  *  Arabic morphology still answer). A digit-bearing token is a model code, so
@@ -1097,7 +1111,9 @@ export function narrowSkuLead<T extends { title: string }>(
   query: string,
   products: readonly T[],
 ): T[] {
-  const codes = skuCodeTokens(query);
+  // REEA-1154 D4 — the code shape reads the dispatch identity, so every
+  // spelling of one dispatched model query narrows the same stored snapshot.
+  const codes = skuCodeTokens(dispatchIdentity(query));
   if (codes.length === 0) return [...products];
   const lead: T[] = [];
   const rest: T[] = [];
@@ -1122,7 +1138,9 @@ export function narrowSkuLead<T extends { title: string }>(
 export function exactSkuKeep(
   query: string,
 ): ((p: { title: string }) => boolean) | undefined {
-  const codes = skuCodeTokens(query);
+  // REEA-1154 D4 — dispatch identity, so the stock keep-predicate agrees with
+  // the ranking gate and the confidence partition for every spelling.
+  const codes = skuCodeTokens(dispatchIdentity(query));
   if (codes.length === 0) return undefined;
   return (p) => titleCarriesCode(p.title, codes);
 }

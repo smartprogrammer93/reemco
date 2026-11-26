@@ -21,9 +21,10 @@
 import "./test-cache-dir";
 import { describe, expect, it } from "vitest";
 import { groupHits } from "@/lib/collect/live-search";
+import { partitionByConfidence } from "@/lib/confidence";
 import { queryCacheKey } from "@/lib/query-cache";
 import { shelfSectionsFromProducts } from "@/lib/results-shelf";
-import { isAccessoryTitle } from "@/lib/relevance";
+import { dispatchIdentity, isAccessoryTitle } from "@/lib/relevance";
 import type { SearchHit } from "@/lib/collect/live-search";
 
 function hit(over: Partial<SearchHit>): SearchHit {
@@ -150,5 +151,48 @@ describe("REEA-1154 D4 — one memo identity per dispatched query, across locale
   it("keeps the country scope and leaves longer phrases with their own identity", () => {
     expect(queryCacheKey("fold7", "KW")).not.toBe(queryCacheKey("fold7"));
     expect(queryCacheKey("galaxy z fold 7")).toBe("galaxy z fold 7");
+  });
+});
+
+describe("REEA-1154 D4 — the rendered shelf reads the dispatch identity", () => {
+  it("folds every spelling onto one dispatch identity, and leaves longer phrases alone", () => {
+    for (const q of SPELLINGS) expect(dispatchIdentity(q)).toBe("fold7");
+    expect(dispatchIdentity("  fold   7 ")).toBe("fold7");
+    expect(dispatchIdentity("galaxy z fold 7")).toBe("galaxy z fold 7");
+    // The memo identity is the same dispatch identity the renderers read.
+    expect(queryCacheKey("fold 7")).toBe(dispatchIdentity("fold 7"));
+  });
+
+  it("renders one identical primary shelf for all four spellings of the dispatch", () => {
+    // QA measured the live defect: the tight spelling rendered 10 cards while
+    // the spaced/title/AR spellings rendered 4 — the same accessory rows were
+    // scored primary only under the tight spelling. The partition must read
+    // the dispatch identity so one dispatched query paints one shelf: the
+    // device set primary, the accessories in the related band below it.
+    const products = groupHits("fold7", LIVE_SHAPE);
+    const shelves = SPELLINGS.map((q) =>
+      partitionByConfidence(q, products).primary.map((p) => p.title),
+    );
+    for (const shelf of shelves.slice(1)) expect(shelf).toEqual(shelves[0]);
+    // The device set is primary; every accessory row is below threshold.
+    expect(shelves[0].length).toBeGreaterThanOrEqual(3);
+    expect(shelves[0].every((t) => !isAccessoryTitle(t))).toBe(true);
+    // Accessories still render — below the phones, in the related band.
+    const related = SPELLINGS.map((q) =>
+      partitionByConfidence(q, products).related.map((p) => p.title),
+    );
+    for (const band of related.slice(1)) expect(band).toEqual(related[0]);
+    expect(related[0].some((t) => isAccessoryTitle(t))).toBe(true);
+  });
+
+  it("keeps a genuine accessory query's accessories primary (no dispatch fold)", () => {
+    // "iphone 17 case" is three tokens: it keeps its own spelling, so the
+    // accessory demotion never applies to it.
+    const products = groupHits("iphone 17 case", [
+      hit({ title: "Apple iPhone 17 Pro Max Clear Case with MagSafe", merchant: "Xcite", price: 19 }),
+      hit({ title: "Apple iPhone 17 Pro Max 256 GB", merchant: "Jarir", price: 459 }),
+    ]);
+    const { primary } = partitionByConfidence("iphone 17 case", products);
+    expect(primary.some((p) => isAccessoryTitle(p.title))).toBe(true);
   });
 });

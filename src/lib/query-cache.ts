@@ -43,7 +43,7 @@
  * runs the live path. Nothing is persisted or bundled.
  */
 
-import { compactDispatchQuery, latinBridgeDispatch } from "@/lib/relevance";
+import { dispatchIdentity } from "@/lib/relevance";
 
 /** Memoization window (REEA-291 AC5): entries this young serve immediately.
  *  REEA-439 tightened it to the 30–60 s band so the whole repeat path
@@ -210,7 +210,7 @@ export function queryCacheKey(query: string, country?: string | null, _locale?: 
   // results for one product), which read as non-equivalent results and paid
   // three times for the same data. Arabic script folds through the same
   // Latin bridge the dispatch uses, so a bridged query cannot fork either.
-  const folded = compactDispatchQuery(latinBridgeDispatch(query)).trim().toLowerCase();
+  const folded = dispatchIdentity(query).toLowerCase();
   // Country scopes the LIVE fan-out itself (REEA-170 — COLLECTORS are
   // filtered to the adapters tagged for the selection), so the collected
   // payload really differs per selection and its identity must too. Callers

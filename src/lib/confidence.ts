@@ -19,6 +19,7 @@
  */
 
 import {
+  dispatchIdentity,
   isAccessoryTitle,
   isModelAliasShape,
   normalizeArabicText,
@@ -87,9 +88,13 @@ export function isAccessoryQuery(query: string): boolean {
  * must NOT take that override: it falls through to the ladder below, where
  * the accessory demotion keeps cases/protectors in the related band. Only a
  * genuine part-number token keeps the override.
+ * REEA-1154 D4 — and the code shape is read off the DISPATCH identity, never
+ * the shopper's spacing: `skuCodeTokens("fold 7")` is [] (two tokens, neither
+ * code-shaped), so scoring the raw spelling would skip the same filter the
+ * tight spelling gets. One dispatched query scores one way.
  */
 export function matchConfidence(query: string, title: string, metadata = ""): number {
-  const exactCodes = skuCodeTokens(query).filter((c) => !isModelAliasShape(c));
+  const exactCodes = skuCodeTokens(dispatchIdentity(query)).filter((c) => !isModelAliasShape(c));
   if (exactCodes.length > 0 && titleCarriesCode(title, exactCodes)) return CONFIDENCE_THRESHOLD;
   const tokens = tierQueryTokens(query);
   const foldedTitle = normalizeArabicText(normalizedTitle(title)).toLowerCase();
