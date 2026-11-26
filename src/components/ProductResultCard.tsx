@@ -750,6 +750,11 @@ export default function ProductResultCard({
     "data-product-id": product.productId,
     "data-comparison": comparison ? "1" : "0",
     "data-in-market-retailers": String(inMarketRetailers),
+    // REEA-1207 AC 7B-1 — the card states its own scope class so the committed
+    // probe measures the COMPARISON shelf (primary/variant), not the related
+    // alternatives band that reuses this same card component. Non-visual:
+    // attribute only.
+    "data-product-scope": product.productScope ?? "unscoped",
   } as const;
 
   if (detail) {

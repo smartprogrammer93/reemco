@@ -115,11 +115,20 @@ function productNodes(html) {
 function measureRendered(html) {
   const tagRe = /<article\b[^>]*>/g;
   const cards = new Map();
+  let skipped = 0;
   let m;
   while ((m = tagRe.exec(html))) {
     const tag = m[0];
     const id = /data-product-id="([^"]+)"/.exec(tag)?.[1];
     if (!id) continue;
+    // AC 7B-1 measures the COMPARISON shelf. The related-alternatives band
+    // reuses the same card component, so a card only counts when its own
+    // scope class is primary/variant (or unscoped on a pre-7A head).
+    const scope = /data-product-scope="([^"]*)"/.exec(tag)?.[1] ?? "";
+    if (scope === "accessory" || scope === "related") {
+      skipped += 1;
+      continue;
+    }
     const comparison = /data-comparison="1"/.test(tag);
     const retailers = Number(/data-in-market-retailers="(\d+)"/.exec(tag)?.[1] ?? "0");
     const multi = comparison || retailers >= 2 ? 1 : 0;
@@ -129,6 +138,7 @@ function measureRendered(html) {
   const multi = [...cards.values()].filter((v) => v === 1).length;
   return {
     source: "rendered-card-attributes",
+    skippedRelated: skipped,
     cards: total,
     multi,
     ratio: total === 0 ? 0 : multi / total,
