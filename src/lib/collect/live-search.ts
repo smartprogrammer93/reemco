@@ -2599,9 +2599,15 @@ export function groupHits(
   // category or brand-only query (no model identity token) is the surface that
   // was a directory of single-store rows.
   const exactModelQuery = modelIdentityTokens(query).length > 0;
+  // REEA-1207 rev-2 — a category shelf is a COMPARISON surface. When the lanes
+  // produced at least one comparison, the shelf is those comparison cards plus
+  // two single-retailer rows (so the page is never comparisons only), capped at
+  // the category budget. When the lanes produced none, the shelf keeps the
+  // ordinary category page — a thin comparison shelf must not become an empty
+  // one. Exact-model queries keep the wider page (REEA-1175).
   const shelf = exactModelQuery
     ? products
-    : products.slice(0, CATEGORY_SHELF_CARDS);
+    : comparisonLedShelf(products);
   // AC-7 — one structured summary line per render cohort evaluation.
   logSanitySummary(sanity.summary);
   return shelf;
@@ -2613,6 +2619,23 @@ export function groupHits(
  * are spent on rows that answer "which store is cheaper".
  */
 const CATEGORY_SHELF_CARDS = 10;
+
+/**
+ * REEA-1207 rev-2 — the category shelf order. Comparisons (>=2 in-market
+ * retailers, the same integrity definition the card and the weekly fold read)
+ * lead; two single-retailer rows follow so the page still shows alternatives.
+ * No comparison at all = the ordinary category page, never a near-empty shelf.
+ */
+function comparisonLedShelf(products: NormalizedProduct[]): NormalizedProduct[] {
+  const comparisons: NormalizedProduct[] = [];
+  const singles: NormalizedProduct[] = [];
+  for (const p of products) {
+    if (comparisonMerchantCount(p.offers, "KW") >= 2) comparisons.push(p);
+    else singles.push(p);
+  }
+  if (comparisons.length === 0) return products.slice(0, CATEGORY_SHELF_CARDS);
+  return [...comparisons, ...singles.slice(0, 2)].slice(0, CATEGORY_SHELF_CARDS);
+}
 
 /** AC-7 query id: the normalized query + locale fork of the render. */
 function queryIdForSanity(query: string, locale?: "en" | "ar"): string {
