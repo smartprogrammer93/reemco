@@ -100,13 +100,17 @@ export async function resolveProductIdentity(
     const exact = products.find((p) => p.productId === productId);
     if (exact) return exact;
     // REEA-1192 — a card->PDP click can arrive while the shelf's finalize
-    // write is still in flight. Re-read the memo once, briefly, so the PDP
-    // lands on the card's exact group instead of a canonical neighbour
-    // (measured: hp-probook4 resolved to the HP OMEN card's group, and
-    // philips-5000s to Quadra Stores, when the first lookup raced the write).
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    const late = readLiveQueryMemo(attempt, { country: scopeCountry, retiredLanes });
-    if (late) {
+    // write is still in flight (the results page streams its first stage; the
+    // memo is written on the FINAL stage). Wait, bounded to 2 s, for that
+    // memo to land and carry the exact slug, so the PDP resolves the SAME
+    // merge map the card was rendered from instead of a second fan-out that
+    // answered differently (measured: hp-probook4 landed on the HP OMEN
+    // group, philips-5000s on Quadra Stores, Fold7-256 lost Blink).
+    const memoDeadline = Date.now() + 2_000;
+    while (Date.now() < memoDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const late = readLiveQueryMemo(attempt, { country: scopeCountry, retiredLanes });
+      if (!late) continue;
       const lateExact = late.products.find((p) => p.productId === productId);
       if (lateExact) return lateExact;
       if (fallbackPool.length === 0) fallbackPool = late.products;
