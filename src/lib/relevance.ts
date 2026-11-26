@@ -1037,6 +1037,19 @@ export function categoryIntent(query: string): CategoryIntent | null {
   return null;
 }
 
+/**
+ * REEA-1200 (Bet 7A) — every curated category class a title names. The
+ * scope gate needs the title side of the same table `categoryIntent` reads,
+ * so a bag under `laptop` is a class conflict (bags ≠ laptop) rather than a
+ * loose keyword guess. Pure; the same table, one definition.
+ */
+export function categoryClassesInTitle(title: string): string[] {
+  const lower = normalizedTitle(title).toLowerCase();
+  return CATEGORY_INTENTS.filter(
+    (c) => c.product.test(lower) || c.ar.some((w) => lower.includes(w)),
+  ).map((c) => c.id);
+}
+
 /** True when a title names a complement of the queried class (accessory
  *  markers, media/software, food, toys, bags, paper/liners). */
 export function isCategoryComplementTitle(title: string): boolean {

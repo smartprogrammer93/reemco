@@ -129,6 +129,11 @@ function scopeSections(
   const accessory: NormalizedProduct[] = [];
   for (const p of products) {
     const scope = p.productScope;
+    // REEA-1200 AC 7a-6 — primary/variant scope is the in-scope set. The gate
+    // never stamps a primary/variant card with `related` (an off-scope row is
+    // bucketed accessory/consumable), so "no `related` card fills a primary
+    // slot" holds by construction of the classifier, not by a second filter
+    // here — one definition, one place.
     if (scope === "primary" || scope === "variant") {
       primary.push(p);
       continue;

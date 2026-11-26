@@ -198,13 +198,31 @@ export interface NormalizedProduct {
    * Never derive it client-side — absent on feeds that predate the gate, and
    * the renderer then falls back to the existing confidence partition.
    */
-  productScope?: "primary" | "accessory" | "consumable" | "variant";
+  productScope?: ProductScope;
   /**
    * REEA-1200 — why the relevance gate kept this card. Machine-readable so the
    * verify ticket can classify without guessing. The UI never re-derives it.
    */
-  matchReason?: "query_token" | "brand_family" | "storefront_ranked" | "related";
+  matchReason?: MatchReason;
 }
+
+/**
+ * REEA-1200 (Bet 7A-1) — what the card is relative to the queried product:
+ * `primary`/`variant` are in scope (the shelf); `accessory` rides the labelled
+ * accessory band; `consumable` is a consumable-class item that is not the
+ * product (the related band). Exported so the gate, the shelf chain and the
+ * probe read ONE enum.
+ */
+export type ProductScope = "primary" | "accessory" | "consumable" | "variant";
+
+/**
+ * REEA-1200 (Bet 7A-1) — why the card matched: the query's own identity
+ * (`query_token`), its brand/family (`brand_family`), the retailer's ranking
+ * under the queried class without token evidence (`storefront_ranked`), or
+ * affinity only (`related`). A `related` card never fills a primary slot
+ * (AC 7a-6), even when its scope reads primary/variant.
+ */
+export type MatchReason = "query_token" | "brand_family" | "storefront_ranked" | "related";
 
 /** REEA-540 Bet A — one endpoint: the native figure and its scraped currency. */
 export interface SeenRange {

@@ -93,6 +93,9 @@ import {
   titleCarriesCode,
   titleMatchesBrand,
 } from "@/lib/relevance";
+// REEA-1200 AC 7a-1 — the deterministic scope gate stamps `matchReason` /
+// `productScope` on every served card at the snapshot boundary.
+import { stampScopeFields } from "@/lib/scope-gate";
 import type { Coupon, NormalizedProduct, PriceOffer, ProductAlternative, ProductVariation } from "@/types/product";
 // REEA-437 — the snapshot shape and the coverage sentence moved to the pure
 // ./coverage.ts so the browser-side results shell can import them without
@@ -4125,8 +4128,18 @@ function withHonestyFlags(q: string, snap: LiveSearchResult): LiveSearchResult {
   const collectedAt = snap.collectedAt ?? productStamp ?? new Date().toISOString();
   const parsed = Date.parse(collectedAt);
   const collectedAtEpochMs = snap.collectedAtEpochMs ?? (Number.isNaN(parsed) ? Date.now() : parsed);
+  // REEA-1200 AC 7a-1 — stamp the relevance/scope verdict on EVERY served
+  // card, on every snapshot path (fresh fan-out, finalized, memo/KV replay),
+  // so a snapshot stored before the gate shipped still answers with the
+  // fields and no card can reach the shelf unclassified. The classifier is
+  // deterministic from the query and the card's own title; re-stamping a
+  // replay yields the identical verdict (idempotent by construction).
+  const products = stampScopeFields(q, snap.products);
+  const suggestions = snap.suggestions ? stampScopeFields(q, snap.suggestions) : undefined;
   return {
     ...snap,
+    products,
+    ...(suggestions ? { suggestions } : {}),
     ...(flags.deviceLeadPending ? { deviceLeadPending: true } : {}),
     ...(flags.kuwaitPendingStatus ? { kuwaitPendingStatus: true } : {}),
     responders,
