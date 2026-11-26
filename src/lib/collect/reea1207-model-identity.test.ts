@@ -83,6 +83,14 @@ describe("REEA-1207 — the same model at two retailers is one identity", () => 
     expect(compatibleFields(sinus, coldFlu)).toBe(false);
   });
 
+  it("folds a styler function list onto one identity", () => {
+    // Live: the same Airwrap at Eureka and Wibi, spelled with a different
+    // function list and the "i.d." marker.
+    const eureka = canonicalFields("Dyson Airwrap i.d. Multi-styler and dryer Straight+Wavy HS08");
+    const wibi = canonicalFields("Dyson Airwrap Multi Styler and Dryer - Ceramic / Apricot");
+    expect(compatibleFields(eureka, wibi)).toBe(true);
+  });
+
   it("still separates an accessory from the device it fits", () => {
     const phone = canonicalFields("Apple iPhone 17 Pro 256GB");
     const kase = canonicalFields("Apple iPhone 17 Pro Silicone Case");

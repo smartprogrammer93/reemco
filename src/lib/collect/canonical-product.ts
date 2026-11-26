@@ -193,6 +193,15 @@ const NOISE = new Set([
   "pain", "relief", "tablets", "tablet", "caplets", "caplet", "capsules",
   "capsule", "softgels", "softgel", "suspension", "liquid", "elixir", "syrup",
   "optizorb", "pack",
+  // REEA-1207 — "i.d." is a spelling variant, not identity: the Airwrap
+  // spells its own name differently across lanes ("Airwrap i.d. Multi-styler"
+  // vs "Airwrap Multi Styler"). Edition words stay in the line: REEA-1162
+  // pins that a themed DualSense edition is a different card.
+  "id", "i.d", "i.d.",
+  // REEA-1207 — styler/dryer function words are the product class, not the
+  // identity: the same Airwrap is described with different function lists by
+  // two lanes.
+  "straight", "wavy", "dryer",
   "5g", "4g", "3g", "lte", "gprs", "wifi", "wi", "fi", "esim", "sim",
   "snapdragon", "elite", "exynos", "dimensity", "helios", "octa", "core",
   "with", "pen", "global", "version", "unlocked", "ram", "memory", "mem",
