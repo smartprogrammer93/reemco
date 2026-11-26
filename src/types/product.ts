@@ -26,10 +26,33 @@ export interface OfferSanity {
   ratioToMedian?: number;
 }
 
+/**
+ * REEA-1177 (Bet 6a) — the one reconciling price statement for an offer:
+ * listed − appliedDiscount = effective. `kind` names what the discount is:
+ * a was-price markdown the retailer itself carries, or a coupon. `effective`
+ * is null when the discount is conditional (percent/cap/minimum) and the
+ * applied value is unknown — the UI must then not subtract a face value.
+ * Figures are in the offer's own native currency; `effectivePrice` on the
+ * offer carries the KWD-space ordering figure.
+ */
+export interface PriceComposition {
+  listed: number;
+  appliedDiscount: number | null;
+  effective: number | null;
+  kind: "was_price" | "coupon";
+}
+
 export interface PriceOffer {
   merchant: string;
   price: number;
   currency: string; // ISO 4217, e.g. "USD"
+  /**
+   * REEA-1177 AC 6a-1 — the KWD-space amount the shopper pays at checkout.
+   * Ranking, the "from" price and the card headline use this one figure.
+   */
+  effectivePrice?: number | null;
+  /** REEA-1177 AC 6a-1 — listed − appliedDiscount = effective, with kind. */
+  priceComposition?: PriceComposition;
   /**
    * REEA-1142 AC3 — the market the listing's own storefront serves, derived
    * from its currency by the adapter tag (KW→KWD, SA→SAR, EG→EGP). Every

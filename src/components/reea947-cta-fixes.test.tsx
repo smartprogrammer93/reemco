@@ -149,10 +149,12 @@ describe("REEA-947 AC2 — the delivered-discount restatement names its basis", 
     },
   ] as NormalizedProduct["offers"];
 
-  it("says 'with coupon' when the lead figure is the post-compare-at one", () => {
+  it("does not call a was-price markdown a coupon (Bet 6a AC3)", () => {
     const { container } = lead({ offers: qaOffers, coupons: qaCoupons });
     const cta = container.querySelector(".cta-lead");
-    expect(cta?.textContent).toContain("with coupon");
+    // Both entries are derived was-price markdowns (code:null, bare amount),
+    // so the CTA names the effective figure without claiming a coupon.
+    expect(cta?.textContent).not.toContain("with coupon");
     // The figure stays the selling price — the delta is never folded twice.
     expect(cta?.textContent).toContain("KD 359.90");
     expect(cta?.textContent).not.toContain("319.80");
@@ -171,7 +173,7 @@ describe("REEA-947 AC2 — the delivered-discount restatement names its basis", 
   it("a parseable coupon still folds once on top of the compare-at figure", () => {
     const { container } = lead({
       offers: qaOffers,
-      coupons: [{ code: "SAVE10", description: "", discount: "10% off", expiresAt: null, merchant: "Xcite" }],
+      coupons: [{ code: "SAVE10", description: "", discount: "10% off", expiresAt: null, merchant: "Wibi" }],
     });
     const cta = container.querySelector(".cta-lead");
     expect(cta?.textContent).toContain("with coupon");

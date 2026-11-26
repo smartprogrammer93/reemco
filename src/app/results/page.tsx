@@ -18,10 +18,10 @@ import { hiddenMatchReport, hiddenMatchTotal } from "@/lib/hidden-matches";
 import { readRetiredLanes, recordLaneAttempts } from "@/lib/collect/lane-health";
 // REEA-1078 AC9 — lane reachability from the same zone status /api/echo reports.
 import { readUnreachableLanes } from "@/lib/collect/zone-status";
-import { MARKET_COOKIE, resolveCountrySelection } from "@/lib/country";
+import { MARKET_COOKIE, resolveResultsMarket } from "@/lib/country";
 import {
   countCrossMarketOffers,
-  marketScope,
+  marketViewScope,
   scopeProductsByMarket,
 } from "@/lib/market";
 import { LOCALE_COOKIE, resolveUiLocale } from "@/lib/i18n";
@@ -29,7 +29,7 @@ import { isRefreshSignal, REFRESH_COOKIE } from "@/lib/query-cache";
 import { buildResultsMeta } from "@/lib/results-meta";
 import { siteOrigin } from "@/lib/site-origin";
 import { sanitizeSearchQuery, sanitizePage } from "@/lib/search-params";
-import { filterProductsByStock, sanitizeShowOutOfStock } from "@/lib/stock";
+import { filterProductsByStock, resolveResultsStock } from "@/lib/stock";
 import { appendEvents } from "@/lib/event-store";
 import { isBotUserAgent } from "@/lib/bot-ua";
 import { buildRenderEvents } from "@/lib/metrics-events";
@@ -60,7 +60,7 @@ export async function generateMetadata({
   const params = await searchParams;
   const query = sanitizeSearchQuery(params.q) ?? "";
   const hint = await readPreferenceHint();
-  const country = resolveCountrySelection(params.c, hint.cookie, hint.acceptLanguage);
+  const country = resolveResultsMarket(params.market, params.c, hint.cookie, hint.acceptLanguage);
   // REEA-448 G2 — the query text is the third link of the chain: with no
   // cookie and no Accept-Language header, an Arabic-script query decides the
   // session, so "آيفون" gets the Arabic title template instead of the mixed
@@ -169,7 +169,7 @@ export default async function ResultsPage({
   // KWD-first local offers instead of a mixed KWD/SAR/EGP list. One tap on a
   // pill overwrites the hint and persists across sessions.
   const hint = await readPreferenceHint();
-  const country = resolveCountrySelection(params.c, hint.cookie, hint.acceptLanguage);
+  const country = resolveResultsMarket(params.market, params.c, hint.cookie, hint.acceptLanguage);
   // REEA-279 — the same request-time read resolves the chrome locale: the
   // rc_locale cookie wins, then the coarse Accept-Language hint, then the
   // Arabic-script query text (REEA-448 G2), then "en" — the same call the
@@ -179,7 +179,7 @@ export default async function ResultsPage({
   // Default hides them; the ResultsClient view applies it BEFORE slicing each
   // staged snapshot so counts and pages match the visible set. Offers stay
   // live-collected; this only selects among the freshly fetched set.
-  const showOutOfStock = sanitizeShowOutOfStock(params.oos) ?? false;
+  const showOutOfStock = resolveResultsStock(params.stock, params.oos);
 
   // Fan-out starts here; rendering does not wait for the slowest adapter.
   // REEA-291 AC4/AC5 — the collection is the FULL live answer for the query;
@@ -293,7 +293,7 @@ export default async function ResultsPage({
       // painted: offers whose market differs from the selected market (e.g.
       // danube.sa SAR rows on a Kuwait search). Aggregate integer only.
       const crossMarketOffers = shelfCards.reduce(
-        (n, p) => n + countCrossMarketOffers(p.offers, marketScope(country)),
+        (n, p) => n + countCrossMarketOffers(p.offers, marketViewScope(country)),
         0,
       );
       // REEA-1114 AC6 — a served page with zero visible cards while an ACTIVE
@@ -381,7 +381,7 @@ export default async function ResultsPage({
         ? partitionByConfidence(
             query,
             filterProductsByStock(
-              scopeProductsByMarket(snap.products, marketScope(country)),
+              scopeProductsByMarket(snap.products, marketViewScope(country)),
               showOutOfStock,
               exactSkuKeep(query),
             ),

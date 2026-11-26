@@ -31,6 +31,7 @@ import {
   toKwdFactor,
   toKwdNumeric,
 } from "@/lib/format";
+import { effectiveKwdOfOffer } from "@/lib/price-composition";
 import { fill, getStrings, type Locale } from "@/lib/i18n";
 import type { NormalizedProduct, PriceOffer } from "@/types/product";
 
@@ -43,6 +44,18 @@ export function marketScope(country: CountryCode | null | undefined): CountryCod
   return country ?? HOME_MARKET;
 }
 
+/**
+ * REEA-1177 AC 6d-1/6d-2 — the results view scope. An explicit `market=ALL`
+ * is the null selection (every offer stays visible, tagged); the default
+ * (no selection at all, undefined) is Kuwait. This is distinct from the
+ * legacy `marketScope(null) → KW` helper so the ALL view is addressable.
+ */
+export function marketViewScope(
+  country: CountryCode | null | undefined,
+): CountryCode | null {
+  return country === undefined ? HOME_MARKET : country;
+}
+
 /** The market a listing belongs to, derived from the currency its own
  *  storefront stamped. Unknown currencies stay untagged (never guessed). */
 export function offerMarket(currency: string): CountryCode | null {
@@ -52,8 +65,9 @@ export function offerMarket(currency: string): CountryCode | null {
 /** True when this listing's market is known and differs from the scope. */
 export function isCrossMarketOffer(
   offer: { currency: string },
-  scope: CountryCode,
+  scope: CountryCode | null,
 ): boolean {
+  if (scope === null) return false; // ALL view: every market is in scope
   const market = offerMarket(offer.currency);
   return market !== null && market !== scope;
 }
@@ -63,8 +77,9 @@ export function isCrossMarketOffer(
  *  price/live ordering already ran). */
 export function partitionOffersByMarket<T extends { currency: string }>(
   offers: readonly T[],
-  scope: CountryCode,
+  scope: CountryCode | null,
 ): { local: T[]; crossMarket: T[] } {
+  if (scope === null) return { local: [...offers], crossMarket: [] };
   const local: T[] = [];
   const crossMarket: T[] = [];
   for (const offer of offers) {
@@ -74,6 +89,14 @@ export function partitionOffersByMarket<T extends { currency: string }>(
 }
 
 function effectiveKeyOf(offer: PriceOffer, couponDiscount?: string | null): number {
+  // REEA-1177 AC 6a-4 — the served effectivePrice (composition) is the ONE
+  // ordering key; legacy offers without it fall back to the arithmetic.
+  if (typeof offer.effectivePrice === "number" && Number.isFinite(offer.effectivePrice)) {
+    return Math.max(0, offer.effectivePrice);
+  }
+  if (offer.priceComposition) {
+    return effectiveKwdOfOffer(offer);
+  }
   return effectivePriceKwd(offer.price, offer.currency, {
     wasPrice: offer.wasPrice,
     couponDiscount,
@@ -90,7 +113,7 @@ function effectiveKeyOf(offer: PriceOffer, couponDiscount?: string | null): numb
 export function sortOffersByMarket<T extends PriceOffer>(
   offers: readonly T[],
   coupon: { discount: string } | null | undefined,
-  scope: CountryCode,
+  scope: CountryCode | null,
 ): T[] {
   const key = (o: T) => effectiveKeyOf(o, coupon?.discount ?? null);
   const ladder = (a: T, b: T): number =>
@@ -113,7 +136,7 @@ function eligibleHeadline(offer: PriceOffer): boolean {
  *  offer (AC2). Null when the card has no local offer at all. */
 export function headlineOfferFor<T extends PriceOffer>(
   offers: readonly T[],
-  scope: CountryCode,
+  scope: CountryCode | null,
 ): T | null {
   const local = offers.filter((o) => !isCrossMarketOffer(o, scope) && eligibleHeadline(o));
   if (local.length === 0) return null;
@@ -124,8 +147,9 @@ export function headlineOfferFor<T extends PriceOffer>(
  *  the card has no offer in the selected market (AC2's "Saudi price from"). */
 export function cheapestCrossMarketOffer<T extends PriceOffer>(
   offers: readonly T[],
-  scope: CountryCode,
+  scope: CountryCode | null,
 ): T | null {
+  if (scope === null) return null;
   const cross = offers.filter((o) => isCrossMarketOffer(o, scope) && eligibleHeadline(o));
   if (cross.length === 0) return null;
   return cross.reduce((a, b) => (effectiveKeyOf(a) <= effectiveKeyOf(b) ? a : b));
@@ -206,9 +230,10 @@ export function crossMarketRowLabel(
  */
 export function crossMarketHeadline(
   offers: readonly PriceOffer[],
-  scope: CountryCode,
+  scope: CountryCode | null,
   locale?: Locale,
 ): string | null {
+  if (scope === null) return null; // ALL view: no single foreign market to name
   // A local offer exists → the normal headline is used, not this line.
   if (headlineOfferFor(offers, scope) !== null) return null;
   const cross = cheapestCrossMarketOffer(offers, scope);
@@ -226,9 +251,10 @@ export function crossMarketHeadline(
 /** The lead-CTA sentence for a cross-market-only card: "Saudi price KD 0.47". */
 export function crossMarketLeadLabel(
   offer: { price: number; currency: string },
-  scope: CountryCode,
+  scope: CountryCode | null,
   locale?: Locale,
 ): string {
+  if (scope === null) return formatPrice(offer.price, offer.currency);
   const market = offerMarket(offer.currency);
   const t = getStrings(locale ?? "en");
   return fill(t.crossMarketLead, {
@@ -241,7 +267,7 @@ export function crossMarketLeadLabel(
  *  (AC5). Pure; used by the results after() tail. */
 export function countCrossMarketOffers(
   offers: readonly { currency: string }[],
-  scope: CountryCode,
+  scope: CountryCode | null,
 ): number {
   return offers.reduce((n, o) => n + (isCrossMarketOffer(o, scope) ? 1 : 0), 0);
 }
@@ -272,14 +298,19 @@ export function marketStockLabel(market: CountryCode, locale?: Locale): string {
  */
 export function scopeProductsByMarket(
   products: readonly NormalizedProduct[],
-  scope: CountryCode,
+  scope: CountryCode | null,
 ): NormalizedProduct[] {
-  void scope;
-  return products.map((p) => ({
-    ...p,
-    offers: p.offers.map((o) => {
+  return products.map((p) => {
+    const tagged = p.offers.map((o) => {
       const market = offerMarket(o.currency);
       return market && o.market !== market ? { ...o, market } : o;
-    }),
-  }));
+    });
+    // REEA-1177 AC 6d-3 — a market-scoped shelf is that market's shelf. A
+    // product with at least one in-market offer renders only those; a product
+    // with NO in-market offer keeps its cross-market rows (the only offer)
+    // and the card names the market, currency, ≈KWD and delivery caveat.
+    if (scope === null) return { ...p, offers: tagged };
+    const local = tagged.filter((o) => !isCrossMarketOffer(o, scope));
+    return { ...p, offers: local.length > 0 ? local : tagged };
+  });
 }

@@ -45,6 +45,30 @@ export function sanitizeShowOutOfStock(raw: unknown): boolean | null {
   return null;
 }
 
+/**
+ * REEA-1177 AC 6d-2 — allowlisted normalize of the `?stock=` param:
+ * `in` = in-stock only (showOutOfStock false), `all` = show every listing
+ * (true). Null for invalid/absent so the legacy `?oos=` layer can apply.
+ */
+export function sanitizeStockParam(raw: unknown): boolean | null {
+  if (typeof raw !== "string") return null;
+  const v = raw.trim().toLowerCase();
+  if (v === "in") return false;
+  if (v === "all") return true;
+  return null;
+}
+
+/**
+ * REEA-1177 AC 6d-2 — the results page's stock resolution: explicit
+ * `?stock=in|all` first, then the legacy `?oos=` flag, default in-stock only.
+ * A copied URL reproduces the view because the chip writes the same param.
+ */
+export function resolveResultsStock(rawStock: unknown, rawOos: unknown): boolean {
+  const stock = sanitizeStockParam(rawStock);
+  if (stock !== null) return stock;
+  return sanitizeShowOutOfStock(rawOos) ?? false;
+}
+
 /** True unless the listing is KNOWN out of stock (missing signal stays). */
 export function offerIsVisible(o: Pick<PriceOffer, "inStock">): boolean {
   return o.inStock !== false;
@@ -122,7 +146,7 @@ export function filterProductsByStock(
  */
 export function bestBadgeIndex(
   products: readonly NormalizedProduct[],
-  scope: CountryCode = HOME_MARKET,
+  scope: CountryCode | null = HOME_MARKET,
 ): number {
   // REEA-1142 AC2 — the "Best price" claim rests only on offers of the
   // SELECTED market. A cross-market (converted) offer may rank inside its

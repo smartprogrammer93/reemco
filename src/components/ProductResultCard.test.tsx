@@ -79,7 +79,7 @@ describe("REEA-281 AC-1 — thumbnails per product row", () => {
 
 describe("REEA-281 AC-2 — converted price on the rendered card", () => {
   it("converted figures carry ≈ and ≤2 decimals; KWD-native keeps its figure", () => {
-    const { container } = render(<ProductResultCard product={product(false)} query="headphones" />);
+    const { container } = render(<ProductResultCard product={product(false)} query="headphones" country={null} />);
     const text = (container.textContent ?? "").replace(/\s+/g, " ");
     // SAR 499 → 40.7184 KD: the rendered reference shows ≈ and two decimals.
     expect(text).toMatch(/≈\s?KD 40\.72(?![\d.])/);
@@ -221,7 +221,7 @@ describe("REEA-468 G3 coupon-slot copy", () => {
   });
 
   it("a promo listing shows the coupon honesty line instead of the empty-slot line", () => {
-    const { container } = render(<ProductResultCard product={withCoupon} query="xm6" rank={0} />);
+    const { container } = render(<ProductResultCard product={withCoupon} query="xm6" rank={0} country={null} />);
     // REEA-760: chip carries the CODE verbatim (paste-and-go), attribution
     // names the issuing retailer (unstamped record falls back to the card's
     // cheapest answering merchant — Jarir leads this fixture in KWD space),
@@ -254,7 +254,7 @@ describe("REEA-760 coupon honesty line", () => {
   };
 
   it("one line per issuing retailer; the effective figure prints exactly once", () => {
-    const { container } = render(<ProductResultCard product={hopStamped} query="xm6" rank={0} />);
+    const { container } = render(<ProductResultCard product={hopStamped} query="xm6" rank={0} country={null} />);
     const lines = Array.from(container.querySelectorAll(".coupon-line"));
     expect(lines).toHaveLength(2);
     // Xcite row: code verbatim (paste-and-go) + hop attribution, no number —
@@ -270,7 +270,7 @@ describe("REEA-760 coupon honesty line", () => {
 
   it("AR mirrors the copy verbatim with bidi-isolated merchant and number", () => {
     const { container } = render(
-      <ProductResultCard product={hopStamped} query="كيبورد" rank={0} locale="ar" />,
+      <ProductResultCard product={hopStamped} query="كيبورد" rank={0} country={null} locale="ar" />,
     );
     const badges = container.querySelectorAll(".coupon-badge");
     expect(badges[0]?.textContent).toBe("SAVEKD45");
@@ -284,10 +284,10 @@ describe("REEA-760 coupon honesty line", () => {
   });
 
   it("paired EN/AR renders of one query print the identical formatted figure", () => {
-    const en = render(<ProductResultCard product={hopStamped} query="xm6" rank={0} />);
+    const en = render(<ProductResultCard product={hopStamped} query="xm6" rank={0} country={null} />);
     const enNum = en.container.querySelector(".coupon-effective bdi")?.textContent;
     cleanup();
-    const ar = render(<ProductResultCard product={hopStamped} query="xm6" rank={0} locale="ar" />);
+    const ar = render(<ProductResultCard product={hopStamped} query="xm6" rank={0} country={null} locale="ar" />);
     const arNum = ar.container.querySelector(".coupon-effective bdi")?.textContent;
     // ≤2 decimals, identical arithmetic EN⇄AR (spec §5).
     expect(enNum).toBe("SAR 474.05");
@@ -517,6 +517,7 @@ describe("REEA-721 — heading `from` figure: matching offers only, KD-space, <=
         }}
         query="anker charger"
         rank={0}
+        country={null}
       />,
     );
     const text = container.textContent ?? "";
@@ -540,6 +541,7 @@ describe("REEA-721 — heading `from` figure: matching offers only, KD-space, <=
         }}
         query="شاحن انكر"
         rank={0}
+        country={null}
         locale="ar"
       />,
     );

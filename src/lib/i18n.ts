@@ -95,6 +95,14 @@ const en = {
   couponAutoNote: "auto-applied at checkout",
   couponViaLead: "via",
   couponEffectiveLead: "Effective",
+  // REEA-1177 AC 6a-2/6a-6 — the one reconciling price statement: listed −
+  // appliedDiscount = effective, or "up to …" when the applied value is
+  // conditional and unknown. Figures ride the shared formatter.
+  compositionListed: "Listed",
+  compositionListedOnly: "Listed {listed} · final price shown at checkout",
+  compositionMath: "Listed {listed} − {discount} = You pay {effective}",
+  couponAppliedAtCheckout: "Coupon {x} off at checkout",
+  couponUpTo: "up to {x} off at checkout",
   // REEA-540 Bet A — confidence-line pair on results cards:
   // "Seen recently: KD 4,099–KD 4,350 · last 14 days".
   seenRecentlyLead: "Seen recently:",
@@ -323,6 +331,7 @@ const en = {
   marketStock: "{market} stock",
   crossMarketHeadline: "No {market} offer · {marketOther} price from {price}",
   crossMarketLead: "{market} price {price}",
+  crossMarketCaveat: "Delivery from {market} · customs may apply",
   checkedLead: "Checked",
   checkedJustNow: "Checked just now",
   offerGo: "Go",
@@ -429,6 +438,11 @@ const ar: typeof en = {
   couponAutoNote: "تُطبَّق تلقائيًا عند الدفع",
   couponViaLead: "من",
   couponEffectiveLead: "بعد الخصم",
+  compositionListed: "المعلن",
+  compositionListedOnly: "المعلن {listed} · السعر النهائي يظهر عند الدفع",
+  compositionMath: "المعلن {listed} − {discount} = تدفع {effective}",
+  couponAppliedAtCheckout: "كوبون {x} خصم عند الدفع",
+  couponUpTo: "حتى {x} خصمًا عند الدفع",
   // REEA-540 Bet A — AR counterpart of the results-card confidence pair.
   seenRecentlyLead: "شوهد مؤخرًا:",
   seenRecentlyWindow: "آخر 14 يومًا",
@@ -615,6 +629,7 @@ const ar: typeof en = {
   marketStock: "مخزون {market}",
   crossMarketHeadline: "لا يوجد عرض في {market} · سعر {marketOther} من {price}",
   crossMarketLead: "سعر {market} {price}",
+  crossMarketCaveat: "التوصيل من {market} · قد تُطبَّق رسوم جمركية",
   checkedLead: "حُدِّث",
   checkedJustNow: "حُدِّث الآن",
   offerGo: "اذهب",

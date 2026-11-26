@@ -23,6 +23,7 @@ import {
   isCrossMarketOffer,
   marketScope,
   marketStockLabel,
+  marketViewScope,
   offerMarket,
   scopeProductsByMarket,
   sortOffersByMarket,
@@ -68,9 +69,12 @@ describe("market tags (AC3)", () => {
   it("defaults to the home market Kuwait when no selection is stated", () => {
     expect(marketScope(null)).toBe("KW");
     expect(marketScope("SA")).toBe("SA");
+    // REEA-1177 — undefined is the unstated default (KW); explicit null is ALL.
+    expect(marketViewScope(undefined)).toBe("KW");
+    expect(marketViewScope(null)).toBeNull();
   });
 
-  it("stamps every offer with its market and keeps the whole set (AC1/AC3)", () => {
+  it("stamps every offer with its market and scopes the shelf to the selected market (Bet 6d)", () => {
     const product: NormalizedProduct = {
       productId: "p1",
       title: "Panadol",
@@ -80,9 +84,19 @@ describe("market tags (AC3)", () => {
       variations: [],
       alternatives: [],
     };
+    // A product with a Kuwait offer renders Kuwait offers only on the KW
+    // shelf; the Saudi row is the AC 6d-3 exception only when no local offer.
     const [scoped] = scopeProductsByMarket([product], "KW");
-    expect(scoped.offers).toHaveLength(2);
-    expect(scoped.offers.map((o) => o.market)).toEqual(["KW", "SA"]);
+    expect(scoped.offers).toHaveLength(1);
+    expect(scoped.offers.map((o) => o.market)).toEqual(["KW"]);
+    // No in-market offer: the cross-market rows survive, tagged.
+    const [crossOnly] = scopeProductsByMarket([{ ...product, offers: [SAR_OFFER] }], "KW");
+    expect(crossOnly.offers).toHaveLength(1);
+    expect(crossOnly.offers.map((o) => o.market)).toEqual(["SA"]);
+    // The explicit ALL view keeps the whole tagged set.
+    const [all] = scopeProductsByMarket([product], null);
+    expect(all.offers).toHaveLength(2);
+    expect(all.offers.map((o) => o.market)).toEqual(["KW", "SA"]);
   });
 });
 

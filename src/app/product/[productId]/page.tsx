@@ -5,8 +5,8 @@ import { startProductCollectionStaged } from "@/lib/collect/runner";
 import type { StagedProductCollection } from "@/lib/collect/runner";
 import { PRODUCTS } from "@/lib/feed";
 import { resolveProductIdentity } from "@/lib/product-identity";
-import { sanitizeCountry } from "@/lib/country";
-import { marketScope, scopeProductsByMarket } from "@/lib/market";
+import { resolveResultsMarket } from "@/lib/country";
+import { marketViewScope, scopeProductsByMarket } from "@/lib/market";
 import { resolveRequestLocale } from "@/lib/i18n-server";
 import { sanitizeSearchQuery } from "@/lib/search-params";
 
@@ -35,8 +35,10 @@ export default async function ProductPage({
   // REEA-170: the country selection rides the link from the results list, so
   // the detail view derives its prices/alternatives from the same filtered
   // offer set. No param → unchanged behavior.
-  const { c, q } = await searchParams;
-  const country = sanitizeCountry(c);
+  const { c, market, q } = await searchParams;
+  // REEA-1177 AC 6d-2 — the PDP carries the same addressable market state as
+  // the shelf it was reached from; a direct visit defaults to Kuwait.
+  const country = resolveResultsMarket(market, c, undefined, undefined);
   // REEA-1140 — the results card carries the query it was collected for, so
   // the detail page re-runs the SAME live fan-out and merge map. A slug-only
   // visit (shared link, sitemap) keeps the decode-from-slug path.
@@ -57,7 +59,7 @@ export default async function ProductPage({
   // Catalog identities carry bundled offers — apply the same market scope the
   // live path applies (REEA-1142: every offer stays, tagged to its market;
   // the renderer labels cross-market rows). Idempotent on live products.
-  const shown = scopeProductsByMarket([product], marketScope(country))[0];
+  const shown = scopeProductsByMarket([product], marketViewScope(country))[0];
   // REEA-248 — start the live per-product collection during the server render
   // (the detail-page sibling of results-page streaming): the panel's first
   // retailer offer rides the streamed HTML with no click needed, and the

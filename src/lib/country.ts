@@ -48,6 +48,18 @@ export function sanitizeCountry(raw: unknown): CountryCode | null {
   return COUNTRY_OPTIONS.find((o) => o.code === v)?.code ?? null;
 }
 
+/**
+ * REEA-1177 AC 6d-2 — allowlisted normalize of the `?market=` param. Returns
+ * the explicit ALL sentinel, a served market, or null for an invalid/absent
+ * value (so the resolution chain can fall through).
+ */
+export function sanitizeMarket(raw: unknown): CountryCode | "ALL" | null {
+  if (typeof raw !== "string") return null;
+  const v = raw.trim().toUpperCase();
+  if (v === "ALL") return "ALL";
+  return sanitizeCountry(v);
+}
+
 /** Country selection → its currency code — the lead figure's space on price
  *  rows (REEA-283): SA→SAR, KW→KWD, EG→EGP. */
 export function currencyForCountry(code: CountryCode): string {
@@ -130,6 +142,33 @@ export function resolveCountrySelection(
 }
 
 /**
+ * REEA-1177 AC 6d-1/6d-2 — the results page's market resolution. Unlike the
+ * legacy helper, the no-selection default is Kuwait (the company's home
+ * market), and `?market=ALL` is an explicit addressable ALL view. Order:
+ * explicit `?market=` → legacy `?c=` → persisted cookie → Accept-Language
+ * region hint → Kuwait. A copied URL reproduces the view because the chip
+ * writes the same `market` param.
+ */
+export function resolveResultsMarket(
+  rawMarket: unknown,
+  rawLegacyC: unknown,
+  cookieRaw: unknown,
+  acceptLanguage: string | null | undefined,
+): CountryCode | null {
+  const readParam = (raw: unknown) => {
+    const param = Array.isArray(raw) ? raw[0] : raw;
+    return typeof param === "string" && param.trim() !== "" ? sanitizeMarket(param) : null;
+  };
+  const explicit = readParam(rawMarket) ?? readParam(rawLegacyC);
+  if (explicit === "ALL") return null;
+  if (explicit !== null) return explicit;
+  const cookie = normalizeMarketCookie(cookieRaw);
+  if (cookie === "ALL") return null;
+  if (cookie) return cookie;
+  return countryFromAcceptLanguage(acceptLanguage) ?? "KW";
+}
+
+/**
  * Currency → country mapping for offer surfaces that only carry a currency
  * (catalog feed offers, LiveOffer rows). Mirrors the adapter tags: KWD stores
  * answer from Kuwait, jarir.com from Saudi Arabia, amazon.eg from Egypt.
@@ -197,8 +236,12 @@ export function buildResultsHref(
   const params = new URLSearchParams();
   if (query) params.set("q", query);
   if (page > 1) params.set("page", String(page));
-  if (country) params.set("c", country);
-  if (showOutOfStock) params.set("oos", "1");
+  // REEA-1177 AC 6d-2 — the shareable URL carries the market and stock
+  // selections in the addressable form. Kuwait/in-stock are the defaults, so
+  // they are omitted; ALL is explicit (otherwise it would reproduce Kuwait).
+  if (country === null) params.set("market", "ALL");
+  else if (country !== "KW") params.set("market", country);
+  if (showOutOfStock) params.set("stock", "all");
   const qs = params.toString();
   return qs ? `/results?${qs}` : "/results";
 }
@@ -218,7 +261,10 @@ export function buildProductHref(
 ): string {
   const params = new URLSearchParams();
   if (query) params.set("q", query);
-  if (country) params.set("c", country);
+  // REEA-1177 AC 6d-2 — carry the market in the addressable form so the
+  // detail view reproduces the shelf the shopper came from.
+  if (country === null) params.set("market", "ALL");
+  else if (country !== "KW") params.set("market", country);
   const qs = params.toString();
   return `/product/${encodeURIComponent(productId)}${qs ? `?${qs}` : ""}`;
 }

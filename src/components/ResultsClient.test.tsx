@@ -140,7 +140,7 @@ describe("country filter UI (REEA-170)", () => {
     },
   ];
 
-  it("renders the pills and labels cross-market rows instead of dropping them (REEA-1142)", async () => {
+  it("renders the pills and keeps a market-scoped shelf to that market (Bet 6d)", async () => {
     searchParams.set("q", "airpods");
     await act(async () => {
       render(
@@ -164,32 +164,31 @@ describe("country filter UI (REEA-170)", () => {
     // aria-pressed (REEA-1069 AC3), no link navigation involved.
     expect(pills[1].getAttribute("aria-pressed")).toBe("true");
     const html = document.body.innerHTML;
-    // REEA-1142 AC1: the market selection no longer DROPS other-market rows —
-    // the Saudi listing stays visible with its market label, and the Kuwait
-    // headline rests on the KWD offer.
+    // REEA-1177 AC 6d-3 — on the default Kuwait shelf a product with a local
+    // offer is KWD-only; the Saudi row is not rendered beside it.
     expect(html).toContain("Xcite");
-    expect(html).toContain("Jarir");
-    expect(html).toContain("Saudi price");
+    expect(html).not.toContain("Jarir");
+    expect(html).not.toContain("Saudi price");
     expect(html).toContain("Best price");
     await act(async () => {
       fireEvent.click(pills[2]); // Saudi Arabia (SAR)
     });
     // Same-document filtering: the view renders in place, the pill moves its
-    // marker, and the URL echo follows without navigation. Under the Saudi
-    // scope the Kuwait offer is the cross-market row, labeled as such.
+    // marker, and the URL echo follows without navigation. The Saudi shelf
+    // now carries the Saudi offer only.
     expect(document.body.innerHTML).toContain("Jarir");
-    expect(document.body.innerHTML).toContain("Xcite");
-    expect(document.body.innerHTML).toContain("Kuwait price");
+    expect(document.body.innerHTML).not.toContain("Xcite");
     const pillsAfter = Array.from(
       document.querySelectorAll('[role="group"][aria-label="Filters and market"] button'),
     );
     expect(pillsAfter[2].getAttribute("aria-pressed")).toBe("true");
-    expect(window.location.search).toContain("c=SA");
+    expect(window.location.search).toContain("market=SA");
     await act(async () => {
       fireEvent.click(pillsAfter[0]); // All
     });
     expect(document.body.innerHTML).toContain("Xcite");
     expect(document.body.innerHTML).toContain("Jarir");
+    expect(window.location.search).toContain("market=ALL");
   });
 
   it("the header search carries the active selection into the next query", async () => {
@@ -230,7 +229,7 @@ describe("stock selection UI (REEA-186)", () => {
   it("filters to in-stock listings by default (In stock pressed) and flips in place", async () => {
     searchParams.set("q", "xm6");
     await act(async () => {
-      render(<ResultsClient query="xm6" page={1} products={MIXED_STOCK} suggestions={MIXED_STOCK} />);
+      render(<ResultsClient query="xm6" page={1} products={MIXED_STOCK} suggestions={MIXED_STOCK} country={null} />);
     });
     // Default: only the in-stock listing renders; the Direction A "In stock"
     // control is the pressed (aria-pressed) state.
@@ -250,7 +249,7 @@ describe("stock selection UI (REEA-186)", () => {
     });
     expect(inStockBtn()?.getAttribute("aria-pressed")).toBe("false");
     expect(document.body.innerHTML).toContain("Jarir");
-    expect(window.location.search).toContain("oos=1");
+    expect(window.location.search).toContain("stock=all");
     await act(async () => {
       fireEvent.click(inStockBtn() as HTMLElement);
     });
@@ -263,7 +262,7 @@ describe("stock selection UI (REEA-186)", () => {
     searchParams.set("oos", "1");
     await act(async () => {
       render(
-        <ResultsClient query="xm6" page={1} products={MIXED_STOCK} suggestions={MIXED_STOCK} showOutOfStock />,
+        <ResultsClient query="xm6" page={1} products={MIXED_STOCK} suggestions={MIXED_STOCK} country={null} showOutOfStock />,
       );
     });
     const html = document.body.innerHTML;
@@ -585,7 +584,7 @@ describe("staged progressive results (REEA-178)", () => {
 
     await act(async () => {
       render(
-        <ResultsClient query="iphone 17 pro" page={1} country={null} stages={stages} />,
+        <ResultsClient query="iphone 17 pro" page={1} country="KW" stages={stages} />,
       );
     });
 
@@ -641,7 +640,7 @@ describe("staged progressive results (REEA-178)", () => {
 
     await act(async () => {
       render(
-        <ResultsClient query="iphone 17 pro" page={1} country={null} stages={stages} />,
+        <ResultsClient query="iphone 17 pro" page={1} country="KW" stages={stages} />,
       );
     });
 

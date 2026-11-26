@@ -96,8 +96,8 @@ describe("REEA-1142 AC1 — cross-market rows are labeled", () => {
 
 describe("REEA-1142 AC2 — the headline is the local offer", () => {
   it("leads with the KWD price even when the converted SAR offer is cheaper", () => {
-    // SAR 5.80 ≈ KD 0.47 is cheaper in KWD-space than Xcite KD 0.90; the
-    // Kuwait headline must still be the local KWD offer.
+    // REEA-1177 AC 6d-3 — on the default Kuwait shelf a product WITH a local
+    // offer is KWD-only: the cheaper SAR row is not rendered beside it.
     const { container } = render(
       <ProductResultCard product={card([KW_OFFER, SAR_OFFER])} isBest rank={0} />,
     );
@@ -105,9 +105,17 @@ describe("REEA-1142 AC2 — the headline is the local offer", () => {
     expect(body).toContain("Best price");
     const hero = container.querySelector(".price-cur");
     expect(text(hero as HTMLElement)).toContain("KD 0.90");
-    // The cross-market row still renders, labeled.
-    expect(body).toContain("Saudi price");
+    expect(body).not.toContain("Saudi price");
+    expect(body).not.toContain("SAR 5.80");
+  });
+
+  it("the explicit ALL view keeps both rows", () => {
+    const { container } = render(
+      <ProductResultCard product={card([KW_OFFER, SAR_OFFER])} isBest rank={0} country={null} />,
+    );
+    const body = text(container);
     expect(body).toContain("SAR 5.80");
+    expect(body).toContain("KD 0.90");
   });
 
   it("renders the honest no-local-offer headline when every offer is cross-market", () => {

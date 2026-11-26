@@ -21,17 +21,21 @@ import { useCollection, type CollectionPhase } from "@/lib/collect/useCollection
 import type { CollectJob, LiveOffer } from "@/lib/collect/types";
 import type { CountryCode } from "@/lib/country";
 import {
+  HOME_MARKET,
   cheapestCrossMarketOffer,
   crossMarketHeadline,
   headlineOfferFor,
   isCrossMarketOffer,
+  marketName,
   marketPriceLabel,
-  marketScope,
   marketStockLabel,
   offerMarket,
+  scopeProductsByMarket,
   sortOffersByMarket,
 } from "@/lib/market";
-import { effectivePriceKwd, formatCountryPrice, formatPrimaryPrice } from "@/lib/format";
+import { formatCountryPrice, formatPrimaryPrice } from "@/lib/format";
+import { bestCouponForOffer, composePrice, realCouponsFor } from "@/lib/price-composition";
+import PriceCompositionLine from "@/components/PriceCompositionLine";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import CollectionPulse from "@/components/CollectionPulse";
 import OfferStatusToken, { StatusLegend } from "@/components/OfferStatus";
@@ -52,7 +56,7 @@ import type { NormalizedProduct } from "@/types/product";
 
 /** REEA-1142 — market-scoped order: the selected market's offers lead, the
  *  cross-market ones follow as a labeled group (same ladder inside each). */
-function sortLiveOffers(offers: LiveOffer[], scope: CountryCode): LiveOffer[] {
+function sortLiveOffers(offers: LiveOffer[], scope: CountryCode | null): LiveOffer[] {
   return sortOffersByMarket(offers, null, scope);
 }
 
@@ -96,7 +100,7 @@ function HeroOfferRow({
   nowMs: number;
   primary: boolean;
   /** REEA-1142 — the market this surface speaks for. */
-  scope: CountryCode;
+  scope: CountryCode | null;
 }) {
   const t = getStrings(locale ?? clientLocale());
   const status = offerStatusForLiveOffer(offer, nowMs);
@@ -196,7 +200,7 @@ function OfferTable({
   offers: LiveOffer[];
   locale?: Locale;
   nowMs: number;
-  scope: CountryCode;
+  scope: CountryCode | null;
 }) {
   const t = getStrings(locale ?? clientLocale());
   return (
@@ -286,7 +290,7 @@ export default function ProductHero(props: {
 
 function ProductHeroBody({
   product,
-  country = null,
+  country,
   locale,
   query = "",
   firstStage,
@@ -303,11 +307,12 @@ function ProductHeroBody({
   const snap = firstStage ? use(firstStage) : null;
   // REEA-1140 — a client restart (or 404 recovery) carries the results query
   // and market, so the server resolves the same merged group the page did.
+  const viewCountry: CountryCode | null = country === undefined ? HOME_MARKET : country;
   const { state, cachedNoticeAt, start, retryRetailer, attach } = useCollection(
     product.productId,
     snap,
     query,
-    country,
+    viewCountry,
   );
   const [staleFallback, setStaleFallback] = useState<CollectJob | null>(null);
   // REEA-283/REEA-1091 — the FIRST paint reuses the page's baked render clock
@@ -354,20 +359,25 @@ function ProductHeroBody({
   }, [state]);
 
   const job = phase.kind === "polling" || phase.kind === "terminal" ? phase.job : null;
-  // REEA-1142 AC2 — the product hero's headline is the selected market's
-  // cheapest in-stock offer; a cross-market-only product shows the honest
-  // "No Kuwait offer · Saudi price from KD X" line instead of claiming one.
-  const scope = marketScope(country);
+  // REEA-1177 AC 6d-1/6d-2 — the PDP speaks for the same market as the shelf
+  // it came from; a direct visit defaults to Kuwait, an explicit null is ALL.
+  // A market-scoped PDP renders that market's offers; cross-market rows stay
+  // only when the product has no in-market offer (AC 6d-3).
+  const scope = viewCountry;
+  const scopedLiveOffers = job
+    ? scopeProductsByMarket([{ ...product, offers: job.offers as unknown as NormalizedProduct["offers"] }], scope)[0]
+        .offers as unknown as LiveOffer[]
+    : [];
   // REEA-1162 — the table is a retailer comparison: fold the same-price
   // duplicate rows one retailer's colourway listings produced, so the rows and
   // the "N retailers" count line describe distinct retailers. The cheapest
   // row of each retailer still leads, so the hero price is unchanged.
-  const offers = job ? dedupeRetailerOfferRows(sortLiveOffers(job.offers, scope)) : [];
-  const localBest = headlineOfferFor(offers, scope);
-  const crossBest = cheapestCrossMarketOffer(offers, scope);
-  const best = localBest ?? crossBest ?? offers[0] ?? null;
+  const offers = job ? dedupeRetailerOfferRows(sortLiveOffers(scopedLiveOffers, scope)) : [];
+  const localBest = headlineOfferFor(offers as unknown as NormalizedProduct["offers"], scope);
+  const crossBest = cheapestCrossMarketOffer(offers as unknown as NormalizedProduct["offers"], scope);
+  const best = (localBest ?? crossBest ?? offers[0] ?? null) as LiveOffer | null;
   const hasLocalOffer = localBest !== null;
-  const headline = hasLocalOffer ? null : crossMarketHeadline(offers, scope, locale);
+  const headline = hasLocalOffer ? null : crossMarketHeadline(offers as unknown as NormalizedProduct["offers"], scope, locale);
   const displayTitle = cleanDisplayTitle(product.title);
   const titleChanged = displayTitleChanged(product.title, displayTitle);
   // REEA-1162 — the answered line is a RETAILER count too: one subtask per
@@ -384,19 +394,43 @@ function ProductHeroBody({
           .map((s) => s.retailer),
       )]
     : [];
-  const heroSaved = best && best.wasPrice != null && best.wasPrice > best.price ? best.wasPrice - best.price : null;
-  const heroPrice = best
-    ? formatCountryPrice(best.price, best.currency, hasLocalOffer ? country : null)
+  // REEA-1177 AC 6a-1/6a-5 — compose the PDP hero from the SAME served
+  // figures: listed − appliedDiscount = effective. Derived was-price coupon
+  // entries are not coupons; a real coupon is applied to its own merchant's
+  // offer only. An unknown conditional discount leaves effective null and
+  // the hero prints the listed figure, never a subtracted face value.
+  const realCoupons = realCouponsFor(product.coupons, product.offers);
+  const bestCoupon = best ? bestCouponForOffer(best as unknown as NormalizedProduct["offers"][number], realCoupons) : null;
+  const bestComposition = best
+    ? composePrice({
+        price: best.price,
+        currency: best.currency,
+        wasPrice: best.wasPrice,
+        coupon: bestCoupon,
+      }).priceComposition
     : null;
-  const coupon = product.coupons[0];
+  const heroEffective = bestComposition
+    ? (bestComposition.effective ?? bestComposition.listed)
+    : null;
+  const heroPrice =
+    best != null && heroEffective != null
+      ? formatCountryPrice(heroEffective, best.currency, hasLocalOffer ? viewCountry : null)
+      : null;
+  const heroListedLabel =
+    best != null && bestComposition != null && (bestComposition.appliedDiscount ?? 0) > 0
+      ? formatCountryPrice(bestComposition.listed, best.currency, hasLocalOffer ? viewCountry : null).primary
+      : null;
   // REEA-1122 — the variant chips ride the SAME price pass as the hero: the
-  // cheapest live offer's KWD-space figure. That keeps the selected chip equal
-  // to the hero price the shopper reads on this screen (never a chip from a
-  // different freshness pass). Before any live offer lands, fall back to the
-  // identity record's cheapest listed offer, so the chip still carries a real
-  // figure instead of the old raw delta ("Orange KD 0").
+  // effective KWD-space figure. Before any live offer lands, fall back to the
+  // identity record's cheapest effective offer, so the chip still carries a
+  // real figure instead of the old raw delta ("Orange KD 0").
   const liveBestKwd = best
-    ? effectivePriceKwd(best.price, best.currency, { wasPrice: best.wasPrice })
+    ? composePrice({
+        price: best.price,
+        currency: best.currency,
+        wasPrice: best.wasPrice,
+        coupon: bestCoupon,
+      }).effectivePrice
     : null;
   const variantBaseKwd = liveBestKwd ?? cheapestListedKwd(product, scope);
 
@@ -405,13 +439,13 @@ function ProductHeroBody({
       <nav className="rc-results-meta" aria-label={t.allOffersLead}>
         {/* REEA-1140 — the back link returns to the query the shopper came
             from when it is carried; a shared-link visit keeps the title. */}
-        <Link href={buildResultsHref(query || product.title, 1, country)}>{t.allOffersLead}</Link>
+        <Link href={buildResultsHref(query || product.title, 1, viewCountry)}>{t.allOffersLead}</Link>
       </nav>
       <div className="rc-product-hero">
         <ProductMedia product={product} />
         <div>
           <div className="rc-product-share flex flex-wrap items-center gap-2">
-            <ShareSummaryButton product={product} country={country} locale={locale} />
+            <ShareSummaryButton product={product} country={viewCountry} locale={locale} />
           </div>
           <h1 style={{ marginBlockStart: "var(--rc-space-2)" }}>
             <bdi className="lat">{displayTitle}</bdi>
@@ -441,24 +475,33 @@ function ProductHeroBody({
                   <bdi>{heroPrice.primary}</bdi>
                 </span>
                 {heroPrice.alt && <span className="price-alt">· <bdi>{heroPrice.alt}</bdi></span>}
-                {best.wasPrice != null && best.wasPrice > best.price && (
+                {heroListedLabel && (
                   <span className="rc-price-was tabular">
-                    <bdi>{formatCountryPrice(best.wasPrice, best.currency, null).primary}</bdi>
-                  </span>
-                )}
-                {heroSaved != null && (
-                  <span className="rc-savings">
-                    <bdi>{`${t.saveLead} ${formatCountryPrice(heroSaved, best.currency, null).primary}`}</bdi>
+                    <bdi>{heroListedLabel}</bdi>
                   </span>
                 )}
               </div>
-              {heroSaved != null && (
-                <p className="rc-product-basis">{fill(t.savingsBaseline, { x: best.merchant })}</p>
-              )}
-              {coupon && (
-                <p className="rc-product-coupon">
-                  {fill(t.couponApplied, { x: coupon.discount })}
+              {!hasLocalOffer && best && offerMarket(best.currency) ? (
+                // REEA-1177 AC 6d-3 — the only-offer foreign card names its
+                // market and carries the delivery caveat.
+                <p className="rc-market-caveat" role="note">
+                  <bdi>
+                    {fill(t.crossMarketCaveat, {
+                      market: marketName(offerMarket(best.currency) as CountryCode, locale),
+                    })}
+                  </bdi>
                 </p>
+              ) : null}
+              {bestComposition && (bestComposition.appliedDiscount ?? 0) > 0 && (
+                <PriceCompositionLine
+                  composition={bestComposition}
+                  merchant={best.merchant}
+                  currency={best.currency}
+                  country={hasLocalOffer ? viewCountry : null}
+                  locale={locale}
+                  comparison
+                  couponText={bestCoupon?.discount}
+                />
               )}
               <div className="rc-hero-offer">
                 <HeroOfferRow offer={best} locale={locale} nowMs={now} primary scope={scope} />
@@ -543,7 +586,7 @@ function ProductHeroBody({
               t.dateUnknown}{" "}
             {t.staleNote}
           </p>
-          <OfferTable offers={dedupeRetailerOfferRows(sortLiveOffers(staleFallback.offers, scope))} locale={locale} nowMs={now} scope={scope} />
+          <OfferTable offers={dedupeRetailerOfferRows(sortLiveOffers(scopeProductsByMarket([{ ...product, offers: staleFallback.offers as unknown as NormalizedProduct["offers"] }], scope)[0].offers as unknown as LiveOffer[], scope))} locale={locale} nowMs={now} scope={scope} />
         </div>
       ) : null}
 
@@ -576,7 +619,7 @@ function ProductHeroBody({
               // name only, never an invented number.
               const chipPrice =
                 variantBaseKwd != null
-                  ? formatCountryPrice(variantBaseKwd + v.priceDelta, "KWD", country).primary
+                  ? formatCountryPrice(variantBaseKwd + v.priceDelta, "KWD", viewCountry).primary
                   : null;
               return (
                 <span
@@ -616,7 +659,7 @@ function ProductHeroBody({
             <div className="rc-alt-grid">
               {rows.map((a) => (
                 <article className="rc-alt" key={a.productId}>
-                  <Link href={buildResultsHref(a.title, 1, country)} className="name">
+                  <Link href={buildResultsHref(a.title, 1, viewCountry)} className="name">
                     <bdi>{cleanDisplayTitle(a.title)}</bdi>
                   </Link>
                   <div className="price tabular">

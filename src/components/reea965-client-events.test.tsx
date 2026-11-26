@@ -119,18 +119,21 @@ describe("REEA-965 client offer events", () => {
     // Lead merchant attribution + R1 verdict mapping + coupon flag.
     // (offer_rendered carries no offerId per the spec table — the coupon_hit
     // events below carry the offer identity.)
+    // REEA-1177 AC 6a-4 — the shelf ranks by effective price, so the KD 0.46
+    // flagged Jarir card leads; each event still attributes its own card's
+    // lead offer and coupon state.
     expect(rendered[0]).toMatchObject({
-      queryId: "qid-9",
-      retailer: "Xcite",
-      hasCoupon: true,
-      priceSanityStatus: "ok",
-      schema: 1,
-    });
-    expect(rendered[1]).toMatchObject({
       queryId: "qid-9",
       retailer: "Jarir",
       hasCoupon: false,
       priceSanityStatus: "outlier_low",
+      schema: 1,
+    });
+    expect(rendered[1]).toMatchObject({
+      queryId: "qid-9",
+      retailer: "Xcite",
+      hasCoupon: true,
+      priceSanityStatus: "ok",
     });
     const hits = sent.filter((e) => e.type === "coupon_hit");
     expect(hits).toHaveLength(1);

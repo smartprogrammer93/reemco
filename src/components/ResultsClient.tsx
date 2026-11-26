@@ -8,13 +8,13 @@ import { StatusLegend } from "@/components/OfferStatus";
 import ProductResultCard from "@/components/ProductResultCard";
 import { searchProducts } from "@/lib/search";
 import { sanitizePage, sanitizeSearchQuery } from "@/lib/search-params";
-import { bestBadgeIndex, recallShowOutOfStock, rememberShowOutOfStock, sanitizeShowOutOfStock } from "@/lib/stock";
+import { bestBadgeIndex, recallShowOutOfStock, rememberShowOutOfStock, sanitizeShowOutOfStock, sanitizeStockParam } from "@/lib/stock";
 import {
   buildResultsHref,
   countryFromAcceptLanguage,
   recallCountry,
   rememberCountry,
-  sanitizeCountry,
+  sanitizeMarket,
   type CountryCode,
 } from "@/lib/country";
 import {
@@ -31,11 +31,12 @@ import {
 } from "@/lib/metrics-events";
 import { HeadingGhost, SkeletonCard, StampGhost, coverageLhTier } from "@/components/SkeletonSlots";
 import { PRODUCTS } from "@/lib/feed";
+import { realCouponsFor } from "@/lib/price-composition";
 import { resultsShelfCards, resultsShelfSections, shelfSectionsFromProducts, RESULTS_PAGE_SIZE, freshCardsForFlush, paintedIdsAfter, preferRicherSnapshot } from "@/lib/results-shelf";
 import { formatPrice, sortOffers } from "@/lib/format";
 import {
   marketName,
-  marketScope,
+  marketViewScope,
   sortOffersByMarket,
 } from "@/lib/market";
 import { merchantMarketCode } from "@/lib/collect/coverage";
@@ -279,13 +280,14 @@ function offerMetricsFor(
   // REEA-1142 — the attributed retailer is the card's LEAD offer in the same
   // market-scoped order the rows render in, so a converted cross-market row
   // never impersonates the local lead in the funnel.
-  const scope = marketScope(country);
+  const scope = marketViewScope(country);
   return products.map((p) => {
     const lead = sortOffersByMarket(p.offers, p.coupons[0] ?? null, scope)[0];
     return {
       offerId: p.productId,
       retailer: lead?.merchant ?? "unknown",
-      hasCoupon: p.coupons.length > 0,
+      // REEA-1177 AC 6a-3 — a derived was-price entry is not a coupon.
+      hasCoupon: realCouponsFor(p.coupons, p.offers).length > 0,
       priceSanityStatus: priceSanityStatusOf(lead?.sanity),
     };
   });
@@ -394,7 +396,7 @@ function ResultsGrid({
 }) {
   const t = getStrings(locale ?? clientLocale());
   // REEA-1142 AC2 — the single "Best price" badge rests on a LOCAL offer only.
-  const bestAt = bestBadgeIndex(products, marketScope(country));
+  const bestAt = bestBadgeIndex(products, marketViewScope(country));
   return (
     <section aria-label={t.primaryResultsAria} data-primary-section="true">
       <div
@@ -554,7 +556,7 @@ function FlushBlock(props: {
   if (products.length === 0) return null;
   // REEA-213: inside a participating block the badge rides the first
   // in-stock card of the final sorted order, never a later cheaper one.
-  const badgeAt = bestAt < 0 ? -1 : bestBadgeIndex(products, marketScope(country));
+  const badgeAt = bestAt < 0 ? -1 : bestBadgeIndex(products, marketViewScope(country));
   return (
     <div>
       <div className={GRID_CLASS}>
@@ -1575,16 +1577,29 @@ function ResultsInner(props: {
     typeof navigator === "undefined"
       ? null
       : countryFromAcceptLanguage(navigator.language ?? undefined);
+  // REEA-1177 AC 6d-2 — the URL chain reads `?market=` first, then the
+  // legacy `?c=`; explicit ALL is the null selection. The server-resolved
+  // prop always wins, and with no selection the default is Kuwait (home).
+  const urlMarket = sanitizeMarket(searchParams.get("market"));
+  const urlLegacyMarket = sanitizeMarket(searchParams.get("c"));
   const resolvedCountry =
-    props.country ?? sanitizeCountry(searchParams.get("c")) ?? recallCountry() ?? browserHint ?? null;
-  // REEA-186: same resolution chain as the country selection — server-resolved
-  // value wins, then the URL, then the same-tab remembered choice; default is
-  // hide out-of-stock listings (checkbox unchecked).
+    props.country !== undefined
+      ? props.country
+      : urlMarket !== null
+        ? (urlMarket === "ALL" ? null : urlMarket)
+        : urlLegacyMarket !== null
+          ? (urlLegacyMarket === "ALL" ? null : urlLegacyMarket)
+          : recallCountry() ?? browserHint ?? "KW";
+  // REEA-186/REEA-1177 AC 6d-2 — same resolution chain for stock: server
+  // value wins, then `?stock=in|all`, then the legacy `?oos=`, then the
+  // remembered choice; default is hide out-of-stock listings.
   const resolvedOos =
-    props.showOutOfStock ??
-    sanitizeShowOutOfStock(searchParams.get("oos")) ??
-    recallShowOutOfStock() ??
-    false;
+    props.showOutOfStock !== undefined
+      ? props.showOutOfStock
+      : sanitizeStockParam(searchParams.get("stock")) ??
+        sanitizeShowOutOfStock(searchParams.get("oos")) ??
+        recallShowOutOfStock() ??
+        false;
 
   // REEA-291 AC4 — the selections are CLIENT-side filters over the loaded
   // payload: the pills/toggle re-render the view from the staged/plain props

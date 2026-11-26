@@ -3,7 +3,7 @@ import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import OfferCtaLabel from "@/components/OfferCtaLabel";
 import { safeHref } from "@/lib/safe-url";
 import { absoluteStamp, ageSeconds, isTenMinutesOld, relativeAge } from "@/lib/relative-time";
-import { formatPrice } from "@/lib/format";
+import { formatPrice, parseDiscountAmount } from "@/lib/format";
 import type { Coupon } from "@/types/product";
 import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
 import CouponLine from "@/components/CouponLine";
@@ -177,6 +177,11 @@ export default function OfferCard({
   // href instead of an inline-JavaScript anchor.
   const t = getStrings(locale ?? clientLocale());
   const href = safeHref(url) ?? "";
+  // REEA-1177 AC 6a-2 — the coupon line states the applied amount (or the
+  // honest "up to") beside the code, never an unreconciled face value.
+  const applied = coupon && price != null ? parseDiscountAmount(price, coupon.discount) : null;
+  const appliedLabel = applied != null ? formatPrice(applied, currency ?? "KWD") : null;
+  const upToLabel = coupon && applied == null ? coupon.discount : null;
   return (
     <article className={`result-card${isBest ? " is-best" : ""}`}>
       {/* Retailer name first, calm (§5.3 order). REEA-451 F6 — the Latin name +
@@ -227,7 +232,7 @@ export default function OfferCard({
         {isBest && savings && <span className="savings-pill"><bdi>{`${t.saveLead} ${savings}`}</bdi></span>}
       </div>
       {coupon ? (
-        <CouponLine row={{ coupon, merchant, effectiveLabel: effectivePriceLabel ?? null }} locale={locale} />
+        <CouponLine row={{ coupon, merchant, effectiveLabel: effectivePriceLabel ?? null, appliedLabel, upToLabel }} locale={locale} />
       ) : effectivePriceLabel ? (
         <p className="tabular mt-1" style={{ font: "var(--rc-text-small)", color: "var(--rc-savings)" }}>
           <>{`${t.effectiveLead} ${effectivePriceLabel} ${t.effectiveTail}`}</>

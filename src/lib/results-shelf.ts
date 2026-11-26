@@ -15,7 +15,8 @@
  * store.
  */
 import type { CountryCode } from "@/lib/country";
-import { marketScope, scopeProductsByMarket } from "@/lib/market";
+import { isCrossMarketOffer, marketViewScope, scopeProductsByMarket } from "@/lib/market";
+import { effectiveKwdOfOffer } from "@/lib/price-composition";
 import { filterProductsByStock } from "@/lib/stock";
 import { exactSkuKeep } from "@/lib/relevance";
 import { partitionByConfidence } from "@/lib/confidence";
@@ -46,11 +47,39 @@ export function shelfSectionsFromProducts(
   // labels the cross-market rows and keeps them out of the headline claim.
   // The stock selection still filters exactly as before.
   const filtered = filterProductsByStock(
-    scopeProductsByMarket([...products], marketScope(country)),
+    scopeProductsByMarket([...products], marketViewScope(country)),
     showOutOfStock,
     exactSkuKeep(query),
   );
-  return partitionByConfidence(query, filtered);
+  const sections = partitionByConfidence(query, filtered);
+  return { ...sections, primary: rankPrimaryByEffective(sections.primary, marketViewScope(country)) };
+}
+
+/**
+ * REEA-1177 AC 6a-4 — the primary shelf ranks by the SAME effective price the
+ * card headline prints: lowest in-market effective first. Products with no
+ * in-market offer (the AC 6d-3 exception) follow every local card, ordered by
+ * their own effective figure; they never hold the "first card" claim.
+ */
+export function rankPrimaryByEffective(
+  products: readonly NormalizedProduct[],
+  scope: CountryCode | null,
+): NormalizedProduct[] {
+  const key = (p: NormalizedProduct): number | null => {
+    const inMarket = scope === null
+      ? p.offers
+      : p.offers.filter((o) => !isCrossMarketOffer(o, scope));
+    if (inMarket.length === 0) return null;
+    return Math.min(...inMarket.map((o) => effectiveKwdOfOffer(o)));
+  };
+  return [...products].sort((a, b) => {
+    const ka = key(a);
+    const kb = key(b);
+    if (ka == null && kb == null) return 0;
+    if (ka == null) return 1;
+    if (kb == null) return -1;
+    return ka - kb;
+  });
 }
 
 /** The shelf cards one page of a live snapshot renders (page 1 = default). */

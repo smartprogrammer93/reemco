@@ -1887,6 +1887,22 @@ html[lang="ar"] .coupon-via {
   text-decoration: line-through;
 }
 
+/* REEA-1177 AC 6a-1 — a non-headline offer row states its own was-price
+   saving, so the Xcite row on the shelf reconciles without a second coupon. */
+.rc-row-was {
+  font: var(--rc-text-small);
+  color: var(--rc-muted);
+  text-decoration: line-through;
+  white-space: nowrap;
+}
+
+.rc-row-savings {
+  font: var(--rc-text-small);
+  color: var(--rc-savings);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .rc-savings {
   display: inline-flex;
   align-items: center;
@@ -1901,6 +1917,39 @@ html[lang="ar"] .coupon-via {
 .rc-savings-basis {
   font: var(--rc-text-meta);
   color: var(--rc-body-text);
+}
+
+/* REEA-1177 AC 6a-6 — the reconciling composition line is visible on the
+   card/PDP without expanding the disclosure. It wraps at any width and never
+   lets a long AR/EN arithmetic sentence overflow 375px. */
+.rc-price-composition {
+  margin-block-start: var(--rc-space-1);
+  font: var(--rc-text-small);
+  color: var(--rc-body-text);
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.rc-composition-math {
+  min-inline-size: 0;
+  color: var(--rc-muted);
+  overflow-wrap: anywhere;
+}
+
+.rc-coupon-applied {
+  min-inline-size: 0;
+  color: var(--rc-ink);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* REEA-1177 AC 6d-3 — the delivery caveat a foreign-currency card carries
+   when it is the only offer for the product. */
+.rc-market-caveat {
+  margin-block: 2px 4px;
+  font: var(--rc-text-small);
+  color: var(--rc-muted);
+  overflow-wrap: anywhere;
 }
 
 /* REEA-1096 D6 — the shelf card keeps only the accepted 7-item anatomy.

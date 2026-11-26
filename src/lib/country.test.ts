@@ -8,6 +8,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   buildResultsHref,
+  resolveResultsMarket,
   countryFromAcceptLanguage,
   countryForCurrency,
   filterOffersByCountry,
@@ -105,11 +106,35 @@ describe("offer/product filtering", () => {
 });
 
 describe("buildResultsHref", () => {
-  it("carries q, page>1 and the country selection", () => {
-    expect(buildResultsHref("airpods", 1, "KW")).toBe("/results?q=airpods&c=KW");
-    expect(buildResultsHref("lg gram", 2, "EG")).toBe("/results?q=lg+gram&page=2&c=EG");
-    expect(buildResultsHref("airpods", 1, null)).toBe("/results?q=airpods");
-    expect(buildResultsHref("", 1, null)).toBe("/results");
+  it("carries q, page>1 and the addressable market selection", () => {
+    // REEA-1177 AC 6d-2 — Kuwait is the default, so it is omitted; ALL is
+    // explicit (otherwise the URL would reproduce the Kuwait default).
+    expect(buildResultsHref("airpods", 1, "KW")).toBe("/results?q=airpods");
+    expect(buildResultsHref("lg gram", 2, "EG")).toBe("/results?q=lg+gram&page=2&market=EG");
+    expect(buildResultsHref("airpods", 1, null)).toBe("/results?q=airpods&market=ALL");
+    expect(buildResultsHref("", 1, null)).toBe("/results?market=ALL");
+  });
+});
+
+describe("resolveResultsMarket (REEA-1177 AC 6d-1/6d-2)", () => {
+  it("defaults to Kuwait when nothing is stated", () => {
+    expect(resolveResultsMarket(undefined, undefined, undefined, undefined)).toBe("KW");
+    expect(resolveResultsMarket(undefined, undefined, undefined, "en-GB")).toBe("KW");
+  });
+
+  it("honours ?market=KW|SA|EG|ALL and the legacy ?c=", () => {
+    expect(resolveResultsMarket("KW", undefined, undefined, undefined)).toBe("KW");
+    expect(resolveResultsMarket("SA", undefined, undefined, undefined)).toBe("SA");
+    expect(resolveResultsMarket("EG", undefined, undefined, undefined)).toBe("EG");
+    expect(resolveResultsMarket("ALL", undefined, undefined, undefined)).toBeNull();
+    expect(resolveResultsMarket(undefined, "SA", undefined, undefined)).toBe("SA");
+    expect(resolveResultsMarket(undefined, "all", undefined, undefined)).toBeNull();
+  });
+
+  it("keeps the persisted cookie and the region hint behind the explicit URL", () => {
+    expect(resolveResultsMarket(undefined, undefined, "SA", "ar-KW")).toBe("SA");
+    expect(resolveResultsMarket(undefined, undefined, "ALL", "ar-KW")).toBeNull();
+    expect(resolveResultsMarket(undefined, undefined, undefined, "ar-EG")).toBe("EG");
   });
 });
 

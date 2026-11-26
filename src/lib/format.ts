@@ -208,7 +208,9 @@ export function sortOffers(
   coupon?: { discount: string } | null,
 ): PriceOffer[] {
   const key = (o: PriceOffer): number =>
-    effectivePriceKwd(o.price, o.currency, { wasPrice: o.wasPrice, couponDiscount: coupon?.discount });
+    typeof o.effectivePrice === "number" && Number.isFinite(o.effectivePrice)
+      ? Math.max(0, o.effectivePrice)
+      : effectivePriceKwd(o.price, o.currency, { wasPrice: o.wasPrice, couponDiscount: coupon?.discount });
   return [...offers].sort((a, b) => {
     if (!!a.fromSnapshot !== !!b.fromSnapshot) return a.fromSnapshot ? 1 : -1;
     if (a.inStock !== b.inStock) return a.inStock ? -1 : 1;
@@ -231,14 +233,31 @@ export function formatExpiry(expiresAt: string | null): string | null {
 /** Parse a machine-readable coupon discount ("10% off" / "$5 off") onto a
  *  figure. Returns null when the string cannot be parsed — callers must never
  *  invent a number (spec §3.3: the effective price is always explained). */
-function applyCouponDiscount(price: number, discount: string): number | null {
-  const dollar = discount.match(/^\$\s?(\d+(?:\.\d+)?)\s+off$/i);
-  if (dollar) return Math.max(0, price - parseFloat(dollar[1]));
-  const percent = discount.match(/^(\d+(?:\.\d+)?)\s?%\s+off$/i);
+/**
+ * REEA-1177 AC 6a-1/6a-2 — parse a machine-readable coupon discount onto the
+ * amount it takes off THIS price. Only strings that actually state a coupon
+ * are parseable: "$5 off", "KD 5.50 off", "5 KWD off", "10% off". A bare
+ * amount ("KD 90") is the derived was-price markdown (REEA-603's
+ * couponSignalOf), not a coupon face value — it returns null so the ordering
+ * key never subtracts the same money twice.
+ */
+export function parseDiscountAmount(price: number, discount: string): number | null {
+  const text = discount.trim();
+  const percent = text.match(/^(\d+(?:\.\d+)?)\s*%\s*off$/i);
   if (percent) {
     const pct = parseFloat(percent[1]);
-    if (pct <= 100) return Math.max(0, price * (1 - pct / 100));
+    if (pct <= 100) return Math.max(0, (price * pct) / 100);
   }
+  const amount = text.match(
+    /^(?:(?:\$|KD|KWD|SAR|EGP|USD|AED)\s*)?(\d+(?:\.\d+)?)\s*(?:(?:\$|KD|KWD|SAR|EGP|USD|AED))?\s+off$/i,
+  );
+  if (amount) return Math.min(price, parseFloat(amount[1]));
+  return null;
+}
+
+function applyCouponDiscount(price: number, discount: string): number | null {
+  const off = parseDiscountAmount(price, discount);
+  if (off != null) return Math.max(0, price - off);
   return null;
 }
 

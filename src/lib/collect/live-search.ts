@@ -52,6 +52,7 @@ import { sanitizeExternalUrl } from "@/lib/safe-url";
 import { normalizedListingUrlOf } from "@/lib/collect/types";
 import { effectivePriceKwd, formatPrice } from "@/lib/format";
 import { savingsFor } from "@/lib/savings";
+import { composePrice } from "@/lib/price-composition";
 import {
   computeCohortSanity,
   logSanitySummary,
@@ -3201,10 +3202,22 @@ function finalizeGroups(
           collectedAt: o.collectedAt,
         });
         const collectedEpoch = o.collectedAt ? Date.parse(o.collectedAt) : Number.NaN;
+        // REEA-1177 AC 6a-1 — the payload carries the one reconciling price
+        // statement and the KWD-space effective figure every ordering key and
+        // the card headline must share. A derived was-price markdown stays
+        // kind:"was_price"; only an explicit hop coupon is kind:"coupon".
+        const composed = composePrice({
+          price: o.price,
+          currency: o.currency,
+          wasPrice: o.wasPrice,
+          coupon: o.coupon ?? null,
+        });
         return {
           merchant: o.merchant,
           price: o.price,
           currency: o.currency,
+          effectivePrice: composed.effectivePrice,
+          priceComposition: composed.priceComposition,
           // REEA-1142 AC3 — every rendered offer carries the market tag its
           // storefront serves, so the surface can mark cross-market rows
           // explicitly (no SAR offer silently treated as Kuwait stock).

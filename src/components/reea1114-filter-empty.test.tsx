@@ -156,7 +156,7 @@ describe("REEA-1114 AC1/AC3 — the In stock filter hid the matches", () => {
     expect(document.body.textContent).toContain("Panadol Pain Relief Tablets 24Tablets");
     expect(document.querySelector('[data-empty-state="true"]')).toBeNull();
     expect(window.location.search).toContain("q=panadol");
-    expect(window.location.search).toContain("oos=1");
+    expect(window.location.search).toContain("stock=all");
     expect(routerSpies.replace).not.toHaveBeenCalled();
     expect(routerSpies.refresh).not.toHaveBeenCalled();
     // The chip flips with the reveal — the filter is no longer hiding rows.
@@ -165,7 +165,7 @@ describe("REEA-1114 AC1/AC3 — the In stock filter hid the matches", () => {
     expect(inStock.textContent).not.toContain("hidden");
   });
 
-  it("keeps the snapshot order after the reveal (no effective-price re-rank)", async () => {
+  it("ranks by effective price after the reveal (Bet 6a AC4)", async () => {
     searchParams.set("q", "panadol");
     const first = product("a-first", "Panadol Pain Relief Tablets 24Tablets", [
       { merchant: "Sultan Center", price: 0.9, currency: "KWD", url: "https://a", inStock: false },
@@ -191,10 +191,11 @@ describe("REEA-1114 AC1/AC3 — the In stock filter hid the matches", () => {
     const titles = Array.from(document.querySelectorAll("article.result-card h3, article.result-card .rc-card-title")).map(
       (n) => n.textContent,
     );
-    // The cheaper product must not jump the order the live snapshot set.
+    // REEA-1177 AC 6a-4 — the primary shelf now ranks by effective price, so
+    // the cheaper product leads the revealed shelf.
     const text = document.body.textContent ?? "";
-    expect(text.indexOf("Panadol Pain Relief Tablets 24Tablets")).toBeLessThan(
-      text.indexOf("Panadol Extra Pain Relief Tablets 24tablets"),
+    expect(text.indexOf("Panadol Extra Pain Relief Tablets 24tablets")).toBeLessThan(
+      text.indexOf("Panadol Pain Relief Tablets 24Tablets"),
     );
     expect(titles.length).toBeGreaterThan(0);
   });

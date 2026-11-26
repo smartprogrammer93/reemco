@@ -6,6 +6,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { buildResultsHref } from "@/lib/country";
+import { resolveResultsStock, sanitizeStockParam } from "@/lib/stock";
 import {
   bestBadgeIndex,
   filterOffersByStock,
@@ -215,10 +216,10 @@ describe("Best-price badge index (REEA-213)", () => {
 });
 
 describe("result href with the stock flag", () => {
-  it("rides oos=1 beside q/c and keeps old URLs unchanged otherwise", () => {
-    expect(buildResultsHref("airpods", 1, null, true)).toBe("/results?q=airpods&oos=1");
-    expect(buildResultsHref("airpods", 2, "KW", true)).toBe("/results?q=airpods&page=2&c=KW&oos=1");
-    expect(buildResultsHref("airpods", 1, null)).toBe("/results?q=airpods");
+  it("rides stock=all beside q/market and keeps default URLs unchanged otherwise", () => {
+    expect(buildResultsHref("airpods", 1, null, true)).toBe("/results?q=airpods&market=ALL&stock=all");
+    expect(buildResultsHref("airpods", 2, "KW", true)).toBe("/results?q=airpods&page=2&stock=all");
+    expect(buildResultsHref("airpods", 1, null)).toBe("/results?q=airpods&market=ALL");
   });
 });
 
@@ -229,5 +230,17 @@ describe("same-tab preference slot", () => {
     expect(recallShowOutOfStock()).toBe(true);
     rememberShowOutOfStock(false);
     expect(recallShowOutOfStock()).toBe(false);
+  });
+});
+
+describe("resolveResultsStock (REEA-1177 AC 6d-2)", () => {
+  it("honours ?stock=in|all and defaults to in-stock only", () => {
+    expect(sanitizeStockParam("in")).toBe(false);
+    expect(sanitizeStockParam("all")).toBe(true);
+    expect(sanitizeStockParam("other")).toBeNull();
+    expect(resolveResultsStock("in", undefined)).toBe(false);
+    expect(resolveResultsStock("all", undefined)).toBe(true);
+    expect(resolveResultsStock(undefined, "1")).toBe(true);
+    expect(resolveResultsStock(undefined, undefined)).toBe(false);
   });
 });
