@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { binsinaHits, luluListHits, nextStoreHits, nextStoreMarkdownHits, yousifiOccHits } from "@/lib/collect/live-search";
+import {
+  COLLECTORS,
+  binsinaHits,
+  collectSettled,
+  luluListHits,
+  nextStoreHits,
+  nextStoreMarkdownHits,
+  yousifiOccHits,
+} from "@/lib/collect/live-search";
 import { browserTierEnabled, relayTierEnabled } from "@/lib/collect/browser-clearance";
 import { coverageParts, type LiveSearchResult } from "@/lib/collect/coverage";
 
@@ -175,6 +183,32 @@ describe("REEA-1221 lane repair", () => {
     });
     // An empty products array is the retailer saying "no match".
     expect(yousifiOccHits({ products: [] }, "panadol")).toEqual([]);
+  });
+
+  it("Nest answers from its catalogue page instead of settling blocked when the search views 429", async () => {
+    // REEA-1235 — QA measured Nest settling `blocked:` on 11 of 12 panel queries:
+    // both Shopify search views answer 429 (retry-after 60) and the shared reader
+    // relay was out of quota. The storefront's catalogue page is not throttled,
+    // so it is the last hop and turns that into a real answer (a homeware hit or
+    // an explicit no-match), never a blocked zero.
+    const nest = COLLECTORS.find((c) => c.merchant === "Nest");
+    expect(nest).toBeDefined();
+    // The catalogue's own card shape: an `/en/products/` anchor with the title
+    // in aria-label and the theme's unquoted `class=money` span.
+    const card =
+      '<div class="product-card"><a href="/en/products/turkish-cup-grey" aria-label="Turkish Cup Grey">' +
+      "<span class=money>4.500 KD</span></a></div>";
+    const settled = await collectSettled(nest as never, "cup", (async (url: string) => {
+      if (url.includes("/search?q=")) {
+        return new Response("throttled", { status: 429, headers: { "content-type": "text/html" } });
+      }
+      return new Response(`<html><body>${card}</body></html>`, {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+    }) as never);
+    expect(settled.error).toBeUndefined();
+    expect(settled.hits.length).toBeGreaterThan(0);
   });
 
   it("keeps both clearance tiers out of the hermetic test run", () => {

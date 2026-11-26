@@ -2509,8 +2509,36 @@ export const COLLECTORS: RetailerCollector[] = [
         out.push(hit);
       }
       if (out.length > 0 || sawAnswer) return out;
+      // REEA-1235 — the search views throttle our egress (Shopify `429
+      // retry-after: 60`) and the reader relay is a shared, quota-limited
+      // resource, so a panel run could leave the lane with NO page at all and
+      // settle `blocked:` on 11 of 12 queries (QA measured exactly that). The
+      // storefront's catalogue page is not throttled (measured 2026-11-26:
+      // `/en` answers HTTP 200 / ~113 KB with 161 priced `/products/` cards), so
+      // it is the last hop: it gives the lane a real page to answer from — a
+      // genuine hit for homeware queries, an explicit no-match for the rest —
+      // instead of a blocked zero. Nest sells homeware; "no match" is the
+      // honest answer for a `panadol` or `laptop` query.
+      // Its OWN window: the shared one may already be spent by the two search
+      // hops and the relay attempt.
+      const catalogue = await fetchChecked(
+        fetchImpl,
+        "https://www.neststores.com/en",
+        { headers: { accept: "text/html" } },
+        AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
+      )
+        .then((res) => res.text())
+        .catch(() => "");
+      if (answered(catalogue)) {
+        for (const hit of nestHits(catalogue, query)) {
+          if (seen.has(hit.url)) continue;
+          seen.add(hit.url);
+          out.push(hit);
+        }
+        return out;
+      }
       throw new BlockedLaneError(
-        "blocked: no usable payload from any Nest hop (429 on both locale views, relay gave no page)" +
+        "blocked: no usable payload from any Nest hop (429 on both locale views, relay and catalogue gave no page)" +
           (browserLastError() ? ` [relay: ${browserLastError().slice(0, 120)}]` : ""),
       );
     },
