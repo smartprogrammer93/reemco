@@ -8,6 +8,8 @@ import {
   selectSitemapQueries,
 } from "@/lib/sitemap-queries";
 import { getTrendingChips } from "@/lib/trending-chips";
+import { scrapeOffer } from "@/lib/collect/scraper";
+import type { NormalizedProduct } from "@/types/product";
 
 // REEA-1051 — sitemap handlers are cached/prerendered at build by default, so
 // a build-time-only env would bake the origin into the artifact. The serving
@@ -45,6 +47,57 @@ async function indexableQuerySet(nowMs: number): Promise<Set<string> | null> {
  *    identities only: the /product page still collects its offers live per
  *    request (REEA-114), so the sitemap never freezes a price.
  */
+
+/** Bounded concurrency for the sitemap's live product check. */
+const SITEMAP_PRODUCT_CHECK_CONCURRENCY = 4;
+/** Per-listing ceiling: a crawler-facing check must not hold the response. */
+const SITEMAP_PRODUCT_CHECK_TIMEOUT_MS = 2_500;
+/** Re-check window: a listed/unlisted answer is reused for this long. */
+const SITEMAP_PRODUCT_CHECK_TTL_MS = 10 * 60 * 1000;
+const productCheckMemo = new Map<string, { at: number; hasOffer: boolean }>();
+
+/**
+ * REEA-1192 — does this catalog identity's product page render at least one
+ * offer right now? Runs the same live listing re-check the PDP runs (catalog
+ * seeds carry no collectedAt, so only a real fetch counts) with a short
+ * per-listing ceiling. Fail-closed: a product whose check throws is omitted.
+ */
+async function productHasLiveOffer(product: NormalizedProduct): Promise<boolean> {
+  const listings = product.offers ?? [];
+  if (listings.length === 0) return false;
+  const outcomes = await Promise.all(
+    listings.map((offer) =>
+      scrapeOffer(
+        { ...offer, titleQuery: product.title },
+        { timeoutMs: SITEMAP_PRODUCT_CHECK_TIMEOUT_MS },
+      ).then(
+        (outcome) => outcome.offers.length > 0,
+        () => false,
+      ),
+    ),
+  );
+  return outcomes.some(Boolean);
+}
+
+async function sitemapProducts(products: readonly NormalizedProduct[]): Promise<NormalizedProduct[]> {
+  const out: NormalizedProduct[] = [];
+  const nowMs = Date.now();
+  for (let i = 0; i < products.length; i += SITEMAP_PRODUCT_CHECK_CONCURRENCY) {
+    const chunk = products.slice(i, i + SITEMAP_PRODUCT_CHECK_CONCURRENCY);
+    const checks = await Promise.all(
+      chunk.map(async (product) => {
+        const memo = productCheckMemo.get(product.productId);
+        if (memo && nowMs - memo.at < SITEMAP_PRODUCT_CHECK_TTL_MS) return { product, hasOffer: memo.hasOffer };
+        const hasOffer = await productHasLiveOffer(product);
+        productCheckMemo.set(product.productId, { at: nowMs, hasOffer });
+        return { product, hasOffer };
+      }),
+    );
+    for (const check of checks) if (check.hasOffer) out.push(check.product);
+  }
+  return out;
+}
+
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();
   // REEA-1051 — the origin follows REEMCO_SITE_ORIGIN (the host actually
@@ -80,9 +133,15 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     priority: 0.9,
   }));
 
-  // Stable product identities from the feed facade. The catalog list is an
-  // identity source, not a price source: every /product page re-collects live.
-  const productPages: MetadataRoute.Sitemap = PRODUCTS.map((product) => ({
+  // REEA-1192 — sitemap honesty: a /product/* URL is listed only when its
+  // page actually has an offer to show. The catalog is an identity source,
+  // not a price source (every /product page re-collects live), and a catalog
+  // seed whose listing URLs have gone stale renders an empty table — a URL
+  // advertised to crawlers and shoppers that answers "no offers" is a broken
+  // promise. Check the same live listing set the PDP would re-check, bounded
+  // and cached so crawlers do not re-pay it on every request.
+  const listed = await sitemapProducts(PRODUCTS);
+  const productPages: MetadataRoute.Sitemap = listed.map((product) => ({
     url: `${origin}/product/${encodeURIComponent(product.productId)}`,
     lastModified: now,
     changeFrequency: "weekly",
