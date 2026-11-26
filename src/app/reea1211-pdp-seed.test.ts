@@ -61,6 +61,8 @@ const CATALOG_OFFER = {
   inStock: true,
 };
 
+const observedAt = new Date(Date.now() - 55 * 60 * 1000).toISOString();
+
 const OBSERVED_OFFER = {
   merchant: "Amazon.eg (ships to KW)",
   domain: "amazon.eg",
@@ -68,8 +70,8 @@ const OBSERVED_OFFER = {
   currency: "EGP",
   url: "https://www.amazon.eg/dp/B0DPWX3WTL",
   inStock: true,
-  collectedAt: "2026-11-26T08:00:05.000Z",
-  collectedAtEpochMs: Date.parse("2026-11-26T08:00:05.000Z"),
+  collectedAt: observedAt,
+  collectedAtEpochMs: Date.parse(observedAt),
   method: "live" as const,
 };
 

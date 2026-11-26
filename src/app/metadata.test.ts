@@ -13,13 +13,21 @@ import {
 } from "@/lib/sitemap-queries";
 import type { FunnelEvent } from "@/lib/events";
 
-// REEA-1192 — the sitemap now checks each catalog identity's own listings
-// live before advertising its /product/* URL. This file pins URL shape, not
-// live data, so the scraper is stubbed to always answer one offer.
+// REEA-1192 / REEA-1211 — the sitemap now runs each catalog identity's own
+// staged PDP collection (the page's exact code path) before advertising its
+// /product/* URL. This file pins URL shape, not live data, so the scraper is
+// stubbed to always answer one offer; `subtaskFor` is stubbed too because the
+// real runner builds its subtask list through it.
 vi.mock("@/lib/collect/scraper", () => ({
   scrapeOffer: async () => ({
     offers: [{ merchant: "Xcite", price: 1, currency: "KWD", url: "https://xcite.com/x" }],
     timedOut: false,
+  }),
+  subtaskFor: (offer: { merchant: string; url: string }) => ({
+    retailer: offer.merchant,
+    domain: "xcite.com",
+    status: "pending",
+    offersFound: 0,
   }),
 }));
 

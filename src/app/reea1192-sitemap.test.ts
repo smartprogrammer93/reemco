@@ -9,23 +9,28 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-// The check runs the same live listing re-check the PDP runs; this pin feeds
-// it one answering product and one that answers nothing.
-vi.mock("@/lib/collect/scraper", () => ({
-  scrapeOffer: async (offer: { url: string; titleQuery?: string }) => {
-    if ((offer.titleQuery ?? "").toLowerCase().includes("bose")) return { offers: [], timedOut: false };
-    return {
-      offers: [{ merchant: "Xcite", price: 1, currency: "KWD", url: offer.url }],
-      timedOut: false,
-    };
-  },
+// REEA-1211 — the check now runs the PDP's own staged collection; feed it one
+// answering product and one that answers nothing. The stored-observation
+// branch has its own pins (reea1211-sitemap-liveness.test.ts).
+const mocks = vi.hoisted(() => ({ startStaged: vi.fn(), findLastCompleted: vi.fn() }));
+
+vi.mock("@/lib/collect/runner", () => ({
+  startProductCollectionStaged: mocks.startStaged,
 }));
 
-// REEA-1211 — the stored-observation branch has its own pins
-// (reea1211-sitemap-liveness.test.ts); keep this file on the live path only so
-// a developer's shared .collect-cache cannot leak a completed job into it.
-vi.mock("@/lib/collect/last-observation", () => ({
-  lastVerifiedObservation: async () => null,
+vi.mock("@/lib/collect/store", () => ({
+  findLastCompleted: mocks.findLastCompleted,
+}));
+
+mocks.findLastCompleted.mockResolvedValue(undefined);
+mocks.startStaged.mockImplementation(async (product: { productId: string }) => ({
+  jobId: `job-${product.productId}`,
+  firstStage: Promise.resolve({
+    offers: product.productId.includes("bose")
+      ? []
+      : [{ merchant: "Xcite", price: 1, currency: "KWD", url: "https://xcite.example/p" }],
+  }),
+  finalStage: Promise.resolve({}),
 }));
 
 const { default: sitemap } = await import("@/app/sitemap");

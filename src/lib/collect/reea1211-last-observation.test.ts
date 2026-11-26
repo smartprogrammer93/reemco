@@ -33,18 +33,20 @@ function product(offers: NormalizedProduct["offers"]): NormalizedProduct {
   };
 }
 
-function job(offers: CollectJob["offers"]): CollectJob {
+function job(offers: CollectJob["offers"], observedAt = new Date(Date.now() - 55 * 60 * 1000).toISOString()): CollectJob {
   return {
     jobId: "job-reea1211",
     productId: "keychron-v3-max",
     status: "complete",
     mode: "live",
-    startedAt: "2026-11-26T08:00:00.000Z",
-    finishedAt: "2026-11-26T08:00:05.000Z",
+    startedAt: observedAt,
+    finishedAt: observedAt,
     subtasks: [],
     offers,
   };
 }
+
+const freshStamp = () => new Date(Date.now() - 55 * 60 * 1000).toISOString();
 
 const observed = {
   merchant: "Amazon.eg (ships to KW)",
@@ -53,8 +55,8 @@ const observed = {
   currency: "EGP",
   url: "https://www.amazon.eg/dp/B0DPWX3WTL",
   inStock: true,
-  collectedAt: "2026-11-26T08:00:05.000Z",
-  collectedAtEpochMs: Date.parse("2026-11-26T08:00:05.000Z"),
+  collectedAt: freshStamp(),
+  collectedAtEpochMs: Date.parse(freshStamp()),
   method: "live" as const,
 };
 
@@ -98,12 +100,22 @@ describe("REEA-1211 — seed a catalog page from its last verified observation",
   });
 
   it("keeps the shelf's query-time rows when they already carry a stamp", async () => {
-    const stamped = { ...unstampedSeed, collectedAt: "2026-11-26T08:10:00.000Z" };
+    const stamped = { ...unstampedSeed, collectedAt: freshStamp() };
     const seed = product([stamped]);
     const seeded = await seedCatalogPageWithLastObservation(seed);
     expect(seeded).toBe(seed);
     // The shelf's answer is the fresher, exact one — no store read needed.
     expect(mocks.findLastCompleted).not.toHaveBeenCalled();
+  });
+
+  it("does not paint a stale-only observation (REEA-1168 AC-7)", async () => {
+    const staleAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    mocks.findLastCompleted.mockResolvedValue(
+      job([{ ...observed, collectedAt: staleAt, collectedAtEpochMs: Date.parse(staleAt) }], staleAt),
+    );
+    const seed = product([unstampedSeed]);
+    expect(await seedCatalogPageWithLastObservation(seed)).toBe(seed);
+    expect(await lastVerifiedObservation("keychron-v3-max")).toBeNull();
   });
 
   it("fail-opens when the store read throws", async () => {

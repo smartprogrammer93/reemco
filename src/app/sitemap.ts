@@ -8,9 +8,12 @@ import {
   selectSitemapQueries,
 } from "@/lib/sitemap-queries";
 import { getTrendingChips } from "@/lib/trending-chips";
-import { lastVerifiedObservation } from "@/lib/collect/last-observation";
-import { scrapeOffer } from "@/lib/collect/scraper";
-import { OFFER_STATUS_STALE_MS } from "@/lib/offer-status";
+import {
+  hasCollectionStamp,
+  isFreshObservation,
+  lastVerifiedObservation,
+} from "@/lib/collect/last-observation";
+import { startProductCollectionStaged } from "@/lib/collect/runner";
 import { OVERALL_BUDGET_MS } from "@/lib/collect/types";
 import type { NormalizedProduct } from "@/types/product";
 
@@ -79,54 +82,48 @@ export function withinBudget<T>(check: Promise<T>, fallback: T, budgetMs: number
  * REEA-1192 / REEA-1211 — would this catalog identity's product page render
  * at least one offer right now?
  *
- * REEA-1211 — the check must use the SAME predicate and budget as the PDP's
- * first paint, or the sitemap and the page disagree. The old check granted
- * each listing a 2.5 s direct fetch plus the scraper's own search fallback
- * (two 8 s attempts) with no overall ceiling, while the PDP races every lane
- * against OVERALL_BUDGET_MS (10 s) — so the sitemap could advertise a URL
- * whose PDP run the budget cut off, painting an empty table.
+ * REEA-1211 — the check must be the PDP's OWN predicate, not a lookalike. The
+ * old check granted each listing a 2.5 s direct fetch plus the scraper's own
+ * search fallback (two 8 s attempts) with no overall ceiling, while the PDP
+ * races every lane against OVERALL_BUDGET_MS (10 s) — so the sitemap could
+ * advertise a URL whose PDP run the budget cut off, painting an empty table.
+ * Measured on 4662f93: the sitemap still listed keychron-v3-max off a lucky
+ * crawl-time 200 while the page's own run answered 503 and painted nothing.
  *
- * Two sources, the same two the page renders from (lib/collect/last-observation):
- *  1. a stored COMPLETED observation whose own stamp is inside the site's
- *     freshness window, which the page paints with its own collectedAt stamp
- *     — cheap, and no retailer fetch (rate-limit citizenship);
- *  2. a live re-check of the listing URLs, bounded by the PDP's per-lane
- *     ceiling and overall budget. Fail-closed: a check that throws or overruns
- *     is a "no".
+ * Three sources, and the invariant is "listed ⟹ the advertised URL renders
+ * ≥1 offer row":
+ *  1. the identity already carries stamped rows inside the freshness window
+ *     (a shelf answer the page inherits as-is);
+ *  2. a stored COMPLETED observation inside that same window, which the page
+ *     seeds and paints with its own collectedAt stamp — cheap, and no retailer
+ *     fetch (rate-limit citizenship);
+ *  3. the PDP's own staged collection (startProductCollectionStaged), listed
+ *     only when its first paint lands an offer. That run is the page's exact
+ *     code path and it writes the store's completed observation on success, so
+ *     the page that follows either seeds that observation (1 h retention) or
+ *     attaches to the very job this check started with its offer already in
+ *     hand. There is no window in which the sitemap promises more than the page
+ *     can deliver.
  *
- * REEA-1168 AC-7 — the stored observation must also be FRESH: the PDP emits
- * no price claim from a row older than the window, so a URL whose only row is
- * stale must not be advertised as a structured-data product page.
+ * REEA-1168 AC-7 — a stored observation must also be FRESH: the PDP emits no
+ * price claim from a row older than the window, so a URL whose only stored row
+ * is stale must not be advertised as a structured-data product page.
+ * Fail-closed: a check that throws or overruns its budget is a "no".
  */
 async function productWouldPaintOffer(product: NormalizedProduct): Promise<boolean> {
-  const stored = await lastVerifiedObservation(product.productId);
   const nowMs = Date.now();
-  if (
-    stored?.some((offer) => {
-      const observedAtMs = Date.parse(offer.collectedAt ?? "");
-      return (
-        Number.isFinite(observedAtMs) &&
-        Math.max(0, nowMs - observedAtMs) <= OFFER_STATUS_STALE_MS
-      );
-    })
-  ) {
-    return true;
-  }
-  const listings = product.offers ?? [];
-  if (listings.length === 0) return false;
-  const outcomes = await withinBudget(
-    Promise.all(
-      listings.map((offer) =>
-        scrapeOffer({ ...offer, titleQuery: product.title }).then(
-          (outcome) => outcome.offers.length > 0,
-          () => false,
-        ),
-      ),
+  const stamped = (product.offers ?? []).filter(hasCollectionStamp);
+  if (stamped.some((offer) => isFreshObservation(offer, nowMs))) return true;
+  const stored = await lastVerifiedObservation(product.productId, nowMs);
+  if (stored) return true;
+  return await withinBudget(
+    startProductCollectionStaged(product).then(
+      async (handle) => (await handle.firstStage).offers.length > 0,
+      () => false,
     ),
-    [] as boolean[],
-    OVERALL_BUDGET_MS,
+    false,
+    OVERALL_BUDGET_MS + 2_000,
   );
-  return outcomes.some(Boolean);
 }
 
 async function sitemapProducts(products: readonly NormalizedProduct[]): Promise<NormalizedProduct[]> {

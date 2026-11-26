@@ -26,12 +26,18 @@
  *    existing REEA-1140/1192 merge (same merchant+listing), so a fresh answer
  *    always wins over the seeded one.
  *
+ * Only observations inside the site's freshness window are painted (REEA-1168
+ * AC-7): a row older than that emits no price claim, so the page keeps waiting
+ * for this request's live fan-out instead of dressing a stale figure as the
+ * answer.
+ *
  * The same predicate is used by the sitemap (`/product/*` is advertised only
  * when the page would paint a row), so the advertised URL and the served page
  * cannot disagree about whether there is something to show.
  */
 import type { LiveOffer } from "@/lib/collect/types";
 import { findLastCompleted } from "@/lib/collect/store";
+import { OFFER_STATUS_STALE_MS } from "@/lib/offer-status";
 import type { NormalizedProduct } from "@/types/product";
 
 /** True when this row carries the moment it was observed. */
@@ -40,13 +46,32 @@ export function hasCollectionStamp(offer: { collectedAt?: string }): boolean {
 }
 
 /**
- * The last verified observation stored for this product, or `null`.
+ * True when this row's own observation stamp is inside the site's freshness
+ * window. REEA-1168 AC-7 — a row older than the window emits no price claim
+ * (the status token reads "Stale"), so it is not painted as this page's answer
+ * and the sitemap does not advertise a URL whose only evidence is that row.
+ */
+export function isFreshObservation(
+  offer: { collectedAt?: string },
+  nowMs: number,
+): boolean {
+  const observedAtMs = Date.parse(offer.collectedAt ?? "");
+  return (
+    Number.isFinite(observedAtMs) &&
+    Math.max(0, nowMs - observedAtMs) <= OFFER_STATUS_STALE_MS
+  );
+}
+
+/**
+ * The last verified observation stored for this product that is still FRESH,
+ * or `null`.
  *
  * Fail-open: a store read failure returns `null` so a page render never fails
  * on the fallback lookup (the live fan-out still runs).
  */
 export async function lastVerifiedObservation(
   productId: string,
+  nowMs: number = Date.now(),
 ): Promise<LiveOffer[] | null> {
   let last;
   try {
@@ -54,7 +79,9 @@ export async function lastVerifiedObservation(
   } catch {
     return null;
   }
-  const offers = (last?.offers ?? []).filter(hasCollectionStamp);
+  const offers = (last?.offers ?? []).filter(
+    (offer) => hasCollectionStamp(offer) && isFreshObservation(offer, nowMs),
+  );
   return offers.length > 0 ? offers : null;
 }
 
