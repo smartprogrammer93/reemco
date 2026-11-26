@@ -372,6 +372,7 @@ describe("REEA-807 store round-trip", () => {
     const blob = JSON.parse(kv.writes[0].value) as { weeks: Record<string, Record<string, unknown>> };
     const week = blob.weeks["2026-W37"];
     expect(Object.keys(week).sort()).toEqual([
+      "bot_serves",
       "cold_serves_full",
       "cold_serves_pending",
       "comparison_cards_multi_retailer",

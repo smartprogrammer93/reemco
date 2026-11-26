@@ -345,6 +345,12 @@ export default async function ResultsPage({
         duplicateCards,
         // REEA-1142 AC5 — cross-market offers on the served shelf.
         crossMarketOffers,
+        // REEA-1200 (Bet 7C fold-in) — one boolean per serve: the shared
+        // bot/health-check UA predicate already read for the render events.
+        // It folds into the aggregate `bot_serves` counter, the ONE named
+        // subtraction behind the clean CTR denominator (AC 7C-3/7C-4). The
+        // UA string itself is never stored.
+        botServe: isBotUserAgent(hint.userAgent),
       });
       // REEA-1078 S2 — the same telemetry feeds the per-lane daily evidence
       // the 7-day auto-retire rule reads. Behind the response (deferred

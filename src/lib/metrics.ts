@@ -310,6 +310,16 @@ export interface WeekCounters {
    * identifiers.
    */
   cross_market_offers: number;
+  /**
+   * REEA-1200 (Bet 7C fold-in) — served live searches whose User-Agent
+   * matched the shared bot/health-check predicate (lib/bot-ua.ts): smoke
+   * probes, QA probes that identify as bots, uptime pingers and missing-UA
+   * fetchers. It is the ONE named counter behind the CTR denominator
+   * subtraction: `ctr_denominator_raw - ctr_denominator_clean == bot_serves`
+   * by construction. Aggregate integer only — the UA string itself is never
+   * stored (Data Minimization).
+   */
+  bot_serves: number;
   link_smoke: LinkSmokeCounters;
 }
 
@@ -346,6 +356,9 @@ export function emptyWeek(): WeekCounters {
     filtered_empty_searches: 0,
     duplicate_cards: 0,
     cross_market_offers: 0,
+    // REEA-1200 — bot/health-check serves excluded from the clean CTR
+    // denominator. Weeks stored before this extension backfill 0.
+    bot_serves: 0,
     link_smoke: emptyLinkSmoke(),
   };
 }
@@ -430,6 +443,9 @@ function backfillWeek(week: WeekCounters): WeekCounters {
     "duplicate_cards",
     // REEA-1142 — cross-market offer aggregate (integer, no identifiers).
     "cross_market_offers",
+    // REEA-1200 — bot/health-check serves (the named CTR-denominator
+    // subtraction). Weeks stored before this extension backfill 0.
+    "bot_serves",
   ] as const) {
     week[key] = clampCount(week[key]);
   }
@@ -558,6 +574,16 @@ export interface SearchOutcome extends SearchOutcomeBase {
    * selected market. One aggregate integer per serve; no per-offer record.
    */
   crossMarketOffers?: number;
+  /**
+   * REEA-1200 (Bet 7C fold-in) — true when this serve's User-Agent matched
+   * the shared bot/health-check predicate (lib/bot-ua.ts): smoke probes, QA
+   * probes that identify as bots, uptime pingers, missing-UA fetchers. One
+   * boolean per serve folds into the aggregate `bot_serves` counter, the ONE
+   * named subtraction behind the clean CTR denominator. The UA string itself
+   * is never stored. Absent = false, so every pre-change caller stays
+   * byte-identical.
+   */
+  botServe?: boolean;
 }
 
 /** Pure: fold one search outcome into the weekly buckets. */
@@ -599,6 +625,10 @@ export function applySearchOutcome(
   // REEA-1142 AC5 — cross-market offer aggregate. Clamped like every counter;
   // no upper invariant beyond the served offer count.
   w.cross_market_offers += clampCount(outcome.crossMarketOffers);
+  // REEA-1200 (Bet 7C fold-in) — bot/health-check serves. Exactly one bump per
+  // bot serve, and the reader clamps it to `searches` so
+  // ctr_denominator_clean ≤ ctr_denominator_raw holds even on a hostile blob.
+  if (outcome.botServe === true) w.bot_serves += 1;
   for (const [merchant, hits] of Object.entries(outcome.offersByRetailer ?? {})) {
     const by = clampCount(hits);
     if (by > 0) bumpRetailer(w.offers_by_retailer, merchant, by);
@@ -995,6 +1025,8 @@ const WEEKLY_SCALAR_FIELDS = [
   "duplicate_cards",
   // REEA-1142 — cross-market offer aggregate (one integer per week).
   "cross_market_offers",
+  // REEA-1200 — bot/health-check serve aggregate (one integer per week).
+  "bot_serves",
 ] as const;
 type WeeklyScalarField = (typeof WEEKLY_SCALAR_FIELDS)[number];
 

@@ -106,8 +106,11 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
     }
     // No PII surface: counters and retailer names only.
     expect(Object.keys(week).sort()).toEqual([
+      "bot_serves",
       "comparison_depth",
       "cross_market_offers",
+      "ctr_denominator_clean",
+      "ctr_denominator_raw",
       "filtered_empty_searches",
       "latency_band_1_3s",
       "latency_band_3_10s",

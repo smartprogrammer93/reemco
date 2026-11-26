@@ -323,8 +323,11 @@ describe("REEA-1035 stored schema + route byte-shape", () => {
     };
     const week = body.weeks[WEEK];
     expect(Object.keys(week).sort()).toEqual([
+      "bot_serves",
       "comparison_depth",
       "cross_market_offers",
+      "ctr_denominator_clean",
+      "ctr_denominator_raw",
       "filtered_empty_searches",
       "latency_band_1_3s",
       "latency_band_3_10s",

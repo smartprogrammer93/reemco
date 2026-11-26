@@ -278,6 +278,14 @@ export function weeklyResponse(
       // REEA-1142 AC5 — offers served outside the selected market (integer
       // aggregate; no identifiers).
       cross_market_offers: w.cross_market_offers,
+      // REEA-1200 (Bet 7C fold-in, AC 7C-3/7C-4) — the CTR denominators as
+      // SEPARATE integers, never one blended figure: raw is every served
+      // search; clean is the same population minus the named bot/health-check
+      // serves. The subtraction is exactly `bot_serves` (published beside
+      // them), and clean ≤ raw holds by construction even on a hostile blob.
+      ctr_denominator_raw: w.searches,
+      ctr_denominator_clean: Math.max(0, w.searches - Math.min(w.bot_serves, w.searches)),
+      bot_serves: w.bot_serves,
       offer_link_clicks: clicks[week] ?? 0,
       // REEA-935 — per-outcome counts plus the derived dead/challenge rates;
       // the annotation fields ride verbatim when stamped.
@@ -321,7 +329,13 @@ export function weeklyResponse(
           "first-offer p75 ≤ 2.0 s (G3 guard — staged first-offer flush must not get slower); full-offer follow-up-complete ≤ 8.5 s (the recording cap); blocking aggregate gates: latency_band_gt_10s == 0 and serves_pending < 5% weekly (AC-8, ratified on REEA-1002; serves_pending is the all-serve count, a superset of cold pending, so a pass is conservative)",
         counter_naming:
           "AC-2 choice: RENAMED, not redefined. serves_full / serves_pending are the all-serve outcome split (formerly cold_serves_full / cold_serves_pending, whose names wrongly implied cold-only while the counter also folded warm serves). Cold and warm are not conflated: the disjoint latency_band_* / latency_warm_band_* sets carry that split, and serves_full + serves_pending == searches == sum(cold bands) + sum(warm bands) for every week, including weeks recorded before this change.",
-        source: "REEA-1148 bet #2 AC-6c/AC-8; REEA-1009 S1b; band definitions unchanged (REEA-871/REEA-884)",
+        // REEA-1200 (Bet 7C fold-in) — AC 7C-3: each CTR denominator states
+        // its own population on the wire. AC 7C-4: the difference is exactly
+        // the named `bot_serves` counter, published beside both so the
+        // subtraction is auditable and clean ≤ raw holds by construction.
+        ctr_denominators:
+          "ctr_denominator_raw = every served live search counted by `searches` (one results-page fan-out serve = one search; bots included). ctr_denominator_clean = the SAME population minus `bot_serves`: serves whose User-Agent matched the shared bot/health-check predicate (lib/bot-ua.ts) — smoke probes, QA probes that identify as bots, uptime pingers, and missing-UA fetchers. clean = max(0, raw − min(bot_serves, raw)), so ctr_denominator_clean ≤ ctr_denominator_raw always, and the difference is attributable to exactly `bot_serves`. Both are aggregate integers; no per-user identifier, no per-query row.",
+        source: "REEA-1148 bet #2 AC-6c/AC-8; REEA-1009 S1b; REEA-1200 bet 7C AC 7C-3/7C-4; band definitions unchanged (REEA-871/REEA-884)",
       },
     },
     { headers: { "cache-control": "no-store" } },
