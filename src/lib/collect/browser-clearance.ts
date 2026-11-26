@@ -38,8 +38,10 @@ import { getSharedKv } from "./kv";
 const CLEARED_CACHE_TTL_S = 1_800;
 /** Hard bound on one navigation. */
 const NAV_TIMEOUT_MS = 12_000;
-/** Bound on waiting for the page to paint the lane's content selector. */
-const CONTENT_WAIT_MS = 12_000;
+/** Bound on waiting for the page to paint the lane's content selector. The
+ *  self-hosted box needs longer than the old 12 s for the managed challenge to
+ *  step aside (measured 2026-11-26: 4.7 KB shell still there at 12.4 s). */
+const CONTENT_WAIT_MS = 25_000;
 
 type BrowserLike = {
   newContext(options: Record<string, unknown>): Promise<ContextLike>;
@@ -320,18 +322,12 @@ async function navigate(
         })
         .catch(() => undefined);
       const html = await page.content();
-      // REEA-1221 — a page that never painted the lane's selector is an arg-set
-      // verdict too, not an answer. Measured on the self-hosted box 2026-11-26
-      // once the PID ceiling was lifted: the package's --single-process set
-      // launched and navigated, but after 12 s the body was still the 4.7 KB
-      // "Just a moment" shell (`painted:false`). Climb the ladder and try the
-      // full browser shape instead of handing the shell back.
-      const token = contentSelector.replace(/^[.#]/, "");
-      if (!html.includes(token) && attempt < maxAttempts - 1) {
-        lastFailure = "browser painted no content for the lane's selector";
-        if (argSetIndex < 2) argSetIndex += 1;
-        continue;
-      }
+      // REEA-1221 — measured on the self-hosted box 2026-11-26 after DevOps
+      // lifted the PID ceiling: the package's set launches and navigates but the
+      // managed challenge needs longer than the old 12 s window to step aside
+      // (`painted:false`, 4.7 KB shell at 12.4 s). The wait is the lever, not
+      // the arg set — escalating there reached the lean shell and crashed it
+      // (SIGTRAP), so the ladder still climbs only when a navigation DIES.
       return { html };
     } catch (err) {
       lastFailure = err instanceof Error ? err.message : String(err);
