@@ -3836,20 +3836,40 @@ html[lang="ar"] .coupon-via {
 /* ---------- §5.2–5.4 — shelf card offer row at ≥641 ---------- */
 @media (min-width: 641px) {
   .rc-card .rc-offer-row {
-    /* 1px divider + 22px line-a + 5px line gap + 44px line-b = the 72px box
-       §9.7 measures. The status token is 22px tall, so line-a is 22px and the
-       two lines stay in their own rows. */
-    grid-template-rows: 22px 44px;
+    /* REEA-1219 — 72px is the FLOOR, not a fixed box. The REEA-1205 block
+       fixed the row at 72px and centred a 22px/44px pair; a chip-heavy row
+       (label + grade + mismatch + market + status) or a row whose price run
+       needs a second line is genuinely overfull at 641–1226, so its flex lines
+       overflowed the fixed rows and painted over the caption above / the next
+       row (REEA-848/850 defect class: "Possible mismatch" over the accessory
+       name, "Needs verification" over "In stock", struck price over current).
+       minmax(…, auto) keeps the accepted 72px anatomy for a row that fits and
+       lets an overfull row grow to its content instead of colliding — no
+       content is removed. */
+    grid-template-rows: minmax(22px, auto) minmax(44px, auto);
     row-gap: 5px;
     padding-block: 0;
-    block-size: 72px;
+    block-size: auto;
     min-block-size: 72px;
     align-items: center;
+  }
+  /* REEA-1219 — when line-a wraps, the chips stay with the wordmark at the
+     inline start and the status token keeps the inline-end slot; spreading
+     every wrapped flex line with `space-between` scattered them mid-row. */
+  .rc-card .rc-offer-row .rc-offer-line.line-a {
+    justify-content: flex-start;
+  }
+  .rc-card .rc-offer-row .rc-status {
+    margin-inline-start: auto;
   }
   .rc-card .rc-offer-row .rc-offer-cta {
     block-size: var(--rc-tap);
     min-block-size: var(--rc-tap);
     min-inline-size: 60px; /* "Go" — §5.2 */
+    /* REEA-1219 — if line-b has to wrap, the action still lands in the
+       inline-end slot of its line instead of the inline start (the clipped
+       "Go" in the board screenshot). */
+    margin-inline-start: auto;
   }
   .rc-card .rc-offer-row .rc-checked {
     min-inline-size: 100px; /* §6.3 EN budget */
@@ -3874,15 +3894,59 @@ html[lang="ar"] .coupon-via {
   .rc-card .rc-offer-row .rc-offer-cta {
     min-inline-size: 60px;
   }
-  /* §4.1/§5.1 — the 375 two-line row is a fixed 92px box. A row that carries a
-     label/grade chip resolves a 22.8px line-a instead of the 20px the spec's
-     §5.1 model assumes; the extra 1.8px stays inside the row's own 7px block
-     padding, so the measured box is 92px for every row (a min-height alone let
-     chip rows resolve 93.8px, outside the §9.7 ±1 band). */
+  /* REEA-1219 — the 375 row is a 92px FLOOR, not a fixed box. A row that
+     carries a label/grade chip resolves a 22.8px line-a; a market row wraps
+     line-a by design (REEA-1161). The old fixed block-size centred that
+     overflow over the caption and the next row. min-block-size keeps the
+     accepted 92px anatomy for a row that fits and lets a genuinely overfull
+     row grow. */
   .rc-offer-row {
-    block-size: var(--rc-row-h-mobile);
+    block-size: auto;
     min-block-size: var(--rc-row-h-mobile);
   }
+  /* REEA-1219 — the wordmark cell may shrink when the row is overfull, but it
+     must never paint outside its own cell: the 96px logo used to spill over
+     the first chip when the retailer cell was squeezed ("Xcite" on top of the
+     accessory name). The logo now fills its cell and ellipsises there. */
+  .rc-card .rc-offer-row .rc-retailer-name {
+    flex: 0 1 96px;
+    min-inline-size: 0;
+    overflow: hidden;
+  }
+  .rc-card .rc-offer-row .rc-retailer-name .logo {
+    min-inline-size: 0;
+    inline-size: 100%;
+  }
+  /* REEA-1219 — the 40% status cap kept the token box at 125px while its
+     label painted 8px outside it and pushed the row's scrollWidth past the
+     card edge. At 375 the token takes its natural width (the retailer cell
+     absorbs the difference); the row itself stays inside 313px. */
+  .rc-card .rc-offer-row .rc-status {
+    max-inline-size: none;
+    overflow: hidden;
+  }
+  /* REEA-1219 — 4px between the current price and its meta sub-line, so the
+     inline font box of the price run cannot touch the collection stamp
+     (a 2px overlap in EN, 10px in AR). */
+  .rc-card .rc-offer-row .rc-price-block {
+    gap: var(--rc-space-1);
+  }
+}
+
+/* ---------- REEA-1219 — price-run boxes are line boxes, not font boxes ----------
+   An inline <bdi> in the AR font stack resolves a getBoundingClientRect taller
+   than its line box (78px for a 36.78px headline), so stacked price runs
+   reported rect intersections although no glyph overlapped (EN 2px / AR
+   10px in the row, up to 13px in the headline price line). inline-block gives
+   the run its real line box; the glyphs, baseline and direction are unchanged. */
+.rc-offer-row .price-cur bdi,
+.rc-offer-row .rc-row-was bdi,
+.rc-offer-row .rc-row-savings bdi,
+.rc-offer-row .price-alt bdi,
+.rc-price-line .price-cur bdi,
+.rc-price-line .rc-price-was bdi,
+.rc-price-line .price-warn bdi {
+  display: inline-block;
 }
 
 /* ---------- §6.2 — LTR isolation inside the AR row ----------
