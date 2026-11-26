@@ -14,6 +14,35 @@
  *  matching/scoring itself lives in search-fallback.ts and stays untouched.
  */
 
+import {
+  ARABIC_BRAND_ALIASES,
+  ARABIC_MODEL_ALIASES,
+  arabicAliasEntryForToken,
+  arabicAliasFormsForToken,
+  arabicBrandForToken,
+  arabicFamilyAliasesForToken,
+  arabicPhraseAliasForQuery,
+  arabicQueryAlias,
+  arabicTokenLookupKeys,
+  foldArabicForMatch,
+  normalizeArabicText,
+} from "@/lib/arabic-lexicon";
+
+/** REEA-1218 — the lexicon owns the Arabic fold and the AR↔EN maps. Keep this
+ *  re-export because the pre-Bet-8 matching paths (canonical tuples, title
+ *  identity) import it from this module. */
+export { normalizeArabicText };
+
+/** Re-export the lexicon helpers used by the relevance/scope gates so the
+ *  scope gate keeps one import surface for Arabic matching. */
+export {
+  arabicAliasFormsForToken,
+  arabicFamilyAliasesForToken,
+  arabicPhraseAliasForQuery,
+  arabicQueryAlias,
+  foldArabicForMatch,
+};
+
 /** Curated known-brand list (cap 75, spec §Rule 1) — brands the four
  *  retailers actually carry. Canonical casing is exactly as written here. */
 export const CURATED_BRANDS: readonly string[] = [
@@ -93,102 +122,9 @@ export function normalizedTitle(title: string): string {
 
 /* ---- REEA-195: Arabic brand-token matching (query side only). ---- */
 
-/** Arabic-script spellings of curated brands as the Kuwait storefronts carry
- *  them. Keys are compared after normalizeArabicText(), so hamza variants share
- *  one entry. Used ONLY to match an Arabic query against retailer titles and
- *  to rank brand-intent queries — brand LINES still come from resolveBrand's
- *  Rule-1 chain, so an unbranded item never inherits a brand from its title's
- *  alias spelling. */
-const ARABIC_BRAND_ALIASES: ReadonlyMap<string, string> = new Map([
-  ["ابل", "Apple"],
-  ["ايفون", "Apple"],
-  ["سامسونج", "Samsung"],
-  ["سامسونغ", "Samsung"],
-  ["سوني", "Sony"],
-  ["بوز", "Bose"],
-  ["شاومي", "Xiaomi"],
-  ["هواوي", "Huawei"],
-  ["هونر", "Honor"],
-  ["اوبو", "Oppo"],
-  ["فيفو", "Vivo"],
-  ["ريلمي", "Realme"],
-  ["جوجل", "Google"],
-  ["مايكروسوفت", "Microsoft"],
-  ["ديل", "Dell"],
-  ["لينوفو", "Lenovo"],
-  ["اسوس", "Asus"],
-  ["ايسر", "Acer"],
-  ["ال جي", "LG"],
-  ["توشيبا", "Toshiba"],
-  ["فيليبس", "Philips"],
-  ["باناسونيك", "Panasonic"],
-  ["هايسنس", "Hisense"],
-  ["شارب", "Sharp"],
-  ["دايسون", "Dyson"],
-  ["دوف", "Dove"],
-  ["المراعي", "Almarai"],
-  ["الصافي", "Al Safi"],
-]);
-
-/** Curated Arabic category words and the Latin spellings the storefronts
- *  actually carry (REEA-408). Kuwait zones answer Arabic-category queries
- *  with English-titled rows — measured live 2026-09-09: Sultan Center
- *  answers `أرز بسمتي` with priced rows titled "Country Xl Organic Basmati
- *  Rice" &co — and a cross-script substring check scores every one of them
- *  0, which is the silent-zero shape the fixed-query matrix kept hitting.
- *  The REEA-399 generic lane keeps zero-score answers alive only while the
- *  query carries no brand token, so brand+category queries like
- *  `لابتوب ديل` still lost their real matches: a "Latitude 5440 Laptop"
- *  row answers neither the Latin form of ديل nor a bare Arabic token.
- *  This map gives the common category words their curated Latin form, so
- *  the coverage gate scores the row instead of dropping it. Same
- *  convention as ARABIC_BRAND_ALIASES: keys are compared after
- *  normalizeArabicText(); unknown tokens keep the plain substring path. */
-const ARABIC_QUERY_ALIASES: ReadonlyMap<string, readonly string[]> = new Map([
-  ["ارز", ["rice"]],
-  ["بسمتي", ["basmati"]],
-  ["صابون", ["soap"]],
-  ["كيبورد", ["keyboard"]],
-  ["لابتوب", ["laptop", "notebook"]],
-  ["جوال", ["smartphone", "mobile phone"]],
-  ["سماعة", ["headphone", "headset", "earbud"]],
-  ["تلفاز", ["television", "smart tv"]],
-  ["ثلاجة", ["fridge", "refrigerator"]],
-  ["غسالة", ["washing machine", "washer"]],
-  ["مكيف", ["air conditioner"]],
-  ["شاشة", ["monitor", "screen"]],
-]);
-
-/** REEA-1068 — Arabic-script spellings of MODEL words Kuwait shoppers type
- *  ("فولد 7", "آيفون 17"). Distinct from the brand aliases above: a brand
- *  alias answers "which brand", these answer "which model", and the Latin
- *  form is what the retailer titles carry. Folding the Latin stem with the
- *  adjacent digit produces the same compact identity token as the Latin query
- *  ("فولد 7" → "fold7"), so the Arabic spelling ranks exactly like "fold 7"
- *  instead of matching a loose word. Keys are compared after
- *  normalizeArabicText(), same convention as the other alias maps. */
-const ARABIC_MODEL_ALIASES: ReadonlyMap<string, string> = new Map([
-  ["فولد", "fold"],
-  ["ايفون", "iphone"],
-  ["جالاكسي", "galaxy"],
-  ["برو", "pro"],
-  ["ايباد", "ipad"],
-  ["بنادول", "panadol"],
-  ["نوت", "note"],
-]);
-
-/** Fold the alef family + case so alias keys and storefront spellings meet in
- *  one form ("أبل"/"ابل"/"آبل" all normalize to the same shape). REEA-213:
- *  tashkeel and tatweel are stripped first so a vowelled spelling ("غسّالة")
- *  and the plain one ("غسالة") compare equal — diacritics must not change a
- *  shopper's results (REEA-211 brief, definition of normalization). */
-export function normalizeArabicText(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[\u0640\u064B-\u065F\u0670]/g, "") // tatweel + tashkeel
-    .replace(/[\u0621\u0622\u0623\u0625\u0627\u0671]/g, "ا")
-    .trim();
-}
+/* REEA-1218 — the AR↔EN alias maps and the Arabic fold now live in
+ * lib/arabic-lexicon.ts (static asset, one curated source). The imports above
+ * keep the same map names the pre-Bet-8 matching code used. */
 
 /** Split a query into match tokens with the same tokenizer the retailer
  *  coverage gates use (Latin letters/digits + Arabic block, min length 2). */
@@ -242,13 +178,13 @@ export function compactQueryTokens(query: string): string[] {
   // digit adjacency folds, so "فولد 7" and "fold 7" produce the same
   // "fold7" identity token. Unknown Arabic words keep the plain path.
   const latinized = chunks.map((t) => {
-    const folded = normalizeArabicText(t);
+    const folded = foldArabicForMatch(t);
     return ARABIC_MODEL_ALIASES.get(folded) ?? t;
   });
   return Array.from(
     new Set(
       compactAdjacent(latinized)
-        .map((t) => normalizeArabicText(t))
+        .map((t) => foldArabicForMatch(t))
         .filter((t) => t.length >= 2),
     ),
   );
@@ -306,13 +242,13 @@ export function dispatchIdentity(query: string): string {
  *  "Foldable" merely because it starts with "fold". Model containment stays
  *  available ("xm6" answers "WH-1000XM6"), mirroring titleMatchScore's G4. */
 export function matchesCompactQueryToken(titleLower: string, token: string): boolean {
-  const folded = normalizeArabicText(token);
+  const folded = foldArabicForMatch(token);
   if (folded === "" || /[\u0600-\u06FF]/.test(folded)) {
     return matchesQueryToken(titleLower, token);
   }
   if (!/\d/.test(folded)) return matchesQueryToken(titleLower, token);
   const target = foldModelToken(folded);
-  const words = compactTitleWords(titleLower).map((w) => normalizeArabicText(w));
+  const words = compactTitleWords(titleLower).map((w) => foldArabicForMatch(w));
   return (
     words.some((w) => foldModelToken(w) === target) ||
     words.some((w) => /\d/.test(w) && foldModelToken(w).endsWith(target))
@@ -344,7 +280,7 @@ export function matchesModelIdentity(titleLower: string, token: string): boolean
   const parts = /^([a-z]+)(\d+)$/.exec(target);
   if (!parts) return false;
   const [, stem, digits] = parts;
-  const words = compactTitleWords(titleLower).map((w) => normalizeArabicText(w));
+  const words = compactTitleWords(titleLower).map((w) => foldArabicForMatch(w));
   return words.includes(stem) && titleLower.includes(digits);
 }
 
@@ -412,14 +348,16 @@ export function latinQueryForms(query: string): string[] {
   const forms: string[] = [];
   for (const t of queryMatchTokens(query)) {
     if (!/[\u0600-\u06FF]/.test(t)) continue;
-    const folded = normalizeArabicText(t);
-    const brand = ARABIC_BRAND_ALIASES.get(folded);
-    if (brand !== undefined) {
-      forms.push(brand.toLowerCase());
+    // REEA-1218 — the lexicon entry carries the dispatch spelling first and
+    // the storefront synonyms after it; brand entries are included so a
+    // per-hop re-search can still answer "دوف صابون" with "dove soap".
+    const entry = arabicAliasEntryForToken(t);
+    if (entry) {
+      forms.push(...entry.forms);
       continue;
     }
-    const cats = ARABIC_QUERY_ALIASES.get(folded);
-    if (cats !== undefined) forms.push(...cats);
+    const brand = arabicBrandForToken(t);
+    if (brand) forms.push(brand.toLowerCase());
   }
   return Array.from(new Set(forms));
 }
@@ -439,26 +377,10 @@ export function latinQueryForms(query: string): string[] {
  *  Relevance scoring is unaffected — the caller keeps matching rows against
  *  the shopper's original query. */
 export function latinBridgeDispatch(query: string): string {
-  if (!/[ء-ي]/.test(query)) return query;
-  const bridged = query
-    .split(/\s+/)
-    .filter((t) => t.length > 0)
-    .map((t) => {
-      if (!/[ء-ي]/.test(t)) return t;
-      const folded = normalizeArabicText(t);
-      // REEA-1068 — model words bridge to their model spelling ("فولد" →
-      // "fold", "آيفون" → "iphone") before the brand alias claims them, so
-      // the dispatch can fold the adjacent digit the way the Latin query does.
-      const model = ARABIC_MODEL_ALIASES.get(folded);
-      if (model !== undefined) return model;
-      const brand = ARABIC_BRAND_ALIASES.get(folded);
-      if (brand !== undefined) return brand.toLowerCase();
-      const cats = ARABIC_QUERY_ALIASES.get(folded);
-      if (cats !== undefined) return cats[0];
-      return t;
-    });
-  const joined = bridged.join(" ").trim();
-  return joined.length > 0 ? joined : query;
+  // REEA-1218 — phrase-aware: "قدر ضغط" bridges as "pressure cooker" and
+  // "الغسالة" bridges through the article-stripped token. The lexicon returns
+  // null for purely-Latin queries, so their dispatch is untouched.
+  return arabicQueryAlias(query)?.to ?? query;
 }
 
 /** True when one query token is answered by the title: substring match on the
@@ -475,17 +397,21 @@ export function latinBridgeDispatch(query: string): string {
  *  path (HTTP 200, populated payload, empty column). Arabic diacritics stay
  *  handled by normalizeArabicText; the Latin fold is a no-op there. */
 export function matchesQueryToken(titleLower: string, token: string): boolean {
-  const title = normalizeArabicText(titleLower)
+  const title = foldArabicForMatch(titleLower)
     .normalize("NFD")
     .replace(/[\u0300-\u036F]/g, "");
-  const folded = normalizeArabicText(token);
-  if (folded !== "" && title.includes(folded)) return true;
-  // Brand aliases keep precedence; the curated category forms below only
-  // speak for tokens no brand alias claims (REEA-408).
-  const entry = ARABIC_BRAND_ALIASES.get(folded);
-  if (entry !== undefined) return title.includes(entry.toLowerCase());
-  const forms = ARABIC_QUERY_ALIASES.get(folded);
-  if (forms !== undefined) return forms.some((form) => title.includes(form));
+  // REEA-1218 — the Arabic token is looked up with the article-stripped
+  // variants too, so "الغسالة" answers a "washing machine" title exactly like
+  // "غسالة" does.
+  for (const key of arabicTokenLookupKeys(token)) {
+    if (key !== "" && title.includes(key)) return true;
+  }
+  // Brand aliases keep precedence; the curated category/family/model forms
+  // below only speak for tokens no brand alias claims (REEA-408).
+  const entry = arabicAliasEntryForToken(token);
+  if (entry) return entry.forms.some((form) => title.includes(form));
+  const brand = arabicBrandForToken(token);
+  if (brand !== null) return title.includes(brand.toLowerCase());
   return false;
 }
 
@@ -498,10 +424,13 @@ export function arabicBrandIntent(query: string): string | null {
   const tokens = queryMatchTokens(query);
   if (!tokens.some((t) => /[\u0600-\u06FF]/.test(t))) return null;
   for (const t of tokens) {
-    const aliased = ARABIC_BRAND_ALIASES.get(normalizeArabicText(t));
+    // REEA-1218 — article-stripped spellings and the wider fold resolve the
+    // panel's brand forms ("ال جي", "آيفون", "سامسونغ") through one lexicon.
+    const aliased = arabicBrandForToken(t);
     if (aliased) return aliased;
+    const folded = foldArabicForMatch(t);
     for (const entry of CURATED_BRANDS) {
-      if (entry.toLowerCase() === t) return entry;
+      if (entry.toLowerCase() === folded) return entry;
     }
   }
   return null;
@@ -512,7 +441,11 @@ export function arabicBrandIntent(query: string): string | null {
  *  brand-match lead ordering only. */
 export function titleMatchesBrand(title: string, brand: string): boolean {
   if (curatedBrandInTitle(title) === brand) return true;
-  const folded = normalizeArabicText(normalizedTitle(title));
+  // REEA-1218 — lexicon brands that sit outside the 75-entry curated cap
+  // (Nikon, Canon) still lead their own Arabic brand queries through a
+  // whole-word Latin check, so "نيكون" ranks Nikon titles like "sony" does.
+  if (brand.trim() !== "" && curatedWordRe(brand).test(title)) return true;
+  const folded = foldArabicForMatch(normalizedTitle(title));
   for (const [alias, entry] of ARABIC_BRAND_ALIASES) {
     if (entry === brand && folded.includes(alias)) return true;
   }
@@ -686,7 +619,9 @@ function titleWords(title: string): string[] {
 export function tierQueryTokens(query: string): string[] {
   const out: string[] = [];
   for (const t of queryMatchTokens(query)) {
-    const folded = normalizeArabicText(t);
+    // REEA-1218 — the wider query fold (taa marbuta/ya) so "غسالة" and
+    // "غساله" meet the same token; title words are folded the same way below.
+    const folded = foldArabicForMatch(t);
     if (folded !== "" && !out.includes(folded)) out.push(folded);
   }
   return out;
@@ -703,9 +638,27 @@ export function tierQueryTokens(query: string): string[] {
 function tokenHitsWord(wordFolded: string, token: string): boolean {
   if (/[\u0600-\u06FF]/.test(token)) {
     if (wordFolded === "") return false;
-    if (wordFolded.includes(token) || token.includes(wordFolded)) return true;
-    const entry = ARABIC_BRAND_ALIASES.get(token);
-    return entry !== undefined && entry.toLowerCase().includes(wordFolded);
+    const foldedToken = foldArabicForMatch(token);
+    if (wordFolded.includes(foldedToken) || foldedToken.includes(wordFolded)) return true;
+    // REEA-1218 — the curated Latin forms answer the same intent, so an
+    // English-titled row ("LG Washing Machine") still scores against "غسالة".
+    const forms = arabicAliasFormsForToken(token);
+    if (
+      forms.some((form) =>
+        form
+          .toLowerCase()
+          .split(/\s+/)
+          .some((formWord) => formWord === wordFolded || form.includes(wordFolded)),
+      )
+    ) {
+      return true;
+    }
+    const brand = arabicBrandForToken(token);
+    if (brand) {
+      const lower = brand.toLowerCase();
+      if (lower.includes(wordFolded) || wordFolded.includes(lower)) return true;
+    }
+    return false;
   }
   if (/\d/.test(token)) return foldModelToken(wordFolded) === foldModelToken(token);
   return wordFolded === token;
@@ -739,16 +692,20 @@ function leadingBrandOffset(firstWordFolded: string, metadataFolded: string): nu
  * of a model no longer collapses into the loose single word "fold" while its
  * compact spelling matches exactly.
  */
-export function relevanceTier(query: string, title: string, metadata = ""): number {
-  const tokens = compactQueryTokens(query);
+function tierOfTokens(
+  tokens: readonly string[],
+  query: string,
+  title: string,
+  metadata: string,
+): number {
   if (tokens.length === 0) return 1;
   const rawWords = compactTitleWords(title);
-  const wordsFolded = rawWords.map((w) => normalizeArabicText(w));
+  const wordsFolded = rawWords.map((w) => foldArabicForMatch(w));
   const matched = tokens.filter((t) => wordsFolded.some((w) => tokenHitsWord(w, t)));
   if (matched.length === tokens.length) {
-    const metadataFolded = normalizeArabicText(metadata).toLowerCase();
+    const metadataFolded = foldArabicForMatch(metadata).toLowerCase();
     const offset = leadingBrandOffset(
-      rawWords.length > 0 ? normalizeArabicText(rawWords[0]) : "",
+      rawWords.length > 0 ? foldArabicForMatch(rawWords[0]) : "",
       metadataFolded,
     );
     for (let start = 0; start <= offset; start++) {
@@ -759,7 +716,7 @@ export function relevanceTier(query: string, title: string, metadata = ""): numb
   }
   // Half the tokens rounded up ⇔ matched * 2 >= tokens.length.
   if (matched.length * 2 >= tokens.length) return 3;
-  const metaFolded = normalizeArabicText(metadata).toLowerCase();
+  const metaFolded = foldArabicForMatch(metadata).toLowerCase();
   if (metaFolded !== "" && tokens.some((t) => metaFolded.includes(t))) return 4;
   // REEA-1143 — category-synonym bridge: a category-intent query ("air
   // fryer", "ps5") is answered by a title that names the class product even
@@ -770,6 +727,27 @@ export function relevanceTier(query: string, title: string, metadata = ""): numb
   const intent = categoryIntent(query);
   if (intent && categoryRowClass(intent, title) === "product") return 1;
   return 0;
+}
+
+export function relevanceTier(query: string, title: string, metadata = ""): number {
+  const direct = tierOfTokens(compactQueryTokens(query), query, title, metadata);
+  // REEA-1218 — an Arabic query is scored against BOTH the shopper's spelling
+  // (Arabic-titled rows) and the curated Latin dispatch spelling (English-
+  // titled rows). Taking the better rung keeps Arabic-titled answers ranked as
+  // they were while the Latin-titled rows the retailers actually stock stop
+  // falling to tier 0 (the Bet 7A empty-primary defect).
+  if (!/[\u0600-\u06FF]/.test(query)) return direct;
+  const bridged = latinBridgeDispatch(query);
+  if (bridged === query) return direct;
+  const viaBridge = tierOfTokens(compactQueryTokens(bridged), bridged, title, metadata);
+  // A row whose title is Arabic already carries the shopper's own spelling;
+  // its direct tier is the honest evidence (a buried Arabic mention stays
+  // buried, tier 2). The Latin dispatch spelling only improves a Latin-titled
+  // row, where the direct Arabic token scored 0.
+  const titleHasArabic = /[\u0600-\u06FF]/.test(title);
+  if (direct === 0) return viaBridge;
+  if (!titleHasArabic && viaBridge > 0 && viaBridge < direct) return viaBridge;
+  return direct;
 }
 
 /** Model-suffix qualifiers: short trailing words that extend a model-name
@@ -788,7 +766,7 @@ export function isModelExtended(query: string, title: string): boolean {
   const tokens = compactQueryTokens(query);
   if (tokens.length === 0) return false;
   const rawWords = compactTitleWords(title);
-  const wordsFolded = rawWords.map((w) => normalizeArabicText(w));
+  const wordsFolded = rawWords.map((w) => foldArabicForMatch(w));
   // Greedy scan to the position of the last token the phrase consumes.
   let k = 0;
   let endAt = -1;
@@ -854,9 +832,12 @@ export function arabicGenericQuery(query: string): string {
   const generic: string[] = [];
   for (const t of tokens) {
     if (!/[\u0600-\u06FF]/.test(t)) continue; // Latin brand words drop out
-    if (ARABIC_BRAND_ALIASES.has(t)) continue; // "ديل" rides along via the alias bridge
+    // REEA-1218 — the standalone article is not a word; brand tokens ride
+    // along through the alias bridge and are dropped from the generic form.
+    if (t === "ال") continue;
+    if (arabicBrandForToken(t)) continue; // "ديل" rides along via the alias bridge
     const isCurated = CURATED_BRANDS.some(
-      (entry) => normalizeArabicText(entry).toLowerCase() === t || entry.toLowerCase() === t,
+      (entry) => foldArabicForMatch(entry).toLowerCase() === t || entry.toLowerCase() === t,
     );
     if (isCurated) continue;
     generic.push(t);
@@ -958,9 +939,12 @@ const CATEGORY_INTENTS: readonly (CategoryIntent & { query: RegExp })[] = [
   },
   {
     id: "headphones",
-    query: /\bheadphones?\b|\bearphones?\b|\bear ?buds?\b|\bheadsets?\b/i,
-    product: /\bheadphones?\b|\bearphones?\b|\bear ?buds?\b|\bheadsets?\b/i,
-    nouns: ["headphone", "headphones", "earphone", "earbud", "headset"],
+    // REEA-1218 — AirPods are the storefront spelling of the audio class; a
+    // bridged Arabic "سماعة أبل" query must classify an "Apple Airpods" row as
+    // the class product, not a neutral row behind an Arabic speaker listing.
+    query: /\bheadphones?\b|\bearphones?\b|\bear ?buds?\b|\bheadsets?\b|\bair ?pods?\b/i,
+    product: /\bheadphones?\b|\bearphones?\b|\bear ?buds?\b|\bheadsets?\b|\bair ?pods?\b|\bbuds?\b/i,
+    nouns: ["headphone", "headphones", "earphone", "earbud", "headset", "airpods"],
     ar: ["سماع", "سماعة", "سماعات"],
   },
   {
@@ -1023,7 +1007,12 @@ const CATEGORY_COMPLEMENT_AR = [
  *  Returns null for exact-model queries ("fold 7", "iPhone 17 Pro"), for
  *  unknown phrases, and for an empty query. Pure and deterministic. */
 export function categoryIntent(query: string): CategoryIntent | null {
-  const q = normalizedTitle(query).toLowerCase();
+  // REEA-1218 — an Arabic category word is read through the curated Latin
+  // dispatch form ("غسالة" → "washing machine") before the class table, so the
+  // existing category intents (laptop/headphones/phones/washing machine) apply
+  // to Arabic shoppers instead of returning null. Exact-model Arabic queries
+  // keep their model identity below and stay exact-model.
+  const q = normalizedTitle(latinBridgeDispatch(query)).toLowerCase();
   if (q === "") return null;
   for (const c of CATEGORY_INTENTS) {
     if (!c.query.test(q)) continue;

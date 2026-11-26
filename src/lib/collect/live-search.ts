@@ -74,6 +74,7 @@ import {
 import { dedupeOfferRows, distinguishSamePriceRows } from "@/lib/offer-integrity";
 import {
   arabicBrandIntent,
+  arabicQueryAlias,
   brandIsNamed,
   categoryIntent,
   categoryRowClass,
@@ -3960,7 +3961,20 @@ async function finalSnapshot(
   let attemptedQueries: string[] | undefined;
   let retrySuggestions: NormalizedProduct[] | undefined;
   let widenedWithAnswers = false;
-  if (q && products.length === 0 && !widenedRetry) {
+  // REEA-1218 — an Arabic query whose curated Latin alias was ALREADY the
+  // dispatch spelling (collectSettled sends `latinBridgeDispatch(q)`) does not
+  // need a second cold fan-out on a zero: the alias round IS the one bounded
+  // retry the ticket asks for (AC-6). Latin and un-aliased queries keep the
+  // shipped widened-retry path untouched.
+  const queryAlias = arabicQueryAlias(q);
+  // Fully-bridged means every token reached its curated Latin spelling; a
+  // mixed query ("دوف صاون") keeps an uncurated Arabic token, so its widened
+  // retry still has work to do and stays enabled.
+  const aliasServed =
+    queryAlias !== null &&
+    queryAlias.to !== q &&
+    !/[\u0600-\u06FF]/.test(queryAlias.to);
+  if (q && products.length === 0 && !widenedRetry && !aliasServed) {
     // REEA-437 — one widened retry before declaring empty: whole phrases can
     // answer thin on a cold hop (retailer engines match nearly-exact phrases
     // — the same quirk REEA-357/REEA-408 worked around per adapter), so the
@@ -3997,6 +4011,10 @@ async function finalSnapshot(
         if (!servedNotes.some((n) => n.merchant === r.merchant)) servedNotes.push(r);
       }
     }
+  } else if (q && products.length === 0 && queryAlias) {
+    // The alias was the dispatch form; name both spellings on the empty state
+    // so a zero still says what the live run actually asked the retailers.
+    attemptedQueries = queryAlias.to === q ? [q] : [q, queryAlias.to];
   }
   // REEA-510 — genuine empties only: merchants whose live pass kept zero
   // offers (or stayed down after both bounded attempts) fill from their ≤24 h

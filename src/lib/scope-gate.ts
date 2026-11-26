@@ -31,12 +31,17 @@
  */
 
 import {
+  arabicAliasFormsForToken,
+  arabicFamilyAliasesForToken,
+  arabicPhraseAliasForQuery,
   categoryClassesInTitle,
   categoryIntent,
   curatedBrandInTitle,
   dispatchIdentity,
+  foldArabicForMatch,
   isAccessoryTitle,
   isModelAliasShape,
+  latinBridgeDispatch,
   matchesModelIdentity,
   modelIdentityTokens,
   normalizeArabicText,
@@ -91,7 +96,12 @@ const PRODUCE_NOUNS: ReadonlySet<string> = new Set([
   "broccoli", "cauliflower", "mushroom", "mushrooms", "zucchini", "eggplant",
   "aubergine", "pepper", "peppers", "garlic", "ginger", "parsley", "mint",
   "coriander", "cilantro", "celery", "radish", "beetroot", "pumpkin", "corn",
-  "peas", "beans", "okra", "molokhia", "apple", "apples", "banana", "bananas",
+  // REEA-1218 — "apple" stays OUT of the produce nouns: it is also the
+  // device brand in every iPhone title ("Apple iPhone 17 Pro"), and treating
+  // the brand as a produce class conflict demoted every iPhone row to the
+  // accessory band. Fruit queries still carry their literal token ("apple")
+  // through carriesQueryIdentity, so the shelf stays correct.
+  "peas", "beans", "okra", "molokhia", "banana", "bananas",
   "orange", "oranges", "lemon", "lemons", "grape", "grapes", "strawberry",
   "strawberries", "watermelon", "melon", "mango", "mangoes", "avocado",
   "pineapple", "peach", "peaches", "plum", "plums", "cherry", "cherries",
@@ -239,8 +249,34 @@ export function carriesQueryIdentity(query: string, title: string): boolean {
   const codes = skuCodeTokens(dispatchIdentity(query)).filter((c) => !isModelAliasShape(c));
   if (codes.length > 0 && titleCarriesCode(title, codes)) return true;
   const tokens = tierQueryTokens(query);
-  const foldedTitle = normalizeArabicText(normalizedTitle(title)).toLowerCase();
+  const foldedTitle = foldArabicForMatch(normalizedTitle(title)).toLowerCase();
   if (tokens.length > 0 && tokens.every((t) => foldedTitle.includes(t))) return true;
+  // REEA-1218 — every query token may also be answered by its curated Latin
+  // form ("غسالة" → washing machine, "سامسونج" → samsung, "بانادول" →
+  // panadol). Without this, a Latin-titled row under an Arabic query carried
+  // no textual identity and the scope gate bucketed it as accessory.
+  if (
+    tokens.length > 0 &&
+    tokens.every((t) => {
+      if (foldedTitle.includes(t)) return true;
+      if (!/[\u0600-\u06FF]/.test(t)) return false;
+      return arabicAliasFormsForToken(t).some((form) => foldedTitle.includes(form));
+    })
+  ) {
+    return true;
+  }
+  // Multi-word curated phrases ("قدر ضغط", "ال جي") carry identity as a
+  // phrase even when a component token (the standalone "ال") has no Latin
+  // form of its own.
+  const phrase = arabicPhraseAliasForQuery(query);
+  if (phrase && phrase.forms.some((form) => foldedTitle.includes(form))) return true;
+  // The whole-query dispatch spelling is the same evidence in Latin script;
+  // this covers phrases the per-token walk above cannot decompose.
+  const bridged = latinBridgeDispatch(query);
+  if (bridged !== query) {
+    const bridgedTokens = tierQueryTokens(bridged);
+    if (bridgedTokens.length > 0 && bridgedTokens.every((t) => foldedTitle.includes(t))) return true;
+  }
   const models = modelIdentityTokens(query);
   if (models.length > 0) {
     const lower = title.toLowerCase();
@@ -267,9 +303,12 @@ const QUERY_FAMILY_ALIASES: ReadonlyMap<string, readonly string[]> = new Map([
 export function carriesFamilyAlias(query: string, title: string): boolean {
   const tokens = tierQueryTokens(query);
   if (tokens.length !== 1) return false;
-  const aliases = QUERY_FAMILY_ALIASES.get(tokens[0]);
-  if (!aliases) return false;
-  const foldedTitle = normalizeArabicText(normalizedTitle(title)).toLowerCase();
+  // REEA-1218 — Arabic pharmacy spellings (بانادول/بنادول) ride the same
+  // curated Panadol family the Latin query uses.
+  const aliases =
+    QUERY_FAMILY_ALIASES.get(tokens[0]) ?? arabicFamilyAliasesForToken(tokens[0]);
+  if (!aliases || aliases.length === 0) return false;
+  const foldedTitle = foldArabicForMatch(normalizedTitle(title)).toLowerCase();
   return aliases.some((alias) => new RegExp(`\\b${alias}\\b`, "i").test(foldedTitle));
 }
 
