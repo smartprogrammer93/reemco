@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { after } from "next/server";
 import ProductHero from "@/components/ProductHero";
+import { seedCatalogPageWithLastObservation } from "@/lib/collect/last-observation";
 import { startProductCollectionStaged } from "@/lib/collect/runner";
 import type { StagedProductCollection } from "@/lib/collect/runner";
 import { PRODUCTS } from "@/lib/feed";
@@ -100,6 +101,17 @@ export default async function ProductPage({
   // live path applies (REEA-1142: every offer stays, tagged to its market;
   // the renderer labels cross-market rows). Idempotent on live products.
   const shown = scopeProductsByMarket([product], marketViewScope(country))[0];
+  // REEA-1211 — a catalog seed carries no collection stamp, so its page paints
+  // only what this request's live fan-out confirms. When the identity's only
+  // listing is unreliable (keychron-v3-max: one amazon.eg search listing that
+  // answers HTTP 503 for long stretches) that means an empty offer table — a
+  // sitemap URL advertised to crawlers that renders no offer. Seed the page
+  // with the last COMPLETED collection from the shared store instead: those
+  // rows carry their own collectedAt, are marked "cache" (Needs verification,
+  // not this run's Verified), and are replaced row-by-row by this run's live
+  // re-checks. The sitemap asks the same question (lib/collect/last-observation)
+  // before advertising the URL, so the two surfaces cannot disagree.
+  const painted = await seedCatalogPageWithLastObservation(shown);
   // REEA-248 — start the live per-product collection during the server render
   // (the detail-page sibling of results-page streaming): the panel's first
   // retailer offer rides the streamed HTML with no click needed, and the
@@ -124,7 +136,7 @@ export default async function ProductPage({
   const stagedCollection: Promise<StagedProductCollection | null> | undefined =
     process.env.STATIC_EXPORT
       ? undefined
-      : startProductCollectionStaged(shown).then(
+      : startProductCollectionStaged(painted).then(
           (s) => s,
           () => null,
         );
@@ -147,7 +159,7 @@ export default async function ProductPage({
 
   return (
     <ProductHero
-      product={shown}
+      product={painted}
       country={country}
       locale={locale}
       query={carriedQuery ?? ""}
