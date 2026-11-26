@@ -35,6 +35,7 @@ import { join } from "node:path";
 import type { CountryCode } from "@/lib/country";
 import { COLLECT_CACHE_DIR } from "@/lib/collect/store";
 import { getSharedKv } from "@/lib/collect/kv";
+import { listingIdentity, type ListingIdentity } from "@/lib/collect/canonical-product";
 import { SEEN_WINDOW_MS, type SeenRow } from "@/lib/seen-range";
 import type { SearchHit } from "@/lib/collect/live-search";
 
@@ -59,8 +60,20 @@ const KV_TTL_S = Math.ceil(SEEN_RETENTION_MS / 1000);
 interface SeenDay {
   /** ISO stamp of the round that recorded it ("latest per day wins"). */
   observedAt: string;
-  /** Offer figures of that day's round, kept in their scraped native form. */
-  offers: { price: number; currency: string; country: CountryCode }[];
+  /**
+   * Offer figures of that day's round, kept in their scraped native form.
+   * REEA-1167 — each row also carries the merge identity the listing was
+   * grouped under, so the confidence roll-up can scope an observation to a
+   * product card instead of folding every row the merchant returned for the
+   * query. Entries written before this field existed simply have no identity
+   * (the roll-up then falls back to merchant-level attribution).
+   */
+  offers: {
+    price: number;
+    currency: string;
+    country: CountryCode;
+    identity?: ListingIdentity;
+  }[];
 }
 
 interface LastSeenEntry {
@@ -195,9 +208,32 @@ function daySlot(hits: SearchHit[], iso: string): SeenDay[] {
   return [
     {
       observedAt: iso,
-      offers: boundedHits(hits, iso).map((h) => ({ price: h.price, currency: h.currency, country: h.country })),
+      offers: boundedHits(hits, iso).map((h) => ({
+        price: h.price,
+        currency: h.currency,
+        country: h.country,
+        // REEA-1167 — same identity the grouping pass merges on, computed from
+        // this listing's own title/url. No new collection, no new KV key. A
+        // title-less hit never reaches a card (buildGroups skips it), so it
+        // stays identity-less and is bounded by the legacy plausibility band.
+        identity: h.title.trim() ? listingIdentity(h.title, h.url) : undefined,
+      })),
     },
   ];
+}
+
+/** REEA-1167 — validate a stored identity (older entries have none; a corrupt
+ *  one degrades to "unknown", never to a failed read). */
+function asIdentity(value: unknown): ListingIdentity | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Partial<ListingIdentity>;
+  const fields = candidate.fields as unknown;
+  if (!fields || typeof fields !== "object") return undefined;
+  const f = fields as Record<string, unknown>;
+  for (const key of ["brand", "modelLine", "platform", "storage", "color", "grade"]) {
+    if (typeof f[key] !== "string") return undefined;
+  }
+  return { fields: candidate.fields as ListingIdentity["fields"], accessory: candidate.accessory === true };
 }
 
 /** Pre-REEA-540 entries carry only the single `hits` round — derive its slot. */
@@ -312,7 +348,16 @@ export async function readSeenObservations(
           const day = dayOf(slot.observedAt);
           for (const o of slot.offers) {
             if (country && o.country !== country) continue;
-            rows.push({ merchant, day, observedAt: slot.observedAt, price: o.price, currency: o.currency, country: o.country });
+            const identity = asIdentity(o.identity);
+            rows.push({
+              merchant,
+              day,
+              observedAt: slot.observedAt,
+              price: o.price,
+              currency: o.currency,
+              country: o.country,
+              ...(identity ? { identity } : {}),
+            });
           }
         }
       }),

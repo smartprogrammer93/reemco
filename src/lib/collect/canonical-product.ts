@@ -28,7 +28,7 @@
  *     spelling covers the retailer-tailed long spelling of the same line.
  */
 
-import { normalizeArabicText } from "@/lib/relevance";
+import { isAccessoryTitle, normalizeArabicText } from "@/lib/relevance";
 
 export interface CanonicalFields {
   brand: string;
@@ -699,6 +699,50 @@ export function compatibleFields(a: CanonicalFields, b: CanonicalFields): boolea
     return (a.color === "" || b.color === "") || a.color === b.color;
   }
   return true;
+}
+
+/**
+ * REEA-1167 — the group-membership rule the results merge uses, lifted here
+ * so every consumer of "the same product" (the grouping pass and the
+ * seen-recently roll-up) reads ONE identity. Colours merge (REEA-254: colour
+ * is not identity), the rest of the tuple must agree under the partial-match
+ * rule above.
+ */
+export function mergeCompatible(a: CanonicalFields, b: CanonicalFields): boolean {
+  if (!compatibleFields({ ...a, color: "" }, { ...b, color: "" })) return false;
+  if (a.modelLine === "" && b.modelLine === "" && a.storage === "" && b.storage === "") {
+    return compatibleFields(a, b);
+  }
+  return true;
+}
+
+/**
+ * REEA-1167 — the merge identity a live listing was grouped under: the
+ * canonical field tuple (with the URL-seeded capacity buildGroups applies)
+ * plus the REEA-192 accessory class, because an accessory never folds into
+ * the device card it fits. Computed only from the listing's own title/url —
+ * no bundled data, no extra hop.
+ */
+export interface ListingIdentity {
+  fields: CanonicalFields;
+  /** True for the accessory class (case / cover / protector / …). */
+  accessory: boolean;
+}
+
+export function listingIdentity(title: string, url?: string): ListingIdentity {
+  const fields = canonicalFields(title);
+  const fromUrl = fields.storage || !url ? "" : storageFromListingUrl(url);
+  return {
+    fields: fromUrl ? { ...fields, storage: fromUrl } : fields,
+    accessory: isAccessoryTitle(title),
+  };
+}
+
+/** True when two listings belong to the same card under the merge rule. */
+export function sameListingIdentity(a: ListingIdentity, b: ListingIdentity): boolean {
+  if (!a?.fields || !b?.fields) return false;
+  if (a.accessory !== b.accessory) return false;
+  return mergeCompatible(a.fields, b.fields);
 }
 
 /**

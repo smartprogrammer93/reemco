@@ -60,9 +60,9 @@ import {
 import {
   canonicalFields,
   capacityLabelOf,
-  compatibleFields,
   familyDisplayTitle,
   listingLabel,
+  mergeCompatible,
   productSlugFor,
   storageFromListingUrl,
   type CanonicalFields,
@@ -2605,19 +2605,6 @@ function orderByAdapter(hits: SearchHit[]): SearchHit[] {
     .map((h, i) => ({ h, i }))
     .sort((a, b) => adapterRank(a.h.merchant) - adapterRank(b.h.merchant) || a.i - b.i)
     .map((x) => x.h);
-}
-
-/** REEA-254 merge decision. One card per model+storage tier: colors ride
- *  inside the card as swatches (see colorSwatches), so they never split the
- *  merge — storage tiers, model lines and grades still discriminate. The
- *  too-generic guard still reads colors when neither side carries a model
- *  line or storage value: there the color IS the visible variant label. */
-function mergeCompatible(a: CanonicalFields, b: CanonicalFields): boolean {
-  if (!compatibleFields({ ...a, color: "" }, { ...b, color: "" })) return false;
-  if (a.modelLine === "" && b.modelLine === "" && a.storage === "" && b.storage === "") {
-    return compatibleFields(a, b);
-  }
-  return true;
 }
 
 function buildGroups(query: string, hits: SearchHit[]): HitGroup[] {
