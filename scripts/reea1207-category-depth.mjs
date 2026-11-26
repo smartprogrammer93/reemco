@@ -307,8 +307,14 @@ async function main() {
 
   const panelRatios = runs.map((r) => r.panelRatio);
   const medianRatio = median(panelRatios);
-  const queriesAtGateMedian = median(runs.map((r) => r.queriesAtGate));
+  // AC 7B-2R reads the count on the MEDIAN RUN (the run whose panel ratio is
+  // the median), not the median of the per-run counts: those are different
+  // statistics and only the former answers "how many queries cleared 40% on
+  // the median run".
+  const queriesAtGateMedian =
+    (runs.find((r) => r.panelRatio === medianRatio) ?? runs[0]).queriesAtGate;
   const medianRunIndex = panelRatios.indexOf(medianRatio);
+  // (queriesAtGateMedian below uses the same median run.)
   const medianRun = runs[medianRunIndex] ?? runs[0];
 
   console.log("\n=== Bet 7B panel summary (median of 3 runs, EN+AR, 375 basis) ===");
