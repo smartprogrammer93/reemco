@@ -24,6 +24,8 @@
  * Usage: node scripts/smoke-timings.mjs            (prints the report)
  *        import { measureResultsTimings } ...      (used by smoke-check.mjs)
  */
+import { fetchWithThrottleRetry } from "./smoke-http.mjs";
+
 const BASE = (process.env.SMOKE_BASE_URL || "https://ns539626.ip-144-217-72.net").replace(/\/$/, "");
 
 // Fixed set from the REEA-255 benchmark doc (key: benchmark) — 16 normal rows
@@ -77,42 +79,54 @@ const HEADERS = {
   "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36",
 };
 
-/** One cold-client measurement for one query. Retries once on transport error. */
+/**
+ * One cold-client measurement for one query.
+ *
+ * REEA-1184: this probe is the biggest consumer of the app's per-IP page budget
+ * (src/proxy.ts PAGE_RATE_LIMIT, 60/min) — 19 sequential /results GETs run
+ * before the blocking funnel steps, and the headless browser's prefetches then
+ * count against the same bucket. A 429 here used to be recorded as a failed
+ * probe AND to starve the blocking steps behind it. Retry 429/503 with the
+ * served Retry-After so a report-only measurement never lies about the host.
+ * The clock starts before the fetch, so a paced retry is included honestly in
+ * the reported time rather than silently dropped.
+ */
 async function probeQuery(base, query) {
-  let lastErr = "no attempt";
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (attempt > 0) await new Promise((r) => setTimeout(r, 1000));
-    try {
-      const t0 = Date.now();
-      const res = await fetch(`${base}/results?q=${encodeURIComponent(query)}`, {
+  const url = `${base}/results?q=${encodeURIComponent(query)}`;
+  try {
+    const t0 = Date.now();
+    const res = await fetchWithThrottleRetry(
+      url,
+      () => ({
         headers: HEADERS,
         redirect: "follow",
         signal: AbortSignal.timeout(30000),
-      });
-      if (!res.ok || !res.body) {
-        lastErr = `HTTP ${res.status}`;
-        continue;
-      }
-      let firstOfferMs = null;
-      let seen = "";
-      const dec = new TextDecoder();
-      for await (const chunk of res.body) {
-        seen += dec.decode(chunk, { stream: true });
-        if (firstOfferMs === null && FIRST_OFFER_RE.test(seen)) firstOfferMs = Date.now() - t0;
-      }
-      seen += dec.decode();
-      if (firstOfferMs === null && FIRST_OFFER_RE.test(seen)) firstOfferMs = Date.now() - t0;
-      const fullMs = Date.now() - t0;
-      if (firstOfferMs === null) {
-        lastErr = "no real result-card rendered within the served document";
-        continue;
-      }
-      return { query, firstOfferMs, fullMs };
-    } catch (e) {
-      lastErr = `ERR ${e?.cause?.code ?? e?.message ?? "unreachable"}`;
+      }),
+      { log: (m) => console.log(`  INFO ${m}`) },
+    );
+    if (!res.ok || !res.body) {
+      return { query, firstOfferMs: null, fullMs: null, error: `HTTP ${res.status}` };
     }
+    let firstOfferMs = null;
+    let seen = "";
+    const dec = new TextDecoder();
+    for await (const chunk of res.body) {
+      seen += dec.decode(chunk, { stream: true });
+      if (firstOfferMs === null && FIRST_OFFER_RE.test(seen)) firstOfferMs = Date.now() - t0;
+    }
+    seen += dec.decode();
+    if (firstOfferMs === null && FIRST_OFFER_RE.test(seen)) firstOfferMs = Date.now() - t0;
+    const fullMs = Date.now() - t0;
+    if (firstOfferMs === null) {
+      return { query, firstOfferMs: null, fullMs: null, error: "no real result-card rendered within the served document" };
+    }
+    return { query, firstOfferMs, fullMs };
+  } catch (e) {
+    const error = e?.rateLimited
+      ? `HTTP ${e.status} (throttled out after ${e.attempts} attempt(s))`
+      : `ERR ${e?.cause?.code ?? e?.message ?? "unreachable"}`;
+    return { query, firstOfferMs: null, fullMs: null, error };
   }
-  return { query, firstOfferMs: null, fullMs: null, error: lastErr };
 }
 
 /** Nearest-rank percentile, same method as scripts/qa-verify.mjs RT AC-6. */

@@ -231,10 +231,32 @@ jobs:
       # recorded in README > Deploy gate.
       - name: Funnel smoke check against the new host (blocking)
         id: smoke
-        timeout-minutes: 10
+        timeout-minutes: 15
         env:
           SMOKE_BASE_URL: ${{ env.SITE_ADDRESS }}
-        run: npm run smoke
+        run: |
+          set -uo pipefail
+          # REEA-1184: the app gates /results and /product with a per-IP budget
+          # (src/proxy.ts PAGE_RATE_LIMIT, 60 requests/minute) and answers a
+          # burst with 429 + Retry-After. The smoke retries those with the
+          # served cooldown (scripts/smoke-http.mjs) and exits 2 only when every
+          # attempt was paced. Exit 2 means the gate was throttled, NOT that the
+          # build is broken — cool down past the limiter window and rerun the
+          # smoke once before any rollback. Exit 1 is a real failure and rolls
+          # back immediately. Before this, three healthy deploys of 641c2b7 were
+          # rolled back by a burst 429 in step 7 (run 45728235136).
+          npm run smoke
+          code=$?
+          if [ "$code" -eq 2 ]; then
+            echo "::warning::funnel smoke throttled out by the per-IP page gate — cooling down 75s and rerunning before rollback"
+            sleep 75
+            npm run smoke
+            code=$?
+          fi
+          if [ "$code" -ne 0 ]; then
+            echo "::error::funnel smoke failed (exit $code)"
+            exit "$code"
+          fi
 
       # Rollback path when verification fails: the host's deploy.sh already
       # rolls back automatically on a failed on-box verify; this covers the

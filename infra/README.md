@@ -109,6 +109,18 @@ from git.
    It never rescues a genuine failure: 404/410, a plain 403 without a marker, 5xx after
    retries, and timeouts still fail the gate and roll the deploy back. The timing probe
    that runs before the functional steps is report-only and does not gate.
+   Since REEA-1184 every app GET in the suite is throttle-aware
+   (`scripts/smoke-http.mjs`): it retries HTTP 429/503 up to 4 attempts, honouring the
+   served `Retry-After` (capped at 30s) and falling back to bounded exponential backoff.
+   The app gates `/results` and `/product` with a per-IP budget of 60 requests/minute
+   (`src/proxy.ts` PAGE_RATE_LIMIT, REEA-1133), and the smoke's 19 timing queries plus the
+   headless browser's link prefetches spend that budget from one runner IP. A 429 there is
+   the limiter pacing a machine client, not a broken build — before REEA-1184 it failed
+   step 7 and rolled back three healthy deploys of `641c2b7` (run `45728235136`). If every
+   attempt is still throttled the smoke exits **2** (not 1); the workflow then cools down
+   75s and reruns the smoke once before any rollback, and only a real failure (exit 1) or
+   a second throttled run rolls the build back. Pinned in
+   `src/lib/metrics/smoke-http.test.ts`.
 8. Secrets hygiene — `verify.sh` fails when `/etc/reemco/release.env` still carries a
    `REEMCO_KV_TOKEN=` line (dead: no consumer, the KV REST surface was replaced by
    RESP to Valkey) or when any hand-made `/etc/reemco/*.bak-*` env copy remains

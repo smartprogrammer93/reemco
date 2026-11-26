@@ -12,6 +12,10 @@
  *
  * Usage: SMOKE_BASE_URL=https://<deploy> node scripts/smoke-check.mjs
  * Exit 0 = SMOKE PASSED, exit 1 = SMOKE FAILED (names the failed step).
+ * Exit 2 = SMOKE THROTTLED OUT — every attempt hit the app's per-IP page gate
+ *          (429) or a transient 503 after honouring Retry-After. That is not a
+ *          broken build: the workflow cools down and reruns the smoke before it
+ *          considers a rollback (REEA-1184).
  */
 import { existsSync, writeFileSync, readFileSync } from "node:fs";
 import { brotliDecompressSync } from "node:zlib";
@@ -20,6 +24,7 @@ import { chromium as pw } from "playwright-core";
 import chromium from "@sparticuz/chromium";
 import { measureResultsTimings } from "./smoke-timings.mjs";
 import { classifyAttempt } from "./dead-link-smoke.mjs";
+import { fetchWithThrottleRetry, gotoWithThrottleRetry } from "./smoke-http.mjs";
 
 // REEA-1051 — default to the self-hosted production box (the Vercel alias is
 // the rollback path only and is currently deployment-disabled). Workflows
@@ -38,6 +43,12 @@ for (const line of await measureResultsTimings(BASE)) console.log(line);
 // on a fully green run, so a later failing step (e.g. link-health) discarded
 // the evidence of the steps that did pass — exactly what made the 375px
 // follow-up hard to report against the box.
+//
+// REEA-1184: a step that fails only because the app's per-IP page gate answered
+// 429/503 on every retry exits 2 instead of 1. The workflow treats exit 2 as
+// "the edge paced the gate, retry the run after a cooldown" and only rolls the
+// build back for exit 1. Before this, three healthy deploys of 641c2b7 were
+// rolled back by a burst 429 in step 7 (run 45728235136).
 function step(n, name, fn) {
   return fn().then(
     (detail) => {
@@ -46,50 +57,15 @@ function step(n, name, fn) {
     (err) => {
       console.error(`SMOKE FAILED at step ${n} (${name}): ${err.message}`);
       console.error(`Deploy under test: ${BASE}`);
+      if (err?.rateLimited) {
+        console.error("SMOKE THROTTLED OUT — the app's rate limiter paced the gate, not a broken build.");
+        console.error("SMOKE INCONCLUSIVE — retry the run after the limiter window; do NOT roll the build back. Exit 2.");
+        process.exit(2);
+      }
       console.error("SMOKE FAILED — deploy must be treated as failed / rolled back. See step above.");
       process.exit(1);
     },
   );
-}
-
-/**
- * REEA-1133 interaction — the live-fanout page gate counts every /results and
- * /product GET per client IP (60/min) and sheds scripted bursts with 429 +
- * Retry-After. This smoke IS such a burst: the 20-query timing probe plus the
- * browser pass, and the product prefetches those page loads trigger, can spend
- * the window before the functional steps finish. A 429 here is the gate doing
- * its job, not the build failing, so wait out the advertised window and retry
- * once. Any other non-2xx still fails the deploy.
- *
- * Measured: the 641c2b7 deploy failed step 7 twice with "results page returned
- * HTTP 429" while steps 1-6 were green; the rollback then served the previous
- * tag, so every downstream check measured the wrong build.
- */
-const GATE_RETRY_CAP_MS = 65_000;
-
-function gateRetryMs(retryAfter) {
-  const seconds = Number(retryAfter);
-  return Math.min(GATE_RETRY_CAP_MS, Math.max(1, Number.isFinite(seconds) && seconds > 0 ? seconds : 60)) * 1000;
-}
-
-/** Fetch a live-fanout page, waiting out the page gate if it answers 429. */
-async function fetchPage(url, init) {
-  const first = await fetch(url, init);
-  if (first.status !== 429) return first;
-  const wait = gateRetryMs(first.headers.get("retry-after"));
-  console.log(`  INFO 429 on ${url} — page gate engaged, retrying in ${Math.round(wait / 1000)}s`);
-  await new Promise((resolve) => setTimeout(resolve, wait));
-  return fetch(url, init);
-}
-
-/** Navigate a Playwright page to a live-fanout address, waiting out a 429. */
-async function gotoPage(page, url, opts) {
-  const first = await page.goto(url, opts);
-  if (!first || first.status() !== 429) return first;
-  const wait = gateRetryMs(first.headers()["retry-after"]);
-  console.log(`  INFO 429 on ${url} — page gate engaged, retrying in ${Math.round(wait / 1000)}s`);
-  await page.waitForTimeout(wait);
-  return page.goto(url, opts);
 }
 
 // @sparticuz/chromium bundles its shared libraries (libnspr4 etc.) in
@@ -148,7 +124,7 @@ const page = await browser.newPage();
 page.setDefaultTimeout(30000);
 
 await step(1, "home page loads (200, no fatal render error)", async () => {
-  const resp = await page.goto(`${BASE}/`, { waitUntil: "load" });
+  const resp = await gotoWithThrottleRetry(page, `${BASE}/`, { waitUntil: "load" }, { log: console.log });
   if (!resp || resp.status() !== 200) throw new Error(`home returned HTTP ${resp ? resp.status() : "no response"}`);
   await page.waitForSelector("header a[href='/']", { timeout: 15000 });
   const fatal = await page.$("text=/Application error|Unhandled Runtime Error/i");
@@ -157,7 +133,12 @@ await step(1, "home page loads (200, no fatal render error)", async () => {
 });
 
 await step(2, `search "${FIXTURE_QUERY}" returns results`, async () => {
-  const resp = await gotoPage(page, `${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`, { waitUntil: "load" });
+  const resp = await gotoWithThrottleRetry(
+    page,
+    `${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`,
+    { waitUntil: "load" },
+    { log: console.log },
+  );
   if (!resp || resp.status() !== 200) throw new Error(`results returned HTTP ${resp ? resp.status() : "no response"}`);
   // Wait out client-side hydration: real cards replace the aria-hidden skeletons.
   await page.waitForFunction(
@@ -177,7 +158,7 @@ await step(3, "result card has a working click-out link", async () => {
   const offerHref = await page.$(".result-card a[target='_blank'][rel*='noopener'], .result-card a[href^='http']");
   if (!productHref && !offerHref) throw new Error("no click-out link (product or offer) on the result card");
   if (productHref) {
-    const resp = await gotoPage(page, `${BASE}${productHref}`, { waitUntil: "load" });
+    const resp = await gotoWithThrottleRetry(page, `${BASE}${productHref}`, { waitUntil: "load" }, { log: console.log });
     if (!resp || resp.status() !== 200) throw new Error(`product page ${productHref} returned HTTP ${resp ? resp.status() : "no response"}`);
     return `product page ${productHref} resolves HTTP 200${offerHref ? " (+ offer link present)" : ""}`;
   }
@@ -193,7 +174,12 @@ await step(3, "result card has a working click-out link", async () => {
 // negative that fails every deploy despite healthy cards.
 await step(4, "results surface last-verified freshness (REEA-65)", async () => {
   const t0 = Date.now();
-  await gotoPage(page, `${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`, { waitUntil: "load" });
+  await gotoWithThrottleRetry(
+    page,
+    `${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`,
+    { waitUntil: "load" },
+    { log: console.log },
+  );
   await page.waitForSelector(".result-card", { timeout: 25000 });
   const html = await page.content();
   // REEA-283/REEA-254/REEA-1092 chip copy renders uppercase with the minute
@@ -241,7 +227,7 @@ await step(5, "375px mobile pass: no horizontal overflow, CTAs in viewport (REEA
   const pages = ["/", `/results?q=${encodeURIComponent(FIXTURE_QUERY)}`];
   // Include one real product detail page when step 3 found its href.
   try {
-    const detailHref = await gotoPage(mobile, `${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`, { waitUntil: "load" }).then(() =>
+    const detailHref = await gotoWithThrottleRetry(mobile, `${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`, { waitUntil: "load" }, { log: console.log }).then(() =>
       mobile.$eval(".result-card a[href^='/product/']", (a) => a.getAttribute("href")),
     );
     if (detailHref) pages.push(detailHref);
@@ -250,7 +236,7 @@ await step(5, "375px mobile pass: no horizontal overflow, CTAs in viewport (REEA
   }
   const scrolled = [];
   for (const path of pages) {
-    await gotoPage(mobile, `${BASE}${path}`, { waitUntil: "load" });
+    await gotoWithThrottleRetry(mobile, `${BASE}${path}`, { waitUntil: "load" }, { log: console.log });
     await mobile.waitForTimeout(500); // allow hydration to settle before measuring
     const { scrollWidth, clipped, reachable } = await mobile.evaluate(() => {
       const vw = document.documentElement.clientWidth;
@@ -381,11 +367,20 @@ await step(6, "catalog offer URLs resolve (link-health)", async () => {
 // deploy check (graceful degradation), but an adapter absent from the notes
 // array means the deployed build never dispatched it.
 await step(7, "deployed results notes carry every registered adapter (REEA-238/260)", async () => {
-  const resp = await fetchPage(`${BASE}/results?q=${encodeURIComponent("iPhone 15")}`, {
-    headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36" },
-    redirect: "follow",
-    signal: AbortSignal.timeout(30000),
-  });
+  // REEA-1184: this is the step that rolled three healthy deploys back. It is
+  // one document GET, but the browser's link prefetches and the 19 timing
+  // probes count against the same per-IP page budget (src/proxy.ts
+  // PAGE_RATE_LIMIT, 60/min). Retry 429/503 with the served Retry-After instead
+  // of reading a pacing response as a broken build.
+  const resp = await fetchWithThrottleRetry(
+    `${BASE}/results?q=${encodeURIComponent("iPhone 15")}`,
+    () => ({
+      headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36" },
+      redirect: "follow",
+      signal: AbortSignal.timeout(30000),
+    }),
+    { log: console.log },
+  );
   if (!resp.ok) throw new Error(`results page returned HTTP ${resp.status}`);
   const html = await resp.text();
   // Flight payload embeds the snapshot notes with escaped quotes; take every
@@ -426,7 +421,11 @@ await step(7, "deployed results notes carry every registered adapter (REEA-238/2
 await step(8, "served cache-window headers on repeated /results (REEA-447 R5)", async () => {
   const url = `${BASE}/results?q=${encodeURIComponent(FIXTURE_QUERY)}`;
   const get = async () =>
-    fetchPage(url, { headers: { accept: "text/html", "cache-control": "max-age=0" }, redirect: "follow", signal: AbortSignal.timeout(15000) });
+    fetchWithThrottleRetry(
+      url,
+      () => ({ headers: { accept: "text/html", "cache-control": "max-age=0" }, redirect: "follow", signal: AbortSignal.timeout(15000) }),
+      { log: console.log },
+    );
   const first = await get();
   const second = await get(); // the repeat the window exists for
   if (!first.ok || !second.ok) throw new Error(`results GETs returned ${first.status}/${second.status}`);
@@ -454,11 +453,15 @@ await step(8, "served cache-window headers on repeated /results (REEA-447 R5)", 
 // 2's hydration assertion runs alongside this one.
 await step(9, "served CSP carries a fresh per-request nonce (REEA-1088)", async () => {
   const read = async () => {
-    const resp = await fetch(`${BASE}/`, {
-      headers: { accept: "text/html" },
-      redirect: "follow",
-      signal: AbortSignal.timeout(15000),
-    });
+    const resp = await fetchWithThrottleRetry(
+      `${BASE}/`,
+      () => ({
+        headers: { accept: "text/html" },
+        redirect: "follow",
+        signal: AbortSignal.timeout(15000),
+      }),
+      { log: console.log },
+    );
     if (!resp.ok) throw new Error(`GET / returned HTTP ${resp.status}`);
     return resp.headers.get("content-security-policy") ?? resp.headers.get("content-security-policy-report-only") ?? "";
   };
