@@ -376,9 +376,13 @@ export function coverageParts(
     // answering). Only a real blocked cause or a zone record may claim the word.
     const budgetMiss =
       typeof n.error === "string" && /completion budget/i.test(n.error);
-    if (budgetMiss && !zoneBlocked) continue;
+    if (budgetMiss) continue;
+    // REEA-1221 — a lane that answered this run (rows parsed, no error)
+    // disproves a stale zone record: the /api/echo tripwire probes PLAIN hops,
+    // so a lane whose collector clears the challenge through a browser or a
+    // relay still records as a blocked zone. The run's own answer wins.
+    if (n.hits > 0 && !n.error) continue;
     if (!zoneBlocked && !blockedCause) continue;
-    if (!rendered && n.hits > 0 && !n.error) continue;
     blocked.push(n.merchant);
   }
   const parts: CoveragePart[] = [];
