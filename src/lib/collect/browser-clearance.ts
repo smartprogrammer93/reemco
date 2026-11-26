@@ -529,8 +529,13 @@ const MARKDOWN_TTL_S = 6 * 60 * 60;
 
 export async function relayMarkdown(url: string, marker: string): Promise<string> {
   if (!relayTierEnabled()) return "";
-  if (Date.now() < relayCooldownUntil) {
-    lastFailure = "reader relay cooling down after a rate-limit answer";
+  // REEA-1221 — its OWN cooldown: the markdown hop rides a different relay
+  // (and therefore a different quota) than the html hop, so a rate-limit on one
+  // must not silence the other (measured 2026-11-26: a microlink 429 put the
+  // jina markdown hop into cooldown too, and the lane settled blocked while the
+  // markdown relay was answering fine).
+  if (Date.now() < jinaCooldownUntil) {
+    lastFailure = "markdown relay cooling down after a rate-limit answer";
     return "";
   }
   const kv = getSharedKv();
@@ -549,8 +554,8 @@ export async function relayMarkdown(url: string, marker: string): Promise<string
       signal: AbortSignal.timeout(JINA_TIMEOUT_MS),
     });
     if (!res.ok) {
-      lastFailure = `reader relay HTTP ${res.status}`;
-      if (res.status === 429 || res.status === 503) relayCooldownUntil = Date.now() + RELAY_COOLDOWN_MS;
+      lastFailure = `markdown relay HTTP ${res.status}`;
+      if (res.status === 429 || res.status === 503) jinaCooldownUntil = Date.now() + RELAY_COOLDOWN_MS;
       return "";
     }
     const md = await res.text();
