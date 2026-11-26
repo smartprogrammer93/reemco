@@ -28,7 +28,7 @@
  *    box can drop ~200 MB of Chromium when it needs the room).
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -43,6 +43,7 @@ const CONTENT_WAIT_MS = 12_000;
 
 type BrowserLike = {
   newContext(options: Record<string, unknown>): Promise<ContextLike>;
+  version?(): string;
   close(): Promise<void>;
 };
 type ContextLike = {
@@ -71,6 +72,8 @@ let launch: Promise<{ browser: BrowserLike; context: ContextLike } | null> | nul
 let lastFailure = "";
 /** Which launch arg set answered (-1 until a browser is up). */
 let lastLaunchArgs = -1;
+/** The launched Chromium's own version string, or "" until it answers. */
+let browserVersion = "";
 /**
  * REEA-1221 — the arg set the process has climbed to. It only ever moves
  * forward: once a set has proven to kill the browser on this host, retrying it
@@ -107,6 +110,14 @@ export interface BrowserProbe {
   ms: number;
   /** Which launch arg set answered (-1 = none). */
   args: number;
+  /** Staged self-test: what the runtime actually managed to do. */
+  stages: {
+    libs: boolean;
+    exeBytes: number;
+    launched: boolean;
+    version: string;
+    gotoOk: boolean;
+  };
   error?: string;
 }
 
@@ -114,9 +125,18 @@ export interface BrowserProbe {
 export async function browserProbe(url: string, contentSelector: string): Promise<BrowserProbe> {
   const started = Date.now();
   if (!browserTierEnabled()) {
-    return { enabled: false, ok: false, bytes: 0, painted: false, ms: 0, args: -1 };
+    return {
+      enabled: false,
+      ok: false,
+      bytes: 0,
+      painted: false,
+      ms: 0,
+      args: -1,
+      stages: { libs: false, exeBytes: 0, launched: false, version: "", gotoOk: false },
+    };
   }
   const { html, error } = await navigate(url, contentSelector);
+  const exe = join(tmpdir(), "chromium");
   return {
     enabled: true,
     ok: html.length > 0 && !error,
@@ -124,6 +144,13 @@ export async function browserProbe(url: string, contentSelector: string): Promis
     painted: html.includes(contentSelector.replace(/^[.#]/, "")),
     ms: Date.now() - started,
     args: lastLaunchArgs,
+    stages: {
+      libs: existsSync(join(tmpdir(), "al2023", "lib", "libnspr4.so")),
+      exeBytes: existsSync(exe) ? statSync(exe).size : 0,
+      launched: lastLaunchArgs >= 0,
+      version: browserVersion,
+      gotoOk: html.length > 0,
+    },
     ...(error ? { error } : {}),
   };
 }
@@ -221,6 +248,11 @@ async function getSharedBrowser(): Promise<{ browser: BrowserLike; context: Cont
           }
         }
         if (!browser) return null;
+        try {
+          browserVersion = browser.version?.() ?? "";
+        } catch {
+          browserVersion = "";
+        }
         const context = await browser.newContext({
           userAgent: BROWSER_UA,
           locale: "en-US",
