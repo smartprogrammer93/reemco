@@ -25,6 +25,7 @@ import chromium from "@sparticuz/chromium";
 import { measureResultsTimings } from "./smoke-timings.mjs";
 import { classifyAttempt } from "./dead-link-smoke.mjs";
 import { fetchWithThrottleRetry, gotoWithThrottleRetry } from "./smoke-http.mjs";
+import { longestNotesArray, notesMerchants } from "./flight-notes.mjs";
 
 // REEA-1051 — default to the self-hosted production box (the Vercel alias is
 // the rollback path only and is currently deployment-disabled). Workflows
@@ -393,12 +394,15 @@ await step(7, "deployed results notes carry every registered adapter (REEA-238/2
   );
   if (!resp.ok) throw new Error(`results page returned HTTP ${resp.status}`);
   const html = await resp.text();
-  // Flight payload embeds the snapshot notes with escaped quotes; take every
-  // notes array in flush order and evaluate the longest (final snapshot).
-  const arrays = [...html.matchAll(/notes\\":\[([^\]]*)\]/g)].map((m) => m[1]);
-  if (arrays.length === 0) throw new Error("no notes array found in deployed results HTML");
-  const finalNotes = arrays.reduce((a, b) => (b.length > a.length ? b : a));
-  const merchants = [...finalNotes.matchAll(/merchant\\":\\"([^\\]+)/g)].map((m) => m[1]);
+  // REEA-1224: the flight payload embeds the snapshot notes with escaped
+  // quotes. A plain `[^\]]*` regex truncated the array at the first `]` inside
+  // a note's `error` string (the Next Store browser-tier failure ends with
+  // one), so the "longest" array was really a 12-note intermediate flush and
+  // this step named three dispatched lanes as missing. Walk the payload with
+  // bracket/string awareness instead; see scripts/flight-notes.mjs.
+  const finalNotes = longestNotesArray(html);
+  if (finalNotes === null) throw new Error("no notes array found in deployed results HTML");
+  const merchants = notesMerchants(finalNotes);
   // REEA-1059: the list must name lanes that are DISPATCHED in
   // src/lib/collect/live-search.ts. "PC Kuwait" was removed here because the
   // lane itself was retired in REEA-901 (Cloudflare 403 on every hop shape from
