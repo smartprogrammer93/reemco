@@ -258,16 +258,25 @@ export function crossMarketHeadline(
   offers: readonly PriceOffer[],
   scope: CountryCode | null,
   locale?: Locale,
+  opts?: { pending?: boolean },
 ): string | null {
-  const parts = crossMarketHeadlineParts(offers, scope, locale);
+  const parts = crossMarketHeadlineParts(offers, scope, locale, opts);
   return parts === null ? null : `${parts.prefix}${parts.price}${parts.suffix}`;
 }
 
-/** REEA-1198 — the same headline as its two render parts (sentence, price). */
+/** REEA-1198 — the same headline as its two render parts (sentence, price).
+ *
+ *  REEA-1217 — `opts.pending` selects the interim sentence: while the selected
+ *  market's batch may still land, the card cannot claim there is NO local
+ *  offer. The pending form states the foreign price it holds ("Saudi price
+ *  from KD X") and leaves the "No {market} offer" claim to the settled state.
+ *  The settled default is unchanged, so a converged card keeps its full
+ *  disclosure. */
 export function crossMarketHeadlineParts(
   offers: readonly PriceOffer[],
   scope: CountryCode | null,
   locale?: Locale,
+  opts?: { pending?: boolean },
 ): CrossMarketHeadlineParts | null {
   if (scope === null) return null; // ALL view: no single foreign market to name
   // A local offer exists → the normal headline is used, not this line.
@@ -284,7 +293,10 @@ export function crossMarketHeadlineParts(
   // Fill the sentence and the price separately: the {price} slot is the ONLY
   // place a line break could split the figure, and it is rendered as its own
   // nowrap token by the card/hero.
-  const [head, tail] = t.crossMarketHeadline.split("{price}");
+  const template = opts?.pending
+    ? t.crossMarketHeadlinePending
+    : t.crossMarketHeadline;
+  const [head, tail] = template.split("{price}");
   return {
     prefix: fill(head, values),
     price: convertedLabel(cross.price, cross.currency, scope, { approx: false }),

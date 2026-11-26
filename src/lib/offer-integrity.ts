@@ -125,6 +125,38 @@ export function comparisonMerchantCount(
 }
 
 /**
+ * REEA-1217 — the distinct in-market merchants whose rows the card renders.
+ *
+ * Same dedupe and market-scope rules as `comparisonMerchantsOf`, but a
+ * possible-mismatch row is NOT dropped: it is still a row on the shopper's
+ * card, so a basis line built on this count can never read "0 retailers" over
+ * a rendered row (live `belkin-rockstar-c`: one Xcite row at ratio 0.09, so
+ * zero comparison lanes but one visible retailer).
+ *
+ * This is a RENDER count, not the comparison-lane count: the claim gate and
+ * `comparison_depth` keep reading `comparisonMerchantCount`, so a mismatch row
+ * still never earns the "best effective price" claim. The card uses this only
+ * when the lane count is zero, i.e. when the alternative is a count line that
+ * contradicts its own rows.
+ */
+export function renderedMerchantCount(
+  offers: readonly ComparisonOffer[],
+  scope: CountryCode | null,
+): number {
+  const merchants = new Set<string>();
+  for (const offer of dedupeOfferRows(offers ?? [])) {
+    if (scope !== null) {
+      const market = offer.market ? (offer.market as CountryCode) : offerMarket(offer.currency);
+      if (market !== scope) continue;
+    }
+    const name = (offer.merchant ?? "").trim();
+    if (!name) continue;
+    merchants.add(name.toLowerCase());
+  }
+  return merchants.size;
+}
+
+/**
  * AC4 — the listing's own reference, for a row that carries no textual
  * qualifier but shares its merchant AND price with another row on the same
  * card (two Eureka listings of one 1TB phone at KD 489.90, one labelled

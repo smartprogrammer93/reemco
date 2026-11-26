@@ -43,7 +43,11 @@ import OfferStatusToken from "@/components/OfferStatus";
 import { offerStatusForOffer } from "@/lib/offer-status";
 // REEA-1178 — the ONE offer-row integrity definition (merchant count, mismatch
 // marker), shared with the weekly comparison-depth fold.
-import { comparisonMerchantCount, isPossibleMismatchOffer } from "@/lib/offer-integrity";
+import {
+  comparisonMerchantCount,
+  isPossibleMismatchOffer,
+  renderedMerchantCount,
+} from "@/lib/offer-integrity";
 
 /**
  * REEA-963 R1 FR-1 — the query-time sanity verdict helpers. A flagged offer
@@ -630,17 +634,23 @@ export default function ProductResultCard({
     best,
     localBest,
     realCoupons,
+    cardRows: shelfOffers,
   } = visibleShelfOffers(product, scope);
   const hasLocalOffer = localBest !== null;
-  // REEA-1198 — the headline is rendered as its two parts so the price token
-  // ("KD 0.47") is its own nowrap span: the sentence may wrap, the figure may
-  // not split ("KD" / "0.47") at 375 AR on the disclosed-fallback path.
-  const headlineParts = hasLocalOffer ? null : crossMarketHeadlineParts(offers, scope, locale);
   const kuwaitChecking =
     kuwaitBatchPending &&
     (kuwaitPendingStatus ||
       !hasLocalOffer ||
       (best != null && best.currency.trim().toUpperCase() !== "KWD"));
+  // REEA-1198 — the headline is rendered as its two parts so the price token
+  // ("KD 0.47") is its own nowrap span: the sentence may wrap, the figure may
+  // not split ("KD" / "0.47") at 375 AR on the disclosed-fallback path.
+  // REEA-1217 — while the batch may still land (kuwaitChecking), the card must
+  // not claim "No Kuwait offer": the interim sentence states the foreign price
+  // it holds and leaves the absence claim to the settled state.
+  const headlineParts = hasLocalOffer
+    ? null
+    : crossMarketHeadlineParts(offers, scope, locale, { pending: kuwaitChecking });
   // REEA-1122 — one absolute-price base, shared with the product hero, so a
   // variant chip never prints a bare delta ("KD 0"). REEA-1177 scopes it to
   // the selected market and uses effectivePrice.
@@ -716,6 +726,16 @@ export default function ProductResultCard({
   // never becomes a comparison lane. Live `fb1747d2`: the Anker AeroFit 2
   // card's Amazon.eg accessory at ratio 0.09997 counted as a second retailer.
   const inMarketRetailers = comparisonMerchantCount(offers, scope);
+  // REEA-1217 — the printed basis must agree with the rows the card renders.
+  // A card whose only in-market rows are possible-mismatch rows has zero
+  // comparison lanes but still prints a row; the lane count alone would read
+  // "0 retailers" over a visible price (live `belkin-rockstar-c`). The claim
+  // gate below keeps reading the lane count, so a mismatch row still never
+  // earns "best effective price" — only the count line stops contradicting
+  // the card's own list.
+  const renderedRetailers = renderedMerchantCount(offers, scope);
+  const basisRetailers =
+    inMarketRetailers > 0 ? inMarketRetailers : renderedRetailers;
   const comparison = inMarketRetailers >= 2;
   const bestEffectiveClaim = comparison && bestKnown;
 
@@ -843,11 +863,11 @@ export default function ProductResultCard({
           <span className="rc-card-basis">
             {bestEffectiveClaim
               ? t.bestEffectiveLabel
-              : inMarketRetailers === 1
-                ? `${inMarketRetailers} ${t.retailersOne}`
+              : basisRetailers === 1
+                ? `${basisRetailers} ${t.retailersOne}`
                 : !hasLocalOffer && best && offerMarket(best.currency)
                   ? marketPriceLabel(offerMarket(best.currency) as CountryCode, locale)
-                  : `${inMarketRetailers} ${t.retailersMany}`}
+                  : `${basisRetailers} ${t.retailersMany}`}
           </span>
         </span>
       </div>
@@ -998,7 +1018,7 @@ export default function ProductResultCard({
             {t.pricesHeading}
           </h3>
           <div className="rc-offer-list">
-            {offers.slice(0, SHELF_VISIBLE_OFFER_ROWS).map((o) => (
+            {shelfOffers.map((o) => (
               <ShelfOfferRow
                 key={`${o.merchant}-${o.url}`}
                 offer={o}
@@ -1060,8 +1080,8 @@ export default function ProductResultCard({
 
           {best && hasLocalOffer && cheapestListed != null && (
             <p style={{ font: "var(--rc-text-body)", color: "var(--rc-body-text)" }}>
-              <span className="tabular">{inMarketRetailers}</span>{" "}
-              {inMarketRetailers === 1 ? t.retailersOne : t.retailersMany} · {t.fromWord}{" "}
+              <span className="tabular">{basisRetailers}</span>{" "}
+              {basisRetailers === 1 ? t.retailersOne : t.retailersMany} · {t.fromWord}{" "}
               <span className="tabular" style={{ fontWeight: 600, color: "var(--rc-ink)" }}>
                 <bdi>{formatCountryPrice(cheapestListed, "KWD", viewCountry).primary}</bdi>
               </span>

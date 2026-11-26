@@ -354,6 +354,11 @@ const en = {
   marketPrice: "{market} price",
   marketStock: "{market} stock",
   crossMarketHeadline: "No {market} offer · {marketOther} price from {price}",
+  /* REEA-1217 — the interim headline: while the selected market's batch may
+     still land, the card cannot claim there is NO local offer. It states the
+     foreign price it actually holds and lets the checking state carry the
+     uncertainty; the settled form above is used only once the batch answered. */
+  crossMarketHeadlinePending: "{marketOther} price from {price}",
   crossMarketLead: "{market} price {price}",
   crossMarketCaveat: "Delivery from {market} · customs may apply",
   checkedLead: "Checked",
@@ -671,6 +676,8 @@ const ar: typeof en = {
   marketPrice: "سعر {market}",
   marketStock: "مخزون {market}",
   crossMarketHeadline: "لا يوجد عرض في {market} · سعر {marketOther} من {price}",
+  // REEA-1217 — الصيغة المؤقتة: أثناء التحقق لا يمكن ادّعاء عدم وجود عرض محلي.
+  crossMarketHeadlinePending: "سعر {marketOther} من {price}",
   crossMarketLead: "سعر {market} {price}",
   crossMarketCaveat: "التوصيل من {market} · قد تُطبَّق رسوم جمركية",
   checkedLead: "حُدِّث",

@@ -72,6 +72,16 @@ export function foldRetailerRows(
 export interface VisibleShelfOffers {
   /** The rows the card paints, in paint order, capped at the shelf anatomy. */
   rows: PriceOffer[];
+  /**
+   * REEA-1217 — the card's paint rows with the headline offer pinned in when
+   * the live-first ladder would push it beyond the cap. A last-seen snapshot
+   * best price sorts after live rows (REEA-510), so `rows` alone could omit
+   * the very merchant the card headlines (live `apple-iphone17-pro-256gb`:
+   * Wibi KD 314.90 led the headline while Xcite / Eureka held the visible
+   * rows). The card paints this set; the JSON-LD keeps `rows` + `best`
+   * because structured data may describe the row behind "view all".
+   */
+  cardRows: PriceOffer[];
   /** The full folded/sorted set behind the "view all N offers" disclosure. */
   all: PriceOffer[];
   /** Cheapest in-stock, unflagged offer of the selected market (headline). */
@@ -108,8 +118,15 @@ export function visibleShelfOffers(
   const localBest = headlineOfferFor(all, scope);
   const crossBest = cheapestCrossMarketOffer(all, scope);
   const best = localBest ?? crossBest ?? all[0] ?? null;
+  const rows = all.slice(0, SHELF_VISIBLE_OFFER_ROWS);
+  // REEA-1217 — the card's own list must carry the merchant it headlines.
+  const cardRows =
+    best != null && !rows.includes(best)
+      ? [best, ...all.filter((o) => o !== best)].slice(0, SHELF_VISIBLE_OFFER_ROWS)
+      : rows;
   return {
-    rows: all.slice(0, SHELF_VISIBLE_OFFER_ROWS),
+    rows,
+    cardRows,
     all,
     localBest,
     crossBest,
