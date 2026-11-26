@@ -1653,6 +1653,10 @@ function StagedResults(props: {
           />
         </Suspense>
       </ResultsHead>
+      {/* REEA-1218 AC-3 — render the alias disclosure in the INITIAL streamed
+          shell too, not only after convergence, so the served document already
+          carries it for QA and the shopper sees it before the shelf lands. */}
+      <AliasSubstitutionLine query={query} />
       <StatusLegend locale={locale} />
       <Suspense fallback={<StampGhost locale={locale} />}>
         <ResultsSubline
