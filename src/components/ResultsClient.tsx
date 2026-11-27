@@ -66,6 +66,13 @@ import { ARABIC_EMPTY_SUGGESTIONS, arabicQueryAlias } from "@/lib/arabic-lexicon
 // REEA-1247 — nearest in-market recovery for the zero-offer page: pure, live
 // from the run's own snapshot products, and never a fabricated offer.
 import { nearestMatches } from "@/lib/zero-recovery";
+// REEA-1266 — the ONE provisional-shell marker pair shared with the
+// /api/health funnel walk, so the probe's "still working" detection can never
+// drift from what this renderer actually stamps.
+import {
+  COLLECTION_PENDING_ATTR,
+  COLLECTION_PENDING_VALUE,
+} from "@/lib/collect/shell-markers";
 import type { NormalizedProduct } from "@/types/product";
 
 /**
@@ -1562,6 +1569,22 @@ export function renderedShelfAcrossStages(
   });
 }
 
+/* REEA-1266 — the machine-readable provisional-shell marker. A served
+   results document whose snapshot is NOT settled (`settled === false`) is
+   either deferred at the collection admission cap or finalized while hops
+   were still in flight: both are "still working", and the follow-up feed
+   folds the real answer in behind the response. The /api/health funnel walk
+   reads this marker (lib/collect/shell-markers.ts) to tell that state apart
+   from a genuinely broken funnel that settled at zero cards, instead of
+   answering 503 (cards=0) and turning normal fan-out load into an outage
+   signal. `hidden` keeps it out of layout and out of the accessibility tree:
+   no shopper-visible change. It rides the same stage snapshot StageCoverage
+   already reads, so it lands in the SERVED (first-flush) document. */
+function CollectionPendingFlag({ pending }: { pending: boolean }) {
+  if (!pending) return null;
+  return <span hidden {...{ [COLLECTION_PENDING_ATTR]: COLLECTION_PENDING_VALUE }} />;
+}
+
 function StageCoverage(props: {
   stages: readonly Promise<LiveSearchResult>[];
   query: string;
@@ -1595,18 +1618,22 @@ function StageCoverage(props: {
   // offer row beside it, and every rendered row's merchant is named. Notes
   // ride the final stage — the only snapshot where every hop has settled.
   return (
-    <CoverageLine
-      notes={snap.notes}
-      products={products}
-      query={props.query}
-      locale={props.locale}
-      pendingStatus={snap.kuwaitPendingStatus}
-      onRefresh={props.onRefresh}
-      unreachableLanes={props.unreachableLanes}
-      shelfEmpty={shelfRows.length === 0}
-      exactModelCards={exactModelCardCount(shelfRows, props.query)}
-      className={props.className}
-    />
+    <>
+      {/* REEA-1266 — the served shell's own honesty flag for the health probe. */}
+      <CollectionPendingFlag pending={snap.settled === false} />
+      <CoverageLine
+        notes={snap.notes}
+        products={products}
+        query={props.query}
+        locale={props.locale}
+        pendingStatus={snap.kuwaitPendingStatus}
+        onRefresh={props.onRefresh}
+        unreachableLanes={props.unreachableLanes}
+        shelfEmpty={shelfRows.length === 0}
+        exactModelCards={exactModelCardCount(shelfRows, props.query)}
+        className={props.className}
+      />
+    </>
   );
 }
 
@@ -1786,6 +1813,11 @@ function StagedResults(props: {
       // now" instead of the lone "." placeholder.
       return (
         <ResultsErrorBoundary locale={locale}>
+          {/* REEA-1266 — the provisional-shell marker rides the converged
+              zero view too (a finalized-at-budget zero is provisional by
+              definition), so the honesty flag never depends on which render
+              branch painted. */}
+          <CollectionPendingFlag pending />
           <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} hiddenByStock={hiddenByStock} hiddenByCountry={hiddenByCountry} />
           <ResultsHead query={query} country={country} locale={locale}>
             <Suspense fallback={null}>
@@ -1840,6 +1872,11 @@ function StagedResults(props: {
     }
     return (
       <ResultsErrorBoundary locale={locale}>
+        {/* REEA-1266 — the served snapshot is still flagged provisional
+            (finalized-at-budget), so the document keeps the machine-readable
+            marker even after the follow-up feed answered without a richer
+            snapshot. */}
+        <CollectionPendingFlag pending={finalSnap.settled === false} />
         <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} hiddenByStock={hiddenByStock} hiddenByCountry={hiddenByCountry} />
         <ResultsHead query={query} country={country} locale={locale}>
           {products.length === 0 && query.length > 0 && emptyCase?.kind === "a" ? <HintLine locale={locale} /> : null}

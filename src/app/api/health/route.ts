@@ -38,11 +38,30 @@
  * the rest of the body, so the tick answers in ~1-2 s warm instead of paying
  * the ~21 s staged-collection finalize. The served body keeps the minimal
  * `{ok, build}` shape either way.
+ *
+ * REEA-1266 — the verdict is stable under concurrent page load. A results
+ * render that the collection admission cap defers (REEA-1133 pending shell)
+ * — or one whose completion budget closed while hops were still in flight —
+ * serves a PROVISIONAL document, not a zero-result answer. That document
+ * carries the `data-collection-pending` marker
+ * (lib/collect/shell-markers.ts), so this probe treats it as "still working"
+ * instead of answering 503 (cards=0): the app is alive and busy serving
+ * shoppers, and the follow-up feed folds the real answer in behind the
+ * response. When a full walk PROVED the funnel recently, the verdict is
+ * replayed from that proof inside REEMCO_HEALTH_VERDICT_REPLAY_MS (default
+ * 5 min) — the same "replay a recent good verdict" idea the REEA-37 limiter
+ * already applies, scoped to the capacity-deferral case only. "Still working"
+ * is bounded: a provisional streak longer than that same window (no proven
+ * walk at all in it) is a real 503, so a funnel that never proves itself
+ * again cannot read green forever. A SETTLED shell that renders zero cards
+ * (or cards without a freshness chip) is a hard 503 too: only evidence of a
+ * broken funnel fails the probe.
  */
 import { after, type NextRequest } from "next/server";
 import { checkRateLimitShared } from "@/lib/rate-limit-kv";
 import { invalidateTrendingChips } from "@/lib/trending-chips";
 import { MAX_RESPONSE_BODY_BYTES, readBodyCapped } from "@/lib/collect/read-body";
+import { hasCollectionPendingShell } from "@/lib/collect/shell-markers";
 import { resolveBuildStamp } from "@/lib/build-stamp";
 import { maybeRunDailyLinkSmoke } from "@/lib/metrics/link-smoke-runner";
 // REEA-1078 S2 — the daily lane-health pass (7-day auto-retire + canary
@@ -156,6 +175,31 @@ const BUILD_SHA = resolveBuildStamp();
 // in lib/rate-limit.ts; a new instance simply re-runs the funnel once.
 let lastVerdict: { ok: boolean } | null = null;
 
+// REEA-1266 — when the last FULL walk proved the results hop (real cards + a
+// freshness chip), and when. A capacity-deferred shell replays that proof
+// inside this window instead of re-walking into the same cap. The window also
+// bounds "still working": once a provisional streak has run this long with no
+// proven walk in it, the probe stops claiming green (see the streak state
+// below). Memory-only, like lastVerdict above: a fresh instance has no proof
+// yet and says "still working" instead of inventing one. Kept short on
+// purpose — a SETTLED zero still fails hard, so the window can never hide a
+// genuinely broken funnel.
+const HEALTH_VERDICT_REPLAY_MS = readReplayMs();
+
+function readReplayMs(): number {
+  const raw = Number(process.env.REEMCO_HEALTH_VERDICT_REPLAY_MS);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 300_000;
+}
+
+let lastGoodVerdictAtMs = 0;
+
+// REEA-1266 — bounded "still working": a provisional shell is never an outage
+// on its own, but a box that cannot PROVE its funnel for a whole replay window
+// is worth a 503, so a permanently stuck funnel cannot read green forever. The
+// streak starts on the first provisional answer and clears the moment a walk
+// proves the results hop.
+let provisionalStreakStartMs = 0;
+
 // Same caller key as the /api/events limiter (client IP from the proxy chain).
 function clientKey(req: NextRequest): string {
   const fwd = req.headers.get("x-forwarded-for");
@@ -242,16 +286,52 @@ export async function GET(req: NextRequest): Promise<Response> {
     );
     const cards = countCards(res.html);
     const chips = countChips(res.html);
-    if (res.status !== 200 || cards < 1) {
+    if (res.status !== 200) {
       failed.push(`results status=${res.status} cards=${cards}`);
-    } else if (chips < 1) {
-      failed.push(`results has ${cards} cards but no freshness chip`);
-    } else {
+    } else if (cards >= 1 && chips >= 1) {
       checks.results = "pass";
       checks.cards = cards;
       checks.freshnessChips = chips;
       const link = res.html.match(/href="(\/product\/[^"]+)"/);
       productHref = link ? link[1] : "";
+    } else if (hasCollectionPendingShell(res.html)) {
+      // REEA-1266 — a PROVISIONAL shell (render deferred at the collection
+      // cap, or finalized while hops were still in flight) is "still working",
+      // not a zero-result verdict: the follow-up feed folds the real answer in
+      // behind the response. Replay the last PROVEN walk inside the window;
+      // with no recent proof, say so instead of inventing one. The streak cap
+      // keeps this from masking a funnel that never proves itself again.
+      const now = Date.now();
+      const proofAgeMs = lastGoodVerdictAtMs > 0 ? now - lastGoodVerdictAtMs : Number.POSITIVE_INFINITY;
+      if (provisionalStreakStartMs === 0) provisionalStreakStartMs = now;
+      const streakMs = now - provisionalStreakStartMs;
+      if (proofAgeMs <= HEALTH_VERDICT_REPLAY_MS) {
+        checks.results = "replay";
+        checks.replayedVerdictAgeS = Math.round(proofAgeMs / 1000);
+      } else if (streakMs > HEALTH_VERDICT_REPLAY_MS) {
+        // No proven walk inside a full replay window: "still working" has run
+        // out of credit, so this is a real failure, not probe noise.
+        checks.results = "unproven";
+        checks.provisionalForS = Math.round(streakMs / 1000);
+        failed.push(
+          `results provisional for ${Math.round(streakMs / 1000)}s with no proven walk`,
+        );
+      } else {
+        checks.results = "still-working";
+      }
+      // Internals (card counts, which verdict) stay on the console; the served
+      // body keeps the minimal `{ok, build}` shape (REEA-377).
+      checks.shellCards = cards;
+      checks.shellFreshnessChips = chips;
+      console.warn(
+        `health provisional shell origin=${origin} cards=${cards} chips=${chips} verdict=${checks.results} replayedVerdictAgeS=${checks.replayedVerdictAgeS ?? "none"} provisionalForS=${checks.provisionalForS ?? "none"}`,
+      );
+    } else if (cards < 1) {
+      // A SETTLED document at zero cards is still a real failure: the funnel
+      // ran and produced nothing (or every hop failed), so 503 stays honest.
+      failed.push(`results status=${res.status} cards=${cards}`);
+    } else {
+      failed.push(`results has ${cards} cards but no freshness chip`);
     }
   } catch (e) {
     failed.push(`results fetch failed: ${(e as Error).message}`);
@@ -270,6 +350,14 @@ export async function GET(req: NextRequest): Promise<Response> {
   }
 
   const ok = failed.length === 0;
+  // REEA-1266 — only a walk that PROVED the results hop (real cards + a
+  // freshness chip) refreshes the replay clock and clears the provisional
+  // streak. A "still working" answer is green but is not evidence, so it must
+  // not extend the window it replays.
+  if (ok && checks.results === "pass") {
+    lastGoodVerdictAtMs = Date.now();
+    provisionalStreakStartMs = 0;
+  }
   const checkedAt = new Date().toISOString();
   // Internals to console logs only (REEA-377): Vercel function logs keep the
   // full step detail, the served body stays the minimal {ok, build} shape.
