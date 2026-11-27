@@ -294,14 +294,25 @@ export interface WeekCounters {
   comparison_cards_cross_market: number;
   comparison_cards_multi_retailer: number;
   /**
-   * REEA-1114 AC6 — served searches whose visible results were zero but an
-   * ACTIVE filter (the default In stock selection or the market selection)
-   * hid ≥1 confident match. The false-empty rate is this counter ÷ searches;
-   * it is the only measurement of the trust failure the W48 empty-state rate
-   * could not see (the search did have offers — they were filtered out).
+   * REEA-1114 AC6 / REEA-1267 — the RESIDUAL false-empty: a served page that
+   * presented the no-match state (its own snapshot carried zero hidden
+   * matches, so the escape could not render) while the run's converged answer
+   * held ≥1 confident in-scope match an ACTIVE filter hides. This is the lie
+   * the shopper saw; after REEA-1267 it is 0 for any serve whose escape
+   * rendered, so a non-zero value is the tripwire that the escape failed to
+   * reach the page. The false-empty rate is this counter ÷ searches.
    * Aggregate integer only: no query text, no identifiers, no per-query row.
    */
   filtered_empty_searches: number;
+  /**
+   * REEA-1267 — the population REEA-1114 published: serves whose active
+   * filter (the default In stock selection) hid ≥1 confident in-scope match.
+   * Kept as its own aggregate because the escape EXPLAINS those serves
+   * ("N matches hidden by In stock — show all"); it does not stop the filter
+   * from hiding them, so this rate is expected to stay where it is while
+   * filtered_empty_searches falls to ~0. Aggregate integer only.
+   */
+  filter_hidden_searches: number;
   /**
    * REEA-1141 AC-4 — duplicate cards the served streamed document painted:
    * cards that repeated a productId an earlier flush already painted. Folded
@@ -365,6 +376,7 @@ export function emptyWeek(): WeekCounters {
     comparison_cards_cross_market: 0,
     comparison_cards_multi_retailer: 0,
     filtered_empty_searches: 0,
+    filter_hidden_searches: 0,
     duplicate_cards: 0,
     cross_market_offers: 0,
     // REEA-1200 — bot/health-check serves excluded from the clean CTR
@@ -447,9 +459,11 @@ function backfillWeek(week: WeekCounters): WeekCounters {
     "comparison_cards_total",
     "comparison_cards_cross_market",
     "comparison_cards_multi_retailer",
-    // REEA-1114 — the filter-aware empty-state counter. Weeks stored before
-    // this extension backfill 0, like every earlier aggregate addition.
+    // REEA-1114 / REEA-1267 — the residual false-empty counter and the
+    // filter-hid-matches population. Weeks stored before this extension
+    // backfill 0, like every earlier aggregate addition.
     "filtered_empty_searches",
+    "filter_hidden_searches",
     // REEA-1141 — duplicate cards painted by the streamed shelf. Weeks stored
     // before this extension backfill 0 (the healthy read).
     "duplicate_cards",
@@ -573,14 +587,23 @@ export interface SearchOutcome extends SearchOutcomeBase {
    * folded clamped to the same retailer's attempts. */
   adapterFailures?: Record<string, number>;
   /**
-   * REEA-1114 AC6 — true when the served page's visible result set was zero
-   * but an ACTIVE filter (default In stock, or the market selection) hid ≥1
-   * confident match: the false-empty the shopper saw. One boolean per serve
-   * folds into the aggregate `filtered_empty_searches` counter — no query
-   * text, no per-query row (Data Minimization). Absent = false, so every
-   * pre-change caller stays byte-identical.
+   * REEA-1114 AC6 / REEA-1267 — true when the SERVED page presented the
+   * no-match state while the run's converged answer held ≥1 confident
+   * in-scope match an active filter hid: the false-empty the shopper saw.
+   * The escape renders whenever the served snapshot holds hidden matches, so
+   * this is the residual lie (a pending/thin serve or a broken escape), not
+   * the filter-hidden population. One boolean per serve folds into the
+   * aggregate `filtered_empty_searches` counter — no query text, no per-query
+   * row (Data Minimization). Absent = false, so every pre-change caller stays
+   * byte-identical.
    */
   filteredEmpty?: boolean;
+  /**
+   * REEA-1267 — true when an active filter hid ≥1 confident in-scope match on
+   * this serve (the REEA-1114 population, now explained by the escape). One
+   * boolean per serve folds into `filter_hidden_searches`. Absent = false.
+   */
+  filterHidden?: boolean;
   /**
    * REEA-1142 AC5 — offers on the served shelf whose market differs from the
    * selected market. One aggregate integer per serve; no per-offer record.
@@ -640,6 +663,8 @@ export function applySearchOutcome(
   // whose visible set was zero because an active filter hid matches. Exactly
   // one bump per serve, so filtered_empty_searches ≤ searches holds.
   if (outcome.filteredEmpty === true) w.filtered_empty_searches += 1;
+  // REEA-1267 — the filter-hid-matches population (escape explained it).
+  if (outcome.filterHidden === true) w.filter_hidden_searches += 1;
   // REEA-1142 AC5 — cross-market offer aggregate. Clamped like every counter;
   // no upper invariant beyond the served offer count.
   w.cross_market_offers += clampCount(outcome.crossMarketOffers);
@@ -1050,8 +1075,10 @@ const WEEKLY_SCALAR_FIELDS = [
   // card incremented cards_total but left cross_market_cards at 0 for the
   // whole week. Add it here so the depth payload can see the population.
   "comparison_cards_cross_market",
-  // REEA-1114 — filter-aware empty-state counter (one integer per week).
+  // REEA-1114 / REEA-1267 — residual false-empty counter and the
+  // filter-hid-matches population (one integer per week each).
   "filtered_empty_searches",
+  "filter_hidden_searches",
   // REEA-1141 — duplicate-card aggregate (one integer per week).
   "duplicate_cards",
   // REEA-1142 — cross-market offer aggregate (one integer per week).

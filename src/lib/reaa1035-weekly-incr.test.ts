@@ -344,6 +344,7 @@ describe("REEA-1035 stored schema + route byte-shape", () => {
       "ctr_denominator_clean",
       "ctr_denominator_raw",
       "ctr_denominator_shopper",
+      "filter_hidden_searches",
       "filtered_empty_searches",
       "latency_band_1_3s",
       "latency_band_3_10s",

@@ -1,40 +1,51 @@
 /**
- * REEA-1114 — filter-aware empty state: count the matches an ACTIVE filter
- * hides, so the results page can never tell a shopper "no match found" when
- * the shelf is only empty because our own In stock / market filter removed
- * rows. Pure and client-safe (same graph rules as results-shelf.ts): no
- * React, no I/O, no store — it rides the already-loaded live snapshot the
- * page renders.
+ * REEA-1114 / REEA-1267 — filter-aware empty state: count the matches an
+ * ACTIVE filter hides, so the results page can never tell a shopper "no match
+ * found" when the shelf is only empty because our own In stock / market
+ * filter removed rows. Pure and client-safe (same graph rules as
+ * results-shelf.ts): no React, no I/O, no store — it rides the already-loaded
+ * live snapshot the page renders.
  *
- * The classification is per product, in the SAME order the renderer applies
- * the selections (country first, then stock — see results-shelf.ts):
- *  - a confident match whose offers all belong to another market is hidden
- *    by the COUNTRY selection (it has offers, just none in the chosen
- *    market). Clearing the market reveals it;
- *  - a confident match with ≥1 offer in the chosen market but no in-stock
- *    offer is hidden by the STOCK selection. Showing out-of-stock reveals
- *    it;
- *  - a match with no offers at all is not hidden by either selection: there
- *    is nothing for a filter to remove, so it stays a plain no-match.
+ * REEA-1267 — the ONE definition. The hidden set is derived from the SAME
+ * painted shelf chain the renderer uses (`paintedShelfFromProducts` in
+ * results-shelf.ts), not from a second confidence ladder:
+ *  - the filter-off shelf is the payload's confident in-scope set as this page
+ *    would paint it (payload `productScope` partition, page slice, per-query
+ *    card budget, one card per productId, price rank);
+ *  - the filter-on shelf is the same chain with the shopper's active
+ *    selections applied;
+ *  - the hidden cards are the filter-off cards the filter-on shelf does not
+ *    paint, restricted to cards that carry ≥1 offer. A card with no offer at
+ *    all is not hidden by a filter — there is nothing for the filter to remove
+ *    (REEA-1114's documented contract, kept).
  *
- * Only PRIMARY (confident) matches are counted. The related band renders as
- * compact chips, explicitly "not a result" (REEA-964), so it is not part of
- * the count the empty state claims. Exact-SKU keeps (REEA-822) are already
- * visible under the stock filter and are therefore not counted as hidden.
+ * That makes the escape count equal to what the reveal actually adds, and the
+ * revealed set exactly the payload's confident in-scope products — no
+ * fabricated rows, no `related`/`accessory` band item promoted into it (F-2).
+ *
+ * The market selection no longer hides a card (REEA-1142 keeps cross-market
+ * offers on the shelf, labelled), so the only hiding filter is In stock; the
+ * `country` branch stays in the type so a future market drop keeps working.
  *
  * No new server field: the count is derived from the live payload the page
- * already holds. The only server addition is the aggregate
- * `filtered_empty_searches` counter (REEA-1114 AC6).
+ * already holds.
  */
 import type { CountryCode } from "@/lib/country";
-import { offerIsVisible } from "@/lib/stock";
-import { exactSkuKeep } from "@/lib/relevance";
-import { partitionByConfidence } from "@/lib/confidence";
+import { paintedShelfFromProducts } from "@/lib/results-shelf";
 import type { NormalizedProduct } from "@/types/product";
 
 /** The active filter that is hiding matches. */
 export type HiddenFilter = "stock" | "country";
 
+/** The cards an active filter is hiding, and which filter hides them. */
+export interface HiddenShelfMatches {
+  /** Exactly the payload cards the one-tap reveal adds to this page. */
+  cards: NormalizedProduct[];
+  /** The selection that hides them. */
+  filter: HiddenFilter;
+}
+
+/** Legacy count shape the filter chips and the empty-state precedence read. */
 export interface HiddenMatchReport {
   /** Confident matches hidden by the In stock selection. */
   stock: number;
@@ -43,38 +54,52 @@ export interface HiddenMatchReport {
 }
 
 /**
- * Count the confident matches the active selections hide. `showOutOfStock`
- * is the stock selection the page is currently rendering: when it is true the
- * stock filter is off and only the market selection can hide matches.
+ * REEA-1267 — the hidden set for one rendered page of a live snapshot.
+ * `showOutOfStock` is the stock selection the page is currently rendering:
+ * when it is true the stock filter is off, so nothing can be hidden by it.
+ */
+export function hiddenShelfMatches(
+  products: readonly NormalizedProduct[],
+  query: string,
+  page: number,
+  country: CountryCode | null,
+  showOutOfStock: boolean,
+): HiddenShelfMatches {
+  if (query.length === 0) return { cards: [], filter: "stock" };
+  // The payload's confident in-scope set as the page would paint it with the
+  // filter off — the reveal's exact target population.
+  const withFilterOff = paintedShelfFromProducts(products, query, page, country, true);
+  const withFilterOn = paintedShelfFromProducts(
+    products,
+    query,
+    page,
+    country,
+    showOutOfStock,
+  );
+  const visibleIds = new Set(withFilterOn.map((p) => p.productId));
+  const cards = withFilterOff.filter(
+    (p) => !visibleIds.has(p.productId) && p.offers.length > 0,
+  );
+  return { cards, filter: "stock" };
+}
+
+/**
+ * The chip/empty-state count, derived from the SAME hidden set the escape
+ * renders, so the chip ("In stock · N hidden") and the escape ("N matches
+ * hidden by In stock") can never disagree.
  */
 export function hiddenMatchReport(
   products: readonly NormalizedProduct[],
   query: string,
   country: CountryCode | null,
   showOutOfStock: boolean,
+  page = 1,
 ): HiddenMatchReport {
-  if (query.length === 0) return { stock: 0, country: 0 };
-  const primary = partitionByConfidence(query, [...products]).primary;
-  const keep = exactSkuKeep(query);
-  let stock = 0;
-  const countryHidden = 0;
-  void country;
-  for (const p of primary) {
-    // Nothing for a filter to remove: the card simply carries no offer.
-    if (p.offers.length === 0) continue;
-    // REEA-1142 AC1 — the market selection no longer hides a card: every
-    // offer stays visible and cross-market rows render with their market
-    // label. The market-hidden count therefore stays 0 (the honest
-    // "No Kuwait offer · Saudi price from KD X" headline replaces the old
-    // empty state), and only the stock selection can hide a match.
-    if (showOutOfStock) continue;
-    // The stock filter keeps an exact-SKU card even when every offer is out
-    // of stock (REEA-822): it renders honestly, so it is not hidden.
-    if (p.offers.some(offerIsVisible)) continue;
-    if (keep?.(p)) continue;
-    stock += 1;
+  const hidden = hiddenShelfMatches(products, query, page, country, showOutOfStock);
+  if (hidden.filter === "stock") {
+    return { stock: hidden.cards.length, country: 0 };
   }
-  return { stock, country: countryHidden };
+  return { stock: 0, country: hidden.cards.length };
 }
 
 /** The total the empty-state copy names. */

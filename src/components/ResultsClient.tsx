@@ -173,6 +173,63 @@ export function LoadingFallback({ locale }: { locale?: Locale }) {
   );
 }
 
+/* REEA-1267 — the ONE-LINE false-empty escape. An active filter that hides a
+   confident in-scope match is named on one line with the true hidden count and
+   a one-tap reveal; it is never a "no match" claim. The count comes from the
+   SAME painted shelf chain the renderer uses (lib/hidden-matches.ts), so the
+   line, the filter chip and the revealed set cannot drift (F-2). EN+AR copy is
+   one sentence; the control is the "— Show all" tail, so at 375 the line wraps
+   as words, never overflows. Rendered by the empty state (zero visible cards)
+   and above a partially-hidden shelf, so a shopper who sees some results still
+   learns the filter is hiding more. */
+function HiddenMatchesLine({
+  count,
+  filter,
+  country,
+  locale,
+  onReveal,
+}: {
+  count: number;
+  filter: HiddenFilter;
+  country: CountryCode | null;
+  locale?: Locale;
+  onReveal?: () => void;
+}) {
+  const resolvedLocale = locale ?? clientLocale();
+  const t = getStrings(resolvedLocale);
+  const filterLabel = filter === "stock" ? t.inStock : countryLabel(country, t);
+  return (
+    <div
+      className="rc-hidden-escape"
+      data-hidden-matches="true"
+      data-hidden-count={count}
+      data-hidden-filter={filter}
+      data-empty-hidden="true"
+      role="status"
+    >
+      <p style={{ font: "var(--rc-text-body)", color: "var(--rc-ink)" }}>
+        {fill(t.hiddenEscapeLine, {
+          n: count,
+          unit: count === 1 ? t.matchOne : t.matchMany,
+          filter: filterLabel,
+        })}
+        <span aria-hidden className="rc-hidden-escape-sep">
+          {" — "}
+        </span>
+        <button
+          type="button"
+          className="rc-hidden-escape-action focusable"
+          data-hidden-reveal={filter}
+          data-empty-reveal={filter}
+          onClick={onReveal}
+        >
+          {t.hiddenEscapeAction}
+        </button>
+      </p>
+    </div>
+  );
+}
+
 /* REEA-964 FR-1 — the honest empty state. Copy is SPEC-PINNED (FR-1.1):
    heading exactly "No match found" (do not reword without PM sign-off), a
    sub-line suggesting rephrasing, then the THREE static editorially chosen
@@ -214,11 +271,6 @@ function EmptyState({
 }) {
   const resolvedLocale = locale ?? clientLocale();
   const t = getStrings(resolvedLocale);
-  const filterLabel = hidden
-    ? hidden.filter === "stock"
-      ? t.inStock
-      : countryLabel(country, t)
-    : "";
   // REEA-1218 AC-4 — the Arabic empty state's three suggestions come from the
   // same curated lexicon the matcher uses (غسالة / لابتوب / بانادول), not from
   // generic English examples. EN keeps its shipped FR-1.1 pills.
@@ -232,29 +284,24 @@ function EmptyState({
       data-empty-state="true"
       data-empty-case={hidden ? "b" : unavailable ? "c" : "a"}
     >
-      <svg className="icon" width={34} height={34} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} aria-hidden>
-        <path d="M3 9.5 5.5 4h13L21 9.5V20H3V9.5Z" />
-        <path d="M3 9.5h18M8.5 13.5h7" />
-      </svg>
+      {hidden ? null : (
+        <svg className="icon" width={34} height={34} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} aria-hidden>
+          <path d="M3 9.5 5.5 4h13L21 9.5V20H3V9.5Z" />
+          <path d="M3 9.5h18M8.5 13.5h7" />
+        </svg>
+      )}
       {hidden ? (
         <>
-          {/* AC1 — the count and the filter are the story; the query is fine. */}
-          <h2 data-empty-hidden="true">
-            {fill(t.emptyHiddenTitle, {
-              n: hidden.count,
-              unit: hidden.count === 1 ? t.matchOne : t.matchMany,
-              filter: filterLabel,
-            })}
-          </h2>
-          <p>{fill(t.emptyHiddenBody, { filter: filterLabel })}</p>
-          <button
-            type="button"
-            className="btn-primary focusable min-h-11 px-4"
-            data-empty-reveal={hidden.filter}
-            onClick={onReveal}
-          >
-            {hidden.filter === "stock" ? t.emptyShowOutOfStock : t.emptyShowAllCountries}
-          </button>
+          {/* REEA-1267 F-1 — one line: the count, the filter that hid the
+              matches and the one-tap reveal. No spelling copy, no suggestions:
+              the query was fine, the filter was the problem. */}
+          <HiddenMatchesLine
+            count={hidden.count}
+            filter={hidden.filter}
+            country={country}
+            locale={resolvedLocale}
+            onReveal={onReveal}
+          />
         </>
       ) : unavailable ? (
         <>
@@ -1103,7 +1150,7 @@ function ResultsHint({
   // REEA-1114 AC2 — "try a shorter phrase" is only true for a genuine
   // no-match (a). A filter-hidden zero (b) and an outage (c) have their own
   // story in the empty state; the hint must not contradict it.
-  const hidden = hiddenMatchReport(snap.products, query, country, showOutOfStock);
+  const hidden = hiddenMatchReport(snap.products, query, country, showOutOfStock, page);
   if (emptyMatchCase(hidden, collectionFailed(snap.notes)).kind !== "a") return null;
   return <HintLine locale={locale} />;
 }
@@ -1409,6 +1456,7 @@ function StageEmptyState(props: {
     props.query,
     props.country,
     props.showOutOfStock,
+    props.page,
   );
   const emptyCase = emptyMatchCase(
     hidden,
@@ -1449,6 +1497,48 @@ function StageEmptyState(props: {
         queryId={props.queryId}
       />
     </>
+  );
+}
+
+/* REEA-1267 — the streamed shell's escape boundary. The converged view
+   renders the same line after hydration; this boundary lands it in the SERVED
+   document too, above the streamed cards, so a partially hidden shelf states
+   the count before the shopper scrolls and QA's fetch-only probe can see it.
+   It renders null on a zero shelf: StageEmptyState owns the case-(b) line
+   there, so the escape is never painted twice. */
+function StageHiddenEscape(props: {
+  stages: readonly Promise<LiveSearchResult>[];
+  query: string;
+  page: number;
+  country: CountryCode | null;
+  showOutOfStock: boolean;
+  locale?: Locale;
+  onRevealOutOfStock?: () => void;
+  onRevealAllCountries?: () => void;
+}) {
+  const snap = use(props.stages[props.stages.length - 1]);
+  if (props.query.length === 0) return null;
+  const sections = stagedSections(snap, props.query, props.country, props.showOutOfStock);
+  if (sections.primary.length === 0) return null;
+  const hidden = hiddenMatchReport(
+    snap.products,
+    props.query,
+    props.country,
+    props.showOutOfStock,
+    props.page,
+  );
+  const filter: HiddenFilter | null =
+    hidden.stock > 0 ? "stock" : hidden.country > 0 ? "country" : null;
+  if (filter === null) return null;
+  const count = filter === "stock" ? hidden.stock : hidden.country;
+  return (
+    <HiddenMatchesLine
+      count={count}
+      filter={filter}
+      country={props.country}
+      locale={props.locale}
+      onReveal={filter === "stock" ? props.onRevealOutOfStock : props.onRevealAllCountries}
+    />
   );
 }
 
@@ -1754,7 +1844,7 @@ function StagedResults(props: {
   // count before the shopper reaches the empty state (AC3); the empty state
   // names the filter and the one-tap reveal (AC1).
   const hiddenReport = finalSnap
-    ? hiddenMatchReport(finalSnap.products, query, country, showOutOfStock)
+    ? hiddenMatchReport(finalSnap.products, query, country, showOutOfStock, page)
     : null;
   const emptyCase =
     finalSnap && finalSections
@@ -1954,6 +2044,11 @@ function StagedResults(props: {
           </>
         ) : (
           <>
+            {/* REEA-1267 F-1 — a partially hidden shelf still names the filter,
+                the true hidden count and the one-tap reveal, above the cards. */}
+            {hiddenByStock > 0 ? (
+              <HiddenMatchesLine count={hiddenByStock} filter="stock" country={country} locale={locale} onReveal={props.onRevealOutOfStock} />
+            ) : null}
             <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} pendingStatus={finalSnap.kuwaitPendingStatus} onRefresh={onRefresh} unreachableLanes={props.unreachableLanes} exactModelCards={exactModelCardCount(products, query)} className="rc-coverage-top" />
             <ResultsGrid
               products={products}
@@ -2032,6 +2127,21 @@ function StagedResults(props: {
           the streamed view as well; normal passes render null and add nothing. */}
       <Suspense fallback={null}>
         <StagePendingRow stages={stages} locale={locale} />
+      </Suspense>
+      {/* REEA-1267 F-1 — a partially hidden shelf names the filter, the true
+          hidden count and the one-tap reveal in the served document, above the
+          cards (the converged view renders the same line in the same slot). */}
+      <Suspense fallback={null}>
+        <StageHiddenEscape
+          stages={stages}
+          query={query}
+          page={page}
+          country={country}
+          showOutOfStock={showOutOfStock}
+          locale={locale}
+          onRevealOutOfStock={props.onRevealOutOfStock}
+          onRevealAllCountries={props.onRevealAllCountries}
+        />
       </Suspense>
       <Suspense fallback={<StampGhost locale={locale} />}>
         <StageCoverage
@@ -2246,7 +2356,7 @@ function ResultsInner(props: {
   // REEA-1114 — the static-host fallback path obeys the same filter-aware
   // empty state: a zero that a filter hid names the filter and reveals the
   // rows in place instead of blaming the spelling.
-  const plainHidden = hiddenMatchReport(served, query, country, showOutOfStock);
+  const plainHidden = hiddenMatchReport(served, query, country, showOutOfStock, page);
   const plainEmptyCase = emptyMatchCase(plainHidden, false);
   // REEA-37: funnel instrumentation — search_submitted (+ zero_results) and
   // result_impressed fire once per (query, page, result-set). Dedup key is
@@ -2352,6 +2462,10 @@ function ResultsInner(props: {
         </>
       ) : (
         <>
+          {/* REEA-1267 F-1 — the same escape on the static-host fallback. */}
+          {plainHidden.stock > 0 ? (
+            <HiddenMatchesLine count={plainHidden.stock} filter="stock" country={country} locale={locale} onReveal={onRevealOutOfStock} />
+          ) : null}
           <ResultsGrid
             products={products}
             query={query}

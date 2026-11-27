@@ -3145,6 +3145,58 @@ html[lang="ar"] .coupon-via {
   }
 }
 
+/* REEA-1267 F-1 — the one-line false-empty escape. A notice row, not a
+   control cluster: one sentence naming the filter + the true hidden count,
+   with the one-tap reveal as its tail. It wraps as words at 375 (never
+   horizontally overflows) and reads RTL-correct in Arabic because the row is
+   logical-property layout. The action keeps a 44px tap target and the primary
+   role; it is the ONLY new UI this ticket adds. */
+.rc-hidden-escape {
+  background: var(--rc-primary-tint);
+  border: 1px solid var(--rc-line);
+  border-radius: var(--rc-radius-card);
+  padding: var(--rc-space-3) var(--rc-space-4);
+  text-align: start;
+}
+
+.rc-hidden-escape p {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--rc-space-1);
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.rc-hidden-escape-sep {
+  white-space: pre;
+}
+
+.rc-hidden-escape-action {
+  min-block-size: 44px;
+  min-inline-size: 44px;
+  padding-inline: var(--rc-space-2);
+  border: 0;
+  background: none;
+  color: var(--rc-primary-deep);
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+  flex: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .rc-hidden-escape {
+    background: var(--rc-dark-surface-sunken);
+    border-color: var(--rc-dark-line);
+  }
+  :root:not([data-theme="light"]) .rc-hidden-escape-action {
+    color: var(--rc-dark-primary);
+  }
+}
+
 .rc-empty,
 .rc-error-state {
   background: var(--rc-surface);
@@ -3761,6 +3813,18 @@ html[lang="ar"] .coupon-via {
 }
 
 :root[data-theme="dark"] .rc-chip-count {
+  color: var(--rc-dark-primary);
+}
+
+/* REEA-1267 — explicit-dark twin of the OS-dark escape row (theme parity
+   contract: every OS-dark declaration carries the identical explicit-dark
+   one, so a pinned theme never falls back to the light tint). */
+:root[data-theme="dark"] .rc-hidden-escape {
+  background: var(--rc-dark-surface-sunken);
+  border-color: var(--rc-dark-line);
+}
+
+:root[data-theme="dark"] .rc-hidden-escape-action {
   color: var(--rc-dark-primary);
 }
 

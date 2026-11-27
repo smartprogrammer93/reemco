@@ -250,6 +250,36 @@ export function shelfCardsFromProducts(
   );
 }
 
+/**
+ * REEA-1267 — the cards one page of a snapshot ACTUALLY paints, i.e. the same
+ * cumulative flush chain the streamed renderer runs (StageAppend →
+ * freshCardsForFlush) over a single settled snapshot. The shelf is budgeted
+ * per query class (REEA-1207/REEA-1238), so "the confident in-scope set" is
+ * NOT the whole primary partition: a card beyond the budget never reaches the
+ * screen and must never be claimed as hidden. The hidden-match escape is
+ * computed over this population so its count equals what the reveal adds.
+ */
+export function paintedShelfFromProducts(
+  products: readonly NormalizedProduct[],
+  query: string,
+  page: number,
+  country: CountryCode | null,
+  showOutOfStock: boolean,
+): NormalizedProduct[] {
+  const budget = shelfCardBudget(query);
+  return freshCardsForFlush(
+    shelfCardsFromProducts(products, query, page, country, showOutOfStock),
+    new Set<string>(),
+    false,
+    budget,
+    {
+      comparisonFirst: true,
+      finalFlush: true,
+      singleTail: budget === CATEGORY_SHELF_CARDS ? 1 : 2,
+    },
+  );
+}
+
 /** Snapshot-level convenience wrapper over `shelfSectionsFromProducts`. */
 export function resultsShelfSections(
   snap: { products: readonly NormalizedProduct[] },

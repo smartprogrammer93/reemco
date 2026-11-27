@@ -235,6 +235,12 @@ const en = {
   // that an ACTIVE filter hid is not a no-match: name the filter, the count
   // and the one-tap reveal instead of blaming the spelling. `{filter}` is the
   // same label the chip carries ("In stock" / the market name).
+  // REEA-1267 F-1 — the ONE-LINE false-empty escape. The line names the
+  // filter that hid the matches and the true count; the one-tap "Show all"
+  // control is the tail of the same sentence ("… — Show all"). No spelling
+  // copy: the query was fine, the filter was the problem.
+  hiddenEscapeLine: "{n} {unit} hidden by {filter}",
+  hiddenEscapeAction: "Show all",
   emptyHiddenTitle: "{n} {unit} hidden by {filter}",
   matchOne: "match",
   matchMany: "matches",
@@ -627,6 +633,9 @@ const ar: typeof en = {
   // REEA-1114 AC1/AC2 — AR side of the filter-aware empty state. The title
   // follows the AC template "N نتيجة مخفية بسبب <filter>"; the unit is the
   // shipped plural pair so 2+ reads naturally (نتائج).
+  // REEA-1267 F-1 — Arabic one-line escape; the action is the sentence tail.
+  hiddenEscapeLine: "{n} {unit} مخفية بسبب {filter}",
+  hiddenEscapeAction: "أظهر الكل",
   emptyHiddenTitle: "{n} {unit} مخفية بسبب {filter}",
   matchOne: "نتيجة",
   matchMany: "نتائج",

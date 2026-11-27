@@ -22,7 +22,7 @@ import { resultsShelfCards } from "@/lib/results-shelf";
 import { paintedShelfCardsAcrossStages, duplicateCardsOf } from "@/lib/results-shelf";
 // REEA-1114 AC6 — the false-empty numerator: the SAME filter-aware
 // classification the empty state renders, folded into one aggregate counter.
-import { hiddenMatchReport, hiddenMatchTotal } from "@/lib/hidden-matches";
+import { hiddenShelfMatches } from "@/lib/hidden-matches";
 // REEA-1078 S2 — the serve path applies the persisted dead-lane retirement set
 // on top of the static retirement (see lib/collect/lane-health.ts).
 import { readLaneRetirement, recordLaneAttempts } from "@/lib/collect/lane-health";
@@ -341,17 +341,33 @@ export default async function ResultsPage({
         (n, p) => n + countCrossMarketOffers(p.offers, marketViewScope(country)),
         0,
       );
-      // REEA-1114 AC6 — a served page with zero visible cards while an ACTIVE
-      // filter hid ≥1 confident match is the false-empty the shopper saw. The
-      // classification is the renderer's own chain (lib/hidden-matches.ts), so
-      // the counter and the empty state can never disagree. One boolean per
-      // serve → one aggregate integer; no query text, no per-query record.
-      const filteredEmpty =
-        !!pageSnap &&
-        shelfCards.length === 0 &&
-        hiddenMatchTotal(
-          hiddenMatchReport(pageSnap.products, query, country, showOutOfStock),
-        ) > 0;
+      // REEA-1267 — the false-empty numerator, corrected to the meaning its
+      // own docs state ("the false-empty the shopper SAW"). REEA-1114 counted
+      // every serve whose zero visible set was caused by an active filter —
+      // including the honest ones, whose page already says "N matches hidden
+      // by In stock — show all". The counter now counts the LIE: the served
+      // document presented the no-match state (its own snapshot carried zero
+      // hidden matches, so no escape could render) while the run's converged
+      // answer held ≥1 confident in-scope match the active filter hides. The
+      // escape and the count ride the SAME painted shelf chain the renderer
+      // uses (lib/hidden-matches.ts + lib/results-shelf.ts), so this cannot
+      // describe a different population than the page. One boolean per serve;
+      // no query text, no per-query record.
+      const servedShelfEmpty = served
+        ? resultsShelfCards(served, query, 1, country, showOutOfStock).length === 0
+        : false;
+      const servedHidden = served
+        ? hiddenShelfMatches(served.products, query, 1, country, showOutOfStock).cards.length
+        : 0;
+      const runHidden = pageSnap
+        ? hiddenShelfMatches(pageSnap.products, query, 1, country, showOutOfStock).cards.length
+        : 0;
+      const filteredEmpty = servedShelfEmpty && servedHidden === 0 && runHidden > 0;
+      // REEA-1267 — the population REEA-1114 published (the active filter hid
+      // ≥1 confident match on this serve) is kept as its OWN aggregate so the
+      // hiding rate stays visible beside the residual lie rate: the escape
+      // explains those serves, it does not stop the filter from hiding them.
+      const filterHidden = runHidden > 0;
       // REEA-1141 AC-4 — duplicate cards the SERVED document painted: fold the
       // same cumulative paint chain the StageAppend boundaries run over this
       // run's own stage snapshots (replay leads excluded — they are superseded
@@ -393,8 +409,11 @@ export default async function ResultsPage({
         serveLatencyMs: Math.max(0, recordedMs - fanoutStartMs),
         adapterAttempts: adapterTelemetry.attempts,
         adapterFailures: adapterTelemetry.failures,
-        // REEA-1114 AC6 — aggregate false-empty numerator (see above).
+        // REEA-1267 — aggregate residual false-empty numerator (see above).
         filteredEmpty,
+        // REEA-1267 — the REEA-1114 population (filter hid matches, escape
+        // explained them) kept as its own aggregate.
+        filterHidden,
         // REEA-1141 AC-4 — aggregate duplicate-card inflation (see above).
         duplicateCards,
         // REEA-1142 AC5 — cross-market offers on the served shelf.

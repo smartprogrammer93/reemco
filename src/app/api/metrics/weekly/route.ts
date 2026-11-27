@@ -390,10 +390,17 @@ export function weeklyResponse(
               ) / w.comparison_cards_total
             : 1,
       },
-      // REEA-1114 AC6 — false-empty numerator: serves whose visible set was
-      // zero because an active filter hid matches. Aggregate integer only;
-      // the rate is filtered_empty_searches ÷ searches.
+      // REEA-1114 AC6 / REEA-1267 — false-empty numerator. REEA-1267 corrected
+      // it to the lie the shopper saw: the served page presented the no-match
+      // state while the run held a confident in-scope match the filter hid.
+      // The escape explains every serve whose snapshot carried hidden
+      // matches, so this is the residual (0 when the escape rendered); the
+      // rate is filtered_empty_searches ÷ searches.
       filtered_empty_searches: w.filtered_empty_searches,
+      // REEA-1267 — the REEA-1114 population (active filter hid ≥1 confident
+      // match, escape rendered) kept as its own integer so the hiding rate
+      // stays readable beside the residual lie rate.
+      filter_hidden_searches: w.filter_hidden_searches,
       // REEA-1142 AC5 — offers served outside the selected market (integer
       // aggregate; no identifiers).
       cross_market_offers: w.cross_market_offers,
@@ -496,7 +503,7 @@ export function weeklyResponse(
         // REEA-1237 (PM scope extension, v5 read) — the term Pareto states
         // its own normalization and population on the wire.
         top_queries:
-          "top_queries = the week's aggregate query-term Pareto, highest count first, capped at 200 rows. Each row is {term, count, zero_offer, filtered_empty}: count = shopper serves for that term; zero_offer = of those, serves whose converged answer carried zero offers; filtered_empty = of those, false-empty serves behind an active filter (a filter hid ≥1 confident match). Zero-offer and filtered-empty terms are included and marked, never dropped. Terms are normalized only for noise — case-folded, internal whitespace collapsed, control characters stripped, capped at 80 characters — and are NOT stemmed, so Arabic and Latin terms stay comparable. Bot/health-check serves are not recorded (the shared UA predicate, lib/bot-ua.ts), so a QA/smoke probe's term cannot dominate the Pareto. Storage is aggregate-only: one {term → three integers} map per ISO week, no user id, no session id, no per-serve row. The store admits up to 1,000 terms per week (above the published 200) so a term that first trends later in the week can still compete; a new term at saturation displaces a count-1 tail term and then accumulates. It is a small per-week blob written read-modify-write, so a concurrent serve can lose an increment; these counts are a Pareto read, not a decision counter.",
+          "top_queries = the week's aggregate query-term Pareto, highest count first, capped at 200 rows. Each row is {term, count, zero_offer, filtered_empty}: count = shopper serves for that term; zero_offer = of those, serves whose converged answer carried zero offers; filtered_empty = of those, residual false-empty serves (the page presented no-match while the run held a confident match the active filter hid; 0 when the escape rendered). Zero-offer and filtered-empty terms are included and marked, never dropped. Terms are normalized only for noise — case-folded, internal whitespace collapsed, control characters stripped, capped at 80 characters — and are NOT stemmed, so Arabic and Latin terms stay comparable. Bot/health-check serves are not recorded (the shared UA predicate, lib/bot-ua.ts), so a QA/smoke probe's term cannot dominate the Pareto. Storage is aggregate-only: one {term → three integers} map per ISO week, no user id, no session id, no per-serve row. The store admits up to 1,000 terms per week (above the published 200) so a term that first trends later in the week can still compete; a new term at saturation displaces a count-1 tail term and then accumulates. It is a small per-week blob written read-modify-write, so a concurrent serve can lose an increment; these counts are a Pareto read, not a decision counter.",
         // REEA-1255 — the WhatsApp share counter states its own population
         // and arithmetic on the wire, so the leading indicator is auditable.
         share_whatsapp:

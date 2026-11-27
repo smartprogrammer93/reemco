@@ -130,9 +130,11 @@ describe("REEA-1114 AC1/AC3 — the In stock filter hid the matches", () => {
     expect(inStock.textContent).toContain("1 hidden");
     expect(inStock.getAttribute("aria-pressed")).toBe("true");
     expect(inStock.getAttribute("aria-label")).toBe("In stock, 1 hidden by this filter");
-    // AC1 — the pinned action label.
+    // REEA-1267 F-1 — the escape is ONE line and the one-tap control is its
+    // "— Show all" tail; the filter is named on the same line.
     const reveal = card.querySelector('[data-empty-reveal="stock"]') as HTMLElement;
-    expect(reveal.textContent).toBe("Show out-of-stock");
+    expect(reveal.textContent).toBe("Show all");
+    expect(card.textContent).toContain("— Show all");
   });
 
   it("reveals the hidden match in place: no reload, query kept, URL echoed (AC4)", async () => {
@@ -291,7 +293,8 @@ describe("REEA-1114 AC5 — Arabic parity", () => {
     expect(card.textContent).toContain("1 نتيجة مخفية بسبب متوفر");
     expect(card.textContent).not.toContain("تحقق من الإملاء");
     const reveal = card.querySelector('[data-empty-reveal="stock"]') as HTMLElement;
-    expect(reveal.textContent).toBe("أظهر غير المتوفر");
+    expect(reveal.textContent).toBe("أظهر الكل");
+    expect(card.textContent).toContain("— أظهر الكل");
     const inStock = chips().find((b) => b.textContent?.includes("متوفر")) as HTMLElement;
     expect(inStock.textContent).toContain("مخفية");
   });
