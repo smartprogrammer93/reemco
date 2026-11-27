@@ -238,6 +238,43 @@ const PANEL_QUERIES = [
 ];
 const GATED = ["Lulu Hypermarket", "Next Store", "Ounass"];
 
+/**
+ * Grade one query's lane outcomes. The follow-up payload carries the lanes'
+ * own notes (`merchant`, `hits`, `error`) — that is the authoritative record;
+ * the `responders` buckets are a convenience view that a deferred/replayed
+ * payload can omit, which is why "not in responders" is NOT "blocked".
+ */
+async function gradeQuery(base, query) {
+  let httpStatus = 0;
+  const body = await fetch(`${base}/api/results-followup?q=${encodeURIComponent(query)}`, {
+    signal: AbortSignal.timeout(180_000),
+  })
+    .then((r) => {
+      httpStatus = r.status;
+      return r.ok ? r.json() : null;
+    })
+    .catch(() => null);
+  const notes = Array.isArray(body?.notes) ? body.notes : [];
+  const answered = new Set(body?.responders?.answered ?? []);
+  const empty = new Set(body?.responders?.answeredEmpty ?? []);
+  const noResponse = new Set(body?.responders?.noResponse ?? []);
+  const lanes = {};
+  for (const merchant of GATED) {
+    const note = notes.find((n) => n.merchant === merchant);
+    const blockedNote = typeof note?.error === "string" && note.error.startsWith("blocked:");
+    let state;
+    if (blockedNote) state = "blocked";
+    else if (note && Number(note.hits) > 0) state = "answered";
+    else if (note) state = "answered-empty";
+    else if (answered.has(merchant)) state = "answered";
+    else if (empty.has(merchant)) state = "answered-empty";
+    else if (noResponse.has(merchant)) state = "blocked";
+    else state = "unknown";
+    lanes[merchant] = { state, hits: note?.hits ?? null, error: note?.error ?? null };
+  }
+  return { http: httpStatus, lanes };
+}
+
 async function runPanel() {
   const base = (process.env.BASE_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
   const stamp = await fetch(`${base}/__commit.txt`, { signal: AbortSignal.timeout(20_000) })
@@ -249,34 +286,20 @@ async function runPanel() {
   const rows = [];
   const failures = [];
   for (const query of PANEL_QUERIES) {
-    let httpStatus = 0;
-    const body = await fetch(`${base}/api/results-followup?q=${encodeURIComponent(query)}`, {
-      signal: AbortSignal.timeout(180_000),
-    })
-      .then((r) => {
-        httpStatus = r.status;
-        return r.ok ? r.json() : null;
-      })
-      .catch(() => null);
-    const answered = new Set(body?.responders?.answered ?? []);
-    const empty = new Set(body?.responders?.answeredEmpty ?? []);
-    const noResponse = new Set(body?.responders?.noResponse ?? []);
-    const notes = Array.isArray(body?.notes) ? body.notes : [];
-    const row = { query, http: httpStatus, lanes: {} };
+    let graded = await gradeQuery(base, query);
+    // A deferred/replayed payload can omit the lanes entirely (measured right
+    // after a deploy: HTTP 200 with products but no notes). That is "no
+    // evidence", not a blocked lane — ask once more before judging it.
+    if (GATED.some((m) => graded.lanes[m].state === "unknown")) {
+      await new Promise((r) => setTimeout(r, 3_000));
+      graded = await gradeQuery(base, query);
+    }
+    const row = { query, http: graded.http, lanes: graded.lanes };
     for (const merchant of GATED) {
-      const note = notes.find((n) => n.merchant === merchant);
-      const blocked = typeof note?.error === "string" && note.error.startsWith("blocked:");
-      const state = answered.has(merchant)
-        ? "answered"
-        : empty.has(merchant)
-          ? "answered-empty"
-          : noResponse.has(merchant) || blocked
-            ? "blocked"
-            : "absent";
-      row.lanes[merchant] = { state, hits: note?.hits ?? null, error: note?.error ?? null };
-      if (state === "blocked" || state === "absent") {
+      const lane = graded.lanes[merchant];
+      if (lane.state === "blocked" || lane.state === "unknown") {
         failures.push(
-          `${query} / ${merchant}: ${state} (followup HTTP ${httpStatus})${note?.error ? ` — ${note.error.slice(0, 200)}` : ""}`,
+          `${query} / ${merchant}: ${lane.state} (followup HTTP ${graded.http})${lane.error ? ` — ${lane.error.slice(0, 200)}` : ""}`,
         );
       }
     }
