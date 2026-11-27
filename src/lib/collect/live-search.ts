@@ -1781,6 +1781,17 @@ export function ounassListingLastDiag(): string {
  * the Shopify lanes use.
  */
 const OUNASS_RETRY_BACKOFF_MS = 900;
+/**
+ * REEA-1221 — a cooldown, not a pace. The box answers HTTP 429 on this host even
+ * after a pause and a retry (measured 2026-11-27 via `/api/echo`:
+ * `plain:err(HTTP 429)` twice), so the limit is a window on our IP rather than a
+ * blip. Pacing every hop slows the whole fan-out and breaks the staged budget;
+ * instead ONE refusal parks the lane for a minute, so a burst stops hammering a
+ * host that is already refusing us and the next query after the window gets the
+ * page. The lane settles its explicit no-match meanwhile, which is honest.
+ */
+const OUNASS_COOLDOWN_MS = 60_000;
+let ounassCooldownUntil = 0;
 async function ounassHop(fetchImpl: FetchImpl, url: string, signal: AbortSignal): Promise<string> {
   const once = async (): Promise<string> => {
     const res = await fetchChecked(
@@ -1797,6 +1808,7 @@ async function ounassHop(fetchImpl: FetchImpl, url: string, signal: AbortSignal)
     );
     return await res.text();
   };
+  if (Date.now() < ounassCooldownUntil) throw new Error("ounass cooling down after a rate-limit answer");
   try {
     return await once();
   } catch (err) {
@@ -1804,7 +1816,16 @@ async function ounassHop(fetchImpl: FetchImpl, url: string, signal: AbortSignal)
     if (!/HTTP (429|503)/.test(message) || signal.aborted) throw err;
     await new Promise((r) => setTimeout(r, OUNASS_RETRY_BACKOFF_MS));
     if (signal.aborted) throw err;
-    return await once();
+    try {
+      return await once();
+    } catch (retryErr) {
+      const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
+      if (/HTTP (429|503)/.test(retryMessage)) {
+        ounassCooldownUntil = Date.now() + OUNASS_COOLDOWN_MS;
+        throw err;
+      }
+      throw retryErr;
+    }
   }
 }
 export const COLLECTORS: RetailerCollector[] = [
