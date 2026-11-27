@@ -2424,9 +2424,22 @@ export const COLLECTORS: RetailerCollector[] = [
       // lands on the interstitial. Cheap hop stays first; the browser only runs
       // on a shell answer.
       const painted = await browserClearedHtml(url, "main").catch(() => "");
-      if (!isShell(painted)) return ounassHits(painted, query);
+      if (!isShell(painted)) {
+        const hits = ounassHits(painted, query);
+        if (hits.length > 0) return hits;
+      }
       const relayed = await jinaClearedHtml(url, "OnlineStore");
-      if (!isShell(relayed)) return ounassHits(relayed, query);
+      if (!isShell(relayed)) {
+        const hits = ounassHits(relayed, query);
+        if (hits.length > 0) return hits;
+      }
+      // REEA-1221 — the island never carries product records, so the LISTING hop
+      // is the lane's real answer path and it must run after the clearance hops
+      // too: on the box the plain hop is the challenged one, so a listing attempt
+      // that only ran inside the plain-hop loop would never be reached.
+      const fromListing = await listingHits();
+      if (fromListing.length > 0) return fromListing;
+      if (!isShell(painted) || !isShell(relayed)) return [];
       throw new BlockedLaneError(
         "blocked: no usable payload from any Ounass hop (challenge shell, no SSR island)" +
           (browserLastError() ? ` [relay: ${browserLastError().slice(0, 120)}]` : ""),
