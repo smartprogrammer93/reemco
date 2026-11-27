@@ -363,11 +363,13 @@ export default async function ResultsPage({
         ? hiddenShelfMatches(pageSnap.products, query, 1, country, showOutOfStock).cards.length
         : 0;
       const filteredEmpty = servedShelfEmpty && servedHidden === 0 && runHidden > 0;
-      // REEA-1267 — the population REEA-1114 published (the active filter hid
-      // ≥1 confident match on this serve) is kept as its OWN aggregate so the
-      // hiding rate stays visible beside the residual lie rate: the escape
-      // explains those serves, it does not stop the filter from hiding them.
-      const filterHidden = runHidden > 0;
+      // REEA-1267 — the population REEA-1114 published is kept as its OWN
+      // aggregate so the hiding rate stays visible beside the residual lie
+      // rate: an EMPTY shelf whose zero was caused by an active filter hiding
+      // ≥1 confident match (the same predicate REEA-1114 folded, so the weekly
+      // trend is comparable across the change). The escape explains those
+      // serves; it does not stop the filter from hiding them.
+      const filterHidden = shelfCards.length === 0 && runHidden > 0;
       // REEA-1141 AC-4 — duplicate cards the SERVED document painted: fold the
       // same cumulative paint chain the StageAppend boundaries run over this
       // run's own stage snapshots (replay leads excluded — they are superseded
