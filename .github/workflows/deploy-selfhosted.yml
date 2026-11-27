@@ -180,7 +180,18 @@ jobs:
             --exclude '.git' --exclude 'node_modules' --exclude '.next' --exclude '.events' --exclude '.events-tests' \
             -e "ssh -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -i $HOME/.ssh/id_ed25519" \
             ./ "$TARGET:/opt/reemco/src/"
-          $SSH "$TARGET" "cd /opt/reemco/src && docker build -f infra/Dockerfile --build-arg REEMCO_COMMIT=$TAG -t $IMAGE_REPO:$TAG . 2>&1 | tail -60"
+          # REEA-1252 — the old `docker build ... | tail -60` pipeline reported
+          # TAIL's exit status on the remote shell, so a failed build looked
+          # green and the deploy step then failed with a confusing "no local
+          # image". Capture the real exit code, keep the full log on the host,
+          # and fail THIS step so the failure is attributed where it happened.
+          BUILD_LOG="/tmp/reemco-build-$TAG.log"
+          if ! $SSH "$TARGET" "cd /opt/reemco/src && docker build -f infra/Dockerfile --build-arg REEMCO_COMMIT=$TAG -t $IMAGE_REPO:$TAG . > $BUILD_LOG 2>&1"; then
+            echo "::error::on-host build failed for $TAG — last 60 lines of $BUILD_LOG:"
+            $SSH "$TARGET" "tail -60 $BUILD_LOG" || true
+            exit 1
+          fi
+          $SSH "$TARGET" "tail -20 $BUILD_LOG" || true
 
       - name: Deploy pinned tag
         id: deploy
