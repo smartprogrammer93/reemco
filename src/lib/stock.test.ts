@@ -100,7 +100,18 @@ describe("product filtering", () => {
     expect(headphones.offers.map((o) => o.merchant)).toEqual(["Xcite"]);
     // Surviving alternative re-priced from its visible offers; the all-OOS
     // alternative disappears instead of carrying a stale fromPrice.
-    expect(headphones.alternatives).toEqual([{ productId: "alt-live", title: "XM5", fromPrice: 66 }]);
+    // REEA-1236 — KWD-space rebuild with the winning offer's own currency +
+    // native amount, so a cross-market alternative never prints under a KD
+    // label.
+    expect(headphones.alternatives).toEqual([
+      {
+        productId: "alt-live",
+        title: "XM5",
+        fromPrice: 66,
+        fromCurrency: "KWD",
+        fromNativePrice: 66,
+      },
+    ]);
   });
 
   it("is a no-op passthrough with the toggle enabled", () => {

@@ -149,7 +149,28 @@ export interface ProductVariation {
 export interface ProductAlternative {
   productId: string;
   title: string;
+  /**
+   * KWD-space numeric of the referenced item's cheapest visible offer
+   * (REEA-254 item B, REEA-604). Every comparison — cheaper-alternatives
+   * membership, ordering and the rail's "from" line — reads this ONE
+   * converted figure; it is never a raw native amount.
+   */
   fromPrice: number;
+  /**
+   * REEA-1236 — ISO 4217 code of the offer `fromPrice` was derived from. The
+   * rail must state whether the printed figure is native or converted: a
+   * SAR-sourced entry renders "≈KD 267.57", never a bare native amount under
+   * a KD label. Absent on legacy snapshots (treated as KWD-native).
+   */
+  fromCurrency?: string;
+  /**
+   * REEA-1236 — that same offer's own effective figure in `fromCurrency`.
+   * Used only for the honest fallback: when the reference conversion has no
+   * factor for the code (REEA-195 pass-through) or the render guard rejects
+   * a suspicious converted figure, the rail prints this native amount with
+   * its own currency symbol instead of a KD label.
+   */
+  fromNativePrice?: number;
 }
 
 /** A single normalized product record from the feed. */

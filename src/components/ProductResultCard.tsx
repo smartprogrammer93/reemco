@@ -2,7 +2,12 @@ import Link from "next/link";
 import Image from "next/image";
 import type { NormalizedProduct, PriceOffer, ProductAlternative } from "@/types/product";
 import { buildProductHref, buildResultsHref, type CountryCode } from "@/lib/country";
-import { formatCountryPrice, formatKWD, formatPrimaryPrice } from "@/lib/format";
+import { formatCountryPrice, formatKWD } from "@/lib/format";
+// REEA-1236 — the ONE rail "from" figure contract: KWD-space numeric with its
+// source currency, so a cross-market entry prints "≈KD X" (or its own
+// currency when no conversion exists) instead of a bare native amount under a
+// KD label.
+import { railFromPriceLabel, railFromPriceLabelGuarded } from "@/lib/alternatives";
 import {
   bestCouponForOffer,
   compositionOfOffer,
@@ -343,13 +348,15 @@ export function cheapestListedKwd(
 /**
  * REEA-787 — alternatives/pairs fold: duplicate cards for ONE matched product
  * (the REEA-167 canonicalKey title identity) with an IDENTICAL formatted
- * fromPrice collapse to the first entry.
+ * fromPrice collapse to the first entry. REEA-1236 — the dedupe key is the
+ * SAME label the rail paints, so a "≈KD 267.57" SAR entry and a "KD 267.57"
+ * KWD entry are never folded into one row.
  */
 export function foldAlternativeRows(rows: ProductAlternative[]): ProductAlternative[] {
   const seen = new Set<string>();
   const out: ProductAlternative[] = [];
   for (const a of rows) {
-    const key = `${canonicalKey(a.title)}|${formatPrimaryPrice(a.fromPrice, "KWD").label}`;
+    const key = `${canonicalKey(a.title)}|${railFromPriceLabel(a)}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(a);
@@ -655,6 +662,11 @@ export default function ProductResultCard({
   // variant chip never prints a bare delta ("KD 0"). REEA-1177 scopes it to
   // the selected market and uses effectivePrice.
   const cheapestListed = cheapestListedKwd(product, scope);
+  // REEA-1236 AC4 — the card's own lead figure in KWD-space, the ceiling the
+  // alternatives render guard compares against. `cheapestListed` is the
+  // in-market effective figure; a cross-market-only card falls back to the
+  // lead offer's converted figure so the guard still has a real base.
+  const cardLeadKwd = cheapestListed ?? (best != null ? effectiveKwdOfOffer(best) : null);
   const oos = best != null && !best.inStock;
   const bestComposition = best ? compositionOfOffer(best) : null;
   const bestDiscount = bestComposition?.appliedDiscount ?? 0;
@@ -828,37 +840,48 @@ export default function ProductResultCard({
         )}
         {(
           [
-            [t.alternativesLabel, foldAlternativeRows(product.alternatives)],
-            [t.pairsWithLabel, foldAlternativeRows(product.pairsWith ?? [])],
+            [t.alternativesLabel, foldAlternativeRows(product.alternatives), true],
+            [t.pairsWithLabel, foldAlternativeRows(product.pairsWith ?? []), false],
           ] as const
-        ).map(([label, rows]) =>
+        ).map(([label, rows, cheaperClaim]) =>
           rows.length === 0 ? null : (
             <section key={label} aria-label={label} className="mt-4">
               <h3 className="label-token mb-2" style={{ color: "var(--rc-body-text)" }}>
                 {label}
               </h3>
               <ul>
-                {rows.map((a) => (
-                  <li
-                    key={a.productId}
-                    className="flex min-h-12 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded px-1 py-1 hover:bg-[var(--rc-canvas)]"
-                  >
-                    <a
-                      href={buildResultsHref(a.title, 1, viewCountry, showOutOfStock)}
-                      className="min-w-0 hover:underline"
-                      style={{ font: "var(--rc-text-body)", fontWeight: 500, color: "var(--rc-ink)" }}
-                      title={displayTitleChanged(a.title, cleanDisplayTitle(a.title)) ? a.title : undefined}
+                {rows.map((a) => {
+                  // REEA-1236 — a cheaper-alternatives row goes through the
+                  // AC4 unit guard; a "Pairs with" accessory is complementary,
+                  // not a cheaper-than-card claim, so it only gets the honest
+                  // converted label.
+                  const figure = cheaperClaim
+                    ? railFromPriceLabelGuarded(a, cardLeadKwd)
+                    : railFromPriceLabel(a);
+                  return (
+                    <li
+                      key={a.productId}
+                      className="flex min-h-12 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded px-1 py-1 hover:bg-[var(--rc-canvas)]"
                     >
-                      {cleanDisplayTitle(a.title)}
-                    </a>
-                    <span
-                      className="tabular ms-auto shrink-0"
-                      style={{ font: "var(--rc-text-body)", fontWeight: 600, color: "var(--rc-ink)" }}
-                    >
-                      <bdi>{`${t.fromWord} ${formatPrimaryPrice(a.fromPrice, "KWD").label}`}</bdi>
-                    </span>
-                  </li>
-                ))}
+                      <a
+                        href={buildResultsHref(a.title, 1, viewCountry, showOutOfStock)}
+                        className="min-w-0 hover:underline"
+                        style={{ font: "var(--rc-text-body)", fontWeight: 500, color: "var(--rc-ink)" }}
+                        title={displayTitleChanged(a.title, cleanDisplayTitle(a.title)) ? a.title : undefined}
+                      >
+                        {cleanDisplayTitle(a.title)}
+                      </a>
+                      {figure != null && (
+                        <span
+                          className="tabular ms-auto shrink-0"
+                          style={{ font: "var(--rc-text-body)", fontWeight: 600, color: "var(--rc-ink)" }}
+                        >
+                          <bdi>{`${t.fromWord} ${figure}`}</bdi>
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </section>
           ),
@@ -1129,37 +1152,47 @@ export default function ProductResultCard({
 
           {(
             [
-              [t.alternativesLabel, altRows],
-              [t.pairsWithLabel, pairRows],
+              [t.alternativesLabel, altRows, true],
+              [t.pairsWithLabel, pairRows, false],
             ] as const
-          ).map(([label, rows]) =>
+          ).map(([label, rows, cheaperClaim]) =>
             rows.length === 0 ? null : (
               <section key={label} aria-label={label}>
                 <h3 className="label-token" style={{ color: "var(--rc-body-text)", marginBottom: 4 }}>
                   {label}
                 </h3>
                 <ul>
-                  {rows.map((a) => (
-                    <li
-                      key={a.productId}
-                      className="flex min-h-12 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded px-1 py-1 hover:bg-[var(--rc-canvas)]"
-                    >
-                      <a
-                        href={buildResultsHref(a.title, 1, viewCountry, showOutOfStock)}
-                        className="min-w-0 hover:underline"
-                        style={{ font: "var(--rc-text-body)", fontWeight: 500, color: "var(--rc-ink)" }}
-                        title={displayTitleChanged(a.title, cleanDisplayTitle(a.title)) ? a.title : undefined}
+                  {rows.map((a) => {
+                    // REEA-1236 — same rail contract as the detail view: the
+                    // cheaper-alternatives row carries the AC4 unit guard, a
+                    // complementary "Pairs with" row gets the honest label.
+                    const figure = cheaperClaim
+                      ? railFromPriceLabelGuarded(a, cardLeadKwd)
+                      : railFromPriceLabel(a);
+                    return (
+                      <li
+                        key={a.productId}
+                        className="flex min-h-12 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded px-1 py-1 hover:bg-[var(--rc-canvas)]"
                       >
-                        {cleanDisplayTitle(a.title)}
-                      </a>
-                      <span
-                        className="tabular ms-auto shrink-0"
-                        style={{ font: "var(--rc-text-body)", fontWeight: 600, color: "var(--rc-ink)" }}
-                      >
-                        <bdi>{`${t.fromWord} ${formatPrimaryPrice(a.fromPrice, "KWD").label}`}</bdi>
-                      </span>
-                    </li>
-                  ))}
+                        <a
+                          href={buildResultsHref(a.title, 1, viewCountry, showOutOfStock)}
+                          className="min-w-0 hover:underline"
+                          style={{ font: "var(--rc-text-body)", fontWeight: 500, color: "var(--rc-ink)" }}
+                          title={displayTitleChanged(a.title, cleanDisplayTitle(a.title)) ? a.title : undefined}
+                        >
+                          {cleanDisplayTitle(a.title)}
+                        </a>
+                        {figure != null && (
+                          <span
+                            className="tabular ms-auto shrink-0"
+                            style={{ font: "var(--rc-text-body)", fontWeight: 600, color: "var(--rc-ink)" }}
+                          >
+                            <bdi>{`${t.fromWord} ${figure}`}</bdi>
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               </section>
             ),

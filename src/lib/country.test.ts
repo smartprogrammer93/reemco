@@ -101,7 +101,17 @@ describe("offer/product filtering", () => {
     expect(airpods.offers.map((o) => o.merchant)).toEqual(["Xcite"]);
     // The surviving alternative keeps its price from the FILTERED offers, and
     // an alternative left with no matching offer disappears entirely.
-    expect(airpods.alternatives).toEqual([{ productId: "alt-local", title: "AirPods 4", fromPrice: 400 }]);
+    // REEA-1236 — the rebuild is KWD-space and carries the winning offer's own
+    // currency + native amount, so the rail can label it honestly.
+    expect(airpods.alternatives).toEqual([
+      {
+        productId: "alt-local",
+        title: "AirPods 4",
+        fromPrice: 400,
+        fromCurrency: "KWD",
+        fromNativePrice: 400,
+      },
+    ]);
   });
 });
 

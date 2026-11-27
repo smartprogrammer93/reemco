@@ -66,7 +66,7 @@ import { sanitizeExternalUrl } from "@/lib/safe-url";
 import { normalizedListingUrlOf } from "@/lib/collect/types";
 import { effectivePriceKwd, formatPrice } from "@/lib/format";
 import { savingsFor } from "@/lib/savings";
-import { composePrice } from "@/lib/price-composition";
+import { composePrice, compositionOfOffer } from "@/lib/price-composition";
 import {
   computeCohortSanity,
   logSanitySummary,
@@ -3608,14 +3608,20 @@ function finalizeGroups(
   // such a group is excluded from every alternatives/pairs-with pool instead
   // of publishing a price it cannot claim.
   const sanityByOffer = sanity?.byOffer;
-  const rollupPriceOf = (g: HitGroup): number | null => {
-    let min: number | null = null;
+  // REEA-1236 — the rollup keeps the WINNING offer, not just its numeric: the
+  // rail has to state whether the printed figure is native or converted, so
+  // the offer's own currency and native amount ride into the payload. Without
+  // that provenance the rail could only guess a KD label (the defect this
+  // ticket fixes: a SAR 3,279 listing printed as "from KD 3,279").
+  const rollupOfferOf = (g: HitGroup): { value: number; offer: PriceOffer } | null => {
+    let best: { value: number; offer: PriceOffer } | null = null;
     for (const o of g.offers) {
       if (sanityByOffer?.get(o)?.status === "flagged") continue;
       const v = effectiveKeyOf(o);
-      if (min == null || v < min) min = v;
+      if (!Number.isFinite(v)) continue;
+      if (best == null || v < best.value) best = { value: v, offer: o };
     }
-    return min;
+    return best;
   };
   // REEA-721: collapse title-identical twins BEFORE any derived figure is
   // read, so the alternatives pool, the cheapest-of-card comparisons and the
@@ -3657,9 +3663,12 @@ function finalizeGroups(
   const metaOf = (g: HitGroup): ProductAlternative | null => {
     let m = metas.get(g);
     if (!m) {
-      const fromPrice = rollupPriceOf(g);
-      if (fromPrice == null) return null; // E2 — no price claim from all-flagged offers
+      const rollup = rollupOfferOf(g);
+      if (rollup == null) return null; // E2 — no price claim from all-flagged offers
       const otherTitle = canonicalGroupTitle(g, locale);
+      // REEA-1236 — the native side of the winning offer, for the rail's
+      // honest fallback when no reference conversion exists (REEA-195).
+      const composition = compositionOfOffer(rollup.offer);
       m = {
         // REEA-1140 — the alternative links to the SAME canonical slug the
         // product card uses for that merged SKU, so a click-through lands on
@@ -3668,11 +3677,15 @@ function finalizeGroups(
         // the device card's productId.
         productId: groupSlugs.get(g) ?? slugOfGroup(g, otherTitle),
         title: otherTitle,
-        // KWD-space numeric (REEA-254 item B): alternatives rows render this
-        // through formatPrimaryPrice(x, "KWD"), so mixed-currency groups show
-        // the cheapest-after-conversion figure, not whichever raw numeric is
-        // smallest.
-        fromPrice,
+        // KWD-space numeric (REEA-254 item B): every rail row renders this
+        // through lib/alternatives.ts, so mixed-currency groups show the
+        // cheapest-after-conversion figure, not whichever raw numeric is
+        // smallest. REEA-1236 adds the source currency + native amount so the
+        // row prints "≈KD" (or the source currency) instead of a bare native
+        // amount under a KD label.
+        fromPrice: rollup.value,
+        fromCurrency: rollup.offer.currency,
+        fromNativePrice: composition.effective ?? composition.listed,
       };
       metas.set(g, m);
     }

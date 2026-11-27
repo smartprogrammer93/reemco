@@ -31,6 +31,7 @@
 import type { NormalizedProduct, PriceOffer } from "@/types/product";
 import type { CountryCode } from "@/lib/country";
 import { HOME_MARKET, isCrossMarketOffer } from "@/lib/market";
+import { alternativeFromPriceOf } from "@/lib/alternatives";
 
 /**
  * Allowlisted normalize of the `?oos=` search param. Checked ⇔ "1"/"true";
@@ -118,7 +119,12 @@ export function filterProductsByStock(
       if (!alt) return [a];
       const altOffers = filterOffersByStock(alt.offers, false);
       if (altOffers.length === 0) return [];
-      return [{ ...a, fromPrice: Math.min(...altOffers.map((o) => o.price)) }];
+      // REEA-1236 — rebuild the "from" figure in KWD-space with the winning
+      // offer's own currency + native amount. The old pass took the raw native
+      // minimum, so a SAR 3,279 listing painted "from KD 3,279" on a card whose
+      // headline said KD 383.44.
+      const priced = alternativeFromPriceOf(altOffers);
+      return priced == null ? [] : [{ ...a, ...priced }];
     });
     out.push({ ...p, offers, alternatives });
   }

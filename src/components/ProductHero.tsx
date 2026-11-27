@@ -33,7 +33,9 @@ import {
   scopeProductsByMarket,
   sortOffersByMarket,
 } from "@/lib/market";
-import { formatCountryPrice, formatPrimaryPrice } from "@/lib/format";
+import { formatCountryPrice } from "@/lib/format";
+// REEA-1236 — the PDP rail shares the results rail's ONE figure contract.
+import { railFromPriceLabel, railFromPriceLabelGuarded } from "@/lib/alternatives";
 import { bestCouponForOffer, composePrice, realCouponsFor } from "@/lib/price-composition";
 import PriceCompositionLine from "@/components/PriceCompositionLine";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
@@ -669,24 +671,34 @@ function ProductHeroBody({
 
       {(
         [
-          [t.alternativesLabel, foldAlternativeRows(product.alternatives)],
-          [t.pairsWithLabel, foldAlternativeRows(product.pairsWith ?? [])],
+          [t.alternativesLabel, foldAlternativeRows(product.alternatives), true],
+          [t.pairsWithLabel, foldAlternativeRows(product.pairsWith ?? []), false],
         ] as const
-      ).map(([label, rows]) =>
+      ).map(([label, rows, cheaperClaim]) =>
         rows.length === 0 ? null : (
           <section key={label} aria-label={label} style={{ marginBlockStart: "var(--rc-space-6)" }}>
             <h2 style={{ font: "var(--rc-text-h2)" }}>{label}</h2>
             <div className="rc-alt-grid">
-              {rows.map((a) => (
-                <article className="rc-alt" key={a.productId}>
-                  <Link href={buildResultsHref(a.title, 1, viewCountry)} className="name">
-                    <bdi>{cleanDisplayTitle(a.title)}</bdi>
-                  </Link>
-                  <div className="price tabular">
-                    <bdi>{`${t.fromWord} ${formatPrimaryPrice(a.fromPrice, "KWD").label}`}</bdi>
-                  </div>
-                </article>
-              ))}
+              {rows.map((a) => {
+                // REEA-1236 — the PDP shares the rail component contract: the
+                // cheaper-alternatives row carries the AC4 unit guard, a
+                // complementary "Pairs with" row gets the honest label.
+                const figure = cheaperClaim
+                  ? railFromPriceLabelGuarded(a, variantBaseKwd)
+                  : railFromPriceLabel(a);
+                return (
+                  <article className="rc-alt" key={a.productId}>
+                    <Link href={buildResultsHref(a.title, 1, viewCountry)} className="name">
+                      <bdi>{cleanDisplayTitle(a.title)}</bdi>
+                    </Link>
+                    {figure != null && (
+                      <div className="price tabular">
+                        <bdi>{`${t.fromWord} ${figure}`}</bdi>
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
             </div>
           </section>
         ),
