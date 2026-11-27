@@ -282,8 +282,18 @@ export async function fillSilentFromLastSeen(
   settled: ReadonlyArray<{ merchant: string; hits: SearchHit[] }>,
   now: number = Date.now(),
   dir?: string,
+  opts: { includeAnswered?: boolean } = {},
 ): Promise<SearchHit[]> {
-  const missing = settled.filter((s) => s.hits.length === 0);
+  // REEA-1238 — the default stays silent-only (a live answer keeps its
+  // fallback out). The finalized-at-budget document opts into the supplement:
+  // it reads EVERY merchant's last-seen rows so a product the retailer's
+  // current search page omitted can still join the merge. The cohort pass
+  // dedupes one (retailer, listing) survivor with the freshest fetch winning,
+  // so a live offer always beats its own snapshot twin; only the listings the
+  // live run did not return are added.
+  const missing = opts.includeAnswered
+    ? settled
+    : settled.filter((s) => s.hits.length === 0);
   if (missing.length === 0) return [];
   const rows: SearchHit[] = [];
   try {

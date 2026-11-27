@@ -4465,7 +4465,13 @@ async function finalizedSnapshot(
     merchant: c.merchant,
     hits: settledByMerchant.get(c.merchant)?.hits ?? [],
   }));
-  const fill = await fillSilentFromLastSeen(q, country, fillTargets);
+  // REEA-1238 — supplement, not only silent lanes: the finalized document is
+  // the served answer, and a product the retailer's current search page left
+  // out can still join the merge from its labeled ≤24 h row. The cohort pass
+  // keeps the live row for any listing the live run did return.
+  const fill = await fillSilentFromLastSeen(q, country, fillTargets, Date.now(), undefined, {
+    includeAnswered: true,
+  });
   const filledByMerchant = new Map<string, number>();
   for (const h of fill) {
     filledByMerchant.set(h.merchant, (filledByMerchant.get(h.merchant) ?? 0) + 1);
