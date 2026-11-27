@@ -827,21 +827,28 @@ export function scanAlghanimStoreCards(html: string): WooCard[] {
     const was = amountOf(del);
     const symbol = windowHtml.match(/woocommerce-Price-currencySymbol[^>]*>([^<]*)</)?.[1]?.trim() ?? "";
     // Same label rules as the shared Woo scanner: KD is the local spelling of
-    // KWD; an empty symbol span falls back to the store's own stamp.
+    // KWD; a symbol span that carries no readable label falls back to the
+    // store's own stamp.
     //
-    // REEA-1221 — that stamp is KWD, not SAR. The theme's class is literally
-    // named `sar-currency-symbol` (a legacy class name), but alghanim-store.com
-    // is the KUWAITI Alghanim storefront and its prices are Kuwaiti dinar
-    // (measured 2026-11-26: a 55" Samsung smart TV at 2,599, a window AC at
-    // 1,949). Stamping SAR on those rows made every Alghanim offer fail the
-    // shared currency-mis-map check against a KW host, so the whole lane's rows
-    // were flagged and excluded from comparison — 18 of 18 on `air fryer`.
+    // REEA-1221 — two separate reasons that label can be unreadable. The theme's
+    // class is literally named `sar-currency-symbol` (a legacy class name), but
+    // alghanim-store.com is the KUWAITI Alghanim storefront and its prices are
+    // Kuwaiti dinar (measured 2026-11-26: a 55" Samsung smart TV at 2,599, a
+    // window AC at 1,949). And the span does not hold text at all — it holds a
+    // private-use glyph, U+E900, the store's currency icon. Stamping that glyph
+    // (or SAR) on the rows made every Alghanim offer fail the shared
+    // currency-mis-map check against a KW host: 18 of 18 on `air fryer`, and QA
+    // measured the same on the served head — `"currency": ""` with
+    // `reason: "currency_mis_map"`, so the rows were excluded from comparison and
+    // rendered without a currency label. Anything that is not an ASCII label is
+    // the store's own KWD.
+    const label = symbol.replace(/[^\x20-\x7E]/g, "").trim();
     const currency =
-      symbol === ""
+      label === ""
         ? "KWD"
-        : symbol.toUpperCase() === "KD"
+        : label.toUpperCase() === "KD"
           ? "KWD"
-          : symbol.toUpperCase();
+          : label.toUpperCase();
     out.push({
       title,
       url,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   COLLECTORS,
+  alghanimHits,
   binsinaHits,
   collectSettled,
   luluListHits,
@@ -347,6 +348,22 @@ describe("REEA-1221 lane repair", () => {
       globalThis.fetch = realFetch;
       delete process.env.CLEARANCE_RELAY;
     }
+  });
+
+  it("Alghanim's currency span holds a private-use glyph, not a label — it still stamps KWD", () => {
+    // REEA-1221 — QA measured `"currency": ""` with `reason: "currency_mis_map"`
+    // on the served head. The span is not empty: it carries U+E900, the store's
+    // currency icon, so the empty-string fallback never fired and every row was
+    // excluded from comparison. Anything that is not an ASCII label is KWD on
+    // this Kuwaiti storefront.
+    const card =
+      '<h2 class="woocommerce-loop-product__title"><a href="https://alghanim-store.com/product/washer-b/">' +
+      "غسالة سوبر جنرال 8 كجم</a></h2>" +
+      '<span class="price"><span class="woocommerce-Price-amount amount"><bdi>' +
+      '<span class="sar-currency-symbol"><span class="woocommerce-Price-currencySymbol">\uE900</span></span> 199</bdi></span></span>';
+    const hits = alghanimHits(card, "غسالة");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ merchant: "Alghanim Electronics", price: 199, currency: "KWD" });
   });
 
   it("keeps both clearance tiers out of the hermetic test run", () => {
