@@ -36,12 +36,14 @@ const timeoutMs = Number(arg("timeout", "40000"));
 const intervalMs = Number(arg("interval", "1000"));
 const stamp = new Date().toISOString();
 
-const ROUTES = [
-  "/",
-  "/results?q=iphone+17+pro",
-  "/api/health",
-  "/product/iphone-17-pro",
-];
+// The app gates /results and /product at 60 page requests/min per client IP
+// (src/proxy.ts PAGE_RATE_LIMIT). Probing BOTH at 1 s would spend ~120/min and
+// earn 429s that are not a deploy failure, so the fast routes rotate one probe
+// per second (~20/min each, ~40/min combined — inside the budget). /api/health
+// cannot be 1 s: it walks the live retailer funnel (18-26 s cold), so it runs
+// on its own continuous loop.
+const FAST_ROUTES = ["/", "/results?q=iphone+17+pro", "/product/iphone-17-pro"];
+const HEALTH_ROUTE = "/api/health";
 
 if (out) mkdirSync(dirname(out), { recursive: true });
 
@@ -96,8 +98,20 @@ async function attempt(url) {
   }
 }
 
-async function loop(route) {
-  const url = base + route;
+async function fastLoop() {
+  let i = 0;
+  while (!stopping && Date.now() < stopAt) {
+    const started = Date.now();
+    record(await attempt(base + FAST_ROUTES[i % FAST_ROUTES.length]));
+    i += 1;
+    const gap = Math.max(0, intervalMs - (Date.now() - started));
+    if (Date.now() + gap >= stopAt) break;
+    await new Promise((r) => setTimeout(r, gap));
+  }
+}
+
+async function healthLoop() {
+  const url = base + HEALTH_ROUTE;
   while (!stopping && Date.now() < stopAt) {
     const started = Date.now();
     record(await attempt(url));
@@ -114,7 +128,7 @@ process.on("SIGINT", onSignal);
 process.on("SIGTERM", onSignal);
 
 console.log(`REEA-1262 probe: base=${base} duration=${durationSec}s interval=${intervalMs}ms started=${stamp}`);
-await Promise.all(ROUTES.map(loop));
+await Promise.all([fastLoop(), healthLoop()]);
 
 // Summary.
 const byUrl = new Map();
