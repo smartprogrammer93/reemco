@@ -1,4 +1,5 @@
 import ResultsClient from "@/components/ResultsClient";
+import ResultsPageViewBeacon from "@/components/ResultsPageViewBeacon";
 import ResultsStructuredData from "@/components/ResultsStructuredData";
 import { Suspense } from "react";
 import { collectLiveResultsStagedAdmitted } from "@/lib/collect/live-search";
@@ -442,6 +443,12 @@ export default async function ResultsPage({
           showOutOfStock={showOutOfStock}
         />
       </Suspense>
+      {/* REEA-1237 — the shopper CTR basis: one client page-view beacon per
+          served results page, keyed on this render's per-query random id so a
+          serve counts exactly once and a new render (new query / refresh)
+          counts again. The server records `searches` only when a query is
+          present, so the beacon mirrors that population. Renders nothing. */}
+      {query ? <ResultsPageViewBeacon serveKey={queryId} /> : null}
       {/* REEA-965 — the per-query id rides the committed REEA-964 props seam:
           click events client-side join the same query execution's server-side
           search_performed through this value (FR-3.1). */}

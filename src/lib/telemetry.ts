@@ -6,7 +6,7 @@
  * Failures are silently dropped — instrumentation must never break UX.
  */
 import type { EventType } from "@/lib/events";
-import { MAX_EVENTS_PER_REQUEST, V1_EVENT_TYPES } from "@/lib/events";
+import { CTR_EVENT_TYPES, MAX_EVENTS_PER_REQUEST, V1_EVENT_TYPES } from "@/lib/events";
 import { isBotUserAgent } from "@/lib/bot-ua";
 
 export type ClientEvent = {
@@ -54,9 +54,18 @@ export function trackEvents(events: ClientEvent[]): void {
   // stream is filtered: the REEA-37 funnel contract is explicitly out of the
   // events spec's scope (REEA-973 §3 non-goal), so funnel beacons pass
   // unchanged and the funnel counters keep their existing semantics.
+  //
+  // REEA-1237 — the page_view CTR beacon joins the filtered set. It is CTR
+  // instrumentation, not a funnel event, so a headless QA/smoke probe (which
+  // DOES execute JS, unlike a crawler) must not inflate the shopper CTR
+  // denominator: the whole point of the shopper basis is that a bot serve is
+  // not a shopper serve. The click numerator stays the unfiltered funnel
+  // stream (REEA-973), so a bot that clicks without a counted view is the
+  // only asymmetry left — QA click volume is negligible beside shopper
+  // views, and it can only make the published CTR a slight over-estimate.
   if (isBotUserAgent(typeof navigator === "undefined" ? null : navigator.userAgent)) {
-    const v1Types: readonly string[] = V1_EVENT_TYPES;
-    events = events.filter((e) => !v1Types.includes(e.type));
+    const filteredTypes: readonly string[] = [...V1_EVENT_TYPES, ...CTR_EVENT_TYPES];
+    events = events.filter((e) => !filteredTypes.includes(e.type));
     if (events.length === 0) return;
   }
   for (const chunk of chunkEvents(events)) {

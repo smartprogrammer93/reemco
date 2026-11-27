@@ -52,7 +52,23 @@ export const V1_EVENT_TYPES = [
 /** REEA-965 — the only v1 schema version this build speaks. */
 export const V1_SCHEMA_VERSION = 1;
 
-export const EVENT_TYPES = [...FUNNEL_EVENT_TYPES, ...V1_EVENT_TYPES] as const;
+/**
+ * REEA-1237 — CTR instrumentation events.
+ *
+ * `page_view` is the client page-view beacon: it fires once per served
+ * results page from the shopper's browser, which is the population the
+ * offer-link CTR denominator must use (the click numerator is a browser
+ * beacon too, so the two share a basis and a window). It carries NO
+ * properties at all — the aggregate count is the whole payload, so no
+ * session, user, query or fingerprint identifier is ever persisted for it
+ * (AC-5). It is deliberately NOT a funnel event: the REEA-37 funnel contract
+ * is out of the metrics spec's scope (REEA-973 §3), so it must not inherit
+ * the funnel's "bots pass unchanged" rule — the transport gates it on the
+ * same shared bot predicate as the v1 stream.
+ */
+export const CTR_EVENT_TYPES = ["page_view"] as const;
+
+export const EVENT_TYPES = [...FUNNEL_EVENT_TYPES, ...V1_EVENT_TYPES, ...CTR_EVENT_TYPES] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 export type V1EventType = (typeof V1_EVENT_TYPES)[number];
 
@@ -243,6 +259,14 @@ const v1EventSchema = z
 
 export type RawEvent = z.input<typeof eventSchema>;
 
+/**
+ * REEA-1237 — the page-view beacon schema: a type and nothing else. Zod
+ * strips unknown keys by default, so a client that sends extra properties
+ * still stores only `{ type: "page_view" }` — that is the no-PII guarantee
+ * (AC-5): the aggregate count is the entire persisted fact.
+ */
+const pageViewSchema = z.object({ type: z.literal("page_view") });
+
 export type EventValidation =
   | { ok: true; event: Omit<FunnelEvent, "id" | "ts"> }
   | { ok: false; error: string };
@@ -286,7 +310,13 @@ export function validateEvent(raw: unknown): EventValidation {
       },
     };
   }
-  const errors = [...funnel.error.issues, ...v1.error.issues];
+  // REEA-1237 — the page-view beacon: type only, every other property is
+  // stripped so the stored row can never carry a query, id or fingerprint.
+  const ctr = pageViewSchema.safeParse(raw);
+  if (ctr.success) {
+    return { ok: true, event: { type: "page_view" } };
+  }
+  const errors = [...funnel.error.issues, ...v1.error.issues, ...ctr.error.issues];
   return { ok: false, error: errors.map((i) => i.message).join("; ") };
 }
 

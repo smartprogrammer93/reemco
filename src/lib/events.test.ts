@@ -98,7 +98,10 @@ describe("validateEvent", () => {
   });
 
   it("rejects unknown event types and empty queries", () => {
-    expect(validateEvent({ type: "page_view", query: "q" }).ok).toBe(false);
+    // REEA-1237 — `page_view` is a known CTR event now; a truly unknown type
+    // must still be rejected (the allowlist did not widen into a wildcard).
+    expect(validateEvent({ type: "page_view", query: "q" }).ok).toBe(true);
+    expect(validateEvent({ type: "nonsense", query: "q" }).ok).toBe(false);
     expect(validateEvent({ type: "zero_results", query: "   " }).ok).toBe(false);
   });
 });

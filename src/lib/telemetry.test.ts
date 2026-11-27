@@ -162,4 +162,24 @@ describe("trackEvents bot-UA gate (REEA-981 AC-4)", () => {
     ]);
     expect(beacon).not.toHaveBeenCalled();
   });
+
+  // REEA-1237 — the shopper CTR denominator must not count a headless QA
+  // probe's page view: a probe DOES execute JS (unlike a crawler), so without
+  // this gate it would inflate the shopper basis. The click numerator stays
+  // the unfiltered funnel stream (REEA-973), documented asymmetry.
+  it("drops the REEA-1237 page_view beacon under a bot UA, sends it under a shopper UA", async () => {
+    const botBeacon = vi.fn(() => true);
+    vi.stubGlobal("navigator", { userAgent: HEADLESS_UA, sendBeacon: botBeacon });
+    trackEvents([{ type: "page_view" }]);
+    expect(botBeacon).not.toHaveBeenCalled();
+
+    const shopperBeacon = vi.fn(() => true);
+    vi.stubGlobal("navigator", { userAgent: BROWSER_UA, sendBeacon: shopperBeacon });
+    trackEvents([{ type: "page_view" }]);
+    expect(shopperBeacon).toHaveBeenCalledOnce();
+    const body = JSON.parse(
+      await (shopperBeacon.mock.calls[0] as unknown as [string, Blob])[1].text(),
+    );
+    expect(body.events).toEqual([{ type: "page_view" }]);
+  });
 });
