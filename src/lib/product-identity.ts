@@ -38,7 +38,19 @@ export async function resolveProductIdentity(
   query?: string | null,
 ): Promise<NormalizedProduct | null> {
   const seeded = PRODUCTS.find((p) => p.productId === productId);
-  if (seeded) return seeded;
+  // REEA-1246 AC5 — a catalog identity is an IDENTITY, not a price source.
+  // The old short-circuit returned the bundled catalog row (one or two
+  // listings with no collection stamp), so the sitemap-advertised URL
+  // `/product/iphone-17-pro` painted a thin 1-retailer page while the shelf's
+  // canonical key (`apple-iphone17-pro-256gb`) carried six. Resolve the same
+  // live fan-out here and fold the catalog id onto the live group that names
+  // the same SKU, so both keys render one offer set. The catalog row stays the
+  // fallback when no live group answers (the page's own per-listing re-check
+  // then paints whatever the retailer still serves).
+  if (seeded) {
+    const live = await resolveSeededIdentity(seeded, country, query);
+    return live ?? seeded;
+  }
 
   const carriedQuery = (query ?? "").trim();
   const decodedQuery = productId.replace(/-/g, " ").trim();
@@ -138,6 +150,109 @@ export async function resolveProductIdentity(
   const want = canonicalFields(decodedQuery);
   const best = bestCanonicalMatch(fallbackPool, want);
   return best ?? fallbackPool[0] ?? null;
+}
+
+/** How long a catalog identity waits for a slow lane to converge before it
+ *  settles for the finalized snapshot or the catalog fallback. */
+const SEEDED_CONVERGED_WAIT_MS = 2_000;
+
+function withinMs<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise<T | null>((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms);
+    void promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(null);
+      },
+    );
+  });
+}
+
+/**
+ * REEA-1246 AC5 — resolve a catalog identity through the SAME live fan-out the
+ * shelf runs, then fold it onto the live group whose canonical fields name the
+ * same SKU. The returned product keeps the catalog id (the URL/canonical
+ * identity) but carries the live offer set, so `/product/iphone-17-pro` and
+ * `/product/apple-iphone17-pro-256gb` render one offer set instead of a thin
+ * duplicate page. Returns null when no live group answers — the caller then
+ * keeps the catalog row (and the page's per-listing re-check paints what the
+ * retailer still serves).
+ *
+ * One fan-out, bounded: the shelf's memo when this query was just served, else
+ * one admitted staged run. A cold catalog visit pays at most the completion
+ * budget plus a short converge window, never the whole hop ceiling.
+ */
+async function resolveSeededIdentity(
+  seeded: NormalizedProduct,
+  country: CountryCode | null | undefined,
+  query: string | null | undefined,
+): Promise<NormalizedProduct | null> {
+  const carriedQuery = (query ?? "").trim();
+  // The decoded slug is the merge identity's own phrase (the same query shape
+  // the live key decodes to), so it reproduces the shelf fan-out that minted
+  // the group; a carried shelf query wins because it is the exact one served.
+  const decodedQuery = seeded.productId.replace(/[-_]+/g, " ").trim();
+  const attempt = carriedQuery || decodedQuery;
+  if (attempt === "") return null;
+  const {
+    readLiveQueryMemo,
+    collectLiveResultsStagedAdmitted,
+    RESULTS_COMPLETION_BUDGET_MS,
+    STAGE_TAIL_HEADROOM_MS,
+  } = await import("@/lib/collect/live-search");
+  const retiredLanes = await readRetiredLanes();
+  const scopeCountry = carriedQuery ? null : country ?? null;
+  const want = canonicalFields(seeded.title);
+  // A key with neither model line nor storage is too generic to fold onto a
+  // live group; keep the catalog identity and its own re-check.
+  if (want.modelLine === "" && want.storage === "") return null;
+
+  const memo = readLiveQueryMemo(attempt, { country: scopeCountry, retiredLanes });
+  if (memo) {
+    const best = bestCanonicalMatch(memo.products, want);
+    if (best) return withCatalogId(best, seeded.productId);
+  }
+
+  const staged = await collectLiveResultsStagedAdmitted(attempt, {
+    country: scopeCountry,
+    retiredLanes,
+    deadlineMs: RESULTS_COMPLETION_BUDGET_MS,
+    signal: AbortSignal.timeout(RESULTS_COMPLETION_BUDGET_MS + STAGE_TAIL_HEADROOM_MS),
+  });
+  const { products } = await staged.final;
+  const finalBest = bestCanonicalMatch(products, want);
+  if (finalBest) return withCatalogId(finalBest, seeded.productId);
+  // The finalized snapshot is bounded by the completion budget; a lane that
+  // answers just after it can still hold the group. Wait briefly, then fall
+  // back to the catalog row rather than blocking first paint on the ceiling.
+  const converged = await withinMs(staged.converged, SEEDED_CONVERGED_WAIT_MS);
+  const convergedBest = converged ? bestCanonicalMatch(converged.products, want) : null;
+  return convergedBest ? withCatalogId(convergedBest, seeded.productId) : null;
+}
+
+/** Keep the catalog URL identity while carrying the live group's offer set.
+ *  Curated catalog extras fill only the arrays the live group left empty. */
+function withCatalogId(
+  live: NormalizedProduct,
+  catalogId: string,
+): NormalizedProduct {
+  const seeded = PRODUCTS.find((p) => p.productId === catalogId);
+  const image = live.image ?? seeded?.image;
+  return {
+    ...live,
+    productId: catalogId,
+    ...(image ? { image } : {}),
+    coupons: live.coupons?.length ? live.coupons : seeded?.coupons ?? [],
+    variations: live.variations?.length ? live.variations : seeded?.variations ?? [],
+    alternatives: live.alternatives?.length ? live.alternatives : seeded?.alternatives ?? [],
+    ...(live.pairsWith?.length || seeded?.pairsWith?.length
+      ? { pairsWith: live.pairsWith?.length ? live.pairsWith : seeded?.pairsWith ?? [] }
+      : {}),
+  };
 }
 
 /** Live fields of a candidate product, with the capacity filled from its own
