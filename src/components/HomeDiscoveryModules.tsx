@@ -173,7 +173,11 @@ function Categories({
   locale: Locale;
 }) {
   const copy = HOME_DISCOVERY_COPY[locale];
-  if (module.status === "no-response") return <CalmLine title={copy.noResponseModule} />;
+  // REEA-1268 D-2 — this module is the browse taxonomy, not a merchandise
+  // module: the eight `/c/<slug>` links stay available even when the home
+  // fan-out could not answer, because each category page runs its own live
+  // collection. Only the count badge is load-specific, and a 0 is hidden
+  // rather than claimed.
   if (module.items.length === 0) return <CalmLine title={copy.emptyCategories} />;
   return (
     <div className="rc-cat-grid">
@@ -181,7 +185,7 @@ function Categories({
         <Link className="rc-cat" href={c.href} key={c.id}>
           <span>
             {c.label[locale]}
-            <span className="rc-cat-count">{c.count}</span>
+            {c.count > 0 ? <span className="rc-cat-count">{c.count}</span> : null}
           </span>
           <svg className="rc-icon-dir" width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <path d="M5 12h14M13 6l6 6-6 6" />

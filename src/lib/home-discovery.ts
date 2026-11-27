@@ -20,6 +20,13 @@ import {
   type ResponderSummary,
 } from "@/lib/collect/coverage";
 import { savingsFor, type OfferSavings } from "@/lib/savings";
+// REEA-1268 — the browse module links to the fixed category surfaces, so the
+// homepage's "Browse categories" module is navigation, not a search list.
+import {
+  CATEGORY_SURFACES,
+  categoryHref,
+  categoryMatchesTitle,
+} from "@/lib/categories";
 
 export type HomeModuleStatus = "loading" | "live" | "empty" | "no-response";
 
@@ -118,77 +125,19 @@ export interface HomeDiscoverySnapshot {
   snap: LiveSearchResult | null;
 }
 
-interface CategoryRule {
-  id: string;
-  label: { en: string; ar: string };
-  query: string;
-  en: RegExp;
-  ar: readonly string[];
-}
-
 /**
- * Live category classifier: entries only appear when a product collected by
- * this run actually matches the rule. The query is what a click runs live;
- * the count is this load's real product count, never a static figure.
+ * REEA-1268 — the homepage "Browse categories" module is now the fixed
+ * browse taxonomy, not a list of searches: every entry links to a live
+ * `/c/<slug>` surface (see lib/categories.ts). The count is still this
+ * load's own live match count; a category the home fan-out did not touch
+ * reads 0 rather than a fabricated figure.
  */
-const CATEGORY_RULES: readonly CategoryRule[] = [
-  {
-    id: "phones",
-    label: { en: "Phones & tablets", ar: "الهواتف والأجهزة اللوحية" },
-    query: "smartphone",
-    en: /\biphones?\b|\bipads?\b|\bsmartphones?\b|\bphones?\b|\btablets?\b/i,
-    ar: ["جوال", "هاتف", "ايفون", "آيفون", "ايباد", "تابلت"],
-  },
-  {
-    id: "computing",
-    label: { en: "Laptops & computing", ar: "الحواسيب واللابتوب" },
-    query: "laptop",
-    en: /\blaptops?\b|\bnotebooks?\b|\bmacbooks?\b|\bdesktops?\b|\bmonitors?\b|\bkeyboards?\b|\bmouse\b/i,
-    ar: ["لابتوب", "حاسوب", "كمبيوتر", "شاشة", "لوحة مفاتيح"],
-  },
-  {
-    id: "audio",
-    label: { en: "Audio", ar: "الصوتيات" },
-    query: "headphones",
-    en: /\bheadphones?\b|\bearphones?\b|\bear ?buds?\b|\bheadsets?\b|\bspeakers?\b|\bsoundbars?\b/i,
-    ar: ["سماع", "سماعة", "مكبر صوت"],
-  },
-  {
-    id: "tv",
-    label: { en: "TV & displays", ar: "التلفاز والشاشات" },
-    query: "television",
-    en: /\btelevisions?\b|\bsmart ?tvs?\b|\btvs?\b|\bprojectors?\b/i,
-    ar: ["تلفاز", "تلفزيون", "بروجكتر"],
-  },
-  {
-    id: "home",
-    label: { en: "Home & kitchen", ar: "المنزل والمطبخ" },
-    query: "home appliance",
-    en: /\bair ?fryers?\b|\bcoffee\b|\bblenders?\b|\bvacuum\b|\bwashing machines?\b|\brefrigerators?\b|\bmicrowaves?\b/i,
-    ar: ["قلاية", "قهوة", "خلاط", "مكنسة", "غسالة", "ثلاجة", "ميكروويف"],
-  },
-  {
-    id: "gaming",
-    label: { en: "Gaming", ar: "الألعاب" },
-    query: "gaming console",
-    en: /\bgaming\b|\bplaystations?\b|\bxbox\b|\bcontrollers?\b|\bconsoles?\b/i,
-    ar: ["ألعاب", "بلايستيشن", "يد تحكم"],
-  },
-];
-
-/** Product title → live category id, or null when no rule matches. */
+/** Product title → the first browse category it belongs to, or null. */
 export function categoryOfTitle(title: string): string | null {
-  const lower = title.trim().toLowerCase();
-  for (const rule of CATEGORY_RULES) {
-    if (rule.en.test(lower) || rule.ar.some((word) => lower.includes(word))) {
-      return rule.id;
-    }
+  for (const def of CATEGORY_SURFACES) {
+    if (categoryMatchesTitle(title, def)) return def.slug;
   }
   return null;
-}
-
-function categoryHref(query: string): string {
-  return `/results?q=${encodeURIComponent(query)}`;
 }
 
 function productHref(productId: string): string {
@@ -364,34 +313,39 @@ function buildCategories(
   snapshots: readonly HomeDiscoverySnapshot[],
   partial: boolean,
 ): HomeModule<HomeCategory> {
-  if (snapshots.length === 0 || snapshots.every(({ snap }) => !snap)) {
-    return { status: "no-response", items: [], reason: "no-queries", partial };
-  }
+  // REEA-1268 D-2 — the module is the fixed eight-surface browse taxonomy.
+  // Every item is a navigation entry to a live `/c/<slug>` shelf, whether or
+  // not this home fan-out happened to touch that category: the category page
+  // runs its own live collection. The count is this load's own matched-product
+  // count, so a 0 is honest rather than a static claim.
   let productsSeen = 0;
   const counts = new Map<string, number>();
   for (const { snap } of snapshots) {
     if (!snap) continue;
     for (const product of snap.products) {
       productsSeen += 1;
-      const id = categoryOfTitle(product.title);
-      if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
+      for (const def of CATEGORY_SURFACES) {
+        if (categoryMatchesTitle(product.title, def)) {
+          counts.set(def.slug, (counts.get(def.slug) ?? 0) + 1);
+        }
+      }
     }
   }
-  const ruleOrder = new Map(CATEGORY_RULES.map((rule, i) => [rule.id, i] as const));
-  const items = CATEGORY_RULES.filter((rule) => (counts.get(rule.id) ?? 0) > 0)
-    .map((rule) => ({
-      id: rule.id,
-      label: rule.label,
-      query: rule.query,
-      count: counts.get(rule.id) ?? 0,
-      href: categoryHref(rule.query),
-    }))
-    .sort((a, b) => b.count - a.count || (ruleOrder.get(a.id) ?? 0) - (ruleOrder.get(b.id) ?? 0));
-  if (productsSeen === 0) {
-    return { status: "empty", items: [], reason: "no-live-offers", partial };
+  const items: HomeCategory[] = CATEGORY_SURFACES.map((def) => ({
+    id: def.slug,
+    label: def.label,
+    query: def.queries[0],
+    count: counts.get(def.slug) ?? 0,
+    href: categoryHref(def.slug),
+  }));
+  if (snapshots.length === 0 || snapshots.every(({ snap }) => !snap)) {
+    return { status: "no-response", items, reason: "no-queries", partial };
   }
-  if (items.length === 0) {
-    return { status: "empty", items: [], reason: "no-categories", partial };
+  if (productsSeen === 0) {
+    return { status: "empty", items, reason: "no-live-offers", partial };
+  }
+  if (!items.some((item) => item.count > 0)) {
+    return { status: "empty", items, reason: "no-categories", partial };
   }
   return { status: "live", items, partial };
 }

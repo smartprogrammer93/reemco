@@ -1920,6 +1920,125 @@ html[lang="ar"] .coupon-via {
   }
 }
 
+/* ---------- REEA-1268 — category browse surface (/c/<slug>) ----------
+   Navigation + live-shelf chrome. Every value is a --rc-* token; logical
+   properties keep EN/LTR and AR/RTL on one layout, and min-width:0 plus
+   overflow-wrap keeps 375 free of horizontal overflow. The streamed shelf
+   reuses the results-page card grid; only its per-flush section padding is
+   trimmed so consecutive flushes read as one browse shelf. */
+.category-viewport-reserve {
+  min-height: 100svh;
+}
+.rc-cat-crumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--rc-space-2);
+  font: var(--rc-text-small);
+  color: var(--rc-muted);
+  min-width: 0;
+}
+.rc-cat-crumb a {
+  color: var(--rc-body-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.rc-cat-crumb bdi {
+  color: var(--rc-ink);
+}
+.rc-cat-hero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rc-space-2);
+  padding-block: var(--rc-space-3) var(--rc-space-4);
+  min-width: 0;
+}
+.rc-cat-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--rc-space-2);
+  font: var(--rc-text-small);
+  color: var(--rc-muted);
+}
+.rc-cat-hero h1 {
+  font: var(--rc-text-h1);
+  color: var(--rc-ink);
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+.rc-cat-blurb {
+  font: var(--rc-text-body);
+  color: var(--rc-body-text);
+  max-width: 62ch;
+  overflow-wrap: anywhere;
+}
+.rc-cat-live-note,
+.rc-cat-terms {
+  font: var(--rc-text-small);
+  color: var(--rc-muted);
+  max-width: 72ch;
+  overflow-wrap: anywhere;
+}
+.rc-shelf.rc-cat-shelf {
+  padding-block: var(--rc-space-3) 0;
+}
+.rc-cat-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rc-space-2);
+  margin-top: var(--rc-space-5);
+  padding-top: var(--rc-space-3);
+  border-top: 1px solid var(--rc-line);
+  min-width: 0;
+}
+.rc-cat-count-line,
+.rc-cat-thin,
+.rc-cat-partial,
+.rc-cat-coverage {
+  font: var(--rc-text-small);
+  color: var(--rc-body-text);
+  overflow-wrap: anywhere;
+}
+.rc-cat-thin,
+.rc-cat-partial,
+.rc-cat-coverage {
+  color: var(--rc-muted);
+}
+.rc-cat-other {
+  margin-top: var(--rc-space-8);
+  padding-top: var(--rc-space-4);
+  border-top: 1px solid var(--rc-line);
+  min-width: 0;
+}
+.rc-cat-other h2 {
+  font: var(--rc-text-h2);
+  color: var(--rc-ink);
+  margin-bottom: var(--rc-space-3);
+}
+.rc-cat-other ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--rc-space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.rc-cat-other a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding-inline: var(--rc-space-3);
+  border: 1px solid var(--rc-line-strong);
+  border-radius: var(--rc-radius-pill);
+  font: var(--rc-text-small);
+  color: var(--rc-body-text);
+  background: var(--rc-surface);
+}
+.rc-cat-other a:hover {
+  color: var(--rc-ink);
+  border-color: var(--rc-ink);
+}
+
 .rc-card {
   background: var(--rc-surface);
   border: 1px solid var(--rc-line);

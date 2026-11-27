@@ -136,12 +136,27 @@ describe("buildHomeDiscovery (REEA-1070 AC1)", () => {
     expect(biggest.checkedAtEpochMs).toBe(Date.parse("2026-11-23T12:00:00Z"));
     expect(biggest.href).toBe("/product/apple-iphone-17-pro");
 
-    // AC1 — categories come from the live titles this run collected.
+    // REEA-1268 — the browse module is the fixed eight-surface taxonomy; the
+    // count is this load's own live match count, and every entry links to a
+    // `/c/<slug>` surface (never `/results?q=`).
     expect(data.categories.status).toBe("live");
-    expect(data.categories.items.map((c) => [c.id, c.count])).toEqual([
-      ["phones", 1],
-      ["audio", 1],
+    expect(data.categories.items.map((c) => c.id)).toEqual([
+      "laptops",
+      "headphones",
+      "air-fryers",
+      "phones",
+      "washing-machines",
+      "refrigerators",
+      "tv",
+      "pharmacy",
     ]);
+    expect(data.categories.items.find((c) => c.id === "phones")?.count).toBe(1);
+    expect(data.categories.items.find((c) => c.id === "headphones")?.count).toBe(1);
+    expect(data.categories.items.find((c) => c.id === "pharmacy")?.count).toBe(0);
+    for (const item of data.categories.items) {
+      expect(item.href.startsWith("/c/")).toBe(true);
+      expect(item.href.includes("/results")).toBe(false);
+    }
 
     // Method band carries live stats + both disclosure locales.
     expect(data.methodBand.offers).toBe(3);
@@ -201,14 +216,21 @@ describe("buildHomeDiscovery (REEA-1070 AC1)", () => {
   });
 });
 
-describe("categoryOfTitle (REEA-1070 AC1)", () => {
+describe("categoryOfTitle (REEA-1070 AC1 / REEA-1268)", () => {
   it("classifies live titles without a bundled product catalogue", () => {
     expect(categoryOfTitle("Apple iPhone 17 Pro 256GB")).toBe("phones");
-    expect(categoryOfTitle("Sony WH-1000XM6 Wireless Headphones")).toBe("audio");
-    expect(categoryOfTitle("ASUS VivoBook 15 Laptop")).toBe("computing");
+    expect(categoryOfTitle("Sony WH-1000XM6 Wireless Headphones")).toBe("headphones");
+    expect(categoryOfTitle("ASUS VivoBook 15 Laptop")).toBe("laptops");
     expect(categoryOfTitle("Samsung 65 inch Smart TV")).toBe("tv");
-    expect(categoryOfTitle("Philips Air Fryer XL")).toBe("home");
-    expect(categoryOfTitle("PlayStation 5 Console")).toBe("gaming");
+    expect(categoryOfTitle("Philips Air Fryer XL")).toBe("air-fryers");
+    expect(categoryOfTitle("LG Washing Machine 9kg")).toBe("washing-machines");
+    expect(categoryOfTitle("Samsung Refrigerator 500L")).toBe("refrigerators");
+    // Pharmacy accepts its seed terms' own scoped shelf on the category page,
+    // so a title-only classifier does not claim an arbitrary product for it.
+    expect(categoryOfTitle("Panadol Extra 24 Tablets")).toBeNull();
+    // The eight-surface browse taxonomy replaced the old six-rule classifier:
+    // a console is not one of the approved browse surfaces.
+    expect(categoryOfTitle("PlayStation 5 Console")).toBeNull();
     expect(categoryOfTitle("Country XL Organic Basmati Rice")).toBeNull();
   });
 });
