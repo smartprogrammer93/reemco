@@ -15,11 +15,11 @@
  * store.
  */
 import type { CountryCode } from "@/lib/country";
-import { HOME_MARKET, isCrossMarketOffer, marketViewScope, scopeProductsByMarket } from "@/lib/market";
+import { isCrossMarketOffer, marketViewScope, scopeProductsByMarket } from "@/lib/market";
 import { effectiveKwdOfOffer } from "@/lib/price-composition";
 import { comparisonMerchantCount } from "@/lib/offer-integrity";
 import { filterProductsByStock } from "@/lib/stock";
-import { exactSkuKeep, modelIdentityTokens } from "@/lib/relevance";
+import { carriesExactModel, exactModelQuery, exactSkuKeep, modelIdentityTokens } from "@/lib/relevance";
 import {
   CONFIDENCE_THRESHOLD,
   RELATED_CAP,
@@ -79,9 +79,16 @@ export function shelfSectionsFromProducts(
     : confidenceSections(filtered, query);
   // REEA-1177 AC 6a-4 — the primary shelf ranks by the SAME effective price
   // the card headline prints (lowest in-market effective first).
+  // REEA-1261 AC-1 — on a brand+model query the exact model leads (see
+  // rankPrimaryByEffective), so a cross-market-only exact card cannot be
+  // buried under cheaper neighbours of another brand.
   const ranked = {
     ...sections,
-    primary: rankPrimaryByEffective(sections.primary, marketViewScope(country)),
+    primary: rankPrimaryByEffective(
+      sections.primary,
+      marketViewScope(country),
+      query,
+    ),
   };
   // REEA-1178 AC1 — the page-level invariant: no two shelf cards share a
   // productId. The collector resolves group collisions (a "+ Wireless
@@ -140,7 +147,18 @@ function scopeSections(
       continue;
     }
     if (scope === "accessory") {
-      accessory.push(p);
+      // REEA-1261 — an accessory-scoped card whose match reason is `related`
+      // is not an accessory OF the queried product; it is a different product
+      // that merely shared a token (a Razer Ornata V3 under "keychron v3
+      // max"). It belongs in the related band the page labels "Related items
+      // — not an exact match", never in the accessory band whose label claims
+      // it complements the query. Genuine accessories (a case that repeats the
+      // device's identity) keep the accessory band.
+      if (p.matchReason === "related") {
+        if (related.length < RELATED_CAP) related.push(p);
+      } else {
+        accessory.push(p);
+      }
       continue;
     }
     if (scope === "consumable") {
@@ -160,10 +178,20 @@ function scopeSections(
  * card headline prints: lowest in-market effective first. Products with no
  * in-market offer (the AC 6d-3 exception) follow every local card, ordered by
  * their own effective figure; they never hold the "first card" claim.
+ *
+ * REEA-1261 AC-1 — the exception to that exception: on a brand+model query
+ * ("keychron v3 max") the card that answers the shopper's exact model leads
+ * the shelf even when its only offer is cross-market. The shopper asked for
+ * THAT product; a cheaper neighbour of another brand must never push it below
+ * the fold (measured live: the exact model ranked behind nine Razer cards).
+ * The exact-identity tier only exists for queries that name a curated brand
+ * AND a model token, so category and brand-only shelves keep the price order
+ * byte-for-byte.
  */
 export function rankPrimaryByEffective(
   products: readonly NormalizedProduct[],
   scope: CountryCode | null,
+  query?: string,
 ): NormalizedProduct[] {
   const key = (p: NormalizedProduct): number | null => {
     const inMarket = scope === null
@@ -172,7 +200,14 @@ export function rankPrimaryByEffective(
     if (inMarket.length === 0) return null;
     return Math.min(...inMarket.map((o) => effectiveKwdOfOffer(o)));
   };
+  const q = query ?? "";
+  const hasExactIdentity = q !== "" && exactModelQuery(q) !== null;
+  const exactRank = (p: NormalizedProduct): number =>
+    hasExactIdentity && carriesExactModel(q, p.title) ? 0 : 1;
   return [...products].sort((a, b) => {
+    const ea = exactRank(a);
+    const eb = exactRank(b);
+    if (ea !== eb) return ea - eb;
     const ka = key(a);
     const kb = key(b);
     if (ka == null && kb == null) return 0;

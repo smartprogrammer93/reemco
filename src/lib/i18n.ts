@@ -272,6 +272,19 @@ const en = {
   inScopeCountDual: "{n} in-scope products for “{q}”",
   inScopeCountFew: "{n} in-scope products for “{q}”",
   inScopeCountMany: "{n} in-scope products for “{q}”",
+  // REEA-1261 AC-2 — the exact-model count line. On a brand+model query
+  // ("keychron v3 max") the shopper named ONE product, so the line counts the
+  // exact-model cards the shelf renders and never a neighbour's padding. When
+  // every exact-model card is cross-market only, the line says so instead of
+  // letting "1 retailer carries this" read as Kuwait stock.
+  exactModelCountOne: "1 retailer carries this exact model",
+  exactModelCountDual: "{n} retailers carry this exact model",
+  exactModelCountFew: "{n} retailers carry this exact model",
+  exactModelCountMany: "{n} retailers carry this exact model",
+  exactModelNoneInMarketOne: "1 retailer carries this model · none in {market}",
+  exactModelNoneInMarketDual: "{n} retailers carry this model · none in {market}",
+  exactModelNoneInMarketFew: "{n} retailers carry this model · none in {market}",
+  exactModelNoneInMarketMany: "{n} retailers carry this model · none in {market}",
   // REEA-1201 AC 7b-2 — the labelled accessory band, pinned copy.
   accessoryBandLabel: "Accessories for this product",
   accessoryBandAria: "Accessories for this product",
@@ -638,6 +651,15 @@ const ar: typeof en = {
   inScopeCountDual: "منتجان ضمن نطاق البحث عن «{q}»",
   inScopeCountFew: "{n} منتجات ضمن نطاق البحث عن «{q}»",
   inScopeCountMany: "{n} منتجًا ضمن نطاق البحث عن «{q}»",
+  // REEA-1261 AC-2 — the Arabic exact-model ladder.
+  exactModelCountOne: "متجر واحد يبيع هذا الموديل بالضبط",
+  exactModelCountDual: "متجران يبيعان هذا الموديل بالضبط",
+  exactModelCountFew: "{n} متاجر تبيع هذا الموديل بالضبط",
+  exactModelCountMany: "{n} متجرًا يبيع هذا الموديل بالضبط",
+  exactModelNoneInMarketOne: "متجر واحد يبيع هذا الموديل · لا يوجد عرض في {market}",
+  exactModelNoneInMarketDual: "متجران يبيعان هذا الموديل · لا يوجد عرض في {market}",
+  exactModelNoneInMarketFew: "{n} متاجر تبيع هذا الموديل · لا يوجد عرض في {market}",
+  exactModelNoneInMarketMany: "{n} متجرًا يبيع هذا الموديل · لا يوجد عرض في {market}",
   accessoryBandLabel: "ملحقات هذا المنتج",
   accessoryBandAria: "ملحقات هذا المنتج",
   accessoryChip: "ملحق",

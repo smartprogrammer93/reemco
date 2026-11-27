@@ -36,6 +36,10 @@
  * and perform ZERO collection work.
  */
 import type { LiveSearchResult } from "@/lib/collect/live-search";
+// REEA-1261 — the fold-in answer carries the exact-model card (same seed the
+// PDP and the page use).
+import { exactModelShelfSeed } from "@/lib/collect/last-observation";
+import { withExactModelCard } from "@/lib/exact-model-seed";
 // REEA-1078 S2 — dead-lane retirement applies to this cross-worker fan-out too.
 import { readLaneRetirement } from "@/lib/collect/lane-health";
 import {
@@ -147,5 +151,17 @@ export async function GET(req: Request): Promise<Response> {
     }),
   ]);
   clearTimeout(timer);
-  return Response.json(settled ?? null, { headers: gateHeaders });
+  if (!settled) return Response.json(null, { headers: gateHeaders });
+  // REEA-1261 — the fold-in path carries the exact-model card too. The page
+  // seeds its own snapshots, but this feed's converged answer can REPLACE the
+  // open page's shelf when it arrives with more offer evidence
+  // (preferRicherSnapshot); without the same seed the exact model the shopper
+  // searched for would vanish again the moment a late lane answers. The helper
+  // is idempotent, so an already-seeded snapshot is returned unchanged.
+  const exactSeed = await exactModelShelfSeed(query).catch(() => null);
+  const answer =
+    exactSeed === null
+      ? settled
+      : { ...settled, products: withExactModelCard(settled.products, exactSeed, query) };
+  return Response.json(answer, { headers: gateHeaders });
 }

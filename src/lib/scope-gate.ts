@@ -280,7 +280,20 @@ export function carriesQueryIdentity(query: string, title: string): boolean {
   const models = modelIdentityTokens(query);
   if (models.length > 0) {
     const lower = title.toLowerCase();
-    if (models.some((m) => matchesModelIdentity(lower, m))) return true;
+    if (models.some((m) => matchesModelIdentity(lower, m))) {
+      // REEA-1261 — a model token answered by ANOTHER brand is not the query's
+      // identity. "v3" is Razer's Ornata V3 and Keychron's V3 Max alike, so a
+      // Razer Ornata V3 must not answer "keychron v3 max" as a primary result.
+      // The curated brand on the query is the missing half of the identity;
+      // queries that name no curated brand (category/brand-only, "iphone 17
+      // pro") keep the pre-change model-token evidence untouched.
+      const queryBrand =
+        curatedBrandInTitle(query) ??
+        // REEA-1261 — an Arabic brand spelling rides its curated Latin bridge
+        // ("سامسونج" → samsung), so the guard holds for the AR panel too.
+        curatedBrandInTitle(latinBridgeDispatch(query));
+      return queryBrand === null || titleMatchesBrand(title, queryBrand);
+    }
   }
   return false;
 }

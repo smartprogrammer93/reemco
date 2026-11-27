@@ -95,26 +95,46 @@ function renderResults(products: NormalizedProduct[], locale: "en" | "ar", query
   );
 }
 
-describe("REEA-1201 AC 7b-1 — the in-scope count line is the payload count (EN)", () => {
-  it("states 2 in-scope products for the query and the number is the primary shelf count", () => {
+describe("REEA-1201 AC 7b-1 — the count line is the payload count (EN)", () => {
+  it("states 2 exact-model retailers and the number is the primary shelf count", () => {
     const { container } = renderResults(S25_SHELF, "en", "samsung galaxy s25 ultra");
+    // REEA-1261 AC-2 — "samsung galaxy s25 ultra" names a curated brand AND a
+    // model token, so the count line is the exact-model sentence. The number
+    // is still the payload's primary card count: the sentence and the shelf
+    // read the same predicate, so they cannot disagree.
+    const line = container.querySelector("[data-exact-model-count]") as HTMLElement;
+    expect(line).not.toBeNull();
+    expect(line.textContent).toBe("2 retailers carry this exact model");
+    expect(line.getAttribute("data-exact-model-total")).toBe("2");
+    expect(line.getAttribute("data-exact-model-none-in-market")).toBe("false");
+    // The number equals the primary-scope cards actually rendered.
+    expect(container.querySelectorAll("[data-primary-section] article.rc-card").length).toBe(2);
+  });
+
+  it("keeps the in-scope count line on a query that names no brand+model", () => {
+    const { container } = renderResults(THIN_SHELF, "en", "panadol");
     const line = container.querySelector("[data-in-scope-count]") as HTMLElement;
     expect(line).not.toBeNull();
     expect(line.textContent).toContain("2 in-scope products");
-    expect(line.textContent).toContain("samsung galaxy s25 ultra");
     expect(line.getAttribute("data-in-scope-total")).toBe("2");
-    // The number equals the primary-scope cards actually rendered.
-    expect(container.querySelectorAll("[data-primary-section] article.rc-card").length).toBe(2);
+    expect(container.querySelector("[data-exact-model-count]")).toBeNull();
   });
 });
 
 describe("REEA-1201 AC 7b-1 — AR count line", () => {
-  it("states the Arabic dual form for 2 in-scope products", () => {
+  it("states the Arabic dual form for 2 exact-model retailers", () => {
     const { container } = renderResults(S25_SHELF, "ar", "samsung galaxy s25 ultra");
+    const line = container.querySelector("[data-exact-model-count]") as HTMLElement;
+    expect(line).not.toBeNull();
+    expect(line.textContent).toContain("متجران يبيعان هذا الموديل بالضبط");
+    expect(line.getAttribute("data-exact-model-total")).toBe("2");
+  });
+
+  it("keeps the Arabic in-scope ladder on a non-exact query", () => {
+    const { container } = renderResults(THIN_SHELF, "ar", "panadol");
     const line = container.querySelector("[data-in-scope-count]") as HTMLElement;
     expect(line).not.toBeNull();
     expect(line.textContent).toContain("منتجان ضمن نطاق البحث");
-    expect(line.textContent).toContain("samsung galaxy s25 ultra");
   });
 });
 

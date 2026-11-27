@@ -285,6 +285,50 @@ export function matchesModelIdentity(titleLower: string, token: string): boolean
 }
 
 
+/**
+ * REEA-1261 (Bet 7A-1) — brand+model exact identity.
+ *
+ * A query that names a curated brand AND carries a model-identity token
+ * ("keychron v3 max", "sony wh-1000xm6") names ONE product. The model token
+ * alone is not identity: "V3" is Razer's Ornata V3, Keychron's V3 Max and
+ * Corsair's K70 V3 alike, so a title that answers only the token is a
+ * different product from a different brand — the substitution measured live
+ * on `keychron v3 max` (9/9 Razer cards, zero Keychron).
+ *
+ * Returns null for category queries ("laptop"), brand-only queries
+ * ("keychron") and model queries that name no curated brand ("iphone 17 pro",
+ * whose brand word is the model's own — Apple never appears in the query), so
+ * those keep the untouched ladder.
+ */
+export function exactModelQuery(
+  query: string,
+): { brand: string; models: string[] } | null {
+  // REEA-1261 — Arabic brand/model spellings ride their curated Latin bridge
+  // ("سامسونج جالكسي" → "samsung galaxy") before the identity read, so the EN
+  // and AR spellings of one query resolve the same exact-model card and the
+  // same count line (AC-2's EN+AR panel).
+  const bridged = /[\u0600-\u06FF]/.test(query) ? latinBridgeDispatch(query) : query;
+  const models = modelIdentityTokens(bridged);
+  if (models.length === 0) return null;
+  const brand = curatedBrandInTitle(bridged);
+  if (brand === null) return null;
+  return { brand, models };
+}
+
+/**
+ * REEA-1261 — does this title answer the query's brand+model identity? Both
+ * halves must hold: the curated brand is on the title (its own brand line) and
+ * the model token is carried by it. Used by the shelf ranking (the exact model
+ * leads) and the honest exact-model count line, so the two can never disagree.
+ */
+export function carriesExactModel(query: string, title: string): boolean {
+  const identity = exactModelQuery(query);
+  if (!identity) return false;
+  if (!titleMatchesBrand(title, identity.brand)) return false;
+  const lower = title.toLowerCase();
+  return identity.models.some((m) => matchesModelIdentity(lower, m));
+}
+
 /** REEA-721 follow-up — SKU-shaped query intent. Tokens that mix letters and
  *  digits at real length (`ps931cbegww`, `1000xm6`) are the exact part-number
  *  shape a shopper pastes when they want one precise item: every retailer

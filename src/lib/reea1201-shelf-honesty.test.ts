@@ -17,6 +17,7 @@ function product(
   title: string,
   scope: NormalizedProduct["productScope"],
   offers: NormalizedProduct["offers"],
+  matchReason?: NormalizedProduct["matchReason"],
 ): NormalizedProduct {
   return {
     productId: id,
@@ -28,7 +29,7 @@ function product(
     alternatives: [],
     scrapedAt: "2026-11-26T00:00:00.000Z",
     productScope: scope,
-    matchReason: scope === "primary" ? "query_token" : "related",
+    matchReason: matchReason ?? (scope === "primary" ? "query_token" : "related"),
   };
 }
 
@@ -45,8 +46,8 @@ describe("REEA-1201 — payload-scope partition", () => {
     const products = [
       product("phone", "Samsung Galaxy S25 Ultra", "primary", [kwd("Xcite", 289.9), kwd("Jarir", 299.9)]),
       product("phone-variant", "Samsung Galaxy S25 Ultra 512GB", "variant", [kwd("Eureka", 319.9)]),
-      product("case", "Samsung Galaxy S25 Ultra Silicone Case", "accessory", [kwd("Xcite", 9.9)]),
-      product("screen", "Samsung Galaxy S25 Ultra Screen Protector", "accessory", [kwd("Jarir", 4.9)]),
+      product("case", "Samsung Galaxy S25 Ultra Silicone Case", "accessory", [kwd("Xcite", 9.9)], "query_token"),
+      product("screen", "Samsung Galaxy S25 Ultra Screen Protector", "accessory", [kwd("Jarir", 4.9)], "query_token"),
       product("soap", "Dove Cucumber Soap", "consumable", [kwd("Sultan Center", 1.2)]),
     ];
     const sections = shelfSectionsFromProducts(products, "samsung galaxy s25 ultra", "KW", false);
@@ -81,7 +82,7 @@ describe("REEA-1201 — payload-scope partition", () => {
     const products = [
       product("phone", "Samsung Galaxy S25 Ultra", "primary", [kwd("Xcite", 289.9)]),
       product("legacy", "Samsung Galaxy S25 Ultra 256GB", undefined, [kwd("Jarir", 299.9)]),
-      product("case", "Samsung Galaxy S25 Ultra Case", "accessory", [kwd("Eureka", 9.9)]),
+      product("case", "Samsung Galaxy S25 Ultra Case", "accessory", [kwd("Eureka", 9.9)], "query_token"),
     ];
     const sections = shelfSectionsFromProducts(products, "samsung galaxy s25 ultra", "KW", false);
     expect(sections.primary.map((p) => p.productId)).toEqual(["phone", "legacy"]);

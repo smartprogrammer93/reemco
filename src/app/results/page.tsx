@@ -3,6 +3,12 @@ import ResultsPageViewBeacon from "@/components/ResultsPageViewBeacon";
 import ResultsStructuredData from "@/components/ResultsStructuredData";
 import { Suspense } from "react";
 import { collectLiveResultsStagedAdmitted } from "@/lib/collect/live-search";
+import type { LiveSearchResult, LiveSearchStages } from "@/lib/collect/live-search";
+// REEA-1261 AC-1/AC-2 — the exact-model card folded into every served
+// snapshot: the same stored last observation the PDP seeds with, and the
+// idempotent merge that never overrides a fresher live row.
+import { exactModelShelfSeed } from "@/lib/collect/last-observation";
+import { withExactModelCard } from "@/lib/exact-model-seed";
 import { COLD_RECORDING_CAP_MS, recordSearchOutcome, searchOutcomeFromSnapshot, serveOutcomeOf } from "@/lib/metrics";
 // REEA-1237 (PM scope extension) — per-week aggregate {term, count} rows for
 // the zero-offer / filtered-empty Pareto. Aggregate-only, shopper serves only.
@@ -214,6 +220,17 @@ export default async function ResultsPage({
     readUnreachableLanes(),
   ]);
   const { retired: retiredLanes, readmitted: readmittedLanes } = retirement;
+  // REEA-1261 AC-1/AC-2 — the exact-model card, read CONCURRENTLY with the
+  // fan-out (it is one small shared-store GET; issuing it here keeps it off
+  // the critical path). It is the same evidence the PDP seeds with
+  // (lib/collect/last-observation): the catalog supplies the identity, the
+  // store supplies the last COMPLETED live observation, marked "cache" so the
+  // card reads "Needs verification" and never claims this run's cross-check.
+  // Null for category/brand-only/model-only queries and when no fresh stored
+  // observation exists — then the live fan-out's answer stands untouched.
+  const exactSeedPromise = query
+    ? exactModelShelfSeed(query, renderStartMs)
+    : Promise.resolve(null);
   // REEA-1133 — the page-path fan-out goes through the process-wide admission
   // cap with a bounded, FAIL-CLOSED wait (src/lib/collect/inflight.ts), so N
   // distinct queries queue behind the ceiling instead of each multiplying the
@@ -221,6 +238,28 @@ export default async function ResultsPage({
   // shell and the same run is deferred behind the response: the follow-up feed
   // (REEA-398) still folds its live answer into the open page.
   const staged = await collectLiveResultsStagedAdmitted(query, { refresh: hint.refresh, locale, retiredLanes, readmittedLanes });
+  const exactSeed = await exactSeedPromise.catch(() => null);
+  // REEA-1261 — fold the exact-model card into EVERY snapshot this serve can
+  // paint (the streamed stages, the finalized document and the run's converged
+  // answer). The helper is idempotent: a snapshot that already carries the
+  // identity (the live fan-out answered with it) is returned unchanged, so
+  // this can never duplicate a card or override a fresher live row. The
+  // after() fold reads the SAME wrapped promises, so `comparison_depth` counts
+  // exactly the shelf the shopper's page painted (REEA-1099).
+  const withExactModel = (snap: LiveSearchResult): LiveSearchResult =>
+    exactSeed === null
+      ? snap
+      : {
+          ...snap,
+          products: withExactModelCard(snap.products, exactSeed, query),
+        };
+  const seededStaged: LiveSearchStages = {
+    ...staged,
+    stages: staged.stages.map((stage) => stage.then(withExactModel)),
+    final: staged.final.then(withExactModel),
+    converged: staged.converged.then(withExactModel),
+    allSettled: staged.allSettled.then((snap) => (snap ? withExactModel(snap) : snap)),
+  };
   // REEA-398 — keep the hops still in flight alive BEHIND the finalized
   // response: after() runs the run's allSettled chain once the document is
   // sent, so late offers converge into the cache and the follow-up feed
@@ -240,14 +279,14 @@ export default async function ResultsPage({
     // cold serve can never be banded past the cap its methodology documents
     // (the previous code awaited staged.converged unbounded, which is where
     // the >10 s band came from).
-    const convSnapAtCap = await staged.allSettled;    // REEA-807 — aggregate outcome counters, folded in the same after() tail
+    const convSnapAtCap = await seededStaged.allSettled;    // REEA-807 — aggregate outcome counters, folded in the same after() tail
     // REEA-1078/REEA-1148 — warm serves keep the serve-entry clock; a cold
     // serve records the bounded collection clock read right here, clamped to
     // the structural cap so latency_band_gt_10s is unreachable by construction.
     // eslint-disable-next-line react-hooks/purity -- deferred after() tail, not render output.
     const capClockMs = Date.now();
     const recordedMs =
-      staged.serveKind === "warm" ? afterEntryMs : Math.min(capClockMs, fanoutStartMs + COLD_RECORDING_CAP_MS);
+      seededStaged.serveKind === "warm" ? afterEntryMs : Math.min(capClockMs, fanoutStartMs + COLD_RECORDING_CAP_MS);
     // that keeps the run's hops alive: one live fan-out page serve = one
     // search; zero-offer and per-retailer offer counts read the fullest
     // answer the page ended with (REEA-921: the converged answer, else the
@@ -273,11 +312,11 @@ export default async function ResultsPage({
     // beyond the existing full/pending split.
     if (query) {
       const [served, adapterTelemetry] = await Promise.all([
-        staged.final.then(
+        seededStaged.final.then(
           (s) => s,
           () => null,
         ),
-        staged.adapterTelemetry.catch(() => ({ attempts: {}, failures: {} })),
+        seededStaged.adapterTelemetry.catch(() => ({ attempts: {}, failures: {} })),
       ]);
       // REEA-1148 — the outcome/offer counters keep the REEA-921 definition
       // (did the registered follow-up deliver the converged answer?), which
@@ -285,7 +324,7 @@ export default async function ResultsPage({
       // cap won the bounded wait, await the converged chain for this
       // classification only — the recorded clock was already taken at the
       // cap, so a long convergence can never re-open the >10 s band.
-      const convSnap = convSnapAtCap ?? (await staged.converged.then((s) => s, () => null));
+      const convSnap = convSnapAtCap ?? (await seededStaged.converged.then((s) => s, () => null));
       const pageSnap = convSnap ?? served;
       // REEA-1099 — comparison depth is folded over the SAME shelf the page
       // paints (the primary slice of the filtered, confidence-partitioned
@@ -320,7 +359,7 @@ export default async function ResultsPage({
       // inflation in `comparison_cards_total`, so depth can be corrected; it
       // is an aggregate integer only — no card ids, no query text.
       const paintedCards = await paintedShelfCardsAcrossStages(
-        staged.stages,
+        seededStaged.stages,
         query,
         1,
         country,
@@ -350,7 +389,7 @@ export default async function ResultsPage({
         serveOutcome: serveOutcomeOf(served, convSnap),
         // REEA-1078 — serve kind from the collection layer (only it knows
         // whether a fresh memo answered with no fan-out).
-        serveKind: staged.serveKind,
+        serveKind: seededStaged.serveKind,
         serveLatencyMs: Math.max(0, recordedMs - fanoutStartMs),
         adapterAttempts: adapterTelemetry.attempts,
         adapterFailures: adapterTelemetry.failures,
@@ -404,10 +443,10 @@ export default async function ResultsPage({
   after(async () => {
     if (!query || isBotUserAgent(hint.userAgent)) return;
     try {
-      const snap = (await staged.converged.then(
+      const snap = (await seededStaged.converged.then(
         (s) => s,
         () => null,
-      )) ?? (await staged.final.then(
+      )) ?? (await seededStaged.final.then(
         (s) => s,
         () => null,
       ));
@@ -446,7 +485,7 @@ export default async function ResultsPage({
           Empty when nothing is visible. */}
       <Suspense fallback={null}>
         <ResultsStructuredData
-          stages={staged.stages}
+          stages={seededStaged.stages}
           query={query}
           country={country}
           locale={locale}
@@ -470,7 +509,7 @@ export default async function ResultsPage({
         country={country}
         showOutOfStock={showOutOfStock}
         locale={locale}
-        stages={staged.stages}
+        stages={seededStaged.stages}
         renderStartMs={renderStartMs}
         queryId={queryId}
         unreachableLanes={unreachableLanes}

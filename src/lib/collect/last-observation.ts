@@ -37,6 +37,10 @@
  */
 import type { LiveOffer } from "@/lib/collect/types";
 import { findLastCompleted } from "@/lib/collect/store";
+import {
+  exactModelIdentityProduct,
+  stampSeededCard,
+} from "@/lib/exact-model-seed";
 import { OFFER_STATUS_STALE_MS } from "@/lib/offer-status";
 import type { NormalizedProduct } from "@/types/product";
 
@@ -104,4 +108,32 @@ export async function seedCatalogPageWithLastObservation(
   // the row cannot claim this run's cross-check.
   const replayed = offers.map((offer) => ({ ...offer, method: "cache" as const }));
   return { ...product, offers: replayed as unknown as NormalizedProduct["offers"] };
+}
+
+/**
+ * REEA-1261 AC-1/AC-2 — the exact-model shelf card for a brand+model query.
+ *
+ * Same evidence and the same honesty rules as the PDP seed above: the catalog
+ * supplies the identity, the shared store supplies the last COMPLETED live
+ * observation (rows with their own `collectedAt`, marked `cache` so the card
+ * reads "Needs verification"), and nothing is painted when no fresh
+ * observation exists. Returns null for category/brand-only/model-only
+ * queries, so their shelves are untouched.
+ *
+ * Fail-open: a store read failure returns null and the live fan-out's answer
+ * stands — the seed can never blank or fail a search.
+ */
+export async function exactModelShelfSeed(
+  query: string,
+  nowMs: number = Date.now(),
+): Promise<NormalizedProduct | null> {
+  const identity = exactModelIdentityProduct(query);
+  if (!identity) return null;
+  const offers = await lastVerifiedObservation(identity.productId, nowMs);
+  if (!offers) return null;
+  const replayed = offers.map((offer) => ({ ...offer, method: "cache" as const }));
+  return stampSeededCard(query, {
+    ...identity,
+    offers: replayed as unknown as NormalizedProduct["offers"],
+  });
 }

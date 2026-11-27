@@ -36,9 +36,19 @@ import { resultsShelfCards, resultsShelfSections, shelfSectionsFromProducts, RES
 // REEA-1201 (Bet 7A-2) — the honest shelf's pure decisions: the in-scope count
 // plural ladder and the thin-shelf test (same comparison-merchant count the
 // card basis prints, so the page line can never contradict a card).
-import { inScopeCountTemplate, isThinShelf } from "@/lib/shelf-honesty";
+// REEA-1261 — the exact-model ladder and card set, so a brand+model query
+// counts only the cards that answer the shopper's exact product.
+import {
+  exactModelCardsOf,
+  exactModelCountTemplate,
+  exactModelOnlyOutsideMarket,
+  inScopeCountTemplate,
+  isExactModelQuery,
+  isThinShelf,
+} from "@/lib/shelf-honesty";
 import { formatPrice, sortOffers } from "@/lib/format";
 import {
+  HOME_MARKET,
   marketName,
   marketViewScope,
   sortOffersByMarket,
@@ -619,6 +629,38 @@ function InScopeCountLine({
       {fill(before, { n: count })}
       <bdi>{query}</bdi>
       {fill(after ?? "", { n: count })}
+    </p>
+  );
+}
+
+/* REEA-1261 AC-2 — the exact-model count line. On a brand+model query the
+   shopper named ONE product, so the page counts the exact-model cards the
+   shelf actually renders (never the neighbours that share a token) and says
+   when every one of them is carried outside the selected market. The number
+   and the shelf read the SAME predicate (carriesExactModel), so the sentence
+   cannot contradict the cards below it. */
+function ExactModelCountLine({
+  count,
+  market,
+  noneInMarket,
+  locale,
+}: {
+  count: number;
+  market: string;
+  noneInMarket: boolean;
+  locale?: Locale;
+}) {
+  const l = locale ?? clientLocale();
+  const template = exactModelCountTemplate(l, count, noneInMarket);
+  return (
+    <p
+      className="in-scope-count exact-model-count"
+      data-exact-model-count="true"
+      data-exact-model-total={count}
+      data-exact-model-none-in-market={noneInMarket ? "true" : "false"}
+      style={{ font: "var(--rc-text-body)", color: "var(--rc-ink)", marginTop: "var(--rc-space-3)" }}
+    >
+      {fill(template, { n: count, market })}
     </p>
   );
 }
@@ -1648,6 +1690,21 @@ function StagedResults(props: {
   // REEA-1201 — the honest in-scope total is the FULL primary shelf, not the
   // page slice; the thin-shelf decision folds the cards this page renders.
   const inScopeCount = finalSections ? finalSections.primary.length : 0;
+  // REEA-1261 AC-2 — on a brand+model query the count line counts the
+  // exact-model cards THIS page renders, read through the same predicate the
+  // shelf ranking uses, so the sentence and the painted shelf cannot drift.
+  const exactModelCards = products ? exactModelCardsOf(products, query) : [];
+  const exactModelLine =
+    products !== null && isExactModelQuery(query) && exactModelCards.length > 0
+      ? {
+          count: exactModelCards.length,
+          market: marketName(marketViewScope(country) ?? HOME_MARKET, locale),
+          noneInMarket: exactModelOnlyOutsideMarket(
+            exactModelCards,
+            marketViewScope(country) ?? HOME_MARKET,
+          ),
+        }
+      : null;
   const thinShelf = products ? isThinShelf(products, marketViewScope(country)) : false;
   // REEA-1114 — the filter-aware count and the empty-state case are derived
   // from the SAME converged snapshot the shelf renders (and the follow-up
@@ -1780,8 +1837,18 @@ function StagedResults(props: {
         <AliasSubstitutionLine query={query} />
         {/* REEA-1201 AC 7b-1/7b-3 — the honest in-scope count and, when every
             card is single-retailer, the thin-shelf sentence. Both sit above
-            the shelf and read the payload's own scope decision. */}
-        {inScopeCount > 0 ? (
+            the shelf and read the payload's own scope decision.
+            REEA-1261 AC-2 — a brand+model query replaces the in-scope sentence
+            with the exact-model count, which counts only the cards that answer
+            the shopper's exact product and discloses when none is in market. */}
+        {exactModelLine ? (
+          <ExactModelCountLine
+            count={exactModelLine.count}
+            market={exactModelLine.market}
+            noneInMarket={exactModelLine.noneInMarket}
+            locale={locale}
+          />
+        ) : inScopeCount > 0 ? (
           <InScopeCountLine count={inScopeCount} query={query} locale={locale} />
         ) : null}
         {thinShelf ? <ThinShelfLine query={query} locale={locale} /> : null}
@@ -2109,6 +2176,20 @@ function ResultsInner(props: {
   const zero = query.length > 0 && matchCount === 0;
   // REEA-1201 — same honest count/thin-shelf decisions on the fallback path.
   const plainInScopeCount = plainSections.primary.length;
+  // REEA-1261 AC-2 — the same exact-model count on the fallback path, from
+  // the same predicate, so both render paths state the same number.
+  const plainExactModelCards = exactModelCardsOf(products, query);
+  const plainExactModelLine =
+    isExactModelQuery(query) && plainExactModelCards.length > 0
+      ? {
+          count: plainExactModelCards.length,
+          market: marketName(marketViewScope(country) ?? HOME_MARKET, locale),
+          noneInMarket: exactModelOnlyOutsideMarket(
+            plainExactModelCards,
+            marketViewScope(country) ?? HOME_MARKET,
+          ),
+        }
+      : null;
   const plainThinShelf = isThinShelf(products, marketViewScope(country));
   // REEA-1114 — the static-host fallback path obeys the same filter-aware
   // empty state: a zero that a filter hid names the filter and reveals the
@@ -2177,8 +2258,17 @@ function ResultsInner(props: {
           static-host / blocking fallback path. */}
       <AliasSubstitutionLine query={query} />
       {/* REEA-1201 AC 7b-1/7b-3 — honest count and thin-shelf sentence on the
-          fallback path too, from the same scope-aware partition. */}
-      {plainInScopeCount > 0 ? (
+          fallback path too, from the same scope-aware partition.
+          REEA-1261 AC-2 — the exact-model sentence wins on a brand+model
+          query, exactly as on the staged path. */}
+      {plainExactModelLine ? (
+        <ExactModelCountLine
+          count={plainExactModelLine.count}
+          market={plainExactModelLine.market}
+          noneInMarket={plainExactModelLine.noneInMarket}
+          locale={locale}
+        />
+      ) : plainInScopeCount > 0 ? (
         <InScopeCountLine count={plainInScopeCount} query={query} locale={locale} />
       ) : null}
       {plainThinShelf ? <ThinShelfLine query={query} locale={locale} /> : null}

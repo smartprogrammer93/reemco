@@ -71,10 +71,12 @@ describe("AC 7a-6 — the primary shelf renders exactly the in-scope count", () 
     expect(sections.primary).toHaveLength(payloadPrimaryScopeCount(products, query));
     expect(sections.primary.every((p) => /panadol/i.test(p.title))).toBe(true);
     expect(sections.related.every((p) => !/panadol/i.test(p.title))).toBe(true);
-    // The filler is off the primary shelf; the payload buckets it into the
-    // labelled accessory band (card mat, scale, webcam) or the related band
-    // (dishwasher tablets, textbook, collagen) — never a primary slot.
-    expect(sections.accessory.length).toBeGreaterThan(0);
+    // The filler is off the primary shelf; the payload buckets it into a
+    // labelled band below the shelf — never a primary slot. REEA-1261 routes
+    // every `related`-matched off-scope card to the related band ("Related
+    // items — not an exact match"), so a scale/webcam under `panadol` is no
+    // longer labelled an accessory of a product it does not complement.
+    expect(sections.accessory.length + sections.related.length).toBeGreaterThan(0);
     expect(sections.related.length).toBeGreaterThan(0);
     expect([...sections.accessory, ...sections.related].some((p) => /panadol/i.test(p.title))).toBe(false);
   });
