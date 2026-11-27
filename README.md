@@ -96,7 +96,10 @@ Static (`STATIC_EXPORT=1`) snapshots render the UI but have no API; beacons
 there are silently dropped.
 
 - Weekly report: `curl <deploy>/api/events/report?days=7` or `npm run report`
-  (reads the local JSONL store in `EVENTS_DIR`, default `./.events`).
+  (reads the local JSONL store in `EVENTS_DIR`, default `./.events`). The
+  endpoint carries a 30 req/min per-caller budget (REEA-1251) and serves a
+  30 s in-process aggregate cache, so a repeat read does not re-read and
+  re-parse the event blob.
 - Raw events are pruned after 90 days (Data Minimization); only aggregates outlive that.
 - Hardening: JSON-only, 16 KB cap, batch ≤ 20, schema-validated fields, 120 req/min rate limit
   (REEA-826: enforced per serverless instance, not deployment-wide).

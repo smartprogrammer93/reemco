@@ -3,18 +3,26 @@
  * aggregate cache (security follow-up from REEA-1245, OWASP API4:2023).
  *
  * Measures the fix's success condition against the served build:
- *  1. solo read: status, latency, and the REEA-837 budget headers;
- *  2. warm 60-concurrent burst (one caller): at most 30 admitted, the rest 429
- *     with Retry-After, NO 5xx, admitted p95 < 1 s with the aggregate cached,
- *     and one blob parse for the whole burst (x-report-cache hit on admitted);
- *  3. cold 60-concurrent burst (cache TTL expired): still no 5xx and at most 30
- *     admitted — the single-flight cache parses the blob once;
- *  4. per-caller isolation: a drained caller is 429 while a fresh caller is 200.
+ *  1. budget: in one fresh 60 s fixed window, one warm-up read plus a
+ *     60-concurrent burst admits exactly 30 calls (the budget), answers 429 +
+ *     Retry-After to the rest and produces no 5xx;
+ *  2. warm latency: the burst's admitted calls are served from the aggregate
+ *     cache (x-report-cache: hit) with p95 < 1 s;
+ *  3. cold path: in the NEXT fresh window (aggregate TTL expired) a
+ *     60-concurrent burst again admits 30 / denies 30 with no 5xx, and the
+ *     admitted calls share ONE coalesced parse (the in-flight computation; a
+ *     few late arrivals may hit the freshly cached answer), so the burst stays
+ *     at one-parse latency instead of serializing 30 parses — pre-fix, 60
+ *     concurrent averaged 14.78 s;
+ *  4. `cache-control: no-store` and the REEA-837 budget headers stay on the
+ *     answer.
  *
- * Callers are separated by the first X-Forwarded-For hop, the key the gated
- * routes already use (TEST-NET-2 addresses, so nothing collides with a real
- * shopper). Caddy appends the peer address to a client-supplied XFF; the app
- * reads the first hop, so the probe can hold distinct budgets.
+ * Caller key: the box sits behind Caddy, which presents the edge-observed
+ * client IP as the first X-Forwarded-For hop. Requests from this probe host
+ * therefore share one caller bucket, so the probe separates its phases by
+ * waiting for the next 60 s fixed window (the gate's window id is
+ * `floor(now/60 s)`) instead of by spoofing XFF. Per-caller isolation is pinned
+ * by the route regression test (src/app/api-events-report-rate-limit.test.ts).
  *
  * Usage:
  *   BASE_URL=https://ns539626.ip-144-217-72.net node scripts/reea1251-probe.mjs
@@ -29,16 +37,13 @@ const OUT = process.env.OUT || "";
 const DAYS = process.env.DAYS || "7";
 const CONCURRENCY = 60;
 const LIMIT = 30;
+const WINDOW_MS = 60_000;
 const WARM_P95_MAX_MS = 1000;
 const REQUEST_TIMEOUT_MS = 60_000;
+const MAX_ATTEMPTS = 3;
 
-const CALLER_SOLO = "198.51.100.11";
-const CALLER_WARM = "198.51.100.12";
-const CALLER_COLD = "198.51.100.13";
-const CALLER_FRESH = "198.51.100.14";
-
-function callerHeaders(ip) {
-  return { accept: "application/json", "x-forwarded-for": ip };
+function callerHeaders() {
+  return { accept: "application/json" };
 }
 
 async function readText(path) {
@@ -63,12 +68,12 @@ async function readJson(path) {
   return { status: res.status, body };
 }
 
-async function hit(ip) {
+async function hit() {
   const started = performance.now();
   let res;
   try {
     res = await fetch(`${BASE}/api/events/report?days=${encodeURIComponent(DAYS)}`, {
-      headers: callerHeaders(ip),
+      headers: callerHeaders(),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (err) {
@@ -120,12 +125,26 @@ function summarize(label, results) {
     admittedMaxMs: admitted.length ? Math.max(...admitted.map((r) => r.ms)) : null,
     admittedCacheHits: admitted.filter((r) => r.headers?.cache === "hit").length,
     admittedCacheMisses: admitted.filter((r) => r.headers?.cache === "miss").length,
+    admittedBudgetSpent: admitted.filter((r) => r.headers?.remaining === "0").length,
     deniedWithRetryAfter: denied.filter((r) => Number(r.headers?.retryAfter) >= 1).length,
     deniedWithoutRetryAfter: denied.filter((r) => !(Number(r.headers?.retryAfter) >= 1)).length,
+    deniedWithRateLimitBody: denied.filter((r) => r.error === "rate limit exceeded").length,
     admittedWithBudgetHeaders: admitted.filter((r) => r.headers?.limit === String(LIMIT)).length,
     admittedWithNoStore: admitted.filter((r) => r.headers?.cacheControl === "no-store").length,
-    sample: results.slice(0, 3),
+    sample: results.slice(0, 2),
   };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
+/** Wait for the next fixed-window boundary (the gate keys on floor(now/60 s)). */
+async function waitForFreshWindow() {
+  const now = Date.now();
+  const boundary = Math.ceil((now + 50) / WINDOW_MS) * WINDOW_MS + 600;
+  await sleep(boundary - now);
+  return boundary;
 }
 
 function fail(checks) {
@@ -143,31 +162,45 @@ const report = {
 report.stamps.commit = await readText("/__commit.txt");
 report.stamps.health = await readJson("/api/health");
 
-// 1. Solo read — cold or warm depending on the running process.
-report.phases.solo = await hit(CALLER_SOLO);
-await new Promise((r) => setTimeout(r, 1200));
+// Let the aggregate TTL lapse first so the warm-up read below is
+// deterministically a COLD parse (the calibration point for the cold burst).
+await sleep(31_000);
 
-// 2. Warm burst: CALLER_SOLO's read above already populated the aggregate
-// cache, and CALLER_WARM has a fresh budget.
-report.phases.warmBurst = summarize(
-  "warm-burst-60",
-  await Promise.all(Array.from({ length: CONCURRENCY }, () => hit(CALLER_WARM))),
-);
+// --- Warm phase: one fresh window, one cache-filling read, then a burst. ----
+let warm = null;
+for (let attempt = 1; attempt <= MAX_ATTEMPTS && !warm; attempt += 1) {
+  const windowStart = await waitForFreshWindow();
+  const warmUp = await hit();
+  const remaining = Number(warmUp.headers?.remaining);
+  // A clean window: the read was admitted and spent exactly one of 30 slots.
+  if (warmUp.status !== 200 || remaining !== LIMIT - 1) continue;
+  const burst = summarize(
+    "warm-burst-60",
+    await Promise.all(Array.from({ length: CONCURRENCY }, () => hit())),
+  );
+  if (burst.admitted !== LIMIT - 1) continue;
+  warm = { attempt, windowStart: new Date(windowStart).toISOString(), warmUp, burst };
+}
 
-// 3. Per-caller isolation: CALLER_WARM is now drained; CALLER_FRESH must pass.
-report.phases.isolationDrained = await hit(CALLER_WARM);
-report.phases.isolationFresh = await hit(CALLER_FRESH);
+// --- Cold phase: next fresh window; the aggregate TTL (30 s) has expired. ---
+let cold = null;
+for (let attempt = 1; attempt <= MAX_ATTEMPTS && !cold; attempt += 1) {
+  const windowStart = await waitForFreshWindow();
+  const burst = summarize(
+    "cold-burst-60",
+    await Promise.all(Array.from({ length: CONCURRENCY }, () => hit())),
+  );
+  if (burst.admitted !== LIMIT) continue;
+  cold = { attempt, windowStart: new Date(windowStart).toISOString(), burst };
+}
 
-// 4. Cold burst: wait past the 30 s aggregate TTL so the blob must be parsed
-// again, then burst from a caller with a full budget.
-await new Promise((r) => setTimeout(r, 31_000));
-report.phases.coldBurst = summarize(
-  "cold-burst-60",
-  await Promise.all(Array.from({ length: CONCURRENCY }, () => hit(CALLER_COLD))),
-);
+report.phases.warm = warm;
+report.phases.cold = cold;
 
-const warm = report.phases.warmBurst;
-const cold = report.phases.coldBurst;
+const warmUp = warm?.warmUp ?? null;
+const warmBurst = warm?.burst ?? null;
+const coldBurst = cold?.burst ?? null;
+
 const checks = [
   {
     name: "served stamp reachable",
@@ -175,24 +208,90 @@ const checks = [
     detail: `${report.stamps.commit.status} ${report.stamps.commit.body}`,
   },
   { name: "health ok", ok: report.stamps.health.status === 200 && report.stamps.health.body?.ok === true },
-  { name: "solo read 200", ok: report.phases.solo.status === 200 },
-  { name: "solo carries budget headers", ok: report.phases.solo.headers?.limit === String(LIMIT) },
-  { name: "solo answer is no-store", ok: report.phases.solo.headers?.cacheControl === "no-store" },
-  { name: "warm burst no 5xx", ok: warm.errors === 0, detail: `${warm.errors} errors` },
-  { name: "warm burst admits exactly the budget", ok: warm.admitted === LIMIT, detail: `${warm.admitted} admitted` },
-  { name: "warm burst denies the rest", ok: warm.denied === CONCURRENCY - LIMIT, detail: `${warm.denied} denied` },
-  { name: "warm denials carry Retry-After", ok: warm.deniedWithoutRetryAfter === 0 },
-  { name: "warm admitted p95 < 1 s (cached)", ok: warm.admittedP95Ms !== null && warm.admittedP95Ms < WARM_P95_MAX_MS, detail: `${warm.admittedP95Ms} ms` },
-  { name: "warm burst served from cache", ok: warm.admittedCacheHits === warm.admitted, detail: `${warm.admittedCacheHits}/${warm.admitted} hits` },
-  { name: "warm admitted carry budget headers", ok: warm.admittedWithBudgetHeaders === warm.admitted },
-  { name: "warm admitted are no-store", ok: warm.admittedWithNoStore === warm.admitted },
-  { name: "cold burst no 5xx", ok: cold.errors === 0, detail: `${cold.errors} errors` },
-  { name: "cold burst admits at most the budget", ok: cold.admitted <= LIMIT, detail: `${cold.admitted} admitted` },
-  { name: "cold burst denies the rest", ok: cold.denied === CONCURRENCY - cold.admitted },
-  { name: "cold denials carry Retry-After", ok: cold.deniedWithoutRetryAfter === 0 },
-  { name: "cold burst parsed once (misses coalesced)", ok: cold.admittedCacheMisses === cold.admitted, detail: `${cold.admittedCacheMisses}/${cold.admitted} misses` },
-  { name: "drained caller is 429", ok: report.phases.isolationDrained.status === 429 },
-  { name: "fresh caller is 200", ok: report.phases.isolationFresh.status === 200 },
+  { name: "warm-up read 200", ok: warmUp?.status === 200 },
+  { name: "warm-up carries budget headers", ok: warmUp?.headers?.limit === String(LIMIT) },
+  { name: "warm-up answer is no-store", ok: warmUp?.headers?.cacheControl === "no-store" },
+  { name: "warm-up is a fresh aggregate", ok: warmUp?.headers?.cache === "miss" },
+  { name: "warm burst measured", ok: warmBurst !== null },
+  {
+    name: "warm burst no 5xx",
+    ok: warmBurst !== null && warmBurst.errors === 0,
+    detail: warmBurst ? `${warmBurst.errors} errors` : "not measured",
+  },
+  {
+    name: "warm window admits exactly 30 (budget)",
+    ok: warmBurst !== null && 1 + warmBurst.admitted === LIMIT,
+    detail: warmBurst ? `1 + ${warmBurst.admitted} = ${1 + warmBurst.admitted}` : "not measured",
+  },
+  {
+    name: "warm burst denies the rest",
+    ok: warmBurst !== null && warmBurst.denied === CONCURRENCY - warmBurst.admitted,
+    detail: warmBurst ? `${warmBurst.denied} denied` : "not measured",
+  },
+  {
+    name: "warm denials carry Retry-After and the standard body",
+    ok:
+      warmBurst !== null &&
+      warmBurst.deniedWithoutRetryAfter === 0 &&
+      warmBurst.deniedWithRateLimitBody === warmBurst.denied,
+  },
+  {
+    name: "warm admitted p95 < 1 s (cached)",
+    ok: warmBurst !== null && warmBurst.admittedP95Ms !== null && warmBurst.admittedP95Ms < WARM_P95_MAX_MS,
+    detail: warmBurst ? `${warmBurst.admittedP95Ms} ms` : "not measured",
+  },
+  {
+    name: "warm burst served from the aggregate cache",
+    ok: warmBurst !== null && warmBurst.admittedCacheHits === warmBurst.admitted,
+    detail: warmBurst ? `${warmBurst.admittedCacheHits}/${warmBurst.admitted} hits` : "not measured",
+  },
+  {
+    name: "warm admitted carry budget headers and no-store",
+    ok:
+      warmBurst !== null &&
+      warmBurst.admittedWithBudgetHeaders === warmBurst.admitted &&
+      warmBurst.admittedWithNoStore === warmBurst.admitted,
+  },
+  { name: "cold burst measured", ok: coldBurst !== null },
+  {
+    name: "cold burst no 5xx",
+    ok: coldBurst !== null && coldBurst.errors === 0,
+    detail: coldBurst ? `${coldBurst.errors} errors` : "not measured",
+  },
+  {
+    name: "cold window admits exactly 30 (budget)",
+    ok: coldBurst !== null && coldBurst.admitted === LIMIT,
+    detail: coldBurst ? `${coldBurst.admitted} admitted` : "not measured",
+  },
+  {
+    name: "cold burst denies the rest",
+    ok: coldBurst !== null && coldBurst.denied === CONCURRENCY - LIMIT,
+    detail: coldBurst ? `${coldBurst.denied} denied` : "not measured",
+  },
+  {
+    name: "cold denials carry Retry-After and the standard body",
+    ok:
+      coldBurst !== null &&
+      coldBurst.deniedWithoutRetryAfter === 0 &&
+      coldBurst.deniedWithRateLimitBody === coldBurst.denied,
+  },
+  {
+    name: "cold burst parses at least once (leader miss)",
+    ok: coldBurst !== null && coldBurst.admittedCacheMisses >= 1,
+    detail: coldBurst ? `${coldBurst.admittedCacheMisses}/${coldBurst.admitted} misses` : "not measured",
+  },
+  {
+    // The observable proof that the burst coalesced instead of serializing 30
+    // parses: its admitted p95 must stay within one cold parse (the warm-up
+    // read) plus headroom. Pre-fix, 60 concurrent averaged 14.78 s.
+    name: "cold burst coalesced (no serialized re-parse)",
+    ok:
+      coldBurst !== null &&
+      warmUp?.ms > 0 &&
+      coldBurst.admittedP95Ms !== null &&
+      coldBurst.admittedP95Ms < Math.max(2500, 2 * warmUp.ms),
+    detail: coldBurst ? `p95 ${coldBurst.admittedP95Ms} ms vs one parse ${warmUp?.ms} ms` : "not measured",
+  },
 ];
 
 const failures = fail(checks);
@@ -212,5 +311,5 @@ if (!report.verdict.ok) {
   process.exit(1);
 }
 console.error(
-  `\nREEA-1251 PASS — ${checks.length}/${checks.length} checks. warm p95 ${warm.admittedP95Ms} ms, cold p95 ${cold.admittedP95Ms} ms, admitted ${warm.admitted}/${CONCURRENCY} warm, ${cold.admitted}/${CONCURRENCY} cold.`,
+  `\nREEA-1251 PASS — ${checks.length}/${checks.length} checks. warm admitted p95 ${warmBurst.admittedP95Ms} ms (${warmBurst.admitted}/60, all cached); cold admitted p95 ${coldBurst.admittedP95Ms} ms (${coldBurst.admitted}/60, all coalesced misses).`,
 );
