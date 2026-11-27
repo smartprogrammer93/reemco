@@ -2428,7 +2428,11 @@ export const COLLECTORS: RetailerCollector[] = [
       // is gated against the query and only genuine answers are kept. That is a
       // real offer, never a synthesized row.
       const listingHits = async (): Promise<SearchHit[]> => {
-        const listingUrl = `https://kuwait.ounass.com/curated-for-all?q=${encodeURIComponent(query)}`;
+        // REEA-1221 — the listing ignores `?q=` (measured 2026-11-27: `?q=dyson` and
+        // `?q=zzzznotathing` return the same curated set), so asking for it costs a
+        // query string the edge may rate-limit for nothing. The bare listing is the
+        // same page; the gate is what keeps the rows on-scope.
+        const listingUrl = "https://kuwait.ounass.com/curated-for-all";
         // REEA-1221 — every attempt records what it actually got, so the box can
         // say WHICH hop failed instead of the lane silently settling no-match.
         // `/api/echo` reports the last record.
