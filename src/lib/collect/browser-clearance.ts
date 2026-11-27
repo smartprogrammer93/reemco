@@ -43,6 +43,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getSharedKv, type SharedKv } from "./kv";
 import { readBodyCapped } from "./read-body";
+import { readRuntimeMemory } from "@/lib/runtime-memory";
 
 /** Repeat queries inside this window replay the cached cleared body. */
 const CLEARED_CACHE_TTL_S = 1_800;
@@ -237,7 +238,274 @@ function safeHost(url: string): string {
   }
 }
 
+/**
+ * REEA-1250 — recycle policy for the shared browser tier.
+ *
+ * Why: the tier holds ONE browser and ONE context for the process lifetime, and
+ * each fan-out navigation grows that Chromium's high-water mark (renderer
+ * caches, GPU/network utility state, the cleared-page cache). The app cgroup is
+ * 6 GiB; measured 2026-11-27 on the served head, a 9.6 h instance sat at
+ * 5.077-5.411 GiB `docker stats` (VmRSS 4.73 GiB) and a 40-query burst on a
+ * fresh instance settled ~0.88 GiB above its baseline and never returned. The
+ * failure mode is an OOM kill: a container restart and a short outage for every
+ * shopper. So the browser is now a BOUNDED resource: closed and relaunched
+ * after N navigations, when the runtime crosses a memory threshold, or when it
+ * has been idle long enough that keeping it costs more than relaunching it.
+ *
+ * Every trigger is bounded and hysteretic on purpose (rate-limit citizenship):
+ *  - the navigation count is the primary bound and always fires;
+ *  - memory triggers need both a minimum navigation count and a minimum gap
+ *    since the last recycle, so a process whose baseline is already high cannot
+ *    relaunch Chromium on every navigation;
+ *  - the idle timer frees the browser when traffic stops, which is what makes
+ *    the post-burst RSS actually return to baseline.
+ *
+ * The clearance cookie survives the recycle in the shared store (the tier
+ * already persists `cf_clearance`/`__cf_bm` per host + egress IP), so a
+ * relaunched context replays the clearance instead of paying another challenge.
+ * Every knob is overridable from the environment; `0` disables one trigger.
+ */
+export interface BrowserRecyclePolicy {
+  /** Close + relaunch the shared browser after this many navigations (0 = off). */
+  maxNavigations: number;
+  /** Recycle when the Node process's own RSS reaches this many bytes (0 = off). */
+  maxRssBytes: number;
+  /** Recycle when heapUsed reaches this fraction of the V8 heap limit (0 = off). */
+  maxHeapFraction: number;
+  /** Recycle when cgroup anonymous memory reaches this fraction of its limit (0 = off). */
+  maxCgroupAnonFraction: number;
+  /** Memory-triggered recycles are at least this far apart. */
+  memoryRecycleMinGapMs: number;
+  /** ...and at least this many navigations apart. */
+  memoryRecycleMinNavigations: number;
+  /** Close an idle browser after this long with no navigation (0 = off). */
+  idleRecycleMs: number;
+}
+
+export const BROWSER_RECYCLE_DEFAULT_POLICY: BrowserRecyclePolicy = Object.freeze({
+  maxNavigations: 30,
+  // Node RSS alone (Chromium children are separate processes). The heap cap the
+  // image sets is 2 GiB; ~1.75 GiB RSS is the point where the tier stops
+  // adding Chromium growth on top of a full Node heap.
+  maxRssBytes: 1792 * 1024 * 1024,
+  maxHeapFraction: 0.75,
+  // 70% of the cgroup's anonymous memory is the OOM-pressure guard; it matches
+  // the deploy-gate ceiling in scripts/memory-gate.mjs.
+  maxCgroupAnonFraction: 0.7,
+  memoryRecycleMinGapMs: 120_000,
+  memoryRecycleMinNavigations: 8,
+  idleRecycleMs: 120_000,
+});
+
+/** Read an env knob; absent/unparseable = null (default), explicit 0 = off. */
+function envCount(name: string): number | null {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === "") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+}
+
+export function browserRecyclePolicy(): BrowserRecyclePolicy {
+  const d = BROWSER_RECYCLE_DEFAULT_POLICY;
+  const navs = envCount("BROWSER_RECYCLE_NAVIGATIONS");
+  const rssMb = envCount("BROWSER_RECYCLE_RSS_MB");
+  const heapPct = envCount("BROWSER_RECYCLE_HEAP_PERCENT");
+  const cgroupPct = envCount("BROWSER_RECYCLE_CGROUP_PERCENT");
+  const gapMs = envCount("BROWSER_RECYCLE_MIN_GAP_MS");
+  const minNavs = envCount("BROWSER_RECYCLE_MIN_NAVIGATIONS");
+  const idleMs = envCount("BROWSER_IDLE_RECYCLE_MS");
+  return {
+    maxNavigations: navs ?? d.maxNavigations,
+    maxRssBytes: rssMb == null ? d.maxRssBytes : rssMb * 1024 * 1024,
+    maxHeapFraction: heapPct == null ? d.maxHeapFraction : Math.min(100, heapPct) / 100,
+    maxCgroupAnonFraction: cgroupPct == null ? d.maxCgroupAnonFraction : Math.min(100, cgroupPct) / 100,
+    memoryRecycleMinGapMs: gapMs ?? d.memoryRecycleMinGapMs,
+    memoryRecycleMinNavigations: minNavs ?? d.memoryRecycleMinNavigations,
+    idleRecycleMs: idleMs ?? d.idleRecycleMs,
+  };
+}
+
+export type BrowserRecycleReason = "" | "navigations" | "rss" | "heap" | "cgroup" | "idle";
+
+export interface BrowserRecycleInput {
+  navigationsSinceRecycle: number;
+  /** null before the first recycle of this process. */
+  msSinceLastRecycle: number | null;
+  rssBytes: number;
+  heapUsedBytes: number;
+  heapLimitBytes: number;
+  cgroupAnonBytes: number | null;
+  cgroupLimitBytes: number | null;
+}
+
+/**
+ * The recycle decision, pure so the threshold is pinned by a unit test instead
+ * of being measured against a live Chromium. Navigation count always wins;
+ * memory triggers are suppressed until the process has done enough work and
+ * enough time has passed since the last recycle, so a high baseline cannot
+ * turn into a relaunch loop.
+ */
+export function recycleReason(
+  input: BrowserRecycleInput,
+  policy: BrowserRecyclePolicy = browserRecyclePolicy(),
+): BrowserRecycleReason {
+  if (policy.maxNavigations > 0 && input.navigationsSinceRecycle >= policy.maxNavigations) {
+    return "navigations";
+  }
+  const memoryDue =
+    input.navigationsSinceRecycle >= policy.memoryRecycleMinNavigations &&
+    (input.msSinceLastRecycle == null || input.msSinceLastRecycle >= policy.memoryRecycleMinGapMs);
+  if (!memoryDue) return "";
+  if (policy.maxRssBytes > 0 && input.rssBytes >= policy.maxRssBytes) return "rss";
+  if (
+    policy.maxHeapFraction > 0 &&
+    input.heapLimitBytes > 0 &&
+    input.heapUsedBytes >= input.heapLimitBytes * policy.maxHeapFraction
+  ) {
+    return "heap";
+  }
+  if (
+    policy.maxCgroupAnonFraction > 0 &&
+    input.cgroupLimitBytes != null &&
+    input.cgroupAnonBytes != null &&
+    input.cgroupAnonBytes >= input.cgroupLimitBytes * policy.maxCgroupAnonFraction
+  ) {
+    return "cgroup";
+  }
+  return "";
+}
+
+export interface BrowserTierStats {
+  /** True when a shared browser is currently held (launched or launching). */
+  launched: boolean;
+  navigationsTotal: number;
+  navigationsSinceRecycle: number;
+  recycles: number;
+  lastRecycleAt: string | null;
+  lastRecycleReason: string;
+  inFlightNavigations: number;
+  policy: BrowserRecyclePolicy;
+}
+
+export function browserTierStats(): BrowserTierStats {
+  return {
+    launched: launch != null,
+    navigationsTotal,
+    navigationsSinceRecycle,
+    recycles,
+    lastRecycleAt: lastRecycleAt == null ? null : new Date(lastRecycleAt).toISOString(),
+    lastRecycleReason,
+    inFlightNavigations,
+    policy: browserRecyclePolicy(),
+  };
+}
+
 let launch: Promise<{ browser: BrowserLike; context: ContextLike } | null> | null = null;
+/** Navigations since the last recycle (any reason). */
+let navigationsSinceRecycle = 0;
+/** Navigations in this process's lifetime, for the /api/echo diagnostic. */
+let navigationsTotal = 0;
+let recycles = 0;
+let lastRecycleAt: number | null = null;
+let lastRecycleReason = "";
+/** Pages currently navigating; a recycle never closes a browser under one. */
+let inFlightNavigations = 0;
+/** A recycle that was requested while a page was in flight. */
+let recyclePending: BrowserRecycleReason = "";
+/** Serializes overlapping recycle requests. */
+let recycling: Promise<void> | null = null;
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearIdleTimer(): void {
+  if (idleTimer != null) {
+    clearTimeout(idleTimer);
+    idleTimer = null;
+  }
+}
+
+function scheduleIdleRecycle(): void {
+  clearIdleTimer();
+  const idleMs = browserRecyclePolicy().idleRecycleMs;
+  if (idleMs <= 0 || launch == null) return;
+  idleTimer = setTimeout(() => {
+    idleTimer = null;
+    if (inFlightNavigations > 0) {
+      // A navigation is still using the browser; try again after it settles.
+      scheduleIdleRecycle();
+      return;
+    }
+    void recycleSharedBrowser("idle");
+  }, idleMs);
+  (idleTimer as unknown as { unref?: () => void }).unref?.();
+}
+
+/**
+ * Close the shared browser + context and drop every reference to them. Runs
+ * only when no page is in flight (callers check `inFlightNavigations`), and is
+ * serialized so two triggers cannot close/relaunch concurrently. The next
+ * navigation relaunches through the existing launch ladder.
+ */
+async function recycleSharedBrowser(reason: BrowserRecycleReason): Promise<void> {
+  if (recycling) return recycling;
+  const run = (async (): Promise<void> => {
+    clearIdleTimer();
+    const pending = launch;
+    launch = null;
+    recyclePending = "";
+    navigationsSinceRecycle = 0;
+    if (pending == null) return;
+    const shared = await pending.catch(() => null);
+    if (shared == null) return;
+    await shared.context.close().catch(() => undefined);
+    await shared.browser.close().catch(() => undefined);
+    recycles += 1;
+    lastRecycleAt = Date.now();
+    lastRecycleReason = reason;
+  })();
+  recycling = run;
+  try {
+    await run;
+  } finally {
+    if (recycling === run) recycling = null;
+  }
+}
+
+/**
+ * Drain a deferred recycle before this attempt acquires the browser. Called
+ * only when this navigation is the sole in-flight one, so no page can be using
+ * the instance being closed.
+ */
+async function recycleBeforeNavigation(): Promise<void> {
+  if (!recyclePending) return;
+  await recycleSharedBrowser(recyclePending);
+}
+
+/** Drain a deferred recycle once the last in-flight navigation has settled. */
+async function drainPendingRecycle(): Promise<void> {
+  if (inFlightNavigations > 0 || !recyclePending) return;
+  await recycleSharedBrowser(recyclePending);
+}
+
+/** Reset every in-process tier field (tests only — never closes a real browser). */
+export function resetBrowserTierForTests(): void {
+  launch = null;
+  navigationsSinceRecycle = 0;
+  navigationsTotal = 0;
+  recycles = 0;
+  lastRecycleAt = null;
+  lastRecycleReason = "";
+  inFlightNavigations = 0;
+  recyclePending = "";
+  recycling = null;
+  clearIdleTimer();
+  noPaintStreakByHost.clear();
+  cooldownByHost.clear();
+  cachedEgressIp = null;
+  lastFailure = "";
+  lastLaunchArgs = -1;
+  browserVersion = "";
+  argSetIndex = 1;
+}
 
 /**
  * The last thing that went wrong in this process's browser tier, or "".
@@ -473,6 +741,9 @@ export async function readPageContent(page: PageLike): Promise<string> {
  */
 async function getSharedBrowser(): Promise<{ browser: BrowserLike; context: ContextLike } | null> {
   if (disabled()) return null;
+  // REEA-1250 — a recycle in progress owns the launch slot; wait for it to
+  // finish instead of racing a close with a new launch.
+  if (recycling) await recycling;
 
   if (!launch) {
     launch = (async () => {
@@ -546,6 +817,10 @@ async function getSharedBrowser(): Promise<{ browser: BrowserLike; context: Cont
         if (!browser) return null;
         browser.on?.("disconnected", () => {
           launch = null;
+          // REEA-1250 — a crashed browser is already gone; the next launch is a
+          // fresh instance, so the navigation count starts over.
+          navigationsSinceRecycle = 0;
+          recyclePending = "";
         });
         try {
           browserVersion = browser.version?.() ?? "";
@@ -596,71 +871,102 @@ async function navigate(
       if (argSetIndex < 2) argSetIndex += 1;
       launch = null;
     }
-    const shared = await getSharedBrowser();
-    if (!shared) return { html: "", error: lastFailure || "browser launch failed" };
-    let page: PageLike | null = null;
-    const host = safeHost(url);
+    // REEA-1250 — hold the tier for this attempt. A recycle requested while a
+    // page was in flight is drained here (this attempt is the only one in
+    // flight and has not acquired the browser yet), and a threshold reached by
+    // THIS attempt can only close the browser after it has settled.
+    inFlightNavigations += 1;
+    let navigated = false;
     try {
-      // REEA-1242 — replay a clearance this egress already earned before
-      // paying for another challenge. Bound to host + egress IP by the store.
-      if (host) {
-        const stored = await readClearance(host);
-        if (stored.length > 0) await shared.context.addCookies(stored).catch(() => undefined);
-      }
-      page = await shared.context.newPage();
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
-      // REEA-1242 — a WAF block is not a challenge: there is nothing to solve,
-      // so return immediately instead of burning the content window, and let
-      // the lane fall through to its relay hop.
-      const first = await page.content();
-      if (classifyClearanceBody(first) === "block") {
-        lastFailure = `cloudflare WAF block (not a challenge) on ${host}`;
-        return { html: "", error: lastFailure };
-      }
-      await page
-        .waitForFunction((sel: string) => document.querySelector(sel) !== null, contentSelector, {
-          timeout: CONTENT_WAIT_MS,
-        })
-        .catch(() => undefined);
-      // REEA-1241 — bounded: a page bigger than the cap is trimmed before the
-      // presence gate, the lane parser, and the cache ever see it.
-      const html = await readPageContent(page);
-      // REEA-1242 — a resolved challenge that still carries the shell is not
-      // an answer: do not hand it back, and do not cache it.
-      const shell = classifyClearanceBody(html);
-      if (shell) {
-        lastFailure =
-          shell === "challenge" ? `managed challenge unresolved on ${host}` : `cloudflare WAF block on ${host}`;
-        return { html: "", error: lastFailure };
-      }
-      // Persist the clearance this navigation earned (cf_clearance / __cf_bm).
-      if (host) {
-        const cookies = await shared.context.cookies().catch(() => [] as StoredCookie[]);
-        const keep = cookies.filter((c) => /^cf_clearance$|^__cf_bm$|^_cfuvid$/.test(c.name));
-        if (keep.length > 0) await writeClearance(host, keep);
-      }
-      // REEA-1221 — a no-paint result feeds the circuit breaker above; the
-      // ladder still climbs only when a navigation DIES (escalating on no-paint
-      // reached the lean shell and crashed it with SIGTRAP).
-      const token = contentSelector.replace(/^[.#]/, "");
-      if (html.includes(token)) {
-        if (host) noPaintStreakByHost.delete(host);
-      } else if (host) {
-        const streak = (noPaintStreakByHost.get(host) ?? 0) + 1;
-        noPaintStreakByHost.set(host, streak);
-        if (streak >= BROWSER_NO_PAINT_LIMIT) {
-          cooldownByHost.set(host, Date.now() + BROWSER_NO_PAINT_COOLDOWN_MS);
-          lastFailure = "browser painted nothing twice for this host — relays take over for ten minutes";
+      if (inFlightNavigations === 1) await recycleBeforeNavigation();
+      const shared = await getSharedBrowser();
+      if (!shared) return { html: "", error: lastFailure || "browser launch failed" };
+      let page: PageLike | null = null;
+      const host = safeHost(url);
+      try {
+        // REEA-1242 — replay a clearance this egress already earned before
+        // paying for another challenge. Bound to host + egress IP by the store.
+        if (host) {
+          const stored = await readClearance(host);
+          if (stored.length > 0) await shared.context.addCookies(stored).catch(() => undefined);
         }
+        page = await shared.context.newPage();
+        navigated = true;
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+        // REEA-1242 — a WAF block is not a challenge: there is nothing to solve,
+        // so return immediately instead of burning the content window, and let
+        // the lane fall through to its relay hop.
+        const first = await page.content();
+        if (classifyClearanceBody(first) === "block") {
+          lastFailure = `cloudflare WAF block (not a challenge) on ${host}`;
+          return { html: "", error: lastFailure };
+        }
+        await page
+          .waitForFunction((sel: string) => document.querySelector(sel) !== null, contentSelector, {
+            timeout: CONTENT_WAIT_MS,
+          })
+          .catch(() => undefined);
+        // REEA-1241 — bounded: a page bigger than the cap is trimmed before the
+        // presence gate, the lane parser, and the cache ever see it.
+        const html = await readPageContent(page);
+        // REEA-1242 — a resolved challenge that still carries the shell is not
+        // an answer: do not hand it back, and do not cache it.
+        const shell = classifyClearanceBody(html);
+        if (shell) {
+          lastFailure =
+            shell === "challenge" ? `managed challenge unresolved on ${host}` : `cloudflare WAF block on ${host}`;
+          return { html: "", error: lastFailure };
+        }
+        // Persist the clearance this navigation earned (cf_clearance / __cf_bm).
+        if (host) {
+          const cookies = await shared.context.cookies().catch(() => [] as StoredCookie[]);
+          const keep = cookies.filter((c) => /^cf_clearance$|^__cf_bm$|^_cfuvid$/.test(c.name));
+          if (keep.length > 0) await writeClearance(host, keep);
+        }
+        // REEA-1221 — a no-paint result feeds the circuit breaker above; the
+        // ladder still climbs only when a navigation DIES (escalating on no-paint
+        // reached the lean shell and crashed it with SIGTRAP).
+        const token = contentSelector.replace(/^[.#]/, "");
+        if (html.includes(token)) {
+          if (host) noPaintStreakByHost.delete(host);
+        } else if (host) {
+          const streak = (noPaintStreakByHost.get(host) ?? 0) + 1;
+          noPaintStreakByHost.set(host, streak);
+          if (streak >= BROWSER_NO_PAINT_LIMIT) {
+            cooldownByHost.set(host, Date.now() + BROWSER_NO_PAINT_COOLDOWN_MS);
+            lastFailure = "browser painted nothing twice for this host — relays take over for ten minutes";
+          }
+        }
+        return { html };
+      } catch (err) {
+        lastFailure = err instanceof Error ? err.message : String(err);
+        // A dead browser is not going to answer this attempt; the next loop
+        // relaunches.
+        if (!/closed|disconnected|crash/i.test(lastFailure)) return { html: "", error: lastFailure };
+      } finally {
+        if (page) await page.close().catch(() => undefined);
       }
-      return { html };
-    } catch (err) {
-      lastFailure = err instanceof Error ? err.message : String(err);
-      // A dead browser is not going to answer this attempt; the next loop
-      // relaunches.
-      if (!/closed|disconnected|crash/i.test(lastFailure)) return { html: "", error: lastFailure };
     } finally {
-      if (page) await page.close().catch(() => undefined);
+      // REEA-1250 — count the attempt and evaluate the recycle policy only once
+      // its page is closed, so the browser is never closed under a live page.
+      if (navigated) {
+        navigationsTotal += 1;
+        navigationsSinceRecycle += 1;
+        const memory = readRuntimeMemory();
+        const reason = recycleReason({
+          navigationsSinceRecycle,
+          msSinceLastRecycle: lastRecycleAt == null ? null : Date.now() - lastRecycleAt,
+          rssBytes: memory.rssBytes,
+          heapUsedBytes: memory.heapUsedBytes,
+          heapLimitBytes: memory.heapLimitBytes,
+          cgroupAnonBytes: memory.cgroup.anonBytes,
+          cgroupLimitBytes: memory.cgroup.limitBytes,
+        });
+        if (reason) recyclePending = reason;
+      }
+      inFlightNavigations -= 1;
+      scheduleIdleRecycle();
+      if (inFlightNavigations === 0) await drainPendingRecycle();
     }
   }
   return { html: "", error: lastFailure };
