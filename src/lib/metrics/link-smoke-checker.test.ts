@@ -308,6 +308,6 @@ describe("REEA-1252 sample selection (the sample is a population slice, not a fi
     expect(planned).toHaveLength(3);
     expect(planned.map((p: { merchant: string }) => p.merchant)).toEqual(["A", "B", "A"]);
     // The source buckets are not mutated.
-    expect(perRetailer.get("A").queue).toHaveLength(4);
+    expect(perRetailer.get("A")?.queue).toHaveLength(4);
   });
 });
