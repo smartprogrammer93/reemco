@@ -128,3 +128,19 @@ export function exactModelCountText(
 ): string {
   return fill(exactModelCountTemplate(locale, n, noneInMarket), { n, market });
 }
+
+/**
+ * REEA-1261 AC-2 — the exact-model card count the COVERAGE sentence may claim
+ * ("N carry this exact model"), or undefined when the query is not a
+ * brand+model query so the pre-change lane-based count stands. Measured live
+ * on `63ab065`: `iphone 17 pro` names no curated brand, so its shelf carries
+ * seven exact cards but the override read 0 and the line said "none carry this
+ * exact model" — the override must apply only where the exact-card set is
+ * meaningful.
+ */
+export function exactModelCardCount(
+  products: readonly NormalizedProduct[],
+  query: string,
+): number | undefined {
+  return isExactModelQuery(query) ? exactModelCardsOf(products, query).length : undefined;
+}

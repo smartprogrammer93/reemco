@@ -39,6 +39,7 @@ import { resultsShelfCards, resultsShelfSections, shelfSectionsFromProducts, RES
 // REEA-1261 — the exact-model ladder and card set, so a brand+model query
 // counts only the cards that answer the shopper's exact product.
 import {
+  exactModelCardCount,
   exactModelCardsOf,
   exactModelCountTemplate,
   exactModelOnlyOutsideMarket,
@@ -1603,7 +1604,7 @@ function StageCoverage(props: {
       onRefresh={props.onRefresh}
       unreachableLanes={props.unreachableLanes}
       shelfEmpty={shelfRows.length === 0}
-      exactModelCards={exactModelCardsOf(shelfRows, props.query).length}
+      exactModelCards={exactModelCardCount(shelfRows, props.query)}
       className={props.className}
     />
   );
@@ -1806,7 +1807,7 @@ function StagedResults(props: {
           {query.length > 0 ? (
             <>
               {/* Partial-response banner above the designed panel. */}
-              <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} unreachableLanes={props.unreachableLanes} exactModelCards={0} />
+              <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} unreachableLanes={props.unreachableLanes} exactModelCards={exactModelCardCount(products, query)} />
               <EmptyState
                 query={query}
                 unavailable={emptyCase?.kind === "c"}
@@ -1881,7 +1882,7 @@ function StagedResults(props: {
                 REEA-1078 AC9 / REEA-1114 AC2(c) — the existing unreachable
                 sentence must still render on a zero-row page: it is the one
                 statement that explains why an empty shelf is not a no-match. */}
-            <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} unreachableLanes={props.unreachableLanes} exactModelCards={0} />
+            <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} unreachableLanes={props.unreachableLanes} exactModelCards={exactModelCardCount(products, query)} />
             {/* REEA-964 — the honest empty state rides the primary position;
                 the related band renders BELOW it, clearly not a result.
                 REEA-1114 — case (b) names the filter that hid the rows and
@@ -1916,7 +1917,7 @@ function StagedResults(props: {
           </>
         ) : (
           <>
-            <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} pendingStatus={finalSnap.kuwaitPendingStatus} onRefresh={onRefresh} unreachableLanes={props.unreachableLanes} exactModelCards={exactModelCardsOf(products, query).length} className="rc-coverage-top" />
+            <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} pendingStatus={finalSnap.kuwaitPendingStatus} onRefresh={onRefresh} unreachableLanes={props.unreachableLanes} exactModelCards={exactModelCardCount(products, query)} className="rc-coverage-top" />
             <ResultsGrid
               products={products}
               query={query}

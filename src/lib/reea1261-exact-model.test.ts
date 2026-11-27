@@ -8,6 +8,7 @@ import { resultsShelfSections } from "@/lib/results-shelf";
 import { carriesExactModel, exactModelQuery } from "@/lib/relevance";
 import { classifyProductScope } from "@/lib/scope-gate";
 import {
+  exactModelCardCount,
   exactModelCardsOf,
   exactModelCountText,
   exactModelOnlyOutsideMarket,
@@ -286,5 +287,18 @@ describe("AC-2 — the coverage sentence counts the exact-model cards, not the l
     // A category query keeps the generic wording, count untouched.
     expect(coverageLine(notes, "en", rendered, [], "laptop")).toContain("carry this");
     expect(coverageLine(notes, "en", rendered, [], "laptop")).not.toContain("exact model");
+  });
+});
+
+describe("AC-2 — the coverage override applies only to brand+model queries", () => {
+  it("returns undefined for iphone 17 pro so its lane count stands", () => {
+    // "iphone 17 pro" names no curated brand, so exactModelQuery is null and
+    // the shelf's seven exact cards must not be overridden with 0 (measured
+    // live on 63ab065: "none carry this exact model" above seven cards).
+    expect(exactModelCardCount([], "iphone 17 pro")).toBeUndefined();
+    expect(exactModelCardCount([], "laptop")).toBeUndefined();
+    expect(
+      exactModelCardCount([keychronCard([egOffer(700)])], "keychron v3 max"),
+    ).toBe(1);
   });
 });
