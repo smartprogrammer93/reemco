@@ -117,7 +117,7 @@ jobs:
           echo "parity after: served=$AFTER intended=$HEAD $([ "$AFTER" = "$HEAD" ] && echo MATCH || echo MISMATCH)"
           [ "$AFTER" = "$HEAD" ] || echo "::warning::parity still lagging after self-heal dispatch - check the Deploy self-hosted run"
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: steps.guard.outputs.due != 'false'
         with:
           node-version: 22
