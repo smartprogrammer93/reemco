@@ -20,6 +20,7 @@ import { fill, getStrings } from "@/lib/i18n";
 import { marketViewScope, scopeProductsByMarket } from "@/lib/market";
 import { resolveRequestLocale } from "@/lib/i18n-server";
 import { sanitizeSearchQuery } from "@/lib/search-params";
+import { decodeClickSeed, mergeSeededOfferRows } from "@/lib/pdp-click-seed";
 import { siteOrigin } from "@/lib/site-origin";
 
 /**
@@ -78,7 +79,7 @@ export default async function ProductPage({
   // REEA-170: the country selection rides the link from the results list, so
   // the detail view derives its prices/alternatives from the same filtered
   // offer set. No param → unchanged behavior.
-  const { c, market, q } = await searchParams;
+  const { c, market, q, o } = await searchParams;
   // REEA-1177 AC 6d-2 — the PDP carries the same addressable market state as
   // the shelf it was reached from; a direct visit defaults to Kuwait.
   const country = resolveResultsMarket(market, c, undefined, undefined);
@@ -99,10 +100,30 @@ export default async function ProductPage({
   const locale = await resolveRequestLocale();
   const product = await resolveProductIdentity(productId, country, carriedQuery);
   if (!product) notFound();
+  // REEA-1246 (Bet 7) — the click carries the offer set the shelf card
+  // rendered. A card can be clicked before the shelf run writes its query
+  // memo, so this page's own bounded fan-out would otherwise paint a
+  // DIFFERENT partial set than the one the shopper just saw (measured:
+  // card Wibi KD 314.90 → cold PDP Eureka KD 331.90). Seed the page with the
+  // clicked rows: each carries its own live `collectedAt` (never a bundled
+  // figure), renders as Needs verification until this run re-checks it, and
+  // enters the fan-out below so every retailer the card showed is covered.
+  // The token names its own productId — a mismatched URL is ignored.
+  const seed =
+    product.productId === productId ? decodeClickSeed(o, productId, renderStartMs) : null;
+  const seeded = seed
+    ? {
+        ...product,
+        offers: mergeSeededOfferRows(
+          product.offers,
+          seed.rows,
+        ) as unknown as typeof product.offers,
+      }
+    : product;
   // Catalog identities carry bundled offers — apply the same market scope the
   // live path applies (REEA-1142: every offer stays, tagged to its market;
   // the renderer labels cross-market rows). Idempotent on live products.
-  const shown = scopeProductsByMarket([product], marketViewScope(country))[0];
+  const shown = scopeProductsByMarket([seeded], marketViewScope(country))[0];
   // REEA-1211 — a catalog seed carries no collection stamp, so its page paints
   // only what this request's live fan-out confirms. When the identity's only
   // listing is unreliable (keychron-v3-max: one amazon.eg search listing that

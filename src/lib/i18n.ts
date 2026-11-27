@@ -69,6 +69,13 @@ const en = {
   // read as a Kuwait best price). Count-free on purpose: the shopper-visible
   // claim stays true whether 0 or 24 Kuwait adapters have answered so far.
   kuwaitChecking: "Checking Kuwait stores…",
+  // REEA-1246 AC2 — when only out-of-stock lanes answered, the figure is a
+  // disclosed price reference, never a "best price" claim.
+  priceReference: "Out of stock — price reference",
+  // REEA-1246 AC1 — first paint from a card click is seeded with the shelf's
+  // offer set; until this page's own fan-out converges the figure is
+  // explicitly provisional (it may still improve).
+  pdpProvisional: "Checking more stores — provisional price",
   lowestListed: "Lowest listed price",
   // REEA-963 R1 FR-1.3 — the sanity warning affordance: flagged offers stay
   // visible but never read as trustworthy. The badge label is short (inline
@@ -468,6 +475,10 @@ const ar: typeof en = {
   // stores…"). Pure Arabic renders correctly under the RTL chrome; the
   // ellipsis trails the sentence in the locale's own script.
   kuwaitChecking: "نتحقق من متاجر الكويت…",
+  // REEA-1246 AC2 — AR side of the price-reference label (EN above).
+  priceReference: "غير متوفر — سعر مرجعي",
+  // REEA-1246 AC1 — AR side of the provisional first-paint label (EN above).
+  pdpProvisional: "جارٍ فحص متاجر أخرى — سعر مبدئي",
   lowestListed: "أقل سعر معروض",
   // REEA-963 — AR side of the sanity warning affordance (EN above). The badge
   // stays short; the per-reason sentences ride the title attribute.

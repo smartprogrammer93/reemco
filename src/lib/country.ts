@@ -262,6 +262,10 @@ export function buildProductHref(
   productId: string,
   query: string,
   country: CountryCode | null,
+  /** REEA-1246 — the clicked card's offer set (lib/pdp-click-seed.ts). The
+   *  detail view seeds its first paint from it, so the click shows the shelf's
+   *  price even when the shelf's query memo has not finalized yet. */
+  seed?: string | null,
 ): string {
   const params = new URLSearchParams();
   if (query) params.set("q", query);
@@ -269,6 +273,7 @@ export function buildProductHref(
   // detail view reproduces the shelf the shopper came from.
   if (country === null) params.set("market", "ALL");
   else if (country !== "KW") params.set("market", country);
+  if (seed) params.set("o", seed);
   const qs = params.toString();
   return `/product/${encodeURIComponent(productId)}${qs ? `?${qs}` : ""}`;
 }

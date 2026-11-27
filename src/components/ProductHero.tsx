@@ -22,7 +22,6 @@ import type { CollectJob, LiveOffer } from "@/lib/collect/types";
 import type { CountryCode } from "@/lib/country";
 import {
   HOME_MARKET,
-  cheapestCrossMarketOffer,
   crossMarketHeadlineParts,
   headlineOfferFor,
   isCrossMarketOffer,
@@ -54,6 +53,8 @@ import { offerStatusForLiveOffer } from "@/lib/offer-status";
 // count line: the collect run scrapes one listing per merged-card row, so a
 // retailer's same-price colourway listings arrived as duplicate rows.
 import { dedupeRetailerOfferRows, distinctRetailerCount, mergeInheritedOfferRows } from "@/lib/offer-rows";
+// REEA-1246 — the ONE headline claim (in-stock wins; OOS is a price reference).
+import { pdpHeadlineClaim } from "@/lib/pdp-click-seed";
 import type { NormalizedProduct } from "@/types/product";
 
 /** REEA-1142 — market-scoped order: the selected market's offers lead, the
@@ -393,12 +394,23 @@ function ProductHeroBody({
   // row of each retailer still leads, so the hero price is unchanged.
   const offers = mergedOffers.length ? dedupeRetailerOfferRows(sortLiveOffers(scopedLiveOffers, scope)) : [];
   const localBest = headlineOfferFor(offers as unknown as NormalizedProduct["offers"], scope);
-  const crossBest = cheapestCrossMarketOffer(offers as unknown as NormalizedProduct["offers"], scope);
-  const best = (localBest ?? crossBest ?? offers[0] ?? null) as LiveOffer | null;
   const hasLocalOffer = localBest !== null;
+  // REEA-1246 AC2 — the ONE headline decision: an in-stock offer always wins;
+  // when only out-of-stock lanes answered, the cheapest row is a disclosed
+  // price reference, never an unqualified "best price". The old
+  // `localBest ?? crossBest ?? offers[0]` fallback could headline an
+  // un-buyable row with no label.
+  const headlineClaim = pdpHeadlineClaim(offers as unknown as NormalizedProduct["offers"], scope);
+  const best = headlineClaim.best as LiveOffer | null;
+  const oosReference = headlineClaim.kind === "out-of-stock-reference";
   // REEA-1198 — same split as the shelf card: the sentence wraps, the price
   // token ("KD 0.47") stays one unbroken figure on the disclosed-fallback path.
-  const headlineParts = hasLocalOffer ? null : crossMarketHeadlineParts(offers as unknown as NormalizedProduct["offers"], scope, locale);
+  // An out-of-stock reference carries its own label instead of the
+  // "no Kuwait offer" sentence (a foreign OOS row is not a price to lead on).
+  const headlineParts =
+    hasLocalOffer || oosReference
+      ? null
+      : crossMarketHeadlineParts(offers as unknown as NormalizedProduct["offers"], scope, locale);
   const displayTitle = cleanDisplayTitle(product.title);
   const titleChanged = displayTitleChanged(product.title, displayTitle);
   // REEA-1162 / REEA-1192 — the answered line is a RETAILER count and it must
@@ -423,14 +435,23 @@ function ProductHeroBody({
   // the hero prints the listed figure, never a subtracted face value.
   const realCoupons = realCouponsFor(product.coupons, product.offers);
   const bestCoupon = best ? bestCouponForOffer(best as unknown as NormalizedProduct["offers"][number], realCoupons) : null;
-  const bestComposition = best
+  const recomposed = best
     ? composePrice({
         price: best.price,
         currency: best.currency,
         wasPrice: best.wasPrice,
         coupon: bestCoupon,
-      }).priceComposition
+      })
     : null;
+  // REEA-1246 — a seeded row carries the card's own listed − applied =
+  // effective statement, so the first paint prints exactly the figure the
+  // shopper clicked (a shelf coupon must not disappear on the PDP). Live
+  // rows carry no composition and are recomposed here as before.
+  const servedComposition =
+    best != null
+      ? ((best as unknown as NormalizedProduct["offers"][number]).priceComposition ?? null)
+      : null;
+  const bestComposition = servedComposition ?? recomposed?.priceComposition ?? null;
   const heroEffective = bestComposition
     ? (bestComposition.effective ?? bestComposition.listed)
     : null;
@@ -455,6 +476,9 @@ function ProductHeroBody({
       }).effectivePrice
     : null;
   const variantBaseKwd = liveBestKwd ?? cheapestListedKwd(product, scope);
+  // REEA-1246 AC1 — while this page's own re-check is still running, a
+  // headline that came from the inherited/clicked rows is provisional.
+  const provisional = collecting && best != null;
 
   return (
     <div className="mx-auto w-full rc-product-wrap" style={{ maxWidth: "var(--rc-layout-max-w)", paddingInline: "var(--rc-gutter)", paddingBlock: "var(--rc-space-4)" }}>
@@ -502,10 +526,32 @@ function ProductHeroBody({
                     <bdi>{heroListedLabel}</bdi>
                   </span>
                 )}
+                {oosReference ? (
+                  // REEA-1246 AC2 — no buyable offer answered: the figure is a
+                  // disclosed price reference, never a best-price claim.
+                  <span className="price-reference label-token" role="status">
+                    <bdi>{t.priceReference}</bdi>
+                  </span>
+                ) : null}
               </div>
-              {!hasLocalOffer && best && offerMarket(best.currency) ? (
+              {provisional ? (
+                // REEA-1246 AC1 — first paint is seeded from the shelf card's
+                // live rows; until this page's own fan-out converges the figure
+                // is explicitly provisional (it can only improve or be
+                // re-confirmed, never silently worse than the click).
+                <p
+                  className="rc-provisional"
+                  role="status"
+                  style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)", marginBlock: "4px 0" }}
+                >
+                  <bdi>{t.pdpProvisional}</bdi>
+                </p>
+              ) : null}
+              {!hasLocalOffer && best && isCrossMarketOffer(best, scope) && offerMarket(best.currency) ? (
                 // REEA-1177 AC 6d-3 — the only-offer foreign card names its
-                // market and carries the delivery caveat.
+                // market and carries the delivery caveat. REEA-1246 — an
+                // out-of-stock-only KWD page is NOT a foreign page, so the
+                // caveat must not claim "Delivery from Kuwait".
                 <p className="rc-market-caveat" role="note">
                   <bdi>
                     {fill(t.crossMarketCaveat, {

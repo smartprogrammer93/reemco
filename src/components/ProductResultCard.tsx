@@ -53,6 +53,8 @@ import {
   isPossibleMismatchOffer,
   renderedMerchantCount,
 } from "@/lib/offer-integrity";
+// REEA-1246 — the click carries this card's offer set to the product page.
+import { encodeClickSeed } from "@/lib/pdp-click-seed";
 
 /**
  * REEA-963 R1 FR-1 — the query-time sanity verdict helpers. A flagged offer
@@ -643,6 +645,11 @@ export default function ProductResultCard({
     realCoupons,
     cardRows: shelfOffers,
   } = visibleShelfOffers(product, scope);
+  // REEA-1246 — the click carries the offer set this card renders, so the
+  // product page's first paint shows the price the shopper just clicked even
+  // when the shelf run has not written its query memo yet. Built from the
+  // same projection the card paints (one definition, no second price pass).
+  const clickSeed = encodeClickSeed(product.productId, offers);
   const hasLocalOffer = localBest !== null;
   const kuwaitChecking =
     kuwaitBatchPending &&
@@ -668,6 +675,10 @@ export default function ProductResultCard({
   // lead offer's converted figure so the guard still has a real base.
   const cardLeadKwd = cheapestListed ?? (best != null ? effectiveKwdOfOffer(best) : null);
   const oos = best != null && !best.inStock;
+  // REEA-1246 AC2 — a foreign-only card is one thing; an out-of-stock-only KWD
+  // card is NOT foreign, so the market badge/caveat must not claim
+  // "Delivery from Kuwait" on it.
+  const crossMarketBest = !hasLocalOffer && best != null && isCrossMarketOffer(best, scope);
   const bestComposition = best ? compositionOfOffer(best) : null;
   const bestDiscount = bestComposition?.appliedDiscount ?? 0;
   const bestKnown = bestComposition?.effective != null;
@@ -905,7 +916,7 @@ export default function ProductResultCard({
               ? t.bestEffectiveLabel
               : basisRetailers === 1
                 ? `${basisRetailers} ${t.retailersOne}`
-                : !hasLocalOffer && best && offerMarket(best.currency)
+                : crossMarketBest && best && offerMarket(best.currency)
                   ? marketPriceLabel(offerMarket(best.currency) as CountryCode, locale)
                   : `${basisRetailers} ${t.retailersMany}`}
           </span>
@@ -915,7 +926,7 @@ export default function ProductResultCard({
       <CardMedia product={product} locale={locale} query={query} country={viewCountry} />
 
       <h2 className="rc-card-title" title={titleChanged ? product.title : undefined}>
-        <Link href={buildProductHref(product.productId, query, viewCountry)} className="hover:underline">
+        <Link href={buildProductHref(product.productId, query, viewCountry, clickSeed)} className="hover:underline">
           <bdi>{displayTitle}</bdi>
         </Link>
       </h2>
@@ -946,7 +957,7 @@ export default function ProductResultCard({
               <bdi>{headlineParts.prefix}<span className="rc-price-token">{headlineParts.price}</span>{headlineParts.suffix}</bdi>
             </p>
           )}
-          {!hasLocalOffer && best && offerMarket(best.currency) ? (
+          {crossMarketBest && best && offerMarket(best.currency) ? (
             // REEA-1177 AC 6d-3 — a foreign-currency card is the only offer
             // for this product; it names its market and carries the delivery
             // caveat so a Kuwait shopper never reads it as local stock.
@@ -959,7 +970,7 @@ export default function ProductResultCard({
             </p>
           ) : null}
           <div className="rc-price-line flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-            {!hasLocalOffer && best && offerMarket(best.currency) ? (
+            {crossMarketBest && best && offerMarket(best.currency) ? (
               <span
                 className="label-token shrink-0 whitespace-nowrap rounded px-2 py-0.5"
                 style={{ background: "var(--rc-canvas)", color: "var(--rc-body-text)", border: "1px solid var(--rc-line)" }}
@@ -1005,6 +1016,13 @@ export default function ProductResultCard({
                 // unqualified "Best price" on the Kuwait surface.
                 <span className="best-flag">{t.bestPrice}</span>
               ) : null
+            ) : null}
+            {oos ? (
+              // REEA-1246 AC2 — no in-stock offer answered for this card, so
+              // the figure is a disclosed reference, never a best-price claim.
+              <span className="price-reference label-token" role="status">
+                <bdi>{t.priceReference}</bdi>
+              </span>
             ) : null}
           </div>
           {bestComposition && bestDiscount > 0 && !heroUnavailable && (
@@ -1075,7 +1093,7 @@ export default function ProductResultCard({
             ))}
           </div>
           {offers.length > SHELF_VISIBLE_OFFER_ROWS && (
-            <Link href={buildProductHref(product.productId, query, viewCountry)} className="rc-view-all">
+            <Link href={buildProductHref(product.productId, query, viewCountry, clickSeed)} className="rc-view-all">
               {fill(t.viewAllOffers, { n: offers.length })}
             </Link>
           )}
