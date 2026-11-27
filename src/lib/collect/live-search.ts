@@ -2378,37 +2378,37 @@ export const COLLECTORS: RetailerCollector[] = [
       // is gated against the query and only genuine answers are kept. That is a
       // real offer, never a synthesized row.
       const listingHits = async (): Promise<SearchHit[]> => {
-        try {
-          const res = await fetchChecked(
-            fetchImpl,
-            `https://kuwait.ounass.com/curated-for-all?q=${encodeURIComponent(query)}`,
-            {
-              headers: {
-                accept: "text/html,application/xhtml+xml",
-                "accept-language": "en-US,en;q=0.9",
-                "user-agent": "Mozilla/5.0",
-              },
-            },
-            AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
-          );
-          const html = await res.text();
-          if (isShell(html)) return [];
-          return scanOunassCards(html)
-            .filter((card) => queryGatePasses(`${card.title} ${card.url}`, query, MIN_SCORE))
-            .map((card) => ({
-              title: card.title,
-              merchant: "Ounass",
-              country: "KW",
-              ...(card.brand ? { brand: card.brand } : {}),
-              price: card.price,
-              currency: card.currency,
-              url: card.url,
-              inStock: true,
-            }));
-        } catch {
-          return [];
-        }
+        const listingUrl = `https://kuwait.ounass.com/curated-for-all?q=${encodeURIComponent(query)}`;
+        const parse = (html: string): SearchHit[] =>
+          isShell(html)
+            ? []
+            : scanOunassCards(html)
+                .filter((card) => queryGatePasses(`${card.title} ${card.url}`, query, MIN_SCORE))
+                .map((card) => ({
+                  title: card.title,
+                  merchant: "Ounass",
+                  country: "KW",
+                  ...(card.brand ? { brand: card.brand } : {}),
+                  price: card.price,
+                  currency: card.currency,
+                  url: card.url,
+                  inStock: true,
+                }));
+        // REEA-1221 — the listing is reached through the SAME clearance ladder as
+        // the search view: on the box a plain fetch of it lands on the challenge
+        // shell (measured 2026-11-27: the plain hop answered no cards while the
+        // same URL from a second egress answered 24 priced ones), so the identity
+        // handshake leads and the browser/relay follow only on a shell.
+        const handshook = await challengeHtmlHop(fetchImpl, listingUrl).catch(() => "");
+        const direct = parse(handshook);
+        if (direct.length > 0) return direct;
+        const painted = await browserClearedHtml(listingUrl, "main").catch(() => "");
+        const fromBrowser = parse(painted);
+        if (fromBrowser.length > 0) return fromBrowser;
+        const relayed = await jinaClearedHtml(listingUrl, "StyleColorListItem");
+        return parse(relayed);
       };
+
       for (const body of bodies) {
         if (isShell(body)) continue;
         const islandHits = ounassHits(body, query);
