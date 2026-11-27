@@ -67,7 +67,10 @@ describe("shared KV store (REEA-92)", () => {
     const entry = table.get(`collect:job:${job.jobId}`);
     expect(entry).toBeTruthy();
     expect((JSON.parse(entry!.value) as CollectJob).subtasks[0].status).toBe("collecting");
-    expect(entry!.ttl).toBe(3600); // jobs answerable for 1 h, then expire
+    // REEA-1261 — the record is also the last verified observation the PDP
+    // and the exact-model shelf paint, so it lives for the site's 24 h
+    // freshness window instead of the old 1 h job-poll window.
+    expect(entry!.ttl).toBe(24 * 60 * 60);
   });
 
   it("a follow-up request on a fresh instance reads the same job state", async () => {

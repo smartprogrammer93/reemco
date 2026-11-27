@@ -24,7 +24,21 @@ import type { CollectJob } from "@/lib/collect/types";
 import { CACHE_TTL_MS, isFreshCompleted } from "@/lib/collect/types";
 import { getSharedKv, type SharedKv } from "@/lib/collect/kv";
 
-const JOBS_TTL_MS = 60 * 60 * 1000; // keep polled job ids answerable for 1 h
+/**
+ * REEA-1261 — how long a completed collection stays readable.
+ *
+ * This used to be 1 h ("keep polled job ids answerable"), but the same record
+ * is the LAST VERIFIED OBSERVATION the PDP and the sitemap paint (REEA-1211)
+ * and the exact-model shelf card seeds from. Measured live on `6b7f63b6`:
+ * `keychron v3 max` served zero results because the only successful collection
+ * (19:27) had expired at 20:27 while the Amazon.eg listing 503s for long
+ * stretches — so the product the shopper named disappeared from both surfaces
+ * even though the offer was still inside the site's 24 h freshness window
+ * (OFFER_STATUS_STALE_MS). Keeping the record for exactly that window makes
+ * the store and the paint rule agree: an observation is readable for as long
+ * as it may legitimately be painted.
+ */
+export const JOBS_TTL_MS = 24 * 60 * 60 * 1000;
 const KV_TTL_S = Math.ceil(JOBS_TTL_MS / 1000);
 
 function defaultCacheDir(): string {

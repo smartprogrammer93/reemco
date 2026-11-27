@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { finishJob, resetStoreForTests } from "@/lib/collect/store";
+import { finishJob, JOBS_TTL_MS, resetStoreForTests } from "@/lib/collect/store";
+import { OFFER_STATUS_STALE_MS } from "@/lib/offer-status";
 import { exactModelShelfSeed } from "@/lib/collect/last-observation";
 import { withExactModelCard } from "@/lib/exact-model-seed";
 import { comparisonDepthOf } from "@/lib/metrics";
@@ -318,5 +319,15 @@ describe("AC-2 — the coverage override counts cards only where the sentence sa
         "keychron v3 max",
       ),
     ).toBe(1);
+  });
+});
+
+describe("AC-1 durability — the last verified observation outlives the paint window", () => {
+  it("keeps a completed collection readable for the site's 24 h freshness window", () => {
+    // The store used to expire the record after 1 h while the PDP/shelf may
+    // paint an observation for 24 h (OFFER_STATUS_STALE_MS). Measured live on
+    // 6b7f63b6: keychron v3 max served zero results because the only
+    // successful collection had aged out mid-window.
+    expect(JOBS_TTL_MS).toBeGreaterThanOrEqual(OFFER_STATUS_STALE_MS);
   });
 });
