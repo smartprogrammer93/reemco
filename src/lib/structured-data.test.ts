@@ -129,10 +129,12 @@ describe("REEA-1212 — JSON-LD describes the card's visible offer set", () => {
     expect(visible.best?.priceComposition?.effective).toBe(314.9);
 
     // The emitted Offer set is exactly the painted rows (the two identical
-    // Eureka rows fold to one), and the headline offer is present.
-    expect(node.offers).toHaveLength(visible.rows.length);
+    // Eureka rows fold to one), and the headline offer is present. REEA-1238 —
+    // the card paints `cardRows` (headline first, one row per retailer), so
+    // the JSON-LD describes that same set.
+    expect(node.offers).toHaveLength(visible.cardRows.length);
     expect(node.offers.map((o) => o.seller.name)).toEqual(
-      visible.rows.map((o) => o.merchant),
+      visible.cardRows.map((o) => o.merchant),
     );
     const wibi = node.offers.find((o) => o.seller.name === "Wibi");
     expect(wibi).toBeDefined();

@@ -35,6 +35,7 @@ const {
 const { coverageLine } = await import("@/lib/collect/coverage");
 const { collectLiveResultsStaged, groupHits } = await import("@/lib/collect/live-search");
 const { rememberRound, resetLastSeenForTests } = await import("@/lib/collect/last-seen");
+const { visibleShelfOffers } = await import("@/lib/results-offers");
 
 type P = NormalizedProduct;
 
@@ -365,5 +366,35 @@ describe("REEA-1238 AC 7B-2b — the served document fills a lane still in fligh
     const blinkNote = snap.notes.find((n) => n.merchant === "Blink");
     expect(blinkNote?.error).toBeUndefined();
     expect(blinkNote?.hits).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("REEA-1238 AC 7B-2b — a comparison card visibly carries both retailers", () => {
+  it("takes one visible row per retailer before filling the three-row cap", () => {
+    const airwrap = product("dyson-airwrap-multi-styler-and", "Dyson Airwrap", [
+      offer("Xcite", 139.9),
+      offer("Xcite", 149.9),
+      offer("Xcite", 154.9),
+      offer("Eureka", 129.95),
+      offer("Wibi", 179.9),
+    ]);
+    const { cardRows } = visibleShelfOffers(airwrap, "KW");
+    expect(cardRows).toHaveLength(3);
+    expect(new Set(cardRows.map((o) => o.merchant))).toEqual(
+      new Set(["Eureka", "Xcite", "Wibi"]),
+    );
+  });
+
+  it("keeps the headline row and the three-row cap for a single-retailer card", () => {
+    const single = product("single", "Single", [
+      offer("Xcite", 10),
+      offer("Xcite", 12),
+      offer("Xcite", 14),
+      offer("Xcite", 16),
+    ]);
+    const { cardRows } = visibleShelfOffers(single, "KW");
+    expect(cardRows).toHaveLength(3);
+    expect(new Set(cardRows.map((o) => o.merchant))).toEqual(new Set(["Xcite"]));
+    expect(cardRows[0].price).toBe(10);
   });
 });

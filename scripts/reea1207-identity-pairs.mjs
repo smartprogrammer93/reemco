@@ -88,9 +88,19 @@ async function main() {
       let found = false;
       let serves = 0;
       for (let attempt = 0; attempt < ATTEMPTS && !found; attempt += 1) {
+        // REEA-1238 — a repeat inside the 60 s memo window serves the FIRST
+        // fan-out's snapshot, so four plain attempts sample ONE collection,
+        // not four. The probe's contract is per-serve sampling ("the fan-out
+        // is per-serve"), so every attempt carries the one-shot refresh
+        // signal and really re-runs the lanes. Without it an EN attempt set
+        // that happened to draw a Sony-less collection reported 0/4 while a
+        // later AR attempt found the pair.
         const { status, body } = await fetchText(
           `${BASE}/results?q=${encodeURIComponent(pair.query)}`,
-          { cookie: `rc_locale=${locale}`, "accept-language": locale === "ar" ? "ar" : "en" },
+          {
+            cookie: `rc_locale=${locale}; rc_refresh=1`,
+            "accept-language": locale === "ar" ? "ar" : "en",
+          },
         );
         if (status !== 200) {
           await sleep(GAP_MS);

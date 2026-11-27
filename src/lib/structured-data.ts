@@ -195,7 +195,9 @@ export function buildResultsStructuredData(args: BuildStructuredDataArgs): Produ
     // REEA-1212 — the ONE visible-offer projection: market scoping, real
     // coupons, fold, ordering, headline and row cap. The card uses this same
     // function, so JSON-LD and the page can never fork again.
-    const { rows, best } = visibleShelfOffers(product, country);
+    // REEA-1238 — read `cardRows`, the exact row set the card paints (one row
+    // per retailer on a comparison card), not the pre-cap slice.
+    const { cardRows: rows, best } = visibleShelfOffers(product, country);
     if (rows.length === 0 || best === null) continue;
 
     // The headline offer is visible on the page (it is the price the card

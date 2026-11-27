@@ -120,10 +120,34 @@ export function visibleShelfOffers(
   const best = localBest ?? crossBest ?? all[0] ?? null;
   const rows = all.slice(0, SHELF_VISIBLE_OFFER_ROWS);
   // REEA-1217 — the card's own list must carry the merchant it headlines.
-  const cardRows =
-    best != null && !rows.includes(best)
-      ? [best, ...all.filter((o) => o !== best)].slice(0, SHELF_VISIBLE_OFFER_ROWS)
-      : rows;
+  // REEA-1238 AC 7B-2b — a comparison card must also VISIBLY carry both
+  // retailers it claims to compare: with six offers from one retailer the
+  // three-row cap showed three rows of that retailer and the other merchant
+  // only behind "View all", so the card read as a single-retailer card even
+  // though its own basis line said "2 retailers". The row selection now takes
+  // one row per distinct retailer first (headline included), then fills the
+  // remaining slots in the served cheapest-first order.
+  const cardRows = (() => {
+    const cap = SHELF_VISIBLE_OFFER_ROWS;
+    const picked: PriceOffer[] = [];
+    const merchants = new Set<string>();
+    const take = (o: PriceOffer): void => {
+      if (picked.length >= cap || picked.includes(o)) return;
+      picked.push(o);
+      merchants.add(o.merchant.trim().toLowerCase());
+    };
+    if (best != null) take(best);
+    for (const o of all) {
+      if (picked.length >= cap) break;
+      if (merchants.has(o.merchant.trim().toLowerCase())) continue;
+      take(o);
+    }
+    for (const o of all) {
+      if (picked.length >= cap) break;
+      take(o);
+    }
+    return picked;
+  })();
   return {
     rows,
     cardRows,
