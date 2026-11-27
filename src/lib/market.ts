@@ -346,11 +346,19 @@ export function marketStockLabel(market: CountryCode, locale?: Locale): string {
 
 /**
  * REEA-1142 AC3 — the render-time market pass over a product list: every
- * offer is kept (cross-market offers stay visible, the policy accepted on
- * this ticket) and every offer carries its market tag. The renderer then
- * labels the cross-market rows and keeps them out of the headline claim.
- * Nothing is dropped, so the offer set the shopper sees is still exactly the
- * live fan-out's answer — only its market scope is made explicit.
+ * offer carries its market tag and the renderer labels the cross-market rows,
+ * keeping them out of the headline claim. A market-scoped shelf keeps only
+ * the selected market's offers on an ordinary card (REEA-1177 AC 6d-3), so
+ * the offer set the shopper sees is the live fan-out's answer for that
+ * market.
+ *
+ * REEA-1238 AC 7B-2b — a card the collector classified as a cross-market
+ * comparison pair (`comparisonAcrossMarkets`) keeps its other-market rows,
+ * tagged, so the identity merge that joined them is visible on ONE card
+ * instead of the card rendering as a single-retailer row. The headline, the
+ * "from" figure and the in-market depth count still read the selected market
+ * only, so a cross-market row can never win a Kuwait price claim or count as
+ * depth.
  */
 export function scopeProductsByMarket(
   products: readonly NormalizedProduct[],
@@ -365,7 +373,9 @@ export function scopeProductsByMarket(
     // product with at least one in-market offer renders only those; a product
     // with NO in-market offer keeps its cross-market rows (the only offer)
     // and the card names the market, currency, ≈KWD and delivery caveat.
-    if (scope === null) return { ...p, offers: tagged };
+    // REEA-1238 AC 7B-2b — the exception: a cross-market comparison pair keeps
+    // its other-market rows tagged, so the merged card carries both retailers.
+    if (scope === null || p.comparisonAcrossMarkets) return { ...p, offers: tagged };
     const local = tagged.filter((o) => !isCrossMarketOffer(o, scope));
     return { ...p, offers: local.length > 0 ? local : tagged };
   });

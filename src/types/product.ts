@@ -225,6 +225,17 @@ export interface NormalizedProduct {
    * verify ticket can classify without guessing. The UI never re-derives it.
    */
   matchReason?: MatchReason;
+  /**
+   * REEA-1238 AC 7B-2b — set server-side by the category shelf classification
+   * when this card compares retailers ACROSS markets (an identity merge that
+   * joined a Kuwait lane with a labelled cross-market row, e.g. the pinned
+   * Panadol pack at Danube Home SA + BinSina). The market-scoped render keeps
+   * the other-market rows tagged for such a card so the merge is visible on
+   * ONE card (REEA-1142 labels the rows); the headline, the "from" figure and
+   * the in-market depth count still read the selected market only. Absent on
+   * ordinary cards and on feeds that predate the flag.
+   */
+  comparisonAcrossMarkets?: boolean;
 }
 
 /**

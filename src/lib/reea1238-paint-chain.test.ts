@@ -201,6 +201,13 @@ describe("REEA-1238 AC 7B-2b — a cross-market pinned pair stays on the shelf",
     expect(new Set(pair!.offers.map((o) => o.merchant))).toEqual(
       new Set(["Danube Home", "BinSina"]),
     );
+    // REEA-1238 AC 7B-2b — the shelf classification is stamped on the card, so
+    // the market-scoped render keeps the tagged Saudi row instead of scoping
+    // it away and painting a single-retailer row.
+    expect(pair!.comparisonAcrossMarkets).toBe(true);
+    const { cardRows, best } = visibleShelfOffers(pair!, "KW");
+    expect(best?.merchant).toBe("BinSina");
+    expect(cardRows.map((o) => o.merchant)).toEqual(["BinSina", "Danube Home"]);
   });
 
   it("keeps ONE single tail slot so a one-comparison query clears the 40% gate", () => {

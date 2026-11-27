@@ -28,6 +28,8 @@ import {
   scopeProductsByMarket,
   sortOffersByMarket,
 } from "@/lib/market";
+import { comparisonMerchantCount } from "@/lib/offer-integrity";
+import { visibleShelfOffers } from "@/lib/results-offers";
 import type { NormalizedProduct, PriceOffer } from "@/types/product";
 
 const KW_OFFER: PriceOffer = {
@@ -165,5 +167,41 @@ describe("aggregate counter input (AC5)", () => {
     expect(countCrossMarketOffers([KW_OFFER, SAR_OFFER, SAR_CHEAPER], "KW")).toBe(2);
     expect(countCrossMarketOffers([KW_OFFER], "KW")).toBe(0);
     expect(countCrossMarketOffers([KW_OFFER, SAR_OFFER], "SA")).toBe(1);
+  });
+});
+
+describe("REEA-1238 AC 7B-2b — a cross-market comparison pair renders both retailers", () => {
+  const pair: NormalizedProduct = {
+    productId: "panadol-extra",
+    title: "Panadol Extra Tablets 48's",
+    brand: "Panadol",
+    offers: [KW_OFFER, SAR_OFFER],
+    coupons: [],
+    variations: [],
+    alternatives: [],
+  };
+
+  it("keeps the tagged other-market row on the card the shelf classified as a pair", () => {
+    const [scoped] = scopeProductsByMarket(
+      [{ ...pair, comparisonAcrossMarkets: true }],
+      "KW",
+    );
+    expect(scoped.offers.map((o) => o.merchant)).toEqual(["Xcite", "Danube Home"]);
+    expect(scoped.offers.map((o) => o.market)).toEqual(["KW", "SA"]);
+  });
+
+  it("still scopes an ordinary card to the selected market (REEA-1177 AC 6d-3)", () => {
+    const [scoped] = scopeProductsByMarket([pair], "KW");
+    expect(scoped.offers.map((o) => o.merchant)).toEqual(["Xcite"]);
+  });
+
+  it("the visible rows carry both retailers while the headline and from figure stay local", () => {
+    const view = visibleShelfOffers({ ...pair, comparisonAcrossMarkets: true }, "KW");
+    expect(view.best?.merchant).toBe("Xcite");
+    expect(view.localBest?.merchant).toBe("Xcite");
+    expect(view.crossBest?.merchant).toBe("Danube Home");
+    expect(view.cardRows.map((o) => o.merchant)).toEqual(["Xcite", "Danube Home"]);
+    // The in-market comparison count still reads the Kuwait lane only.
+    expect(comparisonMerchantCount(view.all, "KW")).toBe(1);
   });
 });

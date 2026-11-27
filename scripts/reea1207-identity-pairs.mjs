@@ -59,13 +59,23 @@ async function readStamp() {
   return { commitHttp: commit.status, commit: commit.body.trim(), healthHttp: health.status, health: healthJson };
 }
 
-/** True when one rendered card's offers region carries both merchant names. */
+/**
+ * True when one rendered card's offers region carries both merchant names.
+ *
+ * REEA-1238 — the split used to run to the NEXT `<article` (or end of
+ * document), so the last card's segment also carried the page-level coverage
+ * sentence and its "Prices from <retailer>" line could make a pair "pass"
+ * without any card carrying both. The segment now stops at the card's own
+ * `</article>`, so only text inside a card can satisfy the pair.
+ */
 function cardCarriesBoth(html, a, b) {
   const parts = html.split(/<article\b/).slice(1);
   for (const part of parts) {
-    // The related-alternatives band follows the card's offers; cut it off so a
-    // merchant that only appears as an alternative cannot count.
-    const cut = part.split(/aria-label="(Alternatives|البدائل)"/)[0];
+    // Bound to the card itself; then cut the related-alternatives band that
+    // follows the card's offers so a merchant that only appears as an
+    // alternative cannot count.
+    const card = part.split(/<\/article>/)[0];
+    const cut = card.split(/aria-label="(Alternatives|البدائل)"/)[0];
     const text = cut.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
     if (text.includes(a) && text.includes(b)) return true;
   }

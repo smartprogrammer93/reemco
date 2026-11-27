@@ -2958,9 +2958,14 @@ function comparisonLedShelf(products: NormalizedProduct[]): NormalizedProduct[] 
   if (inMarket.length === 0 && crossMarketPairs.length === 0) {
     return products.slice(0, CATEGORY_SHELF_CARDS);
   }
+  // REEA-1238 AC 7B-2b — stamp the classification on the card so the render
+  // keeps the cross-market rows it merged (tagged, REEA-1142) instead of
+  // scoping them away and painting a single-retailer row. The in-market
+  // comparison band is unaffected: its cards stay market-scoped.
+  const crossPairs = crossMarketPairs.map((p) => ({ ...p, comparisonAcrossMarkets: true }));
   return [
     ...inMarket,
-    ...crossMarketPairs,
+    ...crossPairs,
     ...singles.slice(0, CATEGORY_SHELF_SINGLES),
   ].slice(0, CATEGORY_SHELF_CARDS);
 }
