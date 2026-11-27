@@ -12,5 +12,8 @@ Type=oneshot
 User=deploy
 # Local loopback: no TLS/DNS dependency, so the probe cannot fail because of
 # Caddy or the certificate. A non-2xx exits non-zero and lands in the journal.
-ExecStart=/usr/bin/curl -fsS -m 45 -o /dev/null -w 'health %{http_code} in %{time_total}s\n' http://127.0.0.1:3000/api/health
+# REEA-1262 — the port is resolved from the active blue/green slot in
+# /etc/reemco/image-tag.env (blue 3000, green 3001) by health-probe.sh, so the
+# probe follows a slot switch instead of probing an idle slot.
+ExecStart=/opt/reemco/scripts/health-probe.sh
 TimeoutStartSec=60

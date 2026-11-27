@@ -30,7 +30,7 @@
 name: reemco
 
 services:
-  app:
+  app: &app-service
     image: ${REEMCO_IMAGE_REPO:-ghcr.io/smartprogrammer93/reemco}:${REEMCO_IMAGE_TAG:?set REEMCO_IMAGE_TAG to a pinned 40-char commit sha}
     env_file:
       - /etc/reemco/app.env
@@ -116,6 +116,27 @@ services:
       - edge
       - data
 
+  # REEA-1262 — second app slot for zero-downtime deploys. It is the same
+  # hardening/volumes/networks as `app` (YAML anchor above); only the image tag
+  # and the loopback port differ. deploy.sh/rollback.sh start the INACTIVE slot
+  # with the new tag, wait for it to answer /api/health + a search on its own
+  # loopback port, switch Caddy's upstream (REEMCO_APP_UPSTREAM) to it, then
+  # stop the old slot. The old slot is kept stopped (not removed) so a rollback
+  # is a start + switch, not a rebuild.
+  #
+  # The standby mounts the SAME durable volumes on purpose: after the switch it
+  # must read the metrics/events/collect state the old slot wrote. The overlap
+  # window is short and the standby serves no shopper traffic before the switch;
+  # writes are append-only (events) or tmp+rename (metrics/collect), so the worst
+  # case is one lost metrics increment, never a corrupt file.
+  app_green:
+    <<: *app-service
+    image: ${REEMCO_IMAGE_REPO:-ghcr.io/smartprogrammer93/reemco}:${REEMCO_IMAGE_TAG_GREEN:?set REEMCO_IMAGE_TAG_GREEN in /etc/reemco/image-tag.env}
+    # A distinct loopback port so both slots can run at once; the app still
+    # listens on 3000 inside its own container (REEMCO_HEALTH_ORIGIN stays valid).
+    ports:
+      - "127.0.0.1:3001:3000"
+
   redis:
     # Local Valkey is the app's shared KV store (REDIS_URL above). It is on the
     # private `data` compose network only — never published to the host, never
@@ -176,6 +197,12 @@ services:
       # Set in /etc/reemco/release.env. During standup use the box's public IP
       # (plain HTTP); at cutover switch to the real hostname (automatic TLS).
       REEMCO_SITE_ADDRESS: ${REEMCO_SITE_ADDRESS:?set REEMCO_SITE_ADDRESS in /etc/reemco/release.env}
+      # REEA-1262 — the active app slot. The Caddyfile reads this placeholder,
+      # so a deploy switches slots with `caddy reload` (validated; keeps the
+      # running config on error) instead of a proxy restart. It comes from
+      # /etc/reemco/image-tag.env, kept current by deploy.sh/rollback.sh; the
+      # fallback keeps a plain `compose up` on an un-migrated host working.
+      REEMCO_APP_UPSTREAM: ${REEMCO_APP_UPSTREAM:-app:3000}
     # The official caddy:2-alpine image has no non-root user, but /usr/bin/caddy
     # carries cap_net_bind_service and a plain numeric uid works with
     # cap_add NET_BIND_SERVICE (verified on the host, REEA-1061). deploy.sh
@@ -204,9 +231,12 @@ services:
       - caddy-config:/config
     mem_limit: 256m
     restart: unless-stopped
-    depends_on:
-      app:
-        condition: service_healthy
+    # REEA-1262 — no depends_on: the upstream is whichever slot is active, and
+    # that is not a fixed compose service. A cold start where the app is not up
+    # yet answers a readable 503 with Retry-After (Caddyfile handle_errors), and
+    # the proxy's own active health check picks the slot up as soon as it is
+    # ready. A depends_on here would drag the *inactive* slot up on a proxy
+    # recreate, which is harmless but confusing.
     logging:
       driver: json-file
       options:

@@ -23,6 +23,26 @@ COMPOSE="${COMPOSE:-/opt/reemco/compose.prod.yml}"
 RELEASE_ENV="${RELEASE_ENV:-/etc/reemco/release.env}"
 TAG_FILE="${TAG_FILE:-/etc/reemco/image-tag.env}"
 
+# REEA-1262 — blue/green slots. The ACTIVE slot is the one Caddy must point at;
+# the other slot may be running during a switch window and must carry the same
+# hardening, but only the active one is required to exist. Read the state file
+# (0640 root:deploy; this script runs as root from deploy.sh, or as the CI
+# `deploy` user which can read it).
+ACTIVE_SLOT="app"
+BLUE_TAG=""
+GREEN_TAG=""
+if [ -r "$TAG_FILE" ]; then
+  BLUE_TAG=$(sed -n 's/^REEMCO_IMAGE_TAG=//p' "$TAG_FILE" | tail -1)
+  GREEN_TAG=$(sed -n 's/^REEMCO_IMAGE_TAG_GREEN=//p' "$TAG_FILE" | tail -1)
+  _active=$(sed -n 's/^REEMCO_ACTIVE_SLOT=//p' "$TAG_FILE" | tail -1)
+  case "$_active" in app|app_green) ACTIVE_SLOT="$_active" ;; esac
+fi
+ACTIVE_TAG=""
+case "$ACTIVE_SLOT" in
+  app) ACTIVE_TAG="$BLUE_TAG" ;;
+  app_green) ACTIVE_TAG="$GREEN_TAG" ;;
+esac
+
 FAIL=0
 fail() { printf 'FAIL: %s\n' "$*"; FAIL=1; }
 ok() { printf 'ok: %s\n' "$*"; }
@@ -67,7 +87,18 @@ expect_pids() {
   [ "$got" = "$want" ] || fail "$svc: pids_limit '$got' != expected '$want'"
 }
 
-for svc in redis proxy app; do
+# REEA-1262 — redis and proxy are fixed; the app role is whichever slot is
+# active. During a switch window the inactive slot may still be running: assert
+# its hardening too (it is a live app container), but only the active slot is
+# required to exist.
+APP_SLOTS=(app app_green)
+SERVICES=(redis proxy "$ACTIVE_SLOT")
+for s in "${APP_SLOTS[@]}"; do
+  [ "$s" = "$ACTIVE_SLOT" ] && continue
+  [ -n "$(container_id "$s")" ] && SERVICES+=("$s")
+done
+
+for svc in "${SERVICES[@]}"; do
   cid=$(container_id "$svc")
   if [ -z "$cid" ]; then
     fail "$svc: no running container found"
@@ -86,7 +117,7 @@ for svc in redis proxy app; do
     proxy) want_user="1000:1000"; want_pids=128; want_nets="reemco_edge" ;;
     # REEA-1226: the app runs headless Chromium for the browser-clearance
     # tier, so its pids ceiling is 2048 (was 512, which Chromium exhausted).
-    app)   want_user=""; want_pids=2048; want_nets="reemco_data,reemco_edge" ;;
+    app|app_green) want_user=""; want_pids=2048; want_nets="reemco_data,reemco_edge" ;;
   esac
 
   # Non-root, both configured and live.
@@ -140,13 +171,23 @@ for svc in redis proxy app; do
   # ("FATAL: nss_util.cc ... cannot open shared object file", SIGTRAP), so the
   # tier silently degrades. The runtime image installs libsqlite3-0; assert it
   # is present on the RUNNING app container so a trimmed image cannot regress.
-  if [ "$svc" = "app" ]; then
+  if [ "$svc" = "app" ] || [ "$svc" = "app_green" ]; then
     if docker exec "$cid" sh -c \
       'ls /usr/lib/x86_64-linux-gnu/libsqlite3.so.0 >/dev/null 2>&1 || ldconfig -p 2>/dev/null | grep -q libsqlite3.so.0' \
       >/dev/null 2>&1; then
-      ok "app: Chromium NSS dependency libsqlite3.so.0 is present"
+      ok "$svc: Chromium NSS dependency libsqlite3.so.0 is present"
     else
-      fail "app: libsqlite3.so.0 missing — Chromium NSS cannot initialise (REEA-1226)"
+      fail "$svc: libsqlite3.so.0 missing — Chromium NSS cannot initialise (REEA-1226)"
+    fi
+    # REEA-1262 (AC-5) — the active slot must actually run the recorded tag;
+    # a stale container behind a fresh stamp is exactly the half-applied switch
+    # this ticket is about. Compare the container's image reference.
+    if [ "$svc" = "$ACTIVE_SLOT" ] && [ -n "$ACTIVE_TAG" ]; then
+      running_ref=$(docker inspect --format '{{.Config.Image}}' "$cid")
+      case "$running_ref" in
+        *":${ACTIVE_TAG}") ok "$svc: running image tag matches the active state ($ACTIVE_TAG)" ;;
+        *) fail "$svc: running image '$running_ref' does not carry active tag '$ACTIVE_TAG'" ;;
+      esac
     fi
   fi
 
@@ -189,12 +230,12 @@ assert_published_ports() {
             and ($p[1] == "tcp" or ($p[0] == "443" and $p[1] == "udp"))
             and ($b[0] == "0.0.0.0" or $b[0] == "::" or $b[0] == "")
             and ($b[1] == $p[0])) then empty
-        elif ($p[0] == "3000" and $p[1] == "tcp" and $b[0] == "127.0.0.1" and $b[1] == "3000") then empty
+        elif (($p[0] == "3000" or $p[0] == "3001") and $p[1] == "tcp" and $b[0] == "127.0.0.1" and $b[1] == $p[0]) then empty
         else "\($k) -> \($b[0]):\($b[1])" end')
     if [ -n "$bad" ]; then
       fail "$name: published port outside the allow-list: $(printf '%s\n' "$bad" | paste -sd, -)"
     else
-      ok "$name: published ports within the allow-list (80/443, loopback 3000)"
+      ok "$name: published ports within the allow-list (80/443, loopback 3000/3001)"
     fi
   done
 }

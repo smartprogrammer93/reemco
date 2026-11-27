@@ -15,12 +15,13 @@ does not exist on the host.
 | `cloud-init.yaml` | First boot: users, SSH posture, UFW, chrony, fail2ban, unattended upgrades, 26.04 delta checks |
 | `ansible/playbook.yml` | Idempotent host convergence: pinned Docker, `/opt/reemco` config, timers, firewall |
 | `ansible/inventory.example.yml` | Copy to `inventory.yml`, set `ansible_host` |
-| `compose.prod.yml` | app + local Valkey (native RESP KV) + Caddy |
-| `Caddyfile` | TLS + HSTS; app owns CSP/CTO/Referrer-Policy (do not duplicate them); strips `Via` (REEA-1085) |
+| `compose.prod.yml` | blue/green app slots + local Valkey (native RESP KV) + Caddy |
+| `Caddyfile` | TLS + HSTS; active-slot upstream (REEA-1262); readable 5xx with `Retry-After`; app owns CSP/CTO/Referrer-Policy (do not duplicate them); strips `Via` (REEA-1085) |
 | `Dockerfile` | Production image, tag = commit sha, standalone Next output |
-| `scripts/deploy.sh` | Deploy a pinned tag, auto-rollback on failed verify |
-| `scripts/rollback.sh` | Redeploy the recorded previous tag, same verify gate |
-| `scripts/verify.sh` | Commit stamp + 4 security headers + no `Via` leak + absent `X-Powered-By` + health + container hardening assertions |
+| `scripts/deploy.sh` | Zero-downtime blue/green deploy of a pinned tag (REEA-1262), auto-rollback on failed verify |
+| `scripts/rollback.sh` | Switch back to the recorded previous tag/slot through the same engine |
+| `scripts/health-probe.sh` | Scheduled loopback health probe against the ACTIVE slot's port |
+| `scripts/verify.sh` | Commit stamp + health build parity + 4 security headers + no `Via` leak + absent `X-Powered-By` + health + container hardening assertions |
 | `scripts/assert-compose-hardening.sh` | CI gate: renders the compose file and asserts the hardening invariants |
 | `scripts/assert-containers.sh` | Post-deploy `docker inspect` assertions on the running stack (called by `verify.sh`) |
 | `scripts/backup.sh` | Restic backup of the durable state (docker volumes + `/opt/reemco` + `/etc/reemco`) |
@@ -53,14 +54,60 @@ tree, syncs `infra/` to the host, runs `deploy.sh --tag <sha>`, and verifies sta
 
 Manual equivalent on the host: `sudo /opt/reemco/scripts/deploy.sh --tag <sha>`.
 
+### Zero-downtime deploy (REEA-1262)
+
+The host is the only shopper-facing surface, so a deploy must never leave a
+window in which neither build answers. `deploy.sh` therefore runs a blue/green
+switch, not a stop-then-start:
+
+1. Read `/etc/reemco/image-tag.env` (blue tag, green tag, active slot, Caddy
+   upstream) and record the rollback target in `image-tag.prev.env` first.
+2. Start the **inactive** slot (`app` on loopback 3000, `app_green` on loopback
+   3001) with the new tag **alongside** the running slot. Nothing is stopped.
+3. Refuse to touch the proxy until that slot answers 200 on `/__commit.txt`
+   (the exact tag), `/api/health` **and** a real search on its own port
+   (`READY_TIMEOUT`, default 360 s; `/api/health` walks the live funnel and
+   legitimately 503s once). A slot that cannot answer never receives traffic.
+4. Switch Caddy with `docker exec -e REEMCO_APP_UPSTREAM=<slot>:3000 … caddy
+   reload`. The Caddyfile reads that placeholder; Caddy validates and keeps the
+   running config on error, so a failed reload leaves the old slot serving.
+5. Run the full `verify.sh` gate on the switched surface. If it fails, reload
+   the upstream back to the old slot and stop the new one.
+6. Only then stop the old slot. It is kept **stopped, not removed**, so
+   `rollback.sh` is a start + switch, not a rebuild.
+
+Both slots mount the same durable volumes (metrics/events/collect): the new slot
+must read the state the old one wrote after the switch. Writes are append-only
+or tmp+rename, so the overlap cannot corrupt a file. `assert-containers.sh`
+asserts the active slot's hardening and that its running image tag matches the
+recorded state. `health-probe.sh` follows the active slot's port instead of a
+hardcoded 3000.
+
+If a 503 is ever unavoidable, the Caddyfile serves a readable page with
+`Retry-After: 5` — for both Caddy's own no-upstream error (`handle_errors`) and
+an app-generated 5xx (`handle_response`). It is never an empty body.
+
+Evidence for AC-1..AC-5 is the committed probe
+`scripts/reea1262-probe.mjs`: a 1 s-interval external probe of `/`,
+`/results?q=iphone+17+pro`, `/api/health` and `/product/iphone-17-pro` that
+appends JSONL and exits non-zero on any non-200.
+
+```sh
+node scripts/reea1262-probe.mjs --base https://ns539626.ip-144-217-72.net \
+  --duration 1800 --out /var/log/reemco/reea1262-probe.jsonl
+```
+
 ## Rollback
 
 Run the same workflow with `rollback_sha` = the previous known-good commit
 (no rebuild — it redeploys the existing artifact). On-host equivalent:
 `sudo /opt/reemco/scripts/rollback.sh` (uses `/etc/reemco/image-tag.prev.env`,
-written by every deploy). This is the only rollback path since REEA-1076: the
-Vercel alias (402 `DEPLOYMENT_DISABLED`) is gone, so if the box itself is
-unreachable the recovery path is the host backup/restore drill, not a DNS flip.
+which records both the previous tag and the slot that served it; written before
+every switch). `rollback.sh` delegates to the same blue/green engine, so a
+rollback is also zero-downtime and is verified by the same gate. This is the only
+rollback path since REEA-1076: the Vercel alias (402 `DEPLOYMENT_DISABLED`) is
+gone, so if the box itself is unreachable the recovery path is the host
+backup/restore drill, not a DNS flip.
 
 **No rollback path, no deploy.**
 
@@ -418,10 +465,11 @@ sudo bash -c 'set -a; . /etc/reemco/backup.env; set +a; /opt/reemco/scripts/rest
 Restore into place (disaster recovery, app stopped):
 
 ```sh
-sudo docker compose -f /opt/reemco/compose.prod.yml stop app
+sudo docker compose -f /opt/reemco/compose.prod.yml stop app app_green
 sudo bash -c 'set -a; . /etc/reemco/backup.env; set +a; restic restore latest --target /'
-sudo docker compose -f /opt/reemco/compose.prod.yml --env-file /etc/reemco/release.env \
-  --env-file /etc/reemco/image-tag.env up -d
+# REEA-1262 — --reconcile starts redis/proxy + the ACTIVE slot from the
+# restored state file and points Caddy at it (a raw `up -d` would start both).
+sudo /opt/reemco/scripts/deploy.sh --reconcile
 ```
 
 ## Observability

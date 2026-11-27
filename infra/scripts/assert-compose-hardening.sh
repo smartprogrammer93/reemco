@@ -25,6 +25,8 @@ COMPOSE="${1:-infra/compose.prod.yml}"
 # `compose config` needs both required variables. Dummy values are fine — the
 # assertion is about shape, not about which tag/hostname is live.
 export REEMCO_IMAGE_TAG="${REEMCO_IMAGE_TAG:-0123456789abcdef0123456789abcdef01234567}"
+# REEA-1262 — the second (standby) app slot needs its own tag placeholder too.
+export REEMCO_IMAGE_TAG_GREEN="${REEMCO_IMAGE_TAG_GREEN:-89abcdef0123456789abcdef0123456789abcdef}"
 export REEMCO_SITE_ADDRESS="${REEMCO_SITE_ADDRESS:-example.com}"
 
 if [ ! -f "$COMPOSE" ]; then
@@ -118,10 +120,13 @@ done
 proxy_nets=$(jq -r '[.services.proxy.networks // {} | keys[]] | sort | join(",")' <<<"$CFG")
 redis_nets=$(jq -r '[.services.redis.networks // {} | keys[]] | sort | join(",")' <<<"$CFG")
 app_nets=$(jq -r '[.services.app.networks // {} | keys[]] | sort | join(",")' <<<"$CFG")
+# REEA-1262 — the standby slot must carry the same network segmentation.
+app_green_nets=$(jq -r '[.services.app_green.networks // {} | keys[]] | sort | join(",")' <<<"$CFG")
 
 [ "$proxy_nets" = "edge" ] || fail "proxy networks should be exactly 'edge', got '$proxy_nets'"
 [ "$redis_nets" = "data" ] || fail "redis networks should be exactly 'data', got '$redis_nets'"
 [ "$app_nets" = "data,edge" ] || fail "app networks should be exactly 'data,edge', got '$app_nets'"
+[ "$app_green_nets" = "data,edge" ] || fail "app_green networks should be exactly 'data,edge', got '$app_green_nets'"
 
 shared=$(printf '%s\n%s\n' "$proxy_nets" "$redis_nets" | tr ',' '\n' | sort | uniq -d | paste -sd, -)
 [ -z "$shared" ] || fail "proxy and redis share a network: $shared"

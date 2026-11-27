@@ -103,6 +103,21 @@ done
 [ "$HEALTH_OK" = "1" ] || fail "/api/health never returned 200 (last: $CODE)"
 echo "health OK: 200"
 
+# 3b. REEA-1262 (AC-5) — the artifact identity must agree across both stamps.
+# /__commit.txt is the shipped static file; /api/health.build resolves the same
+# file, so a disagreement means the proxy is answering from a different build
+# than the one the stamp advertises (e.g. a half-applied slot switch). Compare
+# the health build to the deployed tag; skip only when no --tag was given.
+if [ -n "$TAG" ]; then
+  BUILD=$(jq -r '.build // empty' /tmp/reemco-health.json 2>/dev/null || true)
+  [ -n "$BUILD" ] || fail "/api/health returned no build field (REEA-1262 AC-5)"
+  case "$TAG" in
+    "$BUILD"*) : ;;
+    *) fail "/api/health build '$BUILD' does not match deployed tag '$TAG' (REEA-1262 AC-5)" ;;
+  esac
+  echo "health build agrees with the deployed tag: $BUILD"
+fi
+
 # 4. Container hardening (REEA-1061). The compose file is only a declaration;
 # this proves the RUNNING containers actually carry it. It needs the docker CLI
 # and daemon, so it is skipped when verify.sh is run from outside the host (the

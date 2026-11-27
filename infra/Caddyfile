@@ -36,8 +36,12 @@
 	header /results* Vary "Accept-Language, rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch, Accept-Encoding"
 	header /search* Vary "Accept-Language, rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch, Accept-Encoding"
 
-	# The deploy verification gate (infra/scripts/verify.sh + CI) expects the
-	# app to answer on these paths through the proxy, unchanged from Vercel.
+	# REEA-1262 — the upstream is the ACTIVE app slot, injected from
+	# /etc/reemco/image-tag.env. deploy.sh/rollback.sh switch it with
+	# `docker exec -e REEMCO_APP_UPSTREAM=<slot>:3000 … caddy reload`; the CLI
+	# adapts this file with the exec process environment, Caddy validates the
+	# new config and keeps the running one on error. The `:app:3000` default
+	# keeps a cold start / un-migrated host working.
 	#
 	# REEA-1085 (F7b) — drop the proxy fingerprint. reverse_proxy adds
 	# `Via: 1.1 Caddy` to every forwarded response AFTER the header/header_down
@@ -49,7 +53,19 @@
 	# verify.sh step 2 fails the deploy if Via leaks again, and smoke steps 1-8
 	# (incl. /results and /search, streaming/RSC) gate that handle_response did
 	# not change proxied behaviour.
-	reverse_proxy app:3000 {
+	reverse_proxy {$REEMCO_APP_UPSTREAM:app:3000} {
+		# REEA-1262 — a 5xx FROM THE APP must not reach a shopper as an empty
+		# body either (AC-4). Match on the upstream status and replace the body
+		# with a readable page plus Retry-After; keep the upstream status code
+		# so monitoring still sees 500/502/503/504. 4xx and 2xx are untouched
+		# (handle_response only runs for the matched statuses).
+		@app5xx status 500 502 503 504
+		handle_response @app5xx {
+			header -Server
+			header Retry-After "5"
+			header Content-Type "text/html; charset=utf-8"
+			respond "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Reemco — temporarily unavailable</title></head><body style=\"font-family:system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem\"><h1>We are checking prices again</h1><p>Reemco is briefly unavailable. Please try again in a few seconds.</p><p><a href=\"/\">Reload the home page</a></p></body></html>" {rp.status_code}
+		}
 		handle_response {
 			header -Via
 			copy_response
@@ -57,6 +73,24 @@
 		health_uri /__commit.txt
 		health_interval 30s
 		health_timeout 5s
+	}
+
+	# REEA-1262 — Caddy's OWN errors (no healthy upstream: connection refused /
+	# dial timeout while a slot is being swapped or during a cold start) are not
+	# upstream responses, so the handle_response above cannot see them. AC-4:
+	# answer a readable page with Retry-After instead of Caddy's empty 503.
+	handle_errors {
+		@caddy5xx expression {err.status_code} >= 500
+		handle @caddy5xx {
+			header -Server
+			header Retry-After "5"
+			header Content-Type "text/html; charset=utf-8"
+			respond "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Reemco — temporarily unavailable</title></head><body style=\"font-family:system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem\"><h1>We are checking prices again</h1><p>Reemco is briefly unavailable. Please try again in a few seconds.</p><p><a href=\"/\">Reload the home page</a></p></body></html>" {err.status_code}
+		}
+		handle {
+			header -Server
+			respond "{err.status_code} {err.status_text}"
+		}
 	}
 
 	log {

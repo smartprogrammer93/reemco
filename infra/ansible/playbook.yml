@@ -235,6 +235,8 @@
         - { src: "scripts/uptime-probe.sh", dest: "/opt/reemco/scripts/uptime-probe.sh", mode: "0755" }
         # REEA-1252 — daily link-rot guardrail (idempotent UTC-day runner).
         - { src: "scripts/link-smoke.sh", dest: "/opt/reemco/scripts/link-smoke.sh", mode: "0755" }
+        # REEA-1262 — slot-aware scheduled health probe (blue/green).
+        - { src: "scripts/health-probe.sh", dest: "/opt/reemco/scripts/health-probe.sh", mode: "0755" }
       notify: reconcile stack
 
     # Secrets are injected by the operator (or a secrets manager) into
@@ -251,7 +253,7 @@
         - { src: "app.env.example", dest: "/etc/reemco/app.env", mode: "0640" }
         - { src: "release.env.example", dest: "/etc/reemco/release.env", mode: "0640" }
 
-    - name: Image tag file must exist before the first deploy
+    - name: Image tag / slot state file must exist before the first deploy
       ansible.builtin.copy:
         dest: /etc/reemco/image-tag.env
         owner: root
@@ -259,8 +261,13 @@
         mode: "0640"
         force: false
         content: |
-          # Written by deploy.sh. Do not hand-edit.
+          # Written by deploy.sh/rollback.sh. Do not hand-edit.
+          # REEA-1262 — blue/green slot state: the tag each slot runs, which
+          # slot is active, and the upstream Caddy points at.
           REEMCO_IMAGE_TAG=0000000000000000000000000000000000000000
+          REEMCO_IMAGE_TAG_GREEN=0000000000000000000000000000000000000000
+          REEMCO_ACTIVE_SLOT=app
+          REEMCO_APP_UPSTREAM=app:3000
 
     - name: Health-check + backup timers and the DOCKER-USER firewall unit
       ansible.builtin.copy:
@@ -374,10 +381,14 @@
         daemon_reload: true
 
     # Only fires when compose/Caddy changed, and only if a tag is already
-    # deployed — it re-reads the existing tag, never a new one.
+    # deployed — it re-reads the existing tag/slot, never a new one.
+    # REEA-1262 — deploy.sh --reconcile migrates a pre-blue/green state file,
+    # starts redis/proxy plus the ACTIVE slot only (not both), and points Caddy
+    # at that slot with a validated reload. A raw `compose up -d` would start
+    # both slots and leave the upstream to the file's default.
     - name: reconcile stack
       ansible.builtin.command:
-        cmd: docker compose -f /opt/reemco/compose.prod.yml --env-file /etc/reemco/release.env --env-file /etc/reemco/image-tag.env up -d --remove-orphans
+        cmd: /opt/reemco/scripts/deploy.sh --reconcile
         chdir: /opt/reemco
 
 # REEA-1062 — regression test. This play runs AFTER the provisioning play, so
