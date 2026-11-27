@@ -1,0 +1,64 @@
+name: Lane canary — REEA-1221 AC-2 (daily)
+
+# REEA-1221 AC-2 asks for "a failure share <20% across 3 consecutive days of
+# canary runs". That is a TIME-based acceptance criterion, and until now the only
+# way to produce its evidence was for the owning agent to remember to run the
+# panel by hand — which means a quiet weekend can leave the AC unproven even
+# though the lanes are healthy.
+#
+# This workflow is the durable half: once a day it runs the ticket's own
+# instrument (scripts/reea1221-canary.mjs) against the served head and prints the
+# per-lane failure-share table, the AC-2 gate verdicts, the AC-3 cluster against
+# its W48 baselines and the AC-6 depth ratio. The run log is the day's record, and
+# because the script refuses to measure an unknown head (it reads /__commit.txt
+# first), a run can never attribute a number to the wrong build.
+#
+# Deliberately read-only: it measures the live site, changes nothing, and its only
+# output is the log. It is NOT a gate — a lane above 20% is reported, not retired
+# (the ticket's keep-at-it rule), so a red-looking day never blocks a deploy.
+#
+# Budget: one run a day, ~2-3 minutes of GETs against the box. The cadence is
+# deliberate — four back-to-back runs inside one hour read the cluster at
+# 0/58/87/0% because the retailers throttle our IP in response, so more runs
+# would measure our own probing rather than the lanes.
+#
+# Rollback: delete this file. Nothing else depends on it.
+
+on:
+  schedule:
+    - cron: "17 4 * * *" # daily, 04:17Z — after the deploy window, before the working day
+  workflow_dispatch: # run a deliberate day-N read on demand
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lane-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Measure the AC-2 panel on the served head
+        env:
+          BASE_URL: ${{ vars.PROD_BASE_URL || 'https://ns539626.ip-144-217-72.net' }}
+        run: |
+          set -u -o pipefail
+          echo "Measuring $BASE_URL"
+          node scripts/reea1221-canary.mjs 2>&1 | tee canary.txt
+          # The script exits non-zero only when it cannot read the served stamp —
+          # that is a real failure (we would be measuring an unknown build), so it
+          # fails the job. Lane numbers never do.
+          echo
+          echo "STAMP: $(grep -m1 'CANARY: served=' canary.txt || echo 'not recorded')"
