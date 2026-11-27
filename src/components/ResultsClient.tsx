@@ -368,6 +368,38 @@ function AliasSubstitutionLine({ query }: { query: string }) {
   );
 }
 
+/**
+ * REEA-1270 (Bet 3) AC R-2 — the near-miss correction line. When the live
+ * dispatch corrected a misspelled Latin brand/model token, the page names the
+ * spelling it actually searched ("Showing results for “iphone 17 pro”" / the
+ * AR equivalent). The line is rendered on the shelf, the empty state and the
+ * provisional stream alike, so a corrected query is never a silent
+ * substitution — and the probe reads `data-near-miss-*` off it. Copy follows
+ * the chrome locale: this is a statement about the shopper's Latin query, not
+ * an Arabic-query disclosure like the Bet 8 alias line.
+ */
+function NearMissCorrectionLine({
+  correction,
+  locale,
+}: {
+  correction?: { from: string; to: string };
+  locale?: Locale;
+}) {
+  if (!correction || correction.to === correction.from) return null;
+  const t = getStrings(locale ?? clientLocale());
+  return (
+    <p
+      data-near-miss-correction="true"
+      data-near-miss-from={correction.from}
+      data-near-miss-to={correction.to}
+      className="mt-2"
+      style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}
+    >
+      {fill(t.nearMissCorrection, { to: correction.to })}
+    </p>
+  );
+}
+
 /** REEA-1096 D11 — a collection FAILURE is "no retailer answered" (every note
  *  errored, or there are no notes at all). One errored lane among answering
  *  ones is a partial response, not an outage: that empty state still says
@@ -841,6 +873,10 @@ export default function ResultsClient(props: {
   /** REEA-1255 — server-resolved site origin for the WhatsApp share URL
    *  (lib/site-origin.ts). Passed down, never read from the client env. */
   shareOrigin?: string;
+  /** REEA-1270 AC R-2 — the near-miss correction the server dispatch applied
+   *  (staged snapshots carry it on the final flush; the blocking/static
+   *  fallback reads it here). Absent = the query was dispatched as typed. */
+  correction?: LiveSearchResult["correction"];
 }) {
   return (
     <Suspense fallback={<LoadingFallback locale={props.locale} />}>
@@ -1922,6 +1958,10 @@ function StagedResults(props: {
               zero view too, so a still-converging Arabic query never looks
               like it silently swapped the shopper's language. */}
           <AliasSubstitutionLine query={query} />
+          {/* REEA-1270 AC R-2 — the near-miss correction survives this view
+              too: a corrected query is named on the provisional zero page as
+              well, never silently substituted. */}
+          <NearMissCorrectionLine correction={finalSnap.correction} locale={locale} />
           {/* REEA-793 — pending row ahead of the stamp boundary in this view too. */}
           <Suspense fallback={null}>
             <StagePendingRow stages={stages} locale={locale} />
@@ -1977,6 +2017,9 @@ function StagedResults(props: {
             line, so the shopper sees which Latin spelling answered their
             Arabic query before reading the true offer count. */}
         <AliasSubstitutionLine query={query} />
+        {/* REEA-1270 AC R-2 — the corrected Latin spelling this run actually
+            dispatched, named above the count line. */}
+        <NearMissCorrectionLine correction={finalSnap.correction} locale={locale} />
         {/* REEA-1201 AC 7b-1/7b-3 — the honest in-scope count and, when every
             card is single-retailer, the thin-shelf sentence. Both sit above
             the shelf and read the payload's own scope decision.
@@ -2209,6 +2252,8 @@ function ResultsInner(props: {
   queryId?: string;
   unreachableLanes?: readonly string[];
   shareOrigin?: string;
+  /** REEA-1270 AC R-2 — the near-miss correction the server dispatch applied. */
+  correction?: LiveSearchResult["correction"];
 }) {
   const searchParams = useSearchParams();
   // REEA-279: one resolution per view — prop first (server-resolved), then
@@ -2419,6 +2464,9 @@ function ResultsInner(props: {
       {/* REEA-1218 AC-3 — the same Arabic substitution disclosure on the
           static-host / blocking fallback path. */}
       <AliasSubstitutionLine query={query} />
+      {/* REEA-1270 AC R-2 — the near-miss correction disclosure on the
+          fallback path too. */}
+      <NearMissCorrectionLine correction={props.correction} locale={locale} />
       {/* REEA-1201 AC 7b-1/7b-3 — honest count and thin-shelf sentence on the
           fallback path too, from the same scope-aware partition.
           REEA-1261 AC-2 — the exact-model sentence wins on a brand+model

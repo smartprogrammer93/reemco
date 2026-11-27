@@ -231,6 +231,11 @@ const en = {
   // silent substitution. `{alias}` is the dispatched spelling, `{query}` the
   // shopper's original Arabic text.
   aliasSubstitution: "We searched for {alias} instead of “{query}”.",
+  // REEA-1270 (Bet 3) AC R-2 — the near-miss correction line. When the typed
+  // Latin brand/model token was corrected before dispatch, the shelf names the
+  // spelling it actually searched: never a silent substitution. `{to}` is the
+  // corrected dispatch spelling.
+  nearMissCorrection: "Showing results for “{to}”",
   // REEA-1114 AC1/AC2 — the filter-aware empty state. A zero visible set
   // that an ACTIVE filter hid is not a no-match: name the filter, the count
   // and the one-tap reveal instead of blaming the spelling. `{filter}` is the
@@ -630,6 +635,10 @@ const ar: typeof en = {
   // REEA-1218 AC-3 — the explicit Arabic substitution line, e.g.
   // «بحثنا عن washing machine بدلًا من غسالة».
   aliasSubstitution: "بحثنا عن {alias} بدلًا من «{query}».",
+  // REEA-1270 (Bet 3) AC R-2 — the AR side of the near-miss correction line:
+  // the spelling the shelf actually searched is named, never substituted
+  // silently. `{to}` is the corrected dispatch spelling.
+  nearMissCorrection: "عرض النتائج لـ «{to}»",
   // REEA-1114 AC1/AC2 — AR side of the filter-aware empty state. The title
   // follows the AC template "N نتيجة مخفية بسبب <filter>"; the unit is the
   // shipped plural pair so 2+ reads naturally (نتائج).
