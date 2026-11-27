@@ -1,0 +1,126 @@
+name: Link-smoke guardrail monitor
+
+# REEA-1252 — the dead-link smoke's alert path. The weekly `/api/metrics/weekly`
+# `link_smoke` block used to be a number nobody read: a week could collapse from
+# 320 checked links to 16 (or 0 runs) and no job failed. This monitor grades
+# every week in the window against the stated rule and opens a
+# `link-smoke-alert` issue when the guardrail is decorative.
+#
+# RULE (recorded in scripts/link-smoke-monitor.mjs and scripts/dead-link-smoke.mjs):
+#   320 checked/week floor (the pre-v5 design ceiling: 20 retailers x 8 links x
+#   2 queries), >= 7 runs/week (>= 1/day), dead_rate <= 10%,
+#   challenge_rate <= 25%. The in-progress week is graded against the prorated
+#   floor (ceil(320/7) = 46/day) so a collapse mid-week is not silent.
+#
+# This is the same deduped-issue alert path as uptime.yml (REEA-1194): it opens
+# a GitHub issue, which is the repo's ticket stream for operational alerts.
+on:
+  schedule:
+    - cron: "0 10 * * *"
+  workflow_dispatch:
+    inputs:
+      simulate_failure:
+        description: "Force a failure to prove the alert path"
+        type: boolean
+        required: false
+        default: false
+      base_url:
+        description: "Override the base URL (empty = vars.PROD_BASE_URL / production)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: link-smoke-monitor
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Grade the weekly link-smoke guardrail
+        id: grade
+        run: |
+          set -uo pipefail
+          # Production is the self-hosted box only (Vercel is retired).
+          BASE="${{ inputs.base_url || vars.PROD_BASE_URL || 'https://ns539626.ip-144-217-72.net' }}"
+          BASE="${BASE%/}"
+          TS=$(date -u +%FT%TZ)
+          ARGS=(--base "$BASE")
+          if [ "${{ inputs.simulate_failure }}" = "true" ]; then
+            ARGS+=(--simulate-failure)
+          fi
+          code=0
+          # GitHub runs `run:` under bash -e; capture both invocations explicitly
+          # (the REEA-1224 lesson: a pipe/`||` swallows the real exit status).
+          node scripts/link-smoke-monitor.mjs "${ARGS[@]}" 2>&1 | tee /tmp/link-smoke-monitor.log || code=$?
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "ts=$TS" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Link-smoke guardrail $TS against $BASE"
+            echo '```'
+            cat /tmp/link-smoke-monitor.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
+
+      - name: Open or append the deduped link-smoke alert on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BASE: ${{ steps.grade.outputs.base }}
+          TS: ${{ steps.grade.outputs.ts }}
+        run: |
+          set -uo pipefail
+          gh label create link-smoke-alert --color B60205 \
+            --description "Dead-link smoke guardrail below floor or rate threshold" --force || true
+          REPORT="$(tail -n 40 /tmp/link-smoke-monitor.log 2>/dev/null || true)"
+          BODY="Link-smoke guardrail failed at ${TS:-$(date -u +%FT%TZ)} against \`${BASE}\`.
+
+          \`\`\`
+          ${REPORT}
+          \`\`\`
+
+          Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          Thresholds: 320 checked/week, >=7 runs/week (>=1/day), dead_rate <=10%,
+          challenge_rate <=25%. The in-progress week is graded against the
+          prorated floor (46/day).
+
+          What to do: read \`GET /api/metrics/weekly\` and the
+          \`reemco-link-smoke\` unit on the box (\`journalctl -u
+          reemco-link-smoke.service\`). If \`checked\` is low, the daily smoke
+          did not run or the rendered feed returned too few offers; run
+          \`sudo systemctl start reemco-link-smoke.service\` and inspect the
+          script's SAMPLE lines. If \`dead_rate\` is high, check the per-retailer
+          split and the DEAD URLs in that run's journal."
+          OPEN=$(gh issue list --label link-smoke-alert --state open --json number -q '.[0].number' || true)
+          if [ -n "$OPEN" ]; then
+            echo "open link-smoke-alert issue #$OPEN exists — appending"
+            gh issue comment "$OPEN" --body "$BODY"
+          else
+            gh issue create --title "LINK SMOKE ALERT: dead-link guardrail below floor/threshold" \
+              --label link-smoke-alert --body "$BODY"
+          fi
+
+      - name: Close the alert issue when the guardrail is green again
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          OPEN=$(gh issue list --label link-smoke-alert --state open --json number -q '.[0].number' || true)
+          if [ -n "$OPEN" ]; then
+            gh issue comment "$OPEN" --body "Link-smoke guardrail is green again as of $(date -u +%FT%TZ). Closing."
+            gh issue close "$OPEN"
+          else
+            echo "no open link-smoke-alert issue"
+          fi

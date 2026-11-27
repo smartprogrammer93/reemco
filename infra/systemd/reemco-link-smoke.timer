@@ -1,0 +1,16 @@
+[Unit]
+# REEA-1252 — daily link-rot guardrail. 09:10 UTC sits after the 08:17 health
+# probe, so the app's after() fallback has already had its slot; this timer is
+# the explicit schedule the ticket asks for and it is the one that survives an
+# app-process restart.
+Description=Reemco daily dead-link smoke schedule (09:10 UTC)
+
+[Timer]
+OnCalendar=*-*-* 09:10:00 UTC
+# Do not stampede the origin at boot; catch up a missed slot after downtime.
+RandomizedDelaySec=120
+Persistent=true
+Unit=reemco-link-smoke.service
+
+[Install]
+WantedBy=timers.target

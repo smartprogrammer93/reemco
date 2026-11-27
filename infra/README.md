@@ -458,6 +458,38 @@ alert) pointed at `/api/health` and `/__commit.txt` — no secret on the box and
 no new server, so it stays inside the "no second server" constraint. Needs one
 human signup; flagged to the CEO in [REEA-1194](/REEA/issues/REEA-1194).
 
+### Link-rot guardrail (REEA-1252)
+
+The dead-link smoke is a guardrail, not a spot check. The pre-v5 sample was 320
+links/week; it had collapsed to 16 checked / 1 run in `2026-W48` because the
+smoke sampled two fixed queries (`sony,iphone`) and one of them now converges to
+zero products. The restored rule is recorded here, in the script headers
+(`scripts/dead-link-smoke.mjs`, `scripts/link-smoke-monitor.mjs`,
+`infra/scripts/link-smoke.sh`) and in the systemd unit comments:
+
+| | Value |
+| --- | --- |
+| Schedule | `reemco-link-smoke.timer` daily **09:10 UTC** → `reemco-link-smoke.service` → `/opt/reemco/scripts/link-smoke.sh` (installed by the playbook). The app's `/api/health` `after()` runner remains the once-per-UTC-day fallback. |
+| Selection | 6 broad queries/day from a 12-query UTC-day-rotated pool; offer URLs are read **live** from `/api/results-followup` (the same converged fan-out the results page paints), so the sample is the rendered offer-link population, never a static list. Max 8 links/retailer, max 96 links/run, round-robin across retailers. |
+| Floor | **320 checked links/week** — the pre-v5 design ceiling (20 retailers × 8 links × 2 queries). 7 days × 96 = 672 max; the monitor's daily floor is `ceil(320/7)` = 46. |
+| Alert thresholds | complete week: `checked < 320`, `runs < 7`, `dead_rate > 10%`, `challenge_rate > 25%`. The in-progress week is graded against the prorated floor (46 × elapsed days) so a mid-week collapse is not silent. |
+| Alert path | `.github/workflows/link-smoke-monitor.yml` (daily 10:00 UTC) runs `scripts/link-smoke-monitor.mjs` against `PROD_BASE_URL` and opens/appends a GitHub issue labeled `link-smoke-alert`; it closes the issue when the guardrail is green again. |
+| Idempotency | `link_smoke:last_run_day` (Valkey) is stamped only after a successful ingest; the host script and the app fallback share it, so one day is one run. A failed run is not stamped, so the fallback retries. |
+
+Run it by hand / prove the alert path:
+
+```sh
+ssh reemco-prod 'sudo systemctl start reemco-link-smoke.service'   # one daily run now
+ssh reemco-prod 'journalctl -u reemco-link-smoke.service -n 80 --no-pager'
+node scripts/link-smoke-monitor.mjs --base https://ns539626.ip-144-217-72.net
+gh workflow run link-smoke-monitor.yml -f simulate_failure=true    # must open link-smoke-alert
+```
+
+Rollback: `sudo systemctl disable --now reemco-link-smoke.timer` removes the
+extra schedule; the app `after()` runner (REEA-1078) still records the smoke
+once/day, and the weekly metrics route is untouched. The smoke change itself
+rolls back with the previous image tag via `rollback.sh --tag`.
+
 ### 7-day retrospective (best available evidence, 2026-11-19 → 26)
 
 The box is **3.4 days old as production** (cutover 2026-11-22 18:21Z), so no

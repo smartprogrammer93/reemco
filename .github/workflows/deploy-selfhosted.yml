@@ -158,7 +158,7 @@ jobs:
           scp -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -i ~/.ssh/id_ed25519 \
             infra/scripts/deploy.sh infra/scripts/rollback.sh infra/scripts/verify.sh infra/scripts/backup.sh \
             infra/scripts/assert-containers.sh infra/scripts/docker-user-firewall.sh \
-            infra/scripts/uptime-probe.sh \
+            infra/scripts/uptime-probe.sh infra/scripts/link-smoke.sh \
             "$TARGET:/opt/reemco/scripts/"
           $SSH "$TARGET" 'chmod +x /opt/reemco/scripts/*.sh'
 

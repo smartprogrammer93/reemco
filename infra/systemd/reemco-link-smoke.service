@@ -1,0 +1,15 @@
+[Unit]
+# REEA-1252 — the link-rot guardrail's schedule. A spot check is not a
+# guardrail: this runs the daily dead-link smoke against the rendered offer
+# population and records the aggregate to /api/metrics/weekly.
+Description=Reemco daily dead-link smoke (offer-link rot guardrail)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=deploy
+# The script is idempotent (UTC-day guard) and never prints secrets.
+ExecStart=/opt/reemco/scripts/link-smoke.sh
+# 4 feed samples (up to 22 s each) + up to 96 paced link checks.
+TimeoutStartSec=900

@@ -9,10 +9,41 @@
  * identity, per-host pacing, per-URL timeout), and POSTs the aggregate
  * outcome to /api/metrics/link-smoke so it lands in the weekly PM snapshot.
  *
+ * REEA-1252 — the guardrail must be able to fail. The pre-v5 weekly sample was
+ * 320 links; the two fixed queries ("sony,iphone") collapsed it to a token
+ * 16/week because they cover almost none of the rendered population and one of
+ * them (iphone) now converges to zero products. This script now states and
+ * enforces the rule:
+ *
+ *   SCHEDULE  reemco-link-smoke.timer (host systemd, infra/systemd/) runs this
+ *             daily at 09:10 UTC; the app's /api/health after() runner is the
+ *             once-per-UTC-day fallback. Both paths use this same script, so a
+ *             missed timer still gets a run that day.
+ *   SELECTION 6 broad queries/day drawn from a 12-query rotating pool
+ *             (UTC-day rotation, LINK_SMOKE_QUERY_POOL) and read LIVE from
+ *             /api/results-followup — the same converged fan-out the results
+ *             page paints — so the sample is the rendered offer-link
+ *             population, never a static URL list. Max 8 links per retailer
+ *             and max 96 links per run, spread round-robin across retailers so
+ *             one merchant cannot crowd out the rest.
+ *   FLOOR     320 checked links/week (the pre-v5 design ceiling: 20 retailers
+ *             x 8 links x 2 queries). 7 days x 96 max = 672; the daily floor
+ *             the monitor enforces is ceil(320/7) = 46 checked/run.
+ *   ALERT     scripts/link-smoke-monitor.mjs +
+ *             .github/workflows/link-smoke-monitor.yml fail when a complete
+ *             week is under the floor, has < 7 runs, dead_rate > 10% or
+ *             challenge_rate > 25%, and open a `link-smoke-alert` issue.
+ *             The in-progress week is graded against the prorated floor so the
+ *             monitor cannot go quiet mid-week.
+ *
  * Usage: node scripts/dead-link-smoke.mjs
  *   SMOKE_BASE_URL   base to measure (default https://ns539626.ip-144-217-72.net)
- *   LINK_SMOKE_QUERIES  comma-separated fixture queries (default "sony,iphone")
- *   LINK_SMOKE_PER_RETAILER  max URLs checked per retailer (default 8)
+ *   LINK_SMOKE_QUERY_POOL  rotating broad-query pool (default: 12 categories)
+ *   LINK_SMOKE_QUERIES_PER_RUN  queries sampled per run (default 6, max 8)
+ *   LINK_SMOKE_QUERIES  explicit comma-separated queries (overrides the pool)
+ *   LINK_SMOKE_PER_RETAILER  max URLs checked per retailer (default 8, max 20)
+ *   LINK_SMOKE_MAX_CHECKS    max URLs checked per run (default 96, max 500)
+ *   LINK_SMOKE_SAMPLING_TIMEOUT_MS  follow-up feed wait per attempt (default 22000)
  *   LINK_SMOKE_PAUSE_MS      min pause between same-host checks (default 300)
  *   LINK_SMOKE_CHALLENGE_BACKOFF_MS  backoff before the challenge retry (default 5000)
  *   LINK_SMOKE_TRANSIENT_BACKOFF_MS  backoff before the transient retry (default 2000)
@@ -38,16 +69,83 @@
 import { pathToFileURL } from "node:url";
 
 const BASE = (process.env.SMOKE_BASE_URL || "https://ns539626.ip-144-217-72.net").replace(/\/$/, "");
-const QUERIES = (process.env.LINK_SMOKE_QUERIES || "sony,iphone")
-  .split(",")
-  .map((q) => q.trim())
-  .filter(Boolean)
-  .slice(0, 4);
-const PER_RETAILER = Math.max(1, Math.min(20, Number(process.env.LINK_SMOKE_PER_RETAILER) || 8));
+
+/** Comma-list env parsing with a hard count cap (never trust the environment). */
+function parseList(raw, max) {
+  return String(raw ?? "")
+    .split(",")
+    .map((q) => q.trim())
+    .filter(Boolean)
+    .slice(0, max);
+}
+
+/** Integer env parsing with a clamp; an absent/invalid value falls back. */
+function intEnv(name, fallback, min, max) {
+  const n = Number(process.env[name]);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+/**
+ * REEA-1252 — broad-query pool covering the categories the results page
+ * renders. The URLs themselves always come LIVE from the feed; the pool only
+ * selects which slice of that rendered population is sampled each day, and the
+ * UTC-day rotation keeps the weekly sample from re-checking one fixed list.
+ */
+const QUERY_POOL = parseList(
+  process.env.LINK_SMOKE_QUERY_POOL ||
+    "iphone 17 pro,nintendo switch 2,headphones,panadol,perfume,laptop,tv,air fryer,washing machine,coffee machine,backpack,playstation 5",
+  16,
+);
+const QUERIES_PER_RUN = intEnv("LINK_SMOKE_QUERIES_PER_RUN", 6, 1, 8);
+/** Explicit override (tests / one-off runs): exactly this list. */
+const QUERIES_OVERRIDE = process.env.LINK_SMOKE_QUERIES
+  ? parseList(process.env.LINK_SMOKE_QUERIES, 8)
+  : null;
+const PER_RETAILER = intEnv("LINK_SMOKE_PER_RETAILER", 8, 1, 20);
+const MAX_CHECKS_PER_RUN = intEnv("LINK_SMOKE_MAX_CHECKS", 96, 1, 500);
+const SAMPLING_TIMEOUT_MS = intEnv("LINK_SMOKE_SAMPLING_TIMEOUT_MS", 22_000, 5_000, 45_000);
 const PAUSE_MS = Math.max(0, Number(process.env.LINK_SMOKE_PAUSE_MS) || 300);
 const CHALLENGE_BACKOFF_MS = Math.max(0, Number(process.env.LINK_SMOKE_CHALLENGE_BACKOFF_MS) || 5_000);
 const TRANSIENT_BACKOFF_MS = Math.max(0, Number(process.env.LINK_SMOKE_TRANSIENT_BACKOFF_MS) || 2_000);
 const FETCH_TIMEOUT_MS = 10_000;
+
+/**
+ * REEA-1252 — pick the day's queries. Deterministic rotation by UTC day over
+ * the pool so consecutive days cover different categories and a week covers
+ * the pool once. Exported for pins (no network, injected clock).
+ */
+export function selectQueries(now = Date.now(), opts = {}) {
+  if (opts.queries) return opts.queries.slice(0, 8);
+  const pool = (opts.pool ?? QUERY_POOL).filter(Boolean);
+  if (pool.length === 0) return [];
+  const count = Math.max(1, Math.min(opts.count ?? QUERIES_PER_RUN, 8, pool.length));
+  const day = Math.floor(now / 86_400_000);
+  const start = (day * count) % pool.length;
+  const out = [];
+  for (let i = 0; i < count; i++) out.push(pool[(start + i) % pool.length]);
+  return out;
+}
+
+/**
+ * REEA-1252 — turn the per-retailer buckets into the run's check plan.
+ * Round-robin across retailers (sorted for determinism) until the per-run cap
+ * is reached, so one merchant with many offers cannot crowd the others out.
+ * Pure; exported for pins.
+ */
+export function planSample(perRetailer, maxChecks) {
+  const queues = [...perRetailer.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([merchant, bucket]) => ({ merchant, urls: [...(bucket.queue ?? [])] }));
+  const planned = [];
+  let cursor = 0;
+  while (planned.length < maxChecks && queues.some((q) => q.urls.length > 0)) {
+    const q = queues[cursor % queues.length];
+    if (q.urls.length > 0) planned.push({ merchant: q.merchant, url: q.urls.shift() });
+    cursor += 1;
+  }
+  return planned;
+}
 
 // REEA-935 (R1) — the liveness check presents a PER-HOST identity, resolved
 // from this table and documented here, versioned with the code. Policy
@@ -288,13 +386,17 @@ export async function checkQueueWithPacing(items, deps = {}) {
 async function collectOffers(query, opts = {}) {
   const base = (opts.base ?? BASE).replace(/\/$/, "");
   const fetchImpl = opts.fetchImpl ?? fetch;
+  // REEA-1252 — the follow-up feed waits up to LIVE_SEARCH_BUDGET_MS (16 s) for
+  // a cold cross-worker run to converge; the old 10 s ceiling aborted it and
+  // starved the whole query. The sampling wait must sit ABOVE that budget.
+  const timeoutMs = opts.timeoutMs ?? SAMPLING_TIMEOUT_MS;
   const url = `${base}/api/results-followup?q=${encodeURIComponent(query)}`;
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0) await (opts.sleep ?? sleep)(1500);
     try {
       const res = await fetchImpl(url, {
         headers: { accept: "application/json" },
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
         redirect: "follow",
       });
       if (!res.ok) {
@@ -323,9 +425,14 @@ async function collectOffers(query, opts = {}) {
  * REEA-1078 — the callable smoke runner. Same collection, pacing, identity and
  * outcome classification as the CLI, but it RETURNS the aggregate instead of
  * posting it, so the app can run the daily smoke in-process (the existing
- * health timer is the schedule — no new host unit needed) and record the
- * counters directly. `base` is the origin whose own converged feed is sampled;
- * `fetchImpl`/`sleep`/pacing are injectable so the pins stay network-free.
+ * health timer is the fallback schedule) and record the counters directly.
+ * `base` is the origin whose own converged feed is sampled; `fetchImpl`/`sleep`
+ * /pacing/clock are injectable so the pins stay network-free.
+ *
+ * REEA-1252 — the sample is no longer two fixed queries. It is 6 broad queries
+ * from a UTC-day-rotated pool, read live from the rendered results feed, capped
+ * at 8 per retailer and 96 per run and spread round-robin across retailers.
+ * See the script header for the stated rule and the 320/week floor.
  *
  * Returns { checked, dead, challenge, ok, byRetailer } with every checked URL
  * in exactly one of ok/dead/challenge (REEA-935 vocabulary). Never throws on
@@ -334,17 +441,31 @@ async function collectOffers(query, opts = {}) {
  */
 export async function runDeadLinkSmoke(opts = {}) {
   const base = (opts.base ?? BASE).replace(/\/$/, "");
-  const queries = opts.queries ?? QUERIES;
+  const now = opts.now ?? Date.now();
+  const queries =
+    opts.queries ?? QUERIES_OVERRIDE ?? selectQueries(now, { pool: opts.queryPool, count: opts.queriesPerRun });
   const perRetailerLimit = Math.max(1, Math.min(20, Number(opts.perRetailer ?? PER_RETAILER) || 8));
+  const maxChecks = Math.max(1, Math.min(500, Number(opts.maxChecks ?? MAX_CHECKS_PER_RUN) || 96));
+  const samplingTimeoutMs = Math.max(
+    5_000,
+    Math.min(45_000, Number(opts.samplingTimeoutMs ?? SAMPLING_TIMEOUT_MS) || 22_000),
+  );
   const fetchImpl = opts.fetchImpl ?? fetch;
   const sleepFn = opts.sleep ?? sleep;
   const pauseMs = Math.max(0, Number(opts.pauseMs ?? PAUSE_MS) || 0);
+
+  console.log(`sample queries (UTC-day rotation): ${queries.join(", ") || "(none)"}`);
 
   // ---- collect a bounded, deduped sample per retailer ----
   const perRetailer = new Map(); // merchant -> { queue: [...] }
   const seenUrls = new Set();
   for (const q of queries) {
-    const offers = await collectOffers(q, { base, fetchImpl, sleep: sleepFn });
+    const offers = await collectOffers(q, {
+      base,
+      fetchImpl,
+      sleep: sleepFn,
+      timeoutMs: samplingTimeoutMs,
+    });
     console.log(`query "${q}": ${offers.length} live offers in the converged snapshot`);
     for (const o of offers) {
       if (seenUrls.has(o.url)) continue;
@@ -355,42 +476,45 @@ export async function runDeadLinkSmoke(opts = {}) {
     }
   }
 
+  // ---- plan the run's sample (round-robin, hard per-run cap) ----
+  const planned = planSample(perRetailer, maxChecks);
+  const plannedRetailers = new Set(planned.map((p) => p.merchant)).size;
+  console.log(
+    `sample plan: ${planned.length} links across ${plannedRetailers} retailers (cap ${maxChecks}/run, ${perRetailerLimit}/retailer)`,
+  );
+
   // ---- check with per-host pacing; fold into ok/dead/challenge ----
   let checked = 0;
   let dead = 0;
   let challenge = 0;
-  for (const [merchant, bucket] of [...perRetailer.entries()].sort()) {
-    const results = await checkQueueWithPacing(bucket.queue.map((url) => ({ merchant, url })), {
-      check: (url) => checkUrl(fetchImpl, url, { sleep: sleepFn }),
-      pauseMs,
-      sleep: sleepFn,
-    });
-    const counts = { checked: 0, dead: 0, challenge: 0 };
-    for (const r of results) {
-      counts.checked += 1;
-      checked += 1;
-      if (r.outcome === "dead") {
-        counts.dead += 1;
-        dead += 1;
-        console.log(`DEAD ${r.url}`);
-      } else if (r.outcome === "challenge") {
-        counts.challenge += 1;
-        challenge += 1;
-        console.log(`CHALLENGE ${r.url}`);
-      }
+  const byRetailer = {};
+  const results = await checkQueueWithPacing(planned, {
+    check: (url) => checkUrl(fetchImpl, url, { sleep: sleepFn }),
+    pauseMs,
+    sleep: sleepFn,
+  });
+  for (const r of results) {
+    checked += 1;
+    const counts = byRetailer[r.merchant] ?? { checked: 0, dead: 0, challenge: 0 };
+    counts.checked += 1;
+    if (r.outcome === "dead") {
+      counts.dead += 1;
+      dead += 1;
+      console.log(`DEAD ${r.url}`);
+    } else if (r.outcome === "challenge") {
+      counts.challenge += 1;
+      challenge += 1;
+      console.log(`CHALLENGE ${r.url}`);
     }
-    perRetailer.set(merchant, counts);
+    byRetailer[r.merchant] = counts;
+  }
+  for (const [merchant, counts] of Object.entries(byRetailer).sort()) {
     console.log(
       `${merchant}: ${counts.checked} checked, ${counts.dead} dead, ${counts.challenge} challenge`,
     );
   }
   const ok = Math.max(0, checked - dead - challenge);
   console.log(`outcomes: ${ok} ok / ${dead} dead / ${challenge} challenge`);
-
-  const byRetailer = {};
-  for (const [merchant, c] of perRetailer) {
-    if (!c.queue) byRetailer[merchant] = { checked: c.checked, dead: c.dead, challenge: c.challenge };
-  }
   return { checked, dead, challenge, ok, byRetailer };
 }
 

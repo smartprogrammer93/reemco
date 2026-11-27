@@ -282,3 +282,32 @@ describe("REEA-935 checkQueueWithPacing (AC-2.4 — injected clock/timer)", () =
     expect(sleeps).toEqual([300]);
   });
 });
+
+describe("REEA-1252 sample selection (the sample is a population slice, not a fixed list)", () => {
+  it("rotates a multi-query window across UTC days", () => {
+    const pool = ["a", "b", "c", "d", "e", "f"];
+    const day1 = checker.selectQueries(Date.UTC(2026, 10, 23, 6), { pool, count: 2 });
+    const day2 = checker.selectQueries(Date.UTC(2026, 10, 24, 6), { pool, count: 2 });
+    expect(day1).toHaveLength(2);
+    expect(day2).toHaveLength(2);
+    expect(day1).not.toEqual(day2);
+    // Same day is deterministic (a re-run samples the same slice).
+    expect(checker.selectQueries(Date.UTC(2026, 10, 23, 22), { pool, count: 2 })).toEqual(day1);
+  });
+
+  it("honours an explicit query list (one-off runs/tests)", () => {
+    expect(checker.selectQueries(Date.now(), { queries: ["sony", "iphone"] })).toEqual(["sony", "iphone"]);
+  });
+
+  it("caps the run and round-robins retailers so one merchant cannot crowd out the rest", () => {
+    const perRetailer = new Map([
+      ["A", { queue: ["a1", "a2", "a3", "a4"] }],
+      ["B", { queue: ["b1", "b2"] }],
+    ]);
+    const planned = checker.planSample(perRetailer, 3);
+    expect(planned).toHaveLength(3);
+    expect(planned.map((p: { merchant: string }) => p.merchant)).toEqual(["A", "B", "A"]);
+    // The source buckets are not mutated.
+    expect(perRetailer.get("A").queue).toHaveLength(4);
+  });
+});

@@ -233,6 +233,8 @@
         - { src: "scripts/docker-user-firewall.sh", dest: "/opt/reemco/scripts/docker-user-firewall.sh", mode: "0755" }
         # REEA-1194 — on-box availability record for /api/health + /__commit.txt.
         - { src: "scripts/uptime-probe.sh", dest: "/opt/reemco/scripts/uptime-probe.sh", mode: "0755" }
+        # REEA-1252 — daily link-rot guardrail (idempotent UTC-day runner).
+        - { src: "scripts/link-smoke.sh", dest: "/opt/reemco/scripts/link-smoke.sh", mode: "0755" }
       notify: reconcile stack
 
     # Secrets are injected by the operator (or a secrets manager) into
@@ -274,6 +276,9 @@
         - reemco-uptime.service
         - reemco-uptime.timer
         - reemco-docker-user-firewall.service
+        # REEA-1252 — daily dead-link smoke (link-rot guardrail schedule).
+        - reemco-link-smoke.service
+        - reemco-link-smoke.timer
       notify: reload systemd
 
     - name: Enable timers and the DOCKER-USER firewall unit
@@ -287,6 +292,8 @@
         - reemco-backup.timer
         # REEA-1194 — the 10-minute availability record timer.
         - reemco-uptime.timer
+        # REEA-1252 — the daily link-rot guardrail.
+        - reemco-link-smoke.timer
         # REEA-1087 (F9) — applies the DOCKER-USER allow-list now and re-applies
         # it on every docker restart (PartOf=docker.service).
         - reemco-docker-user-firewall.service
