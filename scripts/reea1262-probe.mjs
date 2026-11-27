@@ -34,6 +34,12 @@ const durationSec = Number(arg("duration", "600"));
 const out = arg("out", "");
 const timeoutMs = Number(arg("timeout", "40000"));
 const intervalMs = Number(arg("interval", "1000"));
+// /api/health walks the whole funnel and holds collection admission slots for
+// 5-20 s. Probing it continuously saturates the app's admission cap and the
+// walk then answers 503 cards=0 — a self-induced non-200 that is not a deploy
+// failure. One walk every 30 s is the app's own health cadence (reemco-health
+// .timer) and stays well inside the cap.
+const healthIntervalMs = Number(arg("health-interval", "30000"));
 const stamp = new Date().toISOString();
 
 // The app gates /results and /product at 60 page requests/min per client IP
@@ -115,7 +121,7 @@ async function healthLoop() {
   while (!stopping && Date.now() < stopAt) {
     const started = Date.now();
     record(await attempt(url));
-    const gap = Math.max(0, intervalMs - (Date.now() - started));
+    const gap = Math.max(0, healthIntervalMs - (Date.now() - started));
     if (Date.now() + gap >= stopAt) break;
     await new Promise((r) => setTimeout(r, gap));
   }
