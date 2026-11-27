@@ -1248,6 +1248,7 @@ function CoverageLine({
   onRefresh,
   unreachableLanes,
   shelfEmpty,
+  exactModelCards,
   className,
 }: {
   notes: LiveSearchResult["notes"];
@@ -1264,9 +1265,21 @@ function CoverageLine({
    *  painted `products` set may still hold related-band rows that must not be
    *  named under "Prices from" or counted as "carry this". */
   shelfEmpty?: boolean;
+  /** REEA-1261 AC-2 — the exact-model cards this shelf renders, so the
+   *  "N carry this exact model" number can never exceed the cards that answer
+   *  the shopper's product. Absent = the pre-change lane-based count. */
+  exactModelCards?: number;
   className?: string;
 }) {
-  const parts = coverageParts(notes, locale, products, unreachableLanes, query, shelfEmpty);
+  const parts = coverageParts(
+    notes,
+    locale,
+    products,
+    unreachableLanes,
+    query,
+    shelfEmpty,
+    exactModelCards,
+  );
   if (parts.length === 0 && !pendingStatus) return null;
   // REEA-778 — the settled sentence rides the SAME lh-tier box as its
   // StampGhost reserve (one shared deterministic box per locale tier): the
@@ -1590,6 +1603,7 @@ function StageCoverage(props: {
       onRefresh={props.onRefresh}
       unreachableLanes={props.unreachableLanes}
       shelfEmpty={shelfRows.length === 0}
+      exactModelCards={exactModelCardsOf(shelfRows, props.query).length}
       className={props.className}
     />
   );
@@ -1792,7 +1806,7 @@ function StagedResults(props: {
           {query.length > 0 ? (
             <>
               {/* Partial-response banner above the designed panel. */}
-              <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} unreachableLanes={props.unreachableLanes} />
+              <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} unreachableLanes={props.unreachableLanes} exactModelCards={0} />
               <EmptyState
                 query={query}
                 unavailable={emptyCase?.kind === "c"}
@@ -1867,7 +1881,7 @@ function StagedResults(props: {
                 REEA-1078 AC9 / REEA-1114 AC2(c) — the existing unreachable
                 sentence must still render on a zero-row page: it is the one
                 statement that explains why an empty shelf is not a no-match. */}
-            <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} unreachableLanes={props.unreachableLanes} />
+            <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} unreachableLanes={props.unreachableLanes} exactModelCards={0} />
             {/* REEA-964 — the honest empty state rides the primary position;
                 the related band renders BELOW it, clearly not a result.
                 REEA-1114 — case (b) names the filter that hid the rows and
@@ -1902,7 +1916,7 @@ function StagedResults(props: {
           </>
         ) : (
           <>
-            <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} pendingStatus={finalSnap.kuwaitPendingStatus} onRefresh={onRefresh} unreachableLanes={props.unreachableLanes} className="rc-coverage-top" />
+            <CoverageLine notes={finalSnap.notes} products={products} query={query} locale={locale} pendingStatus={finalSnap.kuwaitPendingStatus} onRefresh={onRefresh} unreachableLanes={props.unreachableLanes} exactModelCards={exactModelCardsOf(products, query).length} className="rc-coverage-top" />
             <ResultsGrid
               products={products}
               query={query}

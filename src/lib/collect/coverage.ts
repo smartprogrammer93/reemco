@@ -267,6 +267,17 @@ function coverageAggregateText(
    * read as contributors because the zero page renders no primary row at all.
    */
   zeroShelf = false,
+  /**
+   * REEA-1261 AC-2 — the number of EXACT-MODEL cards the shelf renders. When
+   * the query names a brand+model identity, "N carry this exact model" must
+   * equal the cards that answer it (tolerance 0). The lane count below cannot
+   * speak for that: a Razer V3 row that answered the phrase is a lane that
+   * answered, not a card that carries the exact model. Measured live on
+   * `ffaf8fd`: the line said "4 carry this exact model" above a shelf whose
+   * only exact-model card was the Keychron (Amazon.eg) — and zero Keychron
+   * cards at all. Absent = the pre-change lane-based count.
+   */
+  exactModelCards?: number,
 ): string {
   if (notes.length === 0) return "";
   const blockedSet = new Set(blocked);
@@ -302,6 +313,13 @@ function coverageAggregateText(
   // this exact model").
   const q = query ?? "";
   const exact = categoryIntent(q) === null && modelIdentityTokens(q).length > 0;
+  // REEA-1261 AC-2 — the exact-model sentence counts the exact-model CARDS
+  // the shelf renders, not the lanes that answered the phrase. A Razer V3
+  // row answers "keychron v3 max" as a lane but carries a different brand.
+  const carriesCount =
+    exact && typeof exactModelCards === "number"
+      ? Math.max(0, exactModelCards)
+      : answered;
   if (ar) {
     // Arabic count agreement: 1/2 take their own forms, 3–10 take the plural
     // (متاجر), 11–99 the singular accusative (متجرًا). Same rule on the
@@ -316,15 +334,15 @@ function coverageAggregateText(
             : `تم فحص ${checked} متجرًا`;
     const target = exact ? "هذا الطراز بالتحديد" : "هذا";
     const carries =
-      answered === 0
+      carriesCount === 0
         ? `لا أحد يوفّر ${target}`
-        : answered === 1
+        : carriesCount === 1
           ? `متجر واحد يوفّر ${target}`
-          : answered === 2
+          : carriesCount === 2
             ? `متجران يوفّران ${target}`
-            : answered <= 10
-              ? `${answered} متاجر توفّر ${target}`
-              : `${answered} متجر يوفّر ${target}`;
+            : carriesCount <= 10
+              ? `${carriesCount} متاجر توفّر ${target}`
+              : `${carriesCount} متجر يوفّر ${target}`;
     const parts = [head, carries];
     if (similar > 0) {
       // REEA-1247 AC1 — what those non-rendering lanes actually returned.
@@ -345,11 +363,11 @@ function coverageAggregateText(
   const head = checked === 1 ? "1 store checked" : `${checked} stores checked`;
   const carryBase = exact ? "this exact model" : "this";
   const carries =
-    answered === 0
+    carriesCount === 0
       ? `none carry ${carryBase}`
-      : answered === 1
+      : carriesCount === 1
         ? `1 carries ${carryBase}`
-        : `${answered} carry ${carryBase}`;
+        : `${carriesCount} carry ${carryBase}`;
   const parts = [head, carries];
   if (similar > 0) {
     // REEA-1247 AC1 — what those non-rendering lanes actually returned.
@@ -388,6 +406,11 @@ export function coverageParts(
    * merchants under "Prices from" above a "0 retailer offers" count line.
    */
   shelfEmpty?: boolean,
+  /**
+   * REEA-1261 AC-2 — the exact-model cards the shelf renders (see
+   * coverageAggregateText). Absent = the pre-change lane-based count.
+   */
+  exactModelCards?: number,
 ): CoveragePart[] {
   const ordered = [...notes].sort(
     (a, b) => coverageRank(a.merchant) - coverageRank(b.merchant),
@@ -450,7 +473,15 @@ export function coverageParts(
   // sentences read, so "N failed" can never exceed the lanes the "No response
   // from" sentence names: a lane that errored but still rendered prices counts
   // as answered, not failed.
-  const aggregate = coverageAggregateText(ordered, blocked, seen, ar, query, zeroShelf);
+  const aggregate = coverageAggregateText(
+    ordered,
+    blocked,
+    seen,
+    ar,
+    query,
+    zeroShelf,
+    exactModelCards,
+  );
   if (aggregate !== "") parts.push({ kind: "text", value: aggregate });
   const sentence = (next: CoveragePart[]) => {
     if (parts.length > 0) parts.push({ kind: "text", value: " " });
@@ -573,8 +604,9 @@ export function coverageLine(
   unreachable?: readonly string[],
   query?: string,
   shelfEmpty?: boolean,
+  exactModelCards?: number,
 ): string {
-  return coverageParts(notes, locale, rendered, unreachable, query, shelfEmpty)
+  return coverageParts(notes, locale, rendered, unreachable, query, shelfEmpty, exactModelCards)
     .map((p) => (p.kind === "text" ? p.value : summarizeNames(p.names, p.ar)))
     .join("");
 }

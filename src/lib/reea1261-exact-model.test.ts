@@ -3,6 +3,7 @@ import { finishJob, resetStoreForTests } from "@/lib/collect/store";
 import { exactModelShelfSeed } from "@/lib/collect/last-observation";
 import { withExactModelCard } from "@/lib/exact-model-seed";
 import { comparisonDepthOf } from "@/lib/metrics";
+import { coverageLine } from "@/lib/collect/coverage";
 import { resultsShelfSections } from "@/lib/results-shelf";
 import { carriesExactModel, exactModelQuery } from "@/lib/relevance";
 import { classifyProductScope } from "@/lib/scope-gate";
@@ -259,5 +260,31 @@ describe("AC-1 — the seeded exact-model card comes from a live observation", (
   it("returns null for a query that names no exact brand+model identity", async () => {
     expect(await exactModelShelfSeed("laptop")).toBeNull();
     expect(await exactModelShelfSeed("keychron")).toBeNull();
+  });
+});
+
+describe("AC-2 — the coverage sentence counts the exact-model cards, not the lanes", () => {
+  it("says 1 carries this exact model when four lanes answered the phrase", () => {
+    const notes = [
+      { merchant: "Quadra Stores", hits: 11, coupons: 0 },
+      { merchant: "Jarir", hits: 6, coupons: 0 },
+      { merchant: "Amazon.eg", hits: 1, coupons: 0 },
+      { merchant: "Next Store", hits: 0, coupons: 0, error: "blocked" },
+    ];
+    const rendered = [
+      keychronCard([egOffer(700)]),
+      liveProduct("razer-0", razerTitles[0], [kwOffer("Quadra Stores", 21.9)]),
+    ];
+    // Pre-change wording (no exact-card count): the lane count, 3.
+    expect(coverageLine(notes, "en", rendered, [], "keychron v3 max")).toContain(
+      "3 carry this exact model",
+    );
+    // REEA-1261 AC-2: the sentence reads the painted exact-model cards.
+    const honest = coverageLine(notes, "en", rendered, [], "keychron v3 max", false, 1);
+    expect(honest).toContain("1 carries this exact model");
+    expect(honest).not.toContain("3 carry");
+    // A category query keeps the generic wording, count untouched.
+    expect(coverageLine(notes, "en", rendered, [], "laptop")).toContain("carry this");
+    expect(coverageLine(notes, "en", rendered, [], "laptop")).not.toContain("exact model");
   });
 });
