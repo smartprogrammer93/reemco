@@ -230,7 +230,8 @@ assert_published_ports() {
             and ($p[1] == "tcp" or ($p[0] == "443" and $p[1] == "udp"))
             and ($b[0] == "0.0.0.0" or $b[0] == "::" or $b[0] == "")
             and ($b[1] == $p[0])) then empty
-        elif (($p[0] == "3000" or $p[0] == "3001") and $p[1] == "tcp" and $b[0] == "127.0.0.1" and $b[1] == $p[0]) then empty
+        elif ($p[0] == "3000" and $p[1] == "tcp" and $b[0] == "127.0.0.1"
+              and ($b[1] == "3000" or $b[1] == "3001")) then empty
         else "\($k) -> \($b[0]):\($b[1])" end')
     if [ -n "$bad" ]; then
       fail "$name: published port outside the allow-list: $(printf '%s\n' "$bad" | paste -sd, -)"
