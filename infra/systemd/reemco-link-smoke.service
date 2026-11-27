@@ -11,5 +11,7 @@ Type=oneshot
 User=deploy
 # The script is idempotent (UTC-day guard) and never prints secrets.
 ExecStart=/opt/reemco/scripts/link-smoke.sh
-# 4 feed samples (up to 22 s each) + up to 96 paced link checks.
-TimeoutStartSec=900
+# Up to 10 feed samples (up to 22 s each, incl. the floor top-up) + up to 96
+# paced link checks with challenge backoff. 1200 s leaves headroom over the
+# observed ~4.5 min run and keeps the timer from killing a slow-but-healthy run.
+TimeoutStartSec=1200
