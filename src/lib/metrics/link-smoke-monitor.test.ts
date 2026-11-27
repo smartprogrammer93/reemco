@@ -79,17 +79,47 @@ describe("REEA-1252 link-smoke monitor", () => {
     expect(result.failures.map((f: { rule: string }) => f.rule)).toContain("challenge_rate");
   });
 
-  it("grades the in-progress week against the prorated floor", () => {
-    // Friday 2026-11-27 = 2026-W48, 5 elapsed days -> 230 checked / 5 runs.
+  it("grades the in-progress restore week from the day the guardrail was armed", () => {
+    // Friday 2026-11-27 = 2026-W48, 5 elapsed days, but the timer went live
+    // that day, so only 1 armed day is graded -> 46 checked / 1 run floor.
     const friday = Date.UTC(2026, 10, 27, 10, 0, 0);
-    const result = monitor.evaluateLinkSmoke(
-      payload({ "2026-W48": week({ runs: 5, checked: 100, dead: 0, ok: 100 }) }),
+    const passing = monitor.evaluateLinkSmoke(
+      payload({ "2026-W48": week({ runs: 3, checked: 102, dead: 0, ok: 102 }) }),
       { now: friday },
     );
-    expect(result.currentWeek).toBe("2026-W48");
-    expect(result.elapsedDays).toBe(5);
-    expect(result.ok).toBe(false);
-    expect(result.failures.map((f: { rule: string }) => f.rule)).toContain("checked_floor");
+    expect(passing.currentWeek).toBe("2026-W48");
+    expect(passing.elapsedDays).toBe(5);
+    expect(passing.ok).toBe(true);
+    expect(passing.rows[0].graded_days).toBe(1);
+    expect(passing.rows[0].checked_floor).toBe(46);
+
+    // A genuinely thin go-live day (under the 46 floor) must still fail: the
+    // proration must not turn into a free pass.
+    const failing = monitor.evaluateLinkSmoke(
+      payload({ "2026-W48": week({ runs: 1, checked: 40, dead: 0, ok: 40 }) }),
+      { now: friday },
+    );
+    expect(failing.ok).toBe(false);
+    expect(failing.failures.map((f: { rule: string }) => f.rule)).toContain("checked_floor");
+  });
+
+  it("prorates a complete restore week from its armed day, then applies the full floor", () => {
+    // Wednesday 2026-12-02: W48 is complete; armed Fri 11-27 -> 3 armed days.
+    const result = monitor.evaluateLinkSmoke(
+      payload({
+        "2026-W48": week({ runs: 3, checked: 258, dead: 0, ok: 258 }),
+        "2026-W49": week({ runs: 3, checked: 150, dead: 5, ok: 145, dead_rate: 0.0333 }),
+      }),
+      { now: NOW },
+    );
+    const w48 = result.rows.find((r: { week: string }) => r.week === "2026-W48");
+    expect(w48.complete).toBe(true);
+    expect(w48.graded_days).toBe(3);
+    expect(w48.checked_floor).toBe(138);
+    expect(w48.runs_floor).toBe(3);
+    // W49 is the first full week: 3 elapsed days -> 138 / 3 floor, not 320/7.
+    expect(result.rows.find((r: { week: string }) => r.week === "2026-W49").checked_floor).toBe(138);
+    expect(result.ok).toBe(true);
   });
 
   it("does not grade the pre-guardrail week (W47 runs=0)", () => {

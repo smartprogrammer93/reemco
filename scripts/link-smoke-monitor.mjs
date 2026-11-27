@@ -22,7 +22,11 @@
  *   - Weeks before `sinceWeek` (the week this guardrail was restored) are
  *     skipped so the pre-fix empty week (W47: runs=0) does not alert forever.
  *   - The in-progress week is graded against the prorated floor, so the monitor
- *     cannot stay silent mid-week while the sample is collapsing.
+ *     cannot stay silent mid-week while the sample is collapsing. Proration
+ *     counts only the days at/after `armedSince` (the UTC day the daily timer
+ *     and first recorded run went live, 2026-11-27): the restore week is graded
+ *     from Friday, never from a Monday that predates the schedule. Every later
+ *     week is graded at the full 320 / 7-run floor.
  *
  * Usage:
  *   node scripts/link-smoke-monitor.mjs --base https://ns539626.ip-144-217-72.net
@@ -45,6 +49,12 @@ export const THRESHOLDS = Object.freeze({
   challengeRateMax: 0.25,
   // The week the guardrail was restored (REEA-1252). Earlier weeks are history.
   sinceWeek: "2026-W48",
+  // REEA-1252 — the UTC day the daily schedule was actually armed on the box
+  // (reemco-link-smoke.timer installed + first run recorded). Proration counts
+  // only days at/after this date: the restore week is graded from Friday, not
+  // from Monday, so a mid-week go-live is not failed for days that predate the
+  // guardrail. From the next week on the full 320 / 7-run floor applies.
+  armedSince: "2026-11-27",
 });
 
 const DEFAULT_BASE = "https://ns539626.ip-144-217-72.net";
@@ -71,6 +81,42 @@ export function elapsedDaysOfWeek(now) {
   const day = d.getUTCDay() || 7;
   const monday = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - (day - 1));
   return Math.floor((now - monday) / 86_400_000) + 1;
+}
+
+/** UTC midnight (ms) for a "YYYY-MM-DD" key. */
+function utcDayStart(iso) {
+  const [y, m, d] = String(iso).split("-").map(Number);
+  return Date.UTC(y, (m ?? 1) - 1, d ?? 1);
+}
+
+/** Monday 00:00Z (ms) of an ISO week key ("2026-W48"); NaN if malformed. */
+export function weekStartMs(weekKey) {
+  const m = /^(\d{4})-W(\d{2})$/.exec(String(weekKey));
+  if (!m) return Number.NaN;
+  const year = Number(m[1]);
+  const week = Number(m[2]);
+  // ISO week 1 is the week containing Jan 4.
+  const jan4 = Date.UTC(year, 0, 4);
+  const jan4Day = new Date(jan4).getUTCDay() || 7;
+  const week1Monday = jan4 - (jan4Day - 1) * 86_400_000;
+  return week1Monday + (week - 1) * 7 * 86_400_000;
+}
+
+/**
+ * REEA-1252 — days of `weekKey` the guardrail was actually armed for.
+ * 0 means the week predates the schedule and must not be graded. The current
+ * week stops at today; a complete week stops at its Sunday.
+ */
+export function armedDaysOfWeek(weekKey, armedSinceIso, now) {
+  const start = weekStartMs(weekKey);
+  if (!Number.isFinite(start)) return 0;
+  const armed = utcDayStart(armedSinceIso);
+  const today = utcDayStart(new Date(now).toISOString().slice(0, 10));
+  const weekEnd = start + 6 * 86_400_000;
+  const gradedFrom = Math.max(start, armed);
+  const gradedTo = Math.min(weekEnd, today);
+  if (gradedTo < gradedFrom) return 0;
+  return Math.floor((gradedTo - gradedFrom) / 86_400_000) + 1;
 }
 
 /**
@@ -109,14 +155,22 @@ export function evaluateLinkSmoke(payload, opts = {}) {
           ? challenge / checked
           : 0;
     const complete = week < currentWeek;
-    // A complete week must hit the full floor; the in-progress week is graded
+    // REEA-1252 — proration counts only the days the guardrail was armed. A
+    // week that predates armedSince is history (0 armed days -> skipped); the
+    // restore week is graded from its armed day onward; every later week gets
+    // the full 320 / 7-run floor.
+    const armedDays = armedDaysOfWeek(week, t.armedSince, now);
+    if (armedDays <= 0) continue;
+    const gradedDays = complete ? armedDays : Math.min(armedDays, elapsedDays);
+    // A complete week must hit the full floor; an in-progress week is graded
     // against the prorated floor so mid-week silence is still a failure.
-    const checkedFloor = complete ? t.weeklyCheckedFloor : t.dailyCheckedFloor * elapsedDays;
-    const runsFloor = complete ? t.weeklyRunsFloor : elapsedDays;
+    const checkedFloor = complete && gradedDays >= 7 ? t.weeklyCheckedFloor : t.dailyCheckedFloor * gradedDays;
+    const runsFloor = complete && gradedDays >= 7 ? t.weeklyRunsFloor : gradedDays;
 
     const row = {
       week,
       complete,
+      graded_days: gradedDays,
       checked,
       runs,
       dead,
@@ -206,14 +260,14 @@ async function main() {
 
   for (const r of result.rows) {
     console.log(
-      `week ${r.week}${r.complete ? "" : " (in progress)"}: checked=${r.checked}/${r.checked_floor} runs=${r.runs}/${r.runs_floor} dead=${r.dead} challenge=${r.challenge} dead_rate=${(r.dead_rate * 100).toFixed(1)}% challenge_rate=${(r.challenge_rate * 100).toFixed(1)}%`,
+      `week ${r.week}${r.complete ? "" : " (in progress)"} armed_days=${r.graded_days}: checked=${r.checked}/${r.checked_floor} runs=${r.runs}/${r.runs_floor} dead=${r.dead} challenge=${r.challenge} dead_rate=${(r.dead_rate * 100).toFixed(1)}% challenge_rate=${(r.challenge_rate * 100).toFixed(1)}%`,
     );
   }
   for (const f of result.failures) {
     console.error(`FAIL ${f.week} ${f.rule}: ${f.detail}`);
   }
   console.log(
-    `LINK_SMOKE_MONITOR ${result.ok ? "PASS" : "FAIL"} — current=${result.currentWeek} elapsed_days=${result.elapsedDays} floor=${result.thresholds.weeklyCheckedFloor}/week (${result.thresholds.dailyCheckedFloor}/day) dead_rate_max=${(result.thresholds.deadRateMax * 100).toFixed(0)}% challenge_rate_max=${(result.thresholds.challengeRateMax * 100).toFixed(0)}%`,
+    `LINK_SMOKE_MONITOR ${result.ok ? "PASS" : "FAIL"} — current=${result.currentWeek} elapsed_days=${result.elapsedDays} armed_since=${result.thresholds.armedSince} floor=${result.thresholds.weeklyCheckedFloor}/week (${result.thresholds.dailyCheckedFloor}/day) dead_rate_max=${(result.thresholds.deadRateMax * 100).toFixed(0)}% challenge_rate_max=${(result.thresholds.challengeRateMax * 100).toFixed(0)}%`,
   );
   process.exit(result.ok ? 0 : 1);
 }

@@ -310,4 +310,81 @@ describe("REEA-1252 sample selection (the sample is a population slice, not a fi
     // The source buckets are not mutated.
     expect(perRetailer.get("A")?.queue).toHaveLength(4);
   });
+
+  it("tops up from the remaining pool when the rotated day plans under the daily floor", async () => {
+    const pool = ["q0", "q1", "q2", "q3"];
+    const now = Date.UTC(2026, 10, 23, 6);
+    // The queries the UTC-day rotation picks for `now` are the thin ones.
+    const thin = new Set(checker.selectQueries(now, { pool, count: 2 }));
+    const feedCalls: string[] = [];
+
+    const fakeFetch = async (url: string) => {
+      const s = String(url);
+      if (s.includes("/api/results-followup")) {
+        const q = new URL(s).searchParams.get("q") ?? "";
+        feedCalls.push(q);
+        // Thin categories yield 5 offers; the rest of the pool yields 20.
+        const n = thin.has(q) ? 5 : 20;
+        return {
+          ok: true,
+          json: async () => ({
+            products: Array.from({ length: n }, (_, i) => ({
+              offers: [{ merchant: `M${i % 4}`, url: `https://offer.example/${q}/${i}` }],
+            })),
+          }),
+        };
+      }
+      return { ok: true, status: 200, headers: new Headers(), text: async () => "" };
+    };
+
+    const result = await checker.runDeadLinkSmoke({
+      base: "https://smoke.example",
+      now,
+      queryPool: pool,
+      queriesPerRun: 2,
+      dailyFloor: 20,
+      topUpMaxQueries: 2,
+      fetchImpl: fakeFetch,
+      sleep: async () => {},
+      pauseMs: 0,
+      perRetailer: 8,
+      maxChecks: 96,
+      samplingTimeoutMs: 5000,
+    });
+
+    // Two rotated queries plan 10 links; the top-up must draw the rest of the
+    // pool until the 20/run floor is met — the week can then reach 320.
+    expect(feedCalls.length).toBeGreaterThan(2);
+    expect(result.checked).toBeGreaterThanOrEqual(20);
+    expect(result.dead).toBe(0);
+  });
+
+  it("does not top up when an explicit query list is given (one-off probes stay exact)", async () => {
+    const feedCalls: string[] = [];
+    const fakeFetch = async (url: string) => {
+      const s = String(url);
+      if (s.includes("/api/results-followup")) {
+        feedCalls.push(s);
+        return {
+          ok: true,
+          json: async () => ({
+            products: [{ offers: [{ merchant: "M", url: "https://offer.example/only" }] }],
+          }),
+        };
+      }
+      return { ok: true, status: 200, headers: new Headers(), text: async () => "" };
+    };
+
+    const result = await checker.runDeadLinkSmoke({
+      base: "https://smoke.example",
+      queries: ["thin"],
+      dailyFloor: 46,
+      fetchImpl: fakeFetch,
+      sleep: async () => {},
+      pauseMs: 0,
+      samplingTimeoutMs: 5000,
+    });
+    expect(feedCalls).toHaveLength(1);
+    expect(result.checked).toBe(1);
+  });
 });

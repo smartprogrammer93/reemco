@@ -28,13 +28,19 @@
  *             one merchant cannot crowd out the rest.
  *   FLOOR     320 checked links/week (the pre-v5 design ceiling: 20 retailers
  *             x 8 links x 2 queries). 7 days x 96 max = 672; the daily floor
- *             the monitor enforces is ceil(320/7) = 46 checked/run.
+ *             the monitor enforces is ceil(320/7) = 46 checked/run. A run that
+ *             plans fewer than 46 from the rotated queries tops up from the
+ *             REMAINING pool queries (bounded: LINK_SMOKE_TOPUP_MAX_QUERIES,
+ *             default 6) so a low-yield rotation day still carries its share
+ *             of the week. Explicit LINK_SMOKE_QUERIES overrides skip the top-up.
  *   ALERT     scripts/link-smoke-monitor.mjs +
  *             .github/workflows/link-smoke-monitor.yml fail when a complete
  *             week is under the floor, has < 7 runs, dead_rate > 10% or
  *             challenge_rate > 25%, and open a `link-smoke-alert` issue.
  *             The in-progress week is graded against the prorated floor so the
- *             monitor cannot go quiet mid-week.
+ *             monitor cannot go quiet mid-week; the proration counts only the
+ *             days the guardrail has been armed (THRESHOLDS.armedSince), so the
+ *             restore week is not failed for days that predate the schedule.
  *
  * Usage: node scripts/dead-link-smoke.mjs
  *   SMOKE_BASE_URL   base to measure (default https://ns539626.ip-144-217-72.net)
@@ -43,6 +49,8 @@
  *   LINK_SMOKE_QUERIES  explicit comma-separated queries (overrides the pool)
  *   LINK_SMOKE_PER_RETAILER  max URLs checked per retailer (default 8, max 20)
  *   LINK_SMOKE_MAX_CHECKS    max URLs checked per run (default 96, max 500)
+ *   LINK_SMOKE_DAILY_FLOOR   per-run checked floor the top-up aims for (default 46)
+ *   LINK_SMOKE_TOPUP_MAX_QUERIES  max extra queries used for the top-up (default 6)
  *   LINK_SMOKE_SAMPLING_TIMEOUT_MS  follow-up feed wait per attempt (default 22000)
  *   LINK_SMOKE_PAUSE_MS      min pause between same-host checks (default 300)
  *   LINK_SMOKE_CHALLENGE_BACKOFF_MS  backoff before the challenge retry (default 5000)
@@ -104,6 +112,14 @@ const QUERIES_OVERRIDE = process.env.LINK_SMOKE_QUERIES
   : null;
 const PER_RETAILER = intEnv("LINK_SMOKE_PER_RETAILER", 8, 1, 20);
 const MAX_CHECKS_PER_RUN = intEnv("LINK_SMOKE_MAX_CHECKS", 96, 1, 500);
+/**
+ * REEA-1252 — the daily floor the monitor grades against (ceil(320/7) = 46).
+ * A run that plans fewer links than this cannot carry its share of the week,
+ * so the sampler tops up (see runDeadLinkSmoke) instead of recording a thin day.
+ */
+const DAILY_FLOOR = intEnv("LINK_SMOKE_DAILY_FLOOR", 46, 1, 500);
+/** Bounded extra feed queries used to reach the daily floor (see below). */
+const TOPUP_MAX_QUERIES = intEnv("LINK_SMOKE_TOPUP_MAX_QUERIES", 6, 0, 12);
 const SAMPLING_TIMEOUT_MS = intEnv("LINK_SMOKE_SAMPLING_TIMEOUT_MS", 22_000, 5_000, 45_000);
 const PAUSE_MS = Math.max(0, Number(process.env.LINK_SMOKE_PAUSE_MS) || 300);
 const CHALLENGE_BACKOFF_MS = Math.max(0, Number(process.env.LINK_SMOKE_CHALLENGE_BACKOFF_MS) || 5_000);
@@ -459,14 +475,7 @@ export async function runDeadLinkSmoke(opts = {}) {
   // ---- collect a bounded, deduped sample per retailer ----
   const perRetailer = new Map(); // merchant -> { queue: [...] }
   const seenUrls = new Set();
-  for (const q of queries) {
-    const offers = await collectOffers(q, {
-      base,
-      fetchImpl,
-      sleep: sleepFn,
-      timeoutMs: samplingTimeoutMs,
-    });
-    console.log(`query "${q}": ${offers.length} live offers in the converged snapshot`);
+  const addOffers = (offers) => {
     for (const o of offers) {
       if (seenUrls.has(o.url)) continue;
       seenUrls.add(o.url);
@@ -474,13 +483,53 @@ export async function runDeadLinkSmoke(opts = {}) {
       if (bucket.queue.length < perRetailerLimit) bucket.queue.push(o.url);
       perRetailer.set(o.merchant, bucket);
     }
-  }
+  };
+  const sampleQuery = async (q) => {
+    const offers = await collectOffers(q, {
+      base,
+      fetchImpl,
+      sleep: sleepFn,
+      timeoutMs: samplingTimeoutMs,
+    });
+    console.log(`query "${q}": ${offers.length} live offers in the converged snapshot`);
+    addOffers(offers);
+    return offers.length;
+  };
+
+  for (const q of queries) await sampleQuery(q);
 
   // ---- plan the run's sample (round-robin, hard per-run cap) ----
-  const planned = planSample(perRetailer, maxChecks);
+  let planned = planSample(perRetailer, maxChecks);
+
+  // REEA-1252 (follow-up) — the rotation can land on a low-yield day: six thin
+  // categories still cover retailers but plan under the 46/day floor, so the
+  // week would miss 320 without the guardrail ever failing. The floor is the
+  // point, so when the initial plan is short we draw the REMAINING pool queries
+  // (never re-using one already sampled) until the plan reaches DAILY_FLOOR or
+  // the pool / LINK_SMOKE_TOPUP_MAX_QUERIES budget is exhausted. Explicit
+  // query overrides (tests, one-off probes) are honoured exactly: no top-up.
+  const topUpFloor = Math.max(1, Math.min(maxChecks, Number(opts.dailyFloor ?? DAILY_FLOOR) || 46));
+  const topUpMax = Math.max(0, Math.min(12, Number(opts.topUpMaxQueries ?? TOPUP_MAX_QUERIES) || 0));
+  if (!opts.queries && !QUERIES_OVERRIDE && topUpMax > 0) {
+    const pool = (opts.queryPool ?? QUERY_POOL).filter(Boolean);
+    const used = new Set(queries.map((q) => q.trim().toLowerCase()));
+    let extra = 0;
+    for (const q of pool) {
+      if (planned.length >= topUpFloor || extra >= topUpMax) break;
+      if (used.has(q.trim().toLowerCase())) continue;
+      used.add(q.trim().toLowerCase());
+      extra += 1;
+      await sampleQuery(q);
+      planned = planSample(perRetailer, maxChecks);
+    }
+    if (extra > 0) {
+      console.log(`floor top-up: sampled ${extra} extra queries toward the ${topUpFloor}/run floor`);
+    }
+  }
+
   const plannedRetailers = new Set(planned.map((p) => p.merchant)).size;
   console.log(
-    `sample plan: ${planned.length} links across ${plannedRetailers} retailers (cap ${maxChecks}/run, ${perRetailerLimit}/retailer)`,
+    `sample plan: ${planned.length} links across ${plannedRetailers} retailers (cap ${maxChecks}/run, ${perRetailerLimit}/retailer, floor ${topUpFloor}/run)`,
   );
 
   // ---- check with per-host pacing; fold into ok/dead/challenge ----

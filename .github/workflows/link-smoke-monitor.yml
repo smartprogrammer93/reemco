@@ -10,7 +10,10 @@ name: Link-smoke guardrail monitor
 #   320 checked/week floor (the pre-v5 design ceiling: 20 retailers x 8 links x
 #   2 queries), >= 7 runs/week (>= 1/day), dead_rate <= 10%,
 #   challenge_rate <= 25%. The in-progress week is graded against the prorated
-#   floor (ceil(320/7) = 46/day) so a collapse mid-week is not silent.
+#   floor (ceil(320/7) = 46/day) so a collapse mid-week is not silent; the
+#   proration counts only days at/after THRESHOLDS.armedSince (2026-11-27, the
+#   day the timer went live), so the restore week is not failed for days that
+#   predate the schedule.
 #
 # This is the same deduped-issue alert path as uptime.yml (REEA-1194): it opens
 # a GitHub issue, which is the repo's ticket stream for operational alerts.
@@ -92,7 +95,7 @@ jobs:
 
           Thresholds: 320 checked/week, >=7 runs/week (>=1/day), dead_rate <=10%,
           challenge_rate <=25%. The in-progress week is graded against the
-          prorated floor (46/day).
+          prorated floor (46/day, counted from the day the guardrail was armed).
 
           What to do: read \`GET /api/metrics/weekly\` and the
           \`reemco-link-smoke\` unit on the box (\`journalctl -u
