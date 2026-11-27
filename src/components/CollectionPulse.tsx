@@ -4,14 +4,16 @@ import {
   normalizedListingUrlOf,
   type CollectJob,
   type LiveOffer,
-  type RetailerSubtask,
 } from "@/lib/collect/types";
-import { jobProgress } from "@/lib/collect-progress";
 import { effectivePrice, effectivePriceKwd, formatPrimaryPrice } from "@/lib/format";
 import type { Coupon } from "@/types/product";
 import OfferCard from "@/components/OfferCard";
 import { clientLocale, fill, getStrings, type Locale } from "@/lib/i18n";
 import type { CountryCode } from "@/lib/country";
+// REEA-1246 AC3 — one chip per RETAILER, not per listing: the runner fans out
+// one scrape per retailer+SKU listing, so a retailer's several listings used
+// to render as duplicate chips ("Eureka, Eureka").
+import { foldLaneChipsByRetailer, type LaneChip } from "@/lib/lane-chips";
 import {
   isCrossMarketOffer,
   marketPriceLabel,
@@ -30,18 +32,18 @@ import {
  */
 
 function RetailerChip({
-  subtask,
+  chip,
   index,
   onRetry,
   locale,
 }: {
-  subtask: RetailerSubtask;
+  chip: LaneChip;
   index: number;
   onRetry?: (retailer: string) => void;
   locale?: Locale;
 }) {
   const t = getStrings(locale ?? clientLocale());
-  const { status, retailer, offersFound, error } = subtask;
+  const { status, retailer, offersFound, error } = chip;
   const failed = status === "failed" || status === "timeout";
   return (
     <li
@@ -221,15 +223,21 @@ export default function CollectionPulse({
   locale?: Locale;
 }) {
   const t = getStrings(locale ?? clientLocale());
-  const progress = Math.round(jobProgress(job) * 100);
+  // REEA-1246 AC3 — the rail and the progress line speak for RETAILERS, not
+  // listings: one folded chip per retailer, and the same population feeds the
+  // bar, the "n/m stores" figure and the chips below.
+  const chips = foldLaneChipsByRetailer(job.subtasks);
+  const resolvedCount = chips.filter(
+    (c) => c.status !== "pending" && c.status !== "collecting",
+  ).length;
+  const progress = chips.length > 0 ? Math.round((resolvedCount / chips.length) * 100) : 0;
   const settled = job.status !== "collecting";
   // Warm Signal loading label: name the store being checked right now
   // ("Checking Jarir…") beside the amber sweep + the retailer count. Real
   // subtask states only — never synthetic progress.
-  const active = job.subtasks.find((s) => s.status === "collecting");
-  const checking =
-    active?.retailer ?? job.subtasks.find((s) => s.status === "pending")?.retailer;
-  const doneCount = job.subtasks.filter((s) => s.status === "done").length;
+  const active = chips.find((c) => c.status === "collecting");
+  const checking = active?.retailer ?? chips.find((c) => c.status === "pending")?.retailer;
+  const doneCount = chips.filter((c) => c.status === "done").length;
   return (
     <section aria-label={t.collectingAria} aria-busy={!settled}>
       {!settled && (
@@ -249,7 +257,7 @@ export default function CollectionPulse({
           >
             <span>{checking ? fill(t.checkingStore, { x: checking }) : t.checkingStores}</span>
             <span className="tabular">
-              {doneCount}/{job.subtasks.length} {t.storesWord}
+              {doneCount}/{chips.length} {t.storesWord}
               {elapsedLabel ? ` · ${elapsedLabel}` : ""}
             </span>
           </p>
@@ -261,8 +269,8 @@ export default function CollectionPulse({
           its chips carry the real per-retailer arrival states and pulse in on
           mount with the same stagger as the cards rising below. */}
       <ul className={`rc-chip-rail ${settled ? "mt-2" : ""}`}>
-        {job.subtasks.map((s: RetailerSubtask, i: number) => (
-          <RetailerChip key={s.retailer} subtask={s} index={i} onRetry={onRetryRetailer} locale={locale} />
+        {chips.map((chip, i) => (
+          <RetailerChip key={chip.retailer.toLowerCase()} chip={chip} index={i} onRetry={onRetryRetailer} locale={locale} />
         ))}
       </ul>
       {settled && job.status === "complete" && (

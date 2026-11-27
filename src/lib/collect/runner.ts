@@ -474,45 +474,51 @@ export async function retryRetailer(
   // REEA-897 — the subtask list was built from the LISTING-unique offer set,
   // so the retry index must read the same deduped sequence (a duplicated
   // product-offer row would otherwise shift every later subtask index).
+  // REEA-1246 AC3 — the rail is retailer-level, so a retailer retry re-checks
+  // EVERY listing that retailer owns; retrying only the first would leave the
+  // chip failed while a sibling listing never got its second chance.
   const listings = uniqueListings(product.offers);
-  const index = listings.findIndex((o) => o.merchant === retailer);
-  if (index === -1) return undefined;
-  const sub = job.subtasks[index];
-  if (!sub) return undefined;
+  const indices = listings
+    .map((offer, index) => ({ offer, index }))
+    .filter(({ offer }) => offer.merchant === retailer);
+  if (indices.length === 0) return undefined;
+  if (!indices.some(({ index }) => job.subtasks[index])) return undefined;
 
   job.status = "collecting";
-  sub.status = "collecting";
-  sub.error = undefined;
-  sub.startedAt = new Date().toISOString();
-  const offer = listings[index];
-  try {
-    const outcome = await scrapeOffer({ ...offer, titleQuery: product.title }, {
-      fetchImpl: opts.fetchImpl,
-      now: opts.now,
-    });
-    sub.finishedAt = new Date().toISOString();
-    sub.offersFound = outcome.offers.length;
-    if (outcome.timedOut) {
-      sub.status = "timeout";
-      sub.error = outcome.error;
-    } else if (outcome.error) {
+  for (const { offer, index } of indices) {
+    const sub = job.subtasks[index];
+    if (!sub) continue;
+    sub.status = "collecting";
+    sub.error = undefined;
+    sub.startedAt = new Date().toISOString();
+    try {
+      const outcome = await scrapeOffer({ ...offer, titleQuery: product.title }, {
+        fetchImpl: opts.fetchImpl,
+        now: opts.now,
+      });
+      sub.finishedAt = new Date().toISOString();
+      sub.offersFound = outcome.offers.length;
+      if (outcome.timedOut) {
+        sub.status = "timeout";
+        sub.error = outcome.error;
+      } else if (outcome.error) {
+        sub.status = "failed";
+        sub.error = outcome.error;
+      } else {
+        sub.status = "done";
+        // Replace the retried LISTING's prior offers (merchant+URL, REEA-897),
+        // then add the fresh scrape — retrying one of a merchant's distinct-SKU
+        // rows must not wipe the merchant's other listings.
+        const retriedKey = listingKey(offer);
+        job.offers = job.offers.filter((o) => listingKey(o) !== retriedKey);
+        appendUniqueOffers(job, outcome.offers);
+      }
+    } catch (err) {
       sub.status = "failed";
-      sub.error = outcome.error;
-    } else {
-      sub.status = "done";
-      // Replace the retried LISTING's prior offers (merchant+URL, REEA-897),
-      // then add the fresh scrape — retrying one of a merchant's distinct-SKU
-      // rows must not wipe the merchant's other listings.
-      const retriedKey = listingKey(offer);
-      job.offers = job.offers.filter((o) => listingKey(o) !== retriedKey);
-      appendUniqueOffers(job, outcome.offers);
+      sub.error = err instanceof Error ? err.message : String(err);
+      sub.finishedAt = new Date().toISOString();
     }
-  } catch (err) {
-    sub.status = "failed";
-    sub.error = err instanceof Error ? err.message : String(err);
-    sub.finishedAt = new Date().toISOString();
   }
-
   const anySuccess = job.offers.length > 0;
   job.status = anySuccess ? "complete" : "failed";
   if (job.status === "failed") {
