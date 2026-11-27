@@ -4641,7 +4641,16 @@ async function finalSnapshot(
   // unless it opts in explicitly through opts.snapshots.
   let nearPool = hits;
   if (snapshotsEnabled && !widenedWithAnswers) {
-    const fill = await fillSilentFromLastSeen(q, country, settled);
+    // REEA-1238 — supplement, not only silent lanes: a product the retailer's
+    // current search page omitted can still join the merge from its labeled
+    // ≤24 h row. The cohort pass keeps the live offer for any listing the
+    // live run did return (freshest fetch wins), so live answers are never
+    // replaced, only supplemented. Without this the converged answer could
+    // still miss a pinned cross-retailer pair whose second row the retailer's
+    // page had rotated out.
+    const fill = await fillSilentFromLastSeen(q, country, settled, Date.now(), undefined, {
+      includeAnswered: true,
+    });
     if (fill.length > 0) {
       nearPool = [...hits, ...fill];
       products = groupHits(q, nearPool, true, locale, true);
