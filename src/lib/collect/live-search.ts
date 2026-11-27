@@ -4469,7 +4469,11 @@ async function finalizedSnapshot(
   // the served answer, and a product the retailer's current search page left
   // out can still join the merge from its labeled ≤24 h row. The cohort pass
   // keeps the live row for any listing the live run did return.
-  const fill = await fillSilentFromLastSeen(q, country, fillTargets, Date.now(), undefined, {
+  // REEA-1238 — pass null, not the viewer market: the comparison-led shelf
+  // keeps cross-market offers tagged (REEA-1142), so a cross-market pair such
+  // as Danube Home (SA) + BinSina (KW) must be able to form from the fill.
+  // Filtering the fill to KW dropped the very row the pair needed.
+  const fill = await fillSilentFromLastSeen(q, null, fillTargets, Date.now(), undefined, {
     includeAnswered: true,
   });
   const filledByMerchant = new Map<string, number>();
@@ -4648,7 +4652,7 @@ async function finalSnapshot(
     // replaced, only supplemented. Without this the converged answer could
     // still miss a pinned cross-retailer pair whose second row the retailer's
     // page had rotated out.
-    const fill = await fillSilentFromLastSeen(q, country, settled, Date.now(), undefined, {
+    const fill = await fillSilentFromLastSeen(q, null, settled, Date.now(), undefined, {
       includeAnswered: true,
     });
     if (fill.length > 0) {
