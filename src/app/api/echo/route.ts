@@ -45,6 +45,7 @@ import { jarirHits, jsdClearedHtml } from "@/lib/collect/live-search";
 // hop; this probe reports whether it launches and paints from THIS runtime, so
 // a failed lane is diagnosable from the served payload without another deploy.
 import { browserProbe } from "@/lib/collect/browser-clearance";
+import { ounassListingLastDiag } from "@/lib/collect/live-search";
 import { readFileSync } from "node:fs";
 // REEA-782 — GET /api/echo rides the shared rate limiter (REEA-37 bucket,
 // REEA-827 deployment-wide counter: the namespaced `echo:` budget counts
@@ -405,6 +406,10 @@ export async function GET(req: Request): Promise<Response> {
   // URL + content selector, bounded by the tier's own windows. The runtime's
   // memory ceiling rides along: a Chromium that launches and then dies during
   // navigation is the OOM signature, and only the box can say what it allows.
+  // REEA-1221 — what the last Ounass listing attempt got (cards/shell/err per
+  // hop): the lane settles an explicit no-match either way, so without this the
+  // box cannot say WHY it contributed no offer.
+  const ounassListing = ounassListingLastDiag();
   const browser = await browserProbe(NEXTSTORE_URL, ".product-item-link");
   const memory = readRuntimeMemory();
   const [lulu, pckuwait] = await Promise.all([
@@ -446,6 +451,8 @@ export async function GET(req: Request): Promise<Response> {
       jarir,
       // REEA-1221 — real-browser clearance tier status on this egress.
       browser,
+      // REEA-1221 — what the last Ounass listing attempt got, per hop.
+      ounassListing,
       memory,
       pinned: {
         "www.luluhypermarket.com": luluPinned,

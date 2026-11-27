@@ -1767,6 +1767,12 @@ async function ladderCollect(
   return ladderSitemapHits(xml, query, merchant);
 }
 
+/** REEA-1221 — what the last Ounass listing attempt actually got (echo surface). */
+let ounassListingDiag = "";
+export function ounassListingLastDiag(): string {
+  return ounassListingDiag;
+}
+
 export const COLLECTORS: RetailerCollector[] = [
   {
     merchant: "Xcite",
@@ -2379,30 +2385,31 @@ export const COLLECTORS: RetailerCollector[] = [
       // real offer, never a synthesized row.
       const listingHits = async (): Promise<SearchHit[]> => {
         const listingUrl = `https://kuwait.ounass.com/curated-for-all?q=${encodeURIComponent(query)}`;
-        const parse = (html: string): SearchHit[] =>
-          isShell(html)
-            ? []
-            : scanOunassCards(html)
-                .filter((card) => queryGatePasses(`${card.title} ${card.url}`, query, MIN_SCORE))
-                .map((card) => ({
-                  title: card.title,
-                  merchant: "Ounass",
-                  country: "KW",
-                  ...(card.brand ? { brand: card.brand } : {}),
-                  price: card.price,
-                  currency: card.currency,
-                  url: card.url,
-                  inStock: true,
-                }));
-        // REEA-1221 — the listing is reached through the SAME clearance ladder as
-        // the search view: on the box a plain fetch of it lands on the challenge
-        // shell (measured 2026-11-27: the plain hop answered no cards while the
-        // same URL from a second egress answered 24 priced ones), so the identity
-        // handshake leads and the browser/relay follow only on a shell.
-        // The plain shape first: the box's plain fetch of this host answers 200
-        // for the search view (measured: Ounass settles an explicit no-match,
-        // not a challenge), so the listing deserves the same cheap attempt before
-        // any clearance machinery is spent on it.
+        // REEA-1221 — every attempt records what it actually got, so the box can
+        // say WHICH hop failed instead of the lane silently settling no-match.
+        // `/api/echo` reports the last record.
+        const trace: string[] = [];
+        const parse = (html: string, label: string): SearchHit[] => {
+          if (isShell(html)) {
+            trace.push(`${label}:shell(${html.length})`);
+            return [];
+          }
+          const cards = scanOunassCards(html);
+          const hits = cards
+            .filter((card) => queryGatePasses(`${card.title} ${card.url}`, query, MIN_SCORE))
+            .map((card): SearchHit => ({
+              title: card.title,
+              merchant: "Ounass",
+              country: "KW",
+              ...(card.brand ? { brand: card.brand } : {}),
+              price: card.price,
+              currency: card.currency,
+              url: card.url,
+              inStock: true,
+            }));
+          trace.push(`${label}:cards=${cards.length},hits=${hits.length}(${html.length})`);
+          return hits;
+        };
         const plain = await fetchChecked(
           fetchImpl,
           listingUrl,
@@ -2416,18 +2423,33 @@ export const COLLECTORS: RetailerCollector[] = [
           AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
         )
           .then((res) => res.text())
-          .catch(() => "");
-        const fromPlain = parse(plain);
-        if (fromPlain.length > 0) return fromPlain;
+          .catch((err) => {
+            trace.push(`plain:err(${err instanceof Error ? err.message.slice(0, 40) : "?"})`);
+            return "";
+          });
+        const fromPlain = parse(plain, "plain");
+        if (fromPlain.length > 0) {
+          ounassListingDiag = trace.join(" ");
+          return fromPlain;
+        }
         const handshook = await challengeHtmlHop(fetchImpl, listingUrl).catch(() => "");
-        const direct = parse(handshook);
-        if (direct.length > 0) return direct;
+        const direct = parse(handshook, "handshake");
+        if (direct.length > 0) {
+          ounassListingDiag = trace.join(" ");
+          return direct;
+        }
         const painted = await browserClearedHtml(listingUrl, "main").catch(() => "");
-        const fromBrowser = parse(painted);
-        if (fromBrowser.length > 0) return fromBrowser;
+        const fromBrowser = parse(painted, "browser");
+        if (fromBrowser.length > 0) {
+          ounassListingDiag = trace.join(" ");
+          return fromBrowser;
+        }
         const relayed = await jinaClearedHtml(listingUrl, "StyleColorListItem");
-        return parse(relayed);
+        const fromRelay = parse(relayed, "relay");
+        ounassListingDiag = trace.join(" ");
+        return fromRelay;
       };
+
 
       for (const body of bodies) {
         if (isShell(body)) continue;
