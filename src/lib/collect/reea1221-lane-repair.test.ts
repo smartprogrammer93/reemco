@@ -12,7 +12,9 @@ import {
 } from "@/lib/collect/live-search";
 import { browserTierEnabled, relayTierEnabled } from "@/lib/collect/browser-clearance";
 import { coverageParts, type LiveSearchResult } from "@/lib/collect/coverage";
-import { arabicQueryForms } from "@/lib/collect/search-fallback";
+import { arabicQueryForms, queryGatePasses } from "@/lib/collect/search-fallback";
+// The lane gate runs at the adapter threshold, not the ranking threshold.
+const MIN_SCORE = 0.25;
 
 /**
  * REEA-1221 — lane repair guardrails. Each case pins one measured cause the
@@ -364,6 +366,18 @@ describe("REEA-1221 lane repair", () => {
     const hits = alghanimHits(card, "غسالة");
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({ merchant: "Alghanim Electronics", price: 199, currency: "KWD" });
+  });
+
+  it("an Arabic query with zero folded overlap does not answer an unrelated row", () => {
+    // REEA-1221 — the lenient Arabic pass exists for spelling variants
+    // (hamza family, ة/ه, ى/ي, tashkeel, tatweel), and `foldArabicForMatch`
+    // already covers those folds. A title sharing NO folded token is a different
+    // product: measured 2026-11-27, Nahdi's default catalogue let beauty packages
+    // answer `بانادول` and `خيار` because nothing overlapped.
+    expect(queryGatePasses("باقة الجمال اتنظيف البشرة هيدرا فيشال جل", "بانادول", MIN_SCORE)).toBe(false);
+    expect(queryGatePasses("باقة الجمال اتنظيف البشرة هيدرا فيشال جل", "خيار", MIN_SCORE)).toBe(false);
+    // …while an exact answer still passes, so the rule cannot starve a lane.
+    expect(queryGatePasses("غسالة", "غسالة", MIN_SCORE)).toBe(true);
   });
 
   it("keeps both clearance tiers out of the hermetic test run", () => {

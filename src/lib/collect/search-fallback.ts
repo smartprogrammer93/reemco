@@ -42,6 +42,7 @@ import {
   matchesModelIdentity,
   modelIdentityTokens,
 } from "@/lib/relevance";
+import { foldArabicForMatch } from "@/lib/arabic-lexicon";
 import type { FetchImpl } from "@/lib/collect/scraper";
 import { getSharedKv } from "@/lib/collect/kv";
 import { readCappedResponse } from "@/lib/collect/read-body";
@@ -551,7 +552,19 @@ export function queryGatePasses(hitTitle: string, query: string, minScore: numbe
   if (score >= minScore) return true;
   if (score !== 0) return false;
   if (!/[؀-ۿ]/.test(query)) return false;
-  return arabicBrandIntent(query) === null;
+  if (arabicBrandIntent(query) !== null) return false;
+  // REEA-1221 — the Arabic lenient pass exists because Arabic queries and titles
+  // meet in several spellings (hamza family, ة/ه, ى/ي, tashkeel, tatweel) that a
+  // plain token score misses. `foldArabicForMatch` already covers those folds, so
+  // a title that shares NO folded token with the query is not a spelling variant
+  // — it is a different product. Measured 2026-11-27: Nahdi's server-rendered
+  // view returns a default catalogue for every term, and the blanket pass let
+  // beauty packages answer `بانادول` and `خيار` because nothing overlapped.
+  const foldedTitle = foldArabicForMatch(hitTitle);
+  return foldArabicForMatch(query)
+    .split(/\s+/)
+    .filter((token) => token.length >= 2)
+    .some((token) => foldedTitle.includes(token));
 }
 
 /** Parse an amazon.eg `/s?k=` results page into best-matching offer. */
