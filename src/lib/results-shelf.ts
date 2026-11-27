@@ -286,10 +286,14 @@ export const CATEGORY_SHELF_CARDS = 6;
  *  on the comparison-led shelf (comparisons first, then the two singles the
  *  shelf is allowed). Exact-model shelves keep the pre-change append rule. */
 export interface FlushPaintOptions {
-  /** True for the category budget (comparison-led shelf). */
+  /** True for a comparison-led shelf. */
   comparisonFirst?: boolean;
   /** True for the LAST stage of the run (the settled/finalized snapshot). */
   finalFlush?: boolean;
+  /** REEA-1238 — how many non-comparison cards the final flush may paint.
+   *  The category snapshot already caps its own single tail; this keeps the
+   *  wider exact-model page from drowning its comparison cards in filler. */
+  singleTail?: number;
 }
 
 export function freshCardsForFlush(
@@ -319,17 +323,28 @@ export function freshCardsForFlush(
   // comparison card the category surface exists to show.
   const comparisonFirst = opts.comparisonFirst === true;
   const comparisonOnly = comparisonFirst && opts.finalFlush !== true;
+  const singleTail = opts.singleTail ?? Number.POSITIVE_INFINITY;
+  // REEA-1238 — a card carrying two distinct retailers across the fetched set
+  // (including a cross-market pair such as Danube Home + BinSina) is a
+  // comparison card for paint purposes; the card's data-comparison-kw still
+  // reports the Kuwait-only basis the depth gate reads.
   const isComparison = (p: NormalizedProduct): boolean =>
-    comparisonMerchantCount(p.offers, HOME_MARKET) >= 2;
+    comparisonMerchantCount(p.offers, null) >= 2;
   const ordered = comparisonFirst
     ? [
         ...visible.filter(isComparison),
         ...visible.filter((p) => !isComparison(p)),
       ]
     : visible;
+  let singlesPainted = 0;
   for (const p of ordered) {
     if (paintedIds.has(p.productId)) continue;
-    if (comparisonOnly && !isComparison(p)) continue;
+    const comparison = isComparison(p);
+    if (comparisonOnly && !comparison) continue;
+    if (comparisonFirst && !comparisonOnly && !comparison) {
+      if (singlesPainted >= singleTail) continue;
+      singlesPainted += 1;
+    }
     fresh.push(p);
     if (fresh.length >= remaining) break;
   }
@@ -434,7 +449,14 @@ export async function paintedShelfCardsAcrossStages(
   let paintedIds: ReadonlySet<string> = new Set<string>();
   const painted: NormalizedProduct[] = [];
   const budget = shelfCardBudget(query);
-  const comparisonFirst = budget === CATEGORY_SHELF_CARDS;
+  // REEA-1238 — comparison-first for every query class: the intermediate
+  // flush paints comparison cards only, so an early single cannot claim the
+  // slot a later merged comparison needs (they share the productId once the
+  // merge lands). The final flush paints the comparison-led page plus a
+  // bounded single tail (one on a category shelf, two on the wider
+  // exact-model page) so the comparisons cannot be drowned by filler.
+  const comparisonFirst = true;
+  const singleTail = budget === CATEGORY_SHELF_CARDS ? 1 : 2;
   for (let index = 0; index < stages.length; index += 1) {
     const stage = stages[index];
     let snap: { products: readonly NormalizedProduct[]; replay?: boolean } | null;
@@ -455,7 +477,7 @@ export async function paintedShelfCardsAcrossStages(
       paintedIds,
       snap.replay === true,
       budget,
-      { comparisonFirst, finalFlush: index === stages.length - 1 },
+      { comparisonFirst, finalFlush: index === stages.length - 1, singleTail },
     );
     painted.push(...fresh);
     paintedIds = paintedIdsAfter(paintedIds, fresh);

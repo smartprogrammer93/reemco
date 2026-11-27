@@ -66,6 +66,16 @@ function panadol(id: string, title: string, stamp: string, merchant: string, pri
         inStock: true,
         collectedAt: stamp,
       },
+      // REEA-1238 — a comparison card is what the comparison-first paint chain
+      // paints; the dedupe chain is what this suite measures.
+      {
+        merchant: "Blink",
+        price: price + 0.1,
+        currency: "KWD",
+        url: `https://blink.example/${id}`,
+        inStock: true,
+        collectedAt: stamp,
+      },
     ],
     coupons: [],
     variations: [],

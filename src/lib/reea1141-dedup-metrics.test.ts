@@ -37,6 +37,9 @@ function product(productId: string, title: string, stamp: string): P {
     brand: "Panadol",
     offers: [
       { merchant: "Xcite", price: 5.8, currency: "KWD", url: `https://xcite.example/${productId}`, inStock: true },
+      // REEA-1238 — a comparison card is what the comparison-first paint chain
+      // paints; the dedupe chain is what this suite measures.
+      { merchant: "Blink", price: 5.9, currency: "KWD", url: `https://blink.example/${productId}`, inStock: true },
     ],
     coupons: [],
     variations: [],

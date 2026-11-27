@@ -504,7 +504,11 @@ describe("staged progressive results (REEA-178)", () => {
       productId: "panzer-magsafe-slim",
       title: "Panzer Care MagSafe Slim Case for iPhone 17 Pro",
       brand: "",
-      offers: [{ merchant: "Blink", price: 6.9, currency: "KWD", url: "https://blink.example/p1", inStock: true }],
+      offers: [
+        { merchant: "Blink", price: 6.9, currency: "KWD", url: "https://blink.example/p1", inStock: true },
+        // REEA-1238 — a comparison card is what an intermediate flush paints.
+        { merchant: "Xcite", price: 7.5, currency: "KWD", url: "https://xcite.example/p1b", inStock: true },
+      ],
       coupons: [],
       variations: [],
       alternatives: [],
@@ -560,6 +564,8 @@ describe("staged progressive results (REEA-178)", () => {
       brand: "Apple",
       offers: [
         { merchant: "Amazon.eg", price: 42000, currency: "EGP", url: "https://amazon.eg/p1", inStock: true },
+        // REEA-1238 — a cross-market pair is a comparison card for paint.
+        { merchant: "Jumia Egypt", price: 43000, currency: "EGP", url: "https://jumia.example/p1", inStock: true },
       ],
       coupons: [],
       variations: [],
@@ -677,6 +683,8 @@ describe("staged progressive results (REEA-178)", () => {
       brand: "Apple",
       offers: [
         { merchant: "Jarir", price: 6699, currency: "SAR", url: "https://www.jarir.example/p1", inStock: true },
+        // REEA-1238 — a cross-market pair is a comparison card for paint.
+        { merchant: "Extra", price: 6799, currency: "SAR", url: "https://extra.example/p1", inStock: true },
       ],
       coupons: [],
       variations: [],
@@ -745,6 +753,8 @@ describe("staged progressive results (REEA-178)", () => {
       brand: "Apple",
       offers: [
         { merchant: "Xcite", price: 389, currency: "KWD", url: "https://xcite.example/p1", inStock: true },
+        // REEA-1238 — a comparison card is what an intermediate flush paints.
+        { merchant: "Blink", price: 395, currency: "KWD", url: "https://blink.example/p1", inStock: true },
       ],
       coupons: [],
       variations: [],
@@ -785,6 +795,8 @@ describe("staged progressive results (REEA-178)", () => {
       brand: "Apple",
       offers: [
         { merchant: "Jarir", price: 6699, currency: "SAR", url: "https://www.jarir.example/p1", inStock: true },
+        // REEA-1238 — a cross-market pair is a comparison card for paint.
+        { merchant: "Extra", price: 6799, currency: "SAR", url: "https://extra.example/p1", inStock: true },
       ],
       coupons: [],
       variations: [],

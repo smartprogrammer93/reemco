@@ -777,9 +777,12 @@ function StageAppend(props: {
   // the final flush spends the remaining slots on the comparison-led shelf;
   // the fold (paintedShelfCardsAcrossStages) applies the identical policy.
   const budget = shelfCardBudget(props.query);
+  // REEA-1238 — comparison-first for every query class; the final flush may
+  // add one single on a category shelf and two on the wider exact-model page.
   const fresh = freshCardsForFlush(visible, paintedIds, replay, budget, {
-    comparisonFirst: budget === CATEGORY_SHELF_CARDS,
+    comparisonFirst: true,
     finalFlush: index === stages.length - 1,
+    singleTail: budget === CATEGORY_SHELF_CARDS ? 1 : 2,
   });
   const nextPaintedIds = paintedIdsAfter(paintedIds, fresh);
   // REEA-222: badge ownership follows the first flush that actually RENDERS
