@@ -1043,6 +1043,13 @@ const WEEKLY_SCALAR_FIELDS = [
   "latency_warm_band_gt_10s",
   "comparison_cards_total",
   "comparison_cards_multi_retailer",
+  // REEA-1261 AC-5 — cross-market-only cards. The field existed on the week
+  // record and in the route payload, but the atomic writer only diffs
+  // WEEKLY_SCALAR_FIELDS, so on the KV path this counter was NEVER persisted:
+  // measured live on 251cc9e9, a serve whose shelf held a foreign-only exact
+  // card incremented cards_total but left cross_market_cards at 0 for the
+  // whole week. Add it here so the depth payload can see the population.
+  "comparison_cards_cross_market",
   // REEA-1114 — filter-aware empty-state counter (one integer per week).
   "filtered_empty_searches",
   // REEA-1141 — duplicate-card aggregate (one integer per week).

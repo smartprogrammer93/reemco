@@ -200,6 +200,21 @@ describe("REEA-1035 atomic write path", () => {
     expect(w.comparison_cards_multi_retailer).toBeLessThanOrEqual(w.comparison_cards_total);
   });
 
+  // REEA-1261 AC-5 — a cross-market-only card must reach the weekly payload.
+  it("persists cross_market_cards so a foreign-only exact card is visible in depth", async () => {
+    const kv = fakeIncrKv();
+    await recordSearchOutcome(
+      outcome({
+        comparisonDepth: { cardsTotal: 1, cardsMultiRetailer: 0, cardsCrossMarket: 1 },
+      }),
+      { kv, now: WEEK_MS },
+    );
+    expect(counter(kv, v2(`${WEEK}:comparison_cards_cross_market`))).toBe(1);
+    const weeks = await readWeeklyCounters({ kv });
+    expect(weeks[WEEK].comparison_cards_cross_market).toBe(1);
+    expect(weeks[WEEK].comparison_cards_total).toBe(1);
+  });
+
   it("a failed INCR degrades the increment to the local layer, never drops the request", async () => {
     const kv = fakeIncrKv();
     kv.failIncr = true;
@@ -297,7 +312,7 @@ describe("REEA-1035 stored schema + route byte-shape", () => {
       { kv, now: WEEK_MS },
     );
     const keyRe =
-      /^metrics:weekly:v2:\d{4}-W\d{2}:(searches|zero_offer_searches|cold_serves_full|cold_serves_pending|comparison_cards_total|comparison_cards_multi_retailer|latency_band_(lt_1s|1_3s|3_10s|gt_10s)|latency_warm_band_(lt_1s|1_3s|3_10s|gt_10s)|ls_(runs|checked|dead|ok|challenge)|(offer|att|fail|lsbr_checked|lsbr_dead|lsbr_challenge):[^:]+)$/;
+      /^metrics:weekly:v2:\d{4}-W\d{2}:(searches|zero_offer_searches|cold_serves_full|cold_serves_pending|comparison_cards_total|comparison_cards_multi_retailer|comparison_cards_cross_market|latency_band_(lt_1s|1_3s|3_10s|gt_10s)|latency_warm_band_(lt_1s|1_3s|3_10s|gt_10s)|ls_(runs|checked|dead|ok|challenge)|(offer|att|fail|lsbr_checked|lsbr_dead|lsbr_challenge):[^:]+)$/;
     for (const [key, value] of kv.entries) {
       expect(key).toMatch(keyRe);
       expect(value).toMatch(/^\d+$/);
