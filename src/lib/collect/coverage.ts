@@ -66,6 +66,19 @@ export interface LiveSearchResult {
    */
   attemptedQueries?: string[];
   /**
+   * REEA-1270 (Bet 3) — the bounded near-miss correction this run applied to
+   * a misspelled Latin brand/model token. Present ONLY when the typed spelling
+   * was corrected before the bounded retry dispatched it; the results surface
+   * then names the corrected spelling explicitly ("Showing results for …"),
+   * never silently substituting (R-2). Absent = the shopper's spelling was
+   * dispatched as typed.
+   */
+  correction?: {
+    from: string;
+    to: string;
+    tokens: { from: string; to: string }[];
+  };
+  /**
    * REEA-437 — false ONLY on finalized-at-budget snapshots: the completion
    * budget closed the stream while hops were still in flight, so a zero count
    * on such a snapshot is provisional (the late offers converge behind the

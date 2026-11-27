@@ -116,6 +116,9 @@ import {
 // REEA-1200 AC 7a-1 — the deterministic scope gate stamps `matchReason` /
 // `productScope` on every served card at the snapshot boundary.
 import { stampScopeFields } from "@/lib/scope-gate";
+// REEA-1270 (Bet 3) — bounded, deterministic near-miss correction for
+// misspelled Latin brand/model tokens, applied on the one bounded retry.
+import { nearMissCorrection, type NearMissCorrection } from "@/lib/near-miss";
 import type { Coupon, NormalizedProduct, PriceOffer, ProductAlternative, ProductVariation } from "@/types/product";
 // REEA-437 — the snapshot shape and the coverage sentence moved to the pure
 // ./coverage.ts so the browser-side results shell can import them without
@@ -4405,6 +4408,8 @@ function stagedSnapshot(
   observations: SeenRow[] = [],
   /** REEA-1238 — labeled last-seen rows for the SERVED document only. */
   fill: SearchHit[] = [],
+  /** REEA-1270 — the near-miss correction this run dispatched under. */
+  correction?: LiveSearchResult["correction"],
 ): LiveSearchResult {
   const { hits, notes } = filterNotes(country, settledSoFar);
   // REEA-254 payload trim + REEA-488 item 1: staged flushes render through
@@ -4431,7 +4436,9 @@ function stagedSnapshot(
   const suggestions = products.length > 0 ? products.slice(0, 3) : nearMatchSuggestions(q, hits);
   // REEA-835 — fresh flushes carry the honesty flags too, so the streamed
   // first paint can read the Kuwait-pending state straight off its snapshot.
-  return withHonestyFlags(q, { products, notes, suggestions });
+  // REEA-1270 — every flush names the correction this dispatch applied, so a
+  // corrected query is never silently substituted at any paint stage.
+  return withHonestyFlags(q, { products, notes, suggestions, ...(correction ? { correction } : {}) });
 }
 
 /**
@@ -4460,6 +4467,8 @@ async function finalizedSnapshot(
   deadlineMs: number,
   locale?: "en" | "ar",
   observations: SeenRow[] = [],
+  /** REEA-1270 — the near-miss correction this run dispatched under. */
+  correction?: LiveSearchResult["correction"],
 ): Promise<LiveSearchResult> {
   // The fill targets every collector, not only the settled set: the lanes
   // still in flight at the budget are the ones whose partner rows the shelf
@@ -4478,14 +4487,18 @@ async function finalizedSnapshot(
   // keeps cross-market offers tagged (REEA-1142), so a cross-market pair such
   // as Danube Home (SA) + BinSina (KW) must be able to form from the fill.
   // Filtering the fill to KW dropped the very row the pair needed.
-  const fill = await fillSilentFromLastSeen(q, null, fillTargets, Date.now(), undefined, {
+  // REEA-1270 — the labeled last-seen rows are keyed by the shopper's TYPED
+  // query (the bucket the pre-correction runs already wrote), so a corrected
+  // dispatch still carries the typo query's ≤24 h rows instead of starting
+  // cold under the corrected spelling.
+  const fill = await fillSilentFromLastSeen(correction?.from ?? q, null, fillTargets, Date.now(), undefined, {
     includeAnswered: true,
   });
   const filledByMerchant = new Map<string, number>();
   for (const h of fill) {
     filledByMerchant.set(h.merchant, (filledByMerchant.get(h.merchant) ?? 0) + 1);
   }
-  const snap = stagedSnapshot(q, country, settledSoFar, locale, observations, fill);
+  const snap = stagedSnapshot(q, country, settledSoFar, locale, observations, fill, correction);
   // A lane whose labeled rows joined the page answered for this document:
   // reflect that on its note so the responder truth and the coverage line
   // agree with the rows the shopper can see.
@@ -4576,6 +4589,9 @@ async function finalSnapshot(
   locale?: "en" | "ar",
   observations: SeenRow[] = [],
   retiredLanes?: readonly string[],
+  /** REEA-1270 — the bounded near-miss correction this run dispatched under
+   *  (its `from` is the shopper's typed spelling). Absent = no correction. */
+  nearMiss?: NearMissCorrection,
 ): Promise<LiveSearchResult> {
   const { hits, notes } = filterNotes(country, settled);
   let products = groupHits(q, hits, true, locale, true);
@@ -4583,6 +4599,10 @@ async function finalSnapshot(
   let attemptedQueries: string[] | undefined;
   let retrySuggestions: NormalizedProduct[] | undefined;
   let widenedWithAnswers = false;
+  // REEA-1270 — the bounded fallback answered under the shopper's typed
+  // spelling, so the served snapshot is the typed query's answer and the
+  // correction must not be named as its provenance.
+  let answeredByTyped = false;
   // REEA-1218 — an Arabic query whose curated Latin alias was ALREADY the
   // dispatch spelling (collectSettled sends `latinBridgeDispatch(q)`) does not
   // need a second cold fan-out on a zero: the alias round IS the one bounded
@@ -4606,12 +4626,23 @@ async function finalSnapshot(
     // deployed path, the immediate re-fetch after a budget-cut zero answers
     // fine once the discovery/handshake caches are warm. Whatever the retry
     // returns IS live data from this run — still no bundled snapshot.
-    const wider = widerQuery(q);
+    // REEA-1270 — when this run dispatched a corrected spelling and it
+    // answered nothing, the ONE bounded retry falls back to the shopper's
+    // TYPED spelling (with the correction disabled, so it cannot loop back to
+    // the same empty corrected query). Retailer engines sometimes fuzzy-answer
+    // the typo (`whirpool microwave` answers microwave rows) while the strict
+    // corrected phrase answers nothing, so the correction never loses that
+    // recovery. A run without a correction keeps the shipped trimmed-token
+    // widening byte-for-byte.
+    const wider = nearMiss ? nearMiss.from : widerQuery(q);
     attemptedQueries = wider === q ? [q] : [q, wider];
     const retry = await collectLiveResults(wider, {
       fetchImpl,
       country,
       widenedRetry: true,
+      // The fallback re-dispatches the typed spelling, so the correction must
+      // not be re-applied to it.
+      skipCorrection: nearMiss !== undefined,
       locale,
       // REEA-1078 S2 — the widened round is the same dispatch decision: a
       // retired lane must not be re-contacted here either.
@@ -4621,6 +4652,9 @@ async function finalSnapshot(
     if (retry.products.length > 0) {
       products = retry.products;
       widenedWithAnswers = true;
+      // The served rows came from the TYPED spelling, so the correction line
+      // must not claim them: the shelf is the shopper's own query answered.
+      answeredByTyped = nearMiss !== undefined;
       // Coverage honesty: a merchant whose retry hop answered overwrites its
       // round-one note (the coverage line describes what the served cards
       // actually came from); merchants that stayed silent keep their note.
@@ -4657,7 +4691,10 @@ async function finalSnapshot(
     // replaced, only supplemented. Without this the converged answer could
     // still miss a pinned cross-retailer pair whose second row the retailer's
     // page had rotated out.
-    const fill = await fillSilentFromLastSeen(q, null, settled, Date.now(), undefined, {
+    // REEA-1270 — the fill reads the shopper's TYPED-query bucket (the same
+    // last-seen store the pre-correction runs wrote), so a corrected dispatch
+    // never starts cold and the typo's labeled rows still join the page.
+    const fill = await fillSilentFromLastSeen(nearMiss?.from ?? q, null, settled, Date.now(), undefined, {
       includeAnswered: true,
     });
     if (fill.length > 0) {
@@ -4677,8 +4714,21 @@ async function finalSnapshot(
       : nearMatchSuggestions(q, nearPool);
   // REEA-835 — the converged snapshot stamps the flags too, so the settled
   // view (and the follow-up feed that replaces the finalized one) re-derives
-  // the same honesty state the flushes carried.
-  return withHonestyFlags(q, { products, notes: servedNotes, suggestions, attemptedQueries });
+  // the same honesty state the flushes carried. REEA-1270 — `q` is the run's
+  // dispatch spelling (corrected when a bounded near miss applied), so the
+  // scope/honesty fields are stamped against the spelling the retailers
+  // answered. When the bounded fallback answered under the TYPED spelling,
+  // the snapshot is stamped and named against that spelling instead, and no
+  // correction provenance is claimed for rows the correction did not fetch.
+  return withHonestyFlags(answeredByTyped ? (nearMiss?.from ?? q) : q, {
+    products,
+    notes: servedNotes,
+    suggestions,
+    attemptedQueries,
+    ...(nearMiss && !answeredByTyped
+      ? { correction: { from: nearMiss.from, to: nearMiss.to, tokens: nearMiss.tokens } }
+      : {}),
+  });
 }
 
 /**
@@ -4732,6 +4782,14 @@ export interface StagedCollectOptions {
    * rounds (whole query + one trimmed form) instead of recursing per level.
    */
   widenedRetry?: boolean;
+  /**
+   * REEA-1270 — set by the near-miss fallback round: it re-dispatches the
+   * shopper's TYPED spelling after the corrected spelling answered nothing,
+   * so the correction must not be re-applied to it (that would loop back to
+   * the same empty corrected query). The corrected spelling is still the
+   * primary dispatch of the run.
+   */
+  skipCorrection?: boolean;
   /**
    * REEA-510 — last-seen snapshot participation. Default follows the memo
    * rule: production calls (no injected fetchImpl) use the shared snapshot
@@ -5177,6 +5235,21 @@ export function collectLiveResultsStaged(
     query,
     opts,
   );
+  // REEA-1270 (Bet 3) — the bounded near-miss correction is part of THIS
+  // dispatch, not a second round. The Bet 8 alias rule ("one dispatch
+  // spelling") is the model: the corrected spelling is the one every adapter
+  // hop, the ranking/scope gate and the served snapshots read, so a corrected
+  // `samsung washing machine` shelf is not re-classified against `mashine` and
+  // no extra cold fan-out is spent re-spelling (R-4). The memo/follow-up
+  // identity stays the shopper's own query string, so a repeat of the typed
+  // spelling hits the same entry and the follow-up feed still finds this run.
+  // A corrected spelling that answers NOTHING falls back once to the typed
+  // spelling inside the run's existing single bounded retry slot (see
+  // finalSnapshot), so a typo the retailers fuzzy-answer (`whirpool
+  // microwave` → microwave rows) is never lost by the correction.
+  const nearMiss = opts.skipCorrection ? null : nearMissCorrection(q);
+  const correction = nearMiss ?? undefined;
+  const servedQuery = nearMiss ? nearMiss.to : q;
   // REEA-1078 — ANY cache hit means a cached live answer led the first paint
   // (fresh memo hit, or the SWR repeat below). The serve kind is stamped from
   // that fact so the weekly fold records the shopper's serve clock instead of
@@ -5185,7 +5258,10 @@ export function collectLiveResultsStaged(
   if (cached && !cached.stale) {
     // REEA-743 — the memo hit bypasses the fresh ranking chain entirely:
     // re-head the stored snapshot with the exact-SKU guard at serve time.
-    const served = Promise.resolve(skuLeadSnap(q, cached.value));
+    // REEA-1270 — the stored snapshot was written by this dispatch and carries
+    // its own `correction` (or none, when the typed fallback answered), so the
+    // memo replay names exactly what the run searched.
+    const served = Promise.resolve(skuLeadSnap(servedQuery, cached.value));
     // REEA-871 — a memo hit ran no fan-out, so the telemetry is empty by
     // contract: the weekly fold records no adapter attempts for this serve.
     return {
@@ -5217,7 +5293,7 @@ export function collectLiveResultsStaged(
           // REEA-743 — same serve-time head guard on the replayed snapshot.
           // REEA-1141 — flagged as a replay: the renderer paints the live
           // stage's newest version instead of appending a stale shelf.
-          (snap) => (snap ? replaySnap(q, snap) : new Promise<LiveSearchResult>(() => {})),
+          (snap) => (snap ? replaySnap(servedQuery, snap) : new Promise<LiveSearchResult>(() => {})),
         )
       : null;
 
@@ -5229,6 +5305,9 @@ export function collectLiveResultsStaged(
   // read and the ≤5 s gate (REEA-523) keeps the whole budget for the hops.
   let seenRows: SeenRow[] = [];
   const seenRowsP: Promise<SeenRow[]> = snapshotsEnabled
+    // REEA-1270 — observations stay keyed by the shopper's typed query, the
+    // bucket the pre-correction runs wrote, so a corrected dispatch reuses
+    // them instead of starting cold under the corrected spelling.
     ? readSeenObservations(q, collectors.map((c) => c.merchant), { country }).then((rows) => {
         seenRows = rows;
         return rows;
@@ -5264,7 +5343,10 @@ export function collectLiveResultsStaged(
     return new Promise<void>((resolve) => waiting.push({ need: target, resolve }));
   }
 
-  const runs = collectors.map((c) => collectSettled(c, q, fetchImpl));
+  // REEA-1270 — every hop is dispatched under the run's ONE dispatch spelling
+  // (the corrected form when a bounded near miss applied), exactly like the
+  // Bet 8 Arabic alias bridge above it.
+  const runs = collectors.map((c) => collectSettled(c, servedQuery, fetchImpl));
   for (const p of runs) {
     void p.then((s) => {
       settled.push(s);
@@ -5297,16 +5379,38 @@ export function collectLiveResultsStaged(
   // response-cache write-through.
   const finalizeAtDeadline: Promise<LiveSearchResult> = new Promise<void>((resolve) =>
     setTimeout(resolve, deadlineMs),
-  ).then(async () => finalizedSnapshot(q, country, collectors, settled.slice(), deadlineMs, locale, await seenRowsP));
+  ).then(async () =>
+    finalizedSnapshot(
+      servedQuery,
+      country,
+      collectors,
+      settled.slice(),
+      deadlineMs,
+      locale,
+      await seenRowsP,
+      correction,
+    ),
+  );
   const converged: Promise<LiveSearchResult> = Promise.all(runs)
-    .then(() => deepenSilent(q, settled, fetchImpl))
+    .then(() => deepenSilent(servedQuery, settled, fetchImpl))
     // REEA-510 — publish this round's live answers as last-seen snapshots on
     // the SAME converged tail the response cache write-through rides (the
     // after() window): one write per run, behind the finalized response, so
     // the next silent pass for a retailer+query has its labeled fallback.
     .then(() => (snapshotsEnabled ? rememberRound(q, settled) : undefined))
     .then(async () =>
-      finalSnapshot(q, country, settled, fetchImpl, opts.widenedRetry === true, snapshotsEnabled, locale, await seenRowsP, opts.retiredLanes));
+      finalSnapshot(
+        servedQuery,
+        country,
+        settled,
+        fetchImpl,
+        opts.widenedRetry === true,
+        snapshotsEnabled,
+        locale,
+        await seenRowsP,
+        opts.retiredLanes,
+        nearMiss ?? undefined,
+      ));
 
   // REEA-1068 D4 — the memo should end up holding the COMPLETED answer, not
   // only the budget-finalized one. writeLiveAnswer below stores a truncated
@@ -5338,14 +5442,18 @@ export function collectLiveResultsStaged(
   const stages: Promise<LiveSearchResult>[] = collectors.map(async (_c, k) => {
     if (k < collectors.length - 1) {
       return await Promise.race([
-        untilArrivals(k + 1).then(() => stagedSnapshot(q, country, settled.slice(), locale, seenRows)),
+        untilArrivals(k + 1).then(() =>
+          stagedSnapshot(servedQuery, country, settled.slice(), locale, seenRows, [], correction),
+        ),
         finalizeAtDeadline,
         ...(k === 0 && sharedWarm ? [sharedWarm] : []),
       ]);
     }
     return await Promise.race([converged, finalizeAtDeadline, ...(sharedWarm && collectors.length === 1 ? [sharedWarm] : [])]);
   });
-  const final: Promise<LiveSearchResult> = stages[stages.length - 1] ?? Promise.resolve(stagedSnapshot(q, country, settled, locale, seenRows));
+  const final: Promise<LiveSearchResult> = stages[stages.length - 1] ?? Promise.resolve(
+    stagedSnapshot(servedQuery, country, settled, locale, seenRows, [], correction),
+  );
 
   // Write-through carries the LIVE answer only (products with their scrapedAt
   // stamps included). REA-674 fix 4 — the memo stores WHAT THE COMPLETED
@@ -5425,7 +5533,7 @@ export function collectLiveResultsStaged(
     // paints the live stage's newest version of the same products rather than
     // appending the stale shelf beside it, so one productId = one card.
     return {
-      stages: [Promise.resolve(replaySnap(q, cached.value)), ...stages],
+      stages: [Promise.resolve(replaySnap(servedQuery, cached.value)), ...stages],
       final,
       allSettled,
       converged,
