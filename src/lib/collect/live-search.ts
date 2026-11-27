@@ -2399,6 +2399,26 @@ export const COLLECTORS: RetailerCollector[] = [
         // shell (measured 2026-11-27: the plain hop answered no cards while the
         // same URL from a second egress answered 24 priced ones), so the identity
         // handshake leads and the browser/relay follow only on a shell.
+        // The plain shape first: the box's plain fetch of this host answers 200
+        // for the search view (measured: Ounass settles an explicit no-match,
+        // not a challenge), so the listing deserves the same cheap attempt before
+        // any clearance machinery is spent on it.
+        const plain = await fetchChecked(
+          fetchImpl,
+          listingUrl,
+          {
+            headers: {
+              accept: "text/html,application/xhtml+xml",
+              "accept-language": "en-US,en;q=0.9",
+              "user-agent": "Mozilla/5.0",
+            },
+          },
+          AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
+        )
+          .then((res) => res.text())
+          .catch(() => "");
+        const fromPlain = parse(plain);
+        if (fromPlain.length > 0) return fromPlain;
         const handshook = await challengeHtmlHop(fetchImpl, listingUrl).catch(() => "");
         const direct = parse(handshook);
         if (direct.length > 0) return direct;
