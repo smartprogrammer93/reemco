@@ -14,7 +14,13 @@
 import type { CountryCode } from "@/lib/country";
 import { comparisonMerchantCount } from "@/lib/offer-integrity";
 import { fill, getStrings, type Locale } from "@/lib/i18n";
-import { carriesExactModel, exactModelQuery } from "@/lib/relevance";
+import {
+  carriesExactModel,
+  categoryIntent,
+  exactModelQuery,
+  matchesModelIdentity,
+  modelIdentityTokens,
+} from "@/lib/relevance";
 import type { NormalizedProduct } from "@/types/product";
 
 /** Cards per page are not needed here; every card on the rendered page counts. */
@@ -142,5 +148,15 @@ export function exactModelCardCount(
   products: readonly NormalizedProduct[],
   query: string,
 ): number | undefined {
-  return isExactModelQuery(query) ? exactModelCardsOf(products, query).length : undefined;
+  // The override exists only where the sentence says "this exact model":
+  // a model-identity token and no category class (the coverage sentence's own
+  // predicate).
+  const models = modelIdentityTokens(query);
+  if (models.length === 0 || categoryIntent(query) !== null) return undefined;
+  if (isExactModelQuery(query)) return exactModelCardsOf(products, query).length;
+  // Model-only queries ("iphone 17 pro", "fold 7") name no curated brand: the
+  // cards that answer the model token are the exact-model cards.
+  return products.filter((p) =>
+    models.some((m) => matchesModelIdentity(p.title.toLowerCase(), m)),
+  ).length;
 }

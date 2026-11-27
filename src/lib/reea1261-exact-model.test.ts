@@ -290,15 +290,33 @@ describe("AC-2 — the coverage sentence counts the exact-model cards, not the l
   });
 });
 
-describe("AC-2 — the coverage override applies only to brand+model queries", () => {
-  it("returns undefined for iphone 17 pro so its lane count stands", () => {
-    // "iphone 17 pro" names no curated brand, so exactModelQuery is null and
-    // the shelf's seven exact cards must not be overridden with 0 (measured
-    // live on 63ab065: "none carry this exact model" above seven cards).
-    expect(exactModelCardCount([], "iphone 17 pro")).toBeUndefined();
+describe("AC-2 — the coverage override counts cards only where the sentence says so", () => {
+  it("keeps the lane count for a category query", () => {
     expect(exactModelCardCount([], "laptop")).toBeUndefined();
+    expect(exactModelCardCount([], "zzzzqqq")).toBeUndefined();
+  });
+
+  it("counts the model-only cards for iphone 17 pro (no curated brand word)", () => {
+    // Measured live on 63ab065: the lane count said "11 carry this exact
+    // model" above seven cards. The override reads the cards that answer the
+    // model token, so the sentence cannot exceed the shelf.
+    const iphones = [
+      liveProduct("iphone-1", "Apple iPhone 17 Pro 256GB", [kwOffer("Xcite", 499.9)]),
+      liveProduct("iphone-2", "Apple iPhone 17 Pro Max 512GB", [kwOffer("Blink", 599.9)]),
+    ];
+    expect(exactModelCardCount(iphones, "iphone 17 pro")).toBe(2);
+    expect(exactModelCardCount([], "iphone 17 pro")).toBe(0);
+  });
+
+  it("counts the brand+model cards for keychron v3 max", () => {
     expect(
-      exactModelCardCount([keychronCard([egOffer(700)])], "keychron v3 max"),
+      exactModelCardCount(
+        [
+          keychronCard([egOffer(700)]),
+          liveProduct("razer-x", razerTitles[0], [kwOffer("Quadra Stores", 21.9)]),
+        ],
+        "keychron v3 max",
+      ),
     ).toBe(1);
   });
 });
