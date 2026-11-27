@@ -52,6 +52,9 @@ import { collectedAgeLabel, clientLocale, fill, getStrings, type Locale } from "
 // results surface reads it only for the substitution line and the Arabic
 // empty-state suggestions, so the lexicon ships as one static asset (AC-7).
 import { ARABIC_EMPTY_SUGGESTIONS, arabicQueryAlias } from "@/lib/arabic-lexicon";
+// REEA-1247 — nearest in-market recovery for the zero-offer page: pure, live
+// from the run's own snapshot products, and never a fabricated offer.
+import { nearestMatches } from "@/lib/zero-recovery";
 import type { NormalizedProduct } from "@/types/product";
 
 /**
@@ -451,6 +454,141 @@ function AccessoryBand({
         })}
       </ul>
     </section>
+  );
+}
+
+/**
+ * REEA-1247 AC3/AC4/AC5 — the zero-offer recovery surface. It replaces the old
+ * "Accessories for this product" band on a page that has no product: a zero
+ * result cannot own accessories, and padding the last impression with a
+ * children's book and a games console is the defect this ticket names.
+ *
+ * Only REAL live offers from this run's own snapshot are eligible. Every item
+ * must carry the shopper's matched query term (the label names it) and at least
+ * one in-market (Kuwait) offer, so the band never claims a Kuwait match that
+ * has no Kuwait price. When nothing is in market the page says "Not stocked in
+ * Kuwait" and keeps the foreign offers in a separate, clearly-labelled band.
+ * Capped at RECOVERY_CAP; deterministic order from the snapshot alone.
+ */
+function ZeroRecovery({
+  products,
+  query,
+  locale,
+  queryId,
+}: {
+  /** The selection-filtered non-primary cards of the run (related + accessory). */
+  products: NormalizedProduct[];
+  query: string;
+  locale?: Locale;
+  queryId?: string;
+}) {
+  const l = locale ?? clientLocale();
+  const t = getStrings(l);
+  const { inMarket, foreign } = nearestMatches(query, products);
+  if (inMarket.length === 0 && foreign.length === 0) return null;
+  return (
+    <>
+      {inMarket.length > 0 ? (
+        <section
+          className="related-band recovery-band"
+          aria-label={t.youMightAlsoLike}
+          data-recovery-band="true"
+          style={{ marginTop: "var(--rc-space-8)" }}
+        >
+          <h2 className="related-band-title" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
+            {t.youMightAlsoLike}
+          </h2>
+          <ul className="related-band-list mt-2">
+            {inMarket.map((item) => (
+              <li
+                key={item.product.productId}
+                className="related-item"
+                data-recovery-item="true"
+                data-recovery-term={item.matchedTerm}
+                data-recovery-market="KW"
+              >
+                <span className="related-chip">
+                  {fill(t.closestMatchChip, { term: item.matchedTerm })}
+                </span>
+                <Link
+                  href={`/product/${encodeURIComponent(item.product.productId)}`}
+                  className="related-item-link focusable"
+                  aria-label={`${fill(t.closestMatchChip, { term: item.matchedTerm })}: ${item.product.title}`}
+                  onClick={() => {
+                    if (!queryId) return;
+                    trackEvents([
+                      buildRelatedClick({
+                        queryId,
+                        offerId: item.product.productId,
+                        retailer: item.offers[0]?.merchant ?? "unknown",
+                      }),
+                    ]);
+                  }}
+                >
+                  <span className="related-item-title">{item.product.title}</span>
+                  <span className="related-item-meta" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
+                    {t.fromWord} {formatPrice(item.price, item.currency)}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : (
+        <p
+          className="not-stocked-line"
+          data-not-stocked="true"
+          style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)", marginTop: "var(--rc-space-4)" }}
+        >
+          {t.notStockedInKuwait}
+        </p>
+      )}
+      {foreign.length > 0 ? (
+        <section
+          className="related-band foreign-band"
+          aria-label={t.foreignAlternativesLabel}
+          data-foreign-band="true"
+          style={{ marginTop: "var(--rc-space-8)" }}
+        >
+          <h2 className="related-band-title" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
+            {t.foreignAlternativesLabel}
+          </h2>
+          <ul className="related-band-list mt-2">
+            {foreign.map((item) => (
+              <li
+                key={item.product.productId}
+                className="related-item"
+                data-foreign-item="true"
+                data-recovery-term={item.matchedTerm}
+                data-market={item.market}
+              >
+                <span className="related-chip">{marketName(item.market, l)}</span>
+                <Link
+                  href={`/product/${encodeURIComponent(item.product.productId)}`}
+                  className="related-item-link focusable"
+                  aria-label={`${marketName(item.market, l)}: ${item.product.title}`}
+                  onClick={() => {
+                    if (!queryId) return;
+                    trackEvents([
+                      buildRelatedClick({
+                        queryId,
+                        offerId: item.product.productId,
+                        retailer: item.offers[0]?.merchant ?? "unknown",
+                      }),
+                    ]);
+                  }}
+                >
+                  <span className="related-item-title">{item.product.title}</span>
+                  <span className="related-item-meta" style={{ font: "var(--rc-text-small)", color: "var(--rc-muted)" }}>
+                    {t.fromWord} {formatPrice(item.price, item.currency)}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+    </>
   );
 }
 
@@ -1054,6 +1192,7 @@ function CoverageLine({
   pendingStatus,
   onRefresh,
   unreachableLanes,
+  shelfEmpty,
   className,
 }: {
   notes: LiveSearchResult["notes"];
@@ -1066,9 +1205,13 @@ function CoverageLine({
   onRefresh?: () => void;
   /** REEA-1078 AC9 — merchants the reachability record names as blocked. */
   unreachableLanes?: readonly string[];
+  /** REEA-1247 AC1/AC2 — the primary shelf renders zero offers, so the
+   *  painted `products` set may still hold related-band rows that must not be
+   *  named under "Prices from" or counted as "carry this". */
+  shelfEmpty?: boolean;
   className?: string;
 }) {
-  const parts = coverageParts(notes, locale, products, unreachableLanes, query);
+  const parts = coverageParts(notes, locale, products, unreachableLanes, query, shelfEmpty);
   if (parts.length === 0 && !pendingStatus) return null;
   // REEA-778 — the settled sentence rides the SAME lh-tier box as its
   // StampGhost reserve (one shared deterministic box per locale tier): the
@@ -1219,10 +1362,16 @@ function StageEmptyState(props: {
             : undefined
         }
       />
-      {/* REEA-1201 AC 7b-2 — the streamed zero-primary view keeps accessory
-          cards in their labelled band, never in the primary slot. */}
-      <AccessoryBand items={sections.accessory} locale={props.locale} queryId={props.queryId} />
-      <RelatedBand items={sections.related} locale={props.locale} queryId={props.queryId} />
+      {/* REEA-1247 AC3/AC4 — a zero-primary page has no product, so it cannot
+          own "Accessories for this product": the band is replaced by nearest
+          in-market matches ("You might also like") from this run's live rows,
+          with foreign-only answers kept in their own separated band. */}
+      <ZeroRecovery
+        products={[...sections.related, ...sections.accessory]}
+        query={props.query}
+        locale={props.locale}
+        queryId={props.queryId}
+      />
     </>
   );
 }
@@ -1299,6 +1448,51 @@ export function renderedAcrossStages(
   });
 }
 
+/**
+ * REEA-1247 AC1/AC2 — the PRIMARY shelf rows across the streamed stages, i.e.
+ * the rows "Prices from …" may vouch for. The painted union above also carries
+ * the related band (REEA-964), which is exactly why a zero-offer page used to
+ * name related-band merchants under "Prices from" above "0 retailer offers".
+ * This companion answers only the shelf question; an empty result means the
+ * page has no shelf price, so the coverage sentence switches to the honest
+ * zero-offer grammar.
+ */
+export function renderedShelfAcrossStages(
+  stages: readonly Promise<LiveSearchResult>[],
+  query: string,
+  page: number,
+  country: CountryCode | null,
+  showOutOfStock: boolean,
+): Promise<NormalizedProduct[]> {
+  return Promise.all(
+    stages.map((stage) =>
+      Promise.resolve(stage).then((snap) => {
+        if (snap.replay === true) return [];
+        try {
+          return stagedSections(snap, query, country, showOutOfStock).primary.slice(
+            (page - 1) * PAGE_SIZE,
+            page * PAGE_SIZE,
+          );
+        } catch {
+          return [];
+        }
+      }),
+    ),
+  ).then((views) => {
+    const seenIds = new Set<string>();
+    const rows: NormalizedProduct[] = [];
+    for (const view of views) {
+      if (!Array.isArray(view)) continue;
+      for (const p of view) {
+        if (seenIds.has(p.productId)) continue;
+        seenIds.add(p.productId);
+        rows.push(p);
+      }
+    }
+    return rows;
+  });
+}
+
 function StageCoverage(props: {
   stages: readonly Promise<LiveSearchResult>[];
   query: string;
@@ -1318,6 +1512,14 @@ function StageCoverage(props: {
       [props.stages, props.query, props.page, props.country, props.showOutOfStock],
     ),
   );
+  // REEA-1247 — the shelf truth is separate from the painted union: the union
+  // includes related-band rows, which are suggestions, not results.
+  const shelfRows = use(
+    useMemo(
+      () => renderedShelfAcrossStages(props.stages, props.query, props.page, props.country, props.showOutOfStock),
+      [props.stages, props.query, props.page, props.country, props.showOutOfStock],
+    ),
+  );
   // REEA-574 R1 + REEA-601 — contributor names are recomputed at paint time
   // from the rows the streamed blocks actually render (country / out-of-stock
   // selections included), so a name in the sentence always has ≥1 visible
@@ -1332,6 +1534,7 @@ function StageCoverage(props: {
       pendingStatus={snap.kuwaitPendingStatus}
       onRefresh={props.onRefresh}
       unreachableLanes={props.unreachableLanes}
+      shelfEmpty={shelfRows.length === 0}
       className={props.className}
     />
   );
@@ -1537,7 +1740,12 @@ function StagedResults(props: {
                     : undefined
                 }
               />
-              <RelatedBand items={finalSections.related} locale={locale} queryId={props.queryId} />
+              <ZeroRecovery
+                products={[...finalSections.related, ...finalSections.accessory]}
+                query={query}
+                locale={locale}
+                queryId={props.queryId}
+              />
             </>
           ) : null}
         </ResultsErrorBoundary>
@@ -1601,11 +1809,14 @@ function StagedResults(props: {
                   : undefined
               }
             />
-            {/* REEA-1201 AC 7b-2 — accessory cards keep their labelled band
-                even when the primary shelf is empty; they never masquerade as
-                a primary result. */}
-            <AccessoryBand items={finalSections.accessory} locale={locale} queryId={props.queryId} />
-            <RelatedBand items={finalSections.related} locale={locale} queryId={props.queryId} />
+            {/* REEA-1247 AC3/AC4 — zero primary shelf: no accessory band on a
+                page with no product; nearest in-market matches instead. */}
+            <ZeroRecovery
+              products={[...finalSections.related, ...finalSections.accessory]}
+              query={query}
+              locale={locale}
+              queryId={props.queryId}
+            />
           </>
         ) : (
           <>
@@ -1971,8 +2182,12 @@ function ResultsInner(props: {
                 : undefined
             }
           />
-          <AccessoryBand items={plainSections.accessory} locale={locale} queryId={props.queryId} />
-          <RelatedBand items={plainSections.related} locale={locale} queryId={props.queryId} />
+          <ZeroRecovery
+            products={[...plainSections.related, ...plainSections.accessory]}
+            query={query}
+            locale={locale}
+            queryId={props.queryId}
+          />
         </>
       ) : (
         <>

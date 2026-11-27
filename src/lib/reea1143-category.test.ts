@@ -337,7 +337,9 @@ describe("REEA-1143 AC3/AC4 — aggregate coverage on thin and zero pages", () =
       "en",
       [],
     );
-    expect(line.startsWith("4 stores checked · 1 carries this · 2 failed · 1 empty.")).toBe(true);
+    // REEA-1247 AC1 — Danube Home's four rows never reached the shelf, so the
+    // zero page says "none carry this" and names the similar-items lane.
+    expect(line.startsWith("4 stores checked · none carry this · 1 store had similar items, none matched · 2 failed · 1 empty.")).toBe(true);
     expect(line).toContain("No response from Aster Pharmacy and BinSina.");
     expect(line).toContain("No match at Nahdi.");
   });

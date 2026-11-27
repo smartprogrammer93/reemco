@@ -257,12 +257,23 @@ function coverageAggregateText(
   seen: ReadonlySet<string>,
   ar: boolean,
   query?: string,
+  /**
+   * REEA-1247 AC1 — true when this page renders ZERO offers on the primary
+   * shelf (a zero-offer / filtered-empty page). In that state a lane that
+   * returned hits but whose rows were all filtered away is NOT a lane that
+   * "carries this": counting it made the live page say "12 carry this" above
+   * "0 retailer offers". It is counted in the honest `similar` bucket instead
+   * ("N had similar items, none matched"), and the rendered-offer set is not
+   * read as contributors because the zero page renders no primary row at all.
+   */
+  zeroShelf = false,
 ): string {
   if (notes.length === 0) return "";
   const blockedSet = new Set(blocked);
   let answered = 0;
   let empty = 0;
   let failed = 0;
+  let similar = 0;
   for (const n of notes) {
     if (blockedSet.has(n.merchant)) {
       failed += 1;
@@ -272,13 +283,17 @@ function coverageAggregateText(
     // its note carries an error (a partial hop, or a labeled last-seen row).
     // It counts as answered, never as failed, so the aggregate "N failed" can
     // never exceed the lanes the "No response from" sentence names.
-    if (seen.has(n.merchant)) {
+    // REEA-1247 AC1 — on a zero-offer page nothing rendered on the shelf, so
+    // `seen` (which may still hold related-band rows) cannot speak for it.
+    if (!zeroShelf && seen.has(n.merchant)) {
       answered += 1;
       continue;
     }
     if (n.error) failed += 1;
-    else if (n.hits > 0) answered += 1;
-    else empty += 1;
+    else if (n.hits > 0) {
+      if (zeroShelf) similar += 1;
+      else answered += 1;
+    } else empty += 1;
   }
   const checked = notes.length;
   // "carries this exact model" only when the query names one (a model-number
@@ -311,6 +326,18 @@ function coverageAggregateText(
               ? `${answered} متاجر توفّر ${target}`
               : `${answered} متجر يوفّر ${target}`;
     const parts = [head, carries];
+    if (similar > 0) {
+      // REEA-1247 AC1 — what those non-rendering lanes actually returned.
+      parts.push(
+        similar === 1
+          ? "متجر واحد لديه عناصر مشابهة، لا مطابقة"
+          : similar === 2
+            ? "متجران لديهما عناصر مشابهة، لا مطابقة"
+            : similar <= 10
+              ? `${similar} متاجر لديها عناصر مشابهة، لا مطابقة`
+              : `${similar} متجرًا لديها عناصر مشابهة، لا مطابقة`,
+      );
+    }
     if (failed > 0) parts.push(`لم يستجب ${failed}`);
     if (empty > 0 && (answered > 0 || failed > 0)) parts.push(`${empty} بلا مطابقة`);
     return `${parts.join(" · ")}.`;
@@ -324,6 +351,14 @@ function coverageAggregateText(
         ? `1 carries ${carryBase}`
         : `${answered} carry ${carryBase}`;
   const parts = [head, carries];
+  if (similar > 0) {
+    // REEA-1247 AC1 — what those non-rendering lanes actually returned.
+    parts.push(
+      similar === 1
+        ? "1 store had similar items, none matched"
+        : `${similar} stores had similar items, none matched`,
+    );
+  }
   if (failed > 0) parts.push(`${failed} failed`);
   if (empty > 0 && (answered > 0 || failed > 0)) parts.push(`${empty} empty`);
   return `${parts.join(" · ")}.`;
@@ -345,11 +380,23 @@ export function coverageParts(
    * wording; no query text ever appears in the sentence.
    */
   query?: string,
+  /**
+   * REEA-1247 AC1/AC2 — true when the primary shelf renders ZERO offers even
+   * though the painted set may still hold related-band rows. The caller passes
+   * the shelf truth explicitly because `rendered` also feeds the related band
+   * (REEA-964): without this flag a zero-offer page named related-band
+   * merchants under "Prices from" above a "0 retailer offers" count line.
+   */
+  shelfEmpty?: boolean,
 ): CoveragePart[] {
   const ordered = [...notes].sort(
     (a, b) => coverageRank(a.merchant) - coverageRank(b.merchant),
   );
   const ar = locale === "ar";
+  // REEA-1247 — a zero-offer page is the state where "N carry this" must not
+  // be claimed from notes alone. It also covers the legacy `rendered === []`
+  // shape (no painted set at all).
+  const zeroShelf = rendered !== undefined && (rendered.length === 0 || shelfEmpty === true);
   const unreachableSet = new Set(unreachable ?? []);
   const failed: string[] = [];
   const answered: string[] = [];
@@ -403,7 +450,7 @@ export function coverageParts(
   // sentences read, so "N failed" can never exceed the lanes the "No response
   // from" sentence names: a lane that errored but still rendered prices counts
   // as answered, not failed.
-  const aggregate = coverageAggregateText(ordered, blocked, seen, ar, query);
+  const aggregate = coverageAggregateText(ordered, blocked, seen, ar, query, zeroShelf);
   if (aggregate !== "") parts.push({ kind: "text", value: aggregate });
   const sentence = (next: CoveragePart[]) => {
     if (parts.length > 0) parts.push({ kind: "text", value: " " });
@@ -418,7 +465,7 @@ export function coverageParts(
     ]);
   }
   if (rendered) {
-    if (rendered.length === 0) {
+    if (zeroShelf) {
       // REEA-574 rev 1 (R1) still hides the CONTRIBUTOR half on a zero-row
       // page — there are no rendered prices to vouch for, so "Prices from …"
       // would phantom a merchant above an empty shelf. REEA-1068 D1 changes
@@ -426,6 +473,9 @@ export function coverageParts(
       // lie of omission, so the lanes that errored (and the lanes that
       // answered with nothing) are named as the reason the shelf is empty.
       // AC9's unreachable sentence rides the same branch for the same reason.
+      // REEA-1247 AC2 — this branch now also covers a page that paints
+      // related-band rows: those are suggestions, not shelf prices, so their
+      // merchants are not named under "Prices from".
       for (const n of ordered) {
         if (n.error) failed.push(n.merchant);
         else if (n.hits === 0) answeredEmpty.push(n.merchant);
@@ -522,8 +572,9 @@ export function coverageLine(
   rendered?: readonly NormalizedProduct[],
   unreachable?: readonly string[],
   query?: string,
+  shelfEmpty?: boolean,
 ): string {
-  return coverageParts(notes, locale, rendered, unreachable, query)
+  return coverageParts(notes, locale, rendered, unreachable, query, shelfEmpty)
     .map((p) => (p.kind === "text" ? p.value : summarizeNames(p.names, p.ar)))
     .join("");
 }

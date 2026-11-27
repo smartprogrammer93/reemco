@@ -184,7 +184,9 @@ describe("REEA-965 client offer events", () => {
         />,
       );
     });
-    const band = document.querySelector('[data-related-band="true"]');
+    // REEA-1247 AC3 — a zero-primary page renders its matched rows in the
+    // relabelled recovery band, and their clicks ride the same related_click.
+    const band = document.querySelector('[data-recovery-band="true"]');
     expect(band).not.toBeNull();
     const link = band!.querySelector<HTMLAnchorElement>("a.related-item-link");
     expect(link).not.toBeNull();

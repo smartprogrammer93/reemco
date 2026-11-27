@@ -234,6 +234,15 @@ const en = {
   // "stores didn't answer" variant (never imply a no-match on an outage).
   relatedNotExactLabel: "Related items — not an exact match",
   relatedChip: "Related",
+  // REEA-1247 AC3/AC4/AC5 — the zero-offer recovery surface. The band is
+  // relabelled so it never reads as "accessories for a product" that is not on
+  // the page; every row names the query term it actually matched, and a
+  // foreign-only answer is separated under its own heading instead of being
+  // called a Kuwait match.
+  youMightAlsoLike: "You might also like",
+  closestMatchChip: "Closest match: “{term}”",
+  notStockedInKuwait: "Not stocked in Kuwait",
+  foreignAlternativesLabel: "Available outside Kuwait",
   // REEA-1201 (Bet 7A-2) — the honest in-scope count line. The number is the
   // payload's primary-scope card count (never the padded shelf), so the line
   // says "in-scope" and names the query. Arabic carries its own dual/few/other
@@ -582,6 +591,11 @@ const ar: typeof en = {
   emptyExample3: "كيندل",
   relatedNotExactLabel: "عناصر ذات صلة — ليست مطابقة تامة",
   relatedChip: "ذات صلة",
+  // REEA-1247 AC3/AC4/AC5 — the AR side of the zero-offer recovery surface.
+  youMightAlsoLike: "قد يعجبك أيضًا",
+  closestMatchChip: "أقرب مطابقة: «{term}»",
+  notStockedInKuwait: "غير متوفر في الكويت",
+  foreignAlternativesLabel: "متوفر خارج الكويت",
   // REEA-1201 (Bet 7A-2) — Arabic plural ladder for the honest count line.
   inScopeCountOne: "منتج واحد ضمن نطاق البحث عن «{q}»",
   inScopeCountDual: "منتجان ضمن نطاق البحث عن «{q}»",

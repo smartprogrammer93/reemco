@@ -1577,11 +1577,18 @@ describe("R2: honest empty state + relevance hierarchy (REEA-964)", () => {
     const html = document.body.innerHTML;
     expect(html).toContain("No match found");
     expect((document.body.textContent ?? "").replace(/\s+/g, " ")).toContain("0 results for");
-    const band = document.querySelector('[data-related-band="true"]');
-    expect(band?.getAttribute("aria-label")).toBe("Related items — not an exact match");
-    expect(band?.querySelectorAll("[data-related-item]").length).toBe(3);
+    // REEA-1247 AC3/AC4 supersedes the REEA-964 zero-page band: a page with no
+    // product cannot own "Accessories for this product". The matched live rows
+    // ride a relabelled recovery band, each naming the term it matched.
+    const band = document.querySelector('[data-recovery-band="true"]');
+    expect(band?.getAttribute("aria-label")).toBe("You might also like");
+    expect(band?.querySelectorAll("[data-recovery-item]").length).toBe(3);
+    expect(band?.textContent).toContain("Closest match: “iphone”");
+    expect(document.querySelector('[data-accessory-band="true"]')).toBeNull();
+    expect(document.body.textContent ?? "").not.toContain("Accessories for this product");
+    expect(document.body.textContent ?? "").not.toContain("Prices from");
     // The band never occupies the primary position: it follows the section.
-    expect(html.indexOf("No match found")).toBeLessThan(html.indexOf("Related items — not an exact match"));
+    expect(html.indexOf("No match found")).toBeLessThan(html.indexOf("You might also like"));
   });
 
   it("AC-3: the related band renders at most 6 items, each labeled related", async () => {

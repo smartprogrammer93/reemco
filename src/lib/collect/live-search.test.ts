@@ -2498,8 +2498,13 @@ describe("REA-290 — retry once with backoff + per-query coverage line", () => 
       "4 stores checked · 4 carry this. Prices from Jarir.",
     );
     // Zero rendered rows, no failures, no empty answers → the contributor
-    // half stays hidden (REEA-574 R1); REEA-1143 keeps the aggregate scale.
-    expect(coverageLine(notes, "en", [])).toBe("3 stores checked · 3 carry this.");
+    // half stays hidden (REEA-574 R1). REEA-1247 AC1 — those lanes answered
+    // with hits but none of them reached the shelf, so the aggregate says
+    // "none carry this" and names what they returned instead of claiming
+    // three stores carry a query whose page renders zero offers.
+    expect(coverageLine(notes, "en", [])).toBe(
+      "3 stores checked · none carry this · 3 stores had similar items, none matched.",
+    );
   });
 
   it("REEA-1068 D1 — a zero-row page names the lanes that failed or answered empty", () => {
@@ -2518,17 +2523,18 @@ describe("REA-290 — retry once with backoff + per-query coverage line", () => 
     ];
     expect(coverageLine(notes, "en", [])).toBe(
       // REEA-1143 — the thin/zero page states the aggregate scale first, then
-      // names the lanes: 4 checked, 1 carried it, 2 failed, 1 empty.
-      "4 stores checked · 1 carries this · 2 failed · 1 empty. No response from Aster Pharmacy and BinSina. No match at Nahdi.",
+      // names the lanes. REEA-1247 AC1 — Danube Home's four rows never reached
+      // the shelf, so it is a "similar items" lane, not a "carries this" lane.
+      "4 stores checked · none carry this · 1 store had similar items, none matched · 2 failed · 1 empty. No response from Aster Pharmacy and BinSina. No match at Nahdi.",
     );
     expect(coverageLine(notes, "en", [])).not.toContain("Prices from");
     // AR/RTL — same facts, Arabic sentence shapes, isolated Latin names.
     expect(coverageLine(notes, "ar", []).trim()).toBe(
-      "تم فحص 4 متاجر · متجر واحد يوفّر هذا · لم يستجب 2 · 1 بلا مطابقة. لم تستجب Aster Pharmacy وBinSina هذه المرة. لا توجد مطابقة لدى Nahdi.",
+      "تم فحص 4 متاجر · لا أحد يوفّر هذا · متجر واحد لديه عناصر مشابهة، لا مطابقة · لم يستجب 2 · 1 بلا مطابقة. لم تستجب Aster Pharmacy وBinSina هذه المرة. لا توجد مطابقة لدى Nahdi.",
     );
     // One statement per lane: an unreachable lane is not also "no response".
     expect(coverageLine(notes, "en", [], ["Aster Pharmacy"])).toBe(
-      "4 stores checked · 1 carries this · 2 failed · 1 empty. Unreachable: Aster Pharmacy. No response from BinSina. No match at Nahdi.",
+      "4 stores checked · none carry this · 1 store had similar items, none matched · 2 failed · 1 empty. Unreachable: Aster Pharmacy. No response from BinSina. No match at Nahdi.",
     );
     // A GENUINE zero (every lane answered, all with nothing) keeps the lane
     // list quiet — naming twenty empty lanes would just be noise — but the
