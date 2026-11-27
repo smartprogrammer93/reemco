@@ -325,16 +325,16 @@ describe("REEA-760 coupon honesty line", () => {
   });
 });
 
-describe("REEA-541 Bet B — share-summary button placement", () => {
-  it("rides the header of the results card AND the detail variant alike", () => {
+describe("REEA-1255 — WhatsApp share placement (replaces the copy affordance)", () => {
+  it("rides the media slot of the results card AND the detail variant alike", () => {
     const list = render(<ProductResultCard product={product(false)} query="xm6" rank={0} />);
     expect(
-      list.getByRole("button", { name: "Copy price comparison summary" }),
+      list.getByRole("link", { name: "Share on WhatsApp" }),
     ).toBeTruthy();
     cleanup();
     const detail = render(<ProductResultCard product={product(false)} variant="detail" />);
     expect(
-      detail.getByRole("button", { name: "Copy price comparison summary" }),
+      detail.getByRole("link", { name: "Share this comparison on WhatsApp" }),
     ).toBeTruthy();
   });
 });

@@ -197,13 +197,19 @@ const en = {
   shareBestNowLead: "best now",
   shareVerifiedWord: "verified",
   // REEA-1255 — WhatsApp text+link share on the comparison surface. The
-  // visible label is short ("Share"); the accessible name names the channel.
-  // The prefilled message lead names the brand and the shopper's query; the
-  // offer list and page URL follow (see lib/whatsapp-share.ts).
-  whatsappShareAria: "Share on WhatsApp",
-  whatsappShareLabel: "Share",
-  whatsappShareBrand: "Reemco",
-  whatsappShareLead: "{brand} — “{q}”:",
+  // strings are pinned by the REEA-1257 spec §5 (visible label, accessible
+  // names, states, message templates). Keep them byte-identical to the spec.
+  shareWaAriaCard: "Share on WhatsApp",
+  shareWaAriaPdp: "Share this comparison on WhatsApp",
+  shareWaLabel: "WhatsApp",
+  shareWaTitle: "Share on WhatsApp",
+  shareWaCopied: "Copied",
+  shareWaCopiedAnnounce: "Copied — paste in WhatsApp",
+  shareWaCopyFailed: "Copy this message",
+  shareWaLoadingAria: "Share when prices load",
+  shareWaLead: "Kuwait price check",
+  shareWaLink: "Live comparison:",
+  shareWaNotStocked: "not stocked in Kuwait right now. Compare alternatives:",
   couponMoreSuffix: "more",
   couponNoneLabel: "No coupon available",
   errorTitle: "Something went wrong",
@@ -580,11 +586,18 @@ const ar: typeof en = {
   shareSummaryAria: "انسخ ملخص مقارنة الأسعار",
   shareBestNowLead: "أفضل سعر الآن",
   shareVerifiedWord: "تم التحقق",
-  // REEA-1255 — AR side of the WhatsApp share (same slots, RTL-safe).
-  whatsappShareAria: "شارك على واتساب",
-  whatsappShareLabel: "شارك",
-  whatsappShareBrand: "ريمكو",
-  whatsappShareLead: "{brand} — «{q}»:",
+  // REEA-1255 — AR side of the WhatsApp share, pinned by the REEA-1257 spec §5.
+  shareWaAriaCard: "شارك عبر واتساب",
+  shareWaAriaPdp: "شارك هذه المقارنة عبر واتساب",
+  shareWaLabel: "واتساب",
+  shareWaTitle: "شارك عبر واتساب",
+  shareWaCopied: "تم النسخ",
+  shareWaCopiedAnnounce: "تم النسخ — الصق الرسالة في واتساب",
+  shareWaCopyFailed: "انسخ هذه الرسالة",
+  shareWaLoadingAria: "شارك عند تحميل الأسعار",
+  shareWaLead: "مقارنة أسعار في الكويت",
+  shareWaLink: "المقارنة المباشرة:",
+  shareWaNotStocked: "غير متوفر في الكويت حالياً. قارن البدائل:",
   couponMoreSuffix: "أخرى",
   couponNoneLabel: "لا توجد قسيمة متاحة",
   errorTitle: "حدث خطأ ما",

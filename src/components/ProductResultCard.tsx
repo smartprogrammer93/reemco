@@ -34,7 +34,7 @@ import { canonicalKey, gradeBadgeLabel } from "@/lib/collect/canonical-product";
 import { ageSeconds, collectedClock, localizedAgeFromStamp } from "@/lib/relative-time";
 import CouponLine, { buildCouponRows } from "@/components/CouponLine";
 import PriceCompositionLine from "@/components/PriceCompositionLine";
-import ShareSummaryButton from "@/components/ShareSummaryButton";
+import ShareWhatsAppButton from "@/components/ShareWhatsAppButton";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import { LiveAge } from "@/components/OfferCtaLabel";
 import { resolveOfferUrl } from "@/lib/links";
@@ -155,7 +155,23 @@ function CategoryGlyph() {
  *  every other retailer image keeps its direct URL, and
  *  `referrerPolicy="no-referrer"` keeps our origin off the retailer CDN's
  *  logs. */
-function CardMedia({ product, locale, query, country }: { product: NormalizedProduct; locale?: Locale; query?: string; country?: CountryCode | null }) {
+function CardMedia({
+  product,
+  locale,
+  query,
+  country,
+  shareOrigin,
+  shareLoading = false,
+}: {
+  product: NormalizedProduct;
+  locale?: Locale;
+  query?: string;
+  country?: CountryCode | null;
+  /** REEA-1255 — server-resolved origin for the share's PDP URL. */
+  shareOrigin?: string;
+  /** REEA-1255 — true while the Kuwait batch may still land with no in-stock offer. */
+  shareLoading?: boolean;
+}) {
   const src = proxiedImageSrc(product.image ?? product.offers.find((o) => o.image)?.image);
   const displayTitle = cleanDisplayTitle(product.title);
   const alt = `${displayTitle} — ${locale === "ar" ? "صورة المنتج" : "product image"}`;
@@ -166,7 +182,15 @@ function CardMedia({ product, locale, query, country }: { product: NormalizedPro
           <CategoryGlyph />
         </span>
         <div className="rc-card-share">
-          <ShareSummaryButton product={product} query={query} country={country} locale={locale} iconOnly />
+          <ShareWhatsAppButton
+            product={product}
+            query={query}
+            country={country}
+            locale={locale}
+            origin={shareOrigin}
+            variant="card"
+            loading={shareLoading}
+          />
         </div>
       </div>
     );
@@ -187,7 +211,15 @@ function CardMedia({ product, locale, query, country }: { product: NormalizedPro
         />
       )}
       <div className="rc-card-share">
-        <ShareSummaryButton product={product} query={query} country={country} locale={locale} iconOnly />
+        <ShareWhatsAppButton
+          product={product}
+          query={query}
+          country={country}
+          locale={locale}
+          origin={shareOrigin}
+          variant="card"
+          loading={shareLoading}
+        />
       </div>
     </div>
   );
@@ -609,6 +641,7 @@ export default function ProductResultCard({
   locale,
   cascadeIndex,
   queryId,
+  shareOrigin,
 }: {
   product: NormalizedProduct;
   isBest?: boolean;
@@ -623,6 +656,8 @@ export default function ProductResultCard({
   renderStartMs?: number;
   locale?: Locale;
   cascadeIndex?: number;
+  /** REEA-1255 — server-resolved origin for the share's PDP URL. */
+  shareOrigin?: string;
 }) {
   const detail = variant === "detail";
   const t = getStrings(locale ?? clientLocale());
@@ -656,6 +691,10 @@ export default function ProductResultCard({
     (kuwaitPendingStatus ||
       !hasLocalOffer ||
       (best != null && best.currency.trim().toUpperCase() !== "KWD"));
+  // REEA-1255 — the share control stays inert until the first in-market
+  // in-stock offer resolves; a pending Kuwait batch with no local offer must
+  // never send a not-stocked message it cannot stand behind.
+  const shareLoading = kuwaitBatchPending && !hasLocalOffer;
   // REEA-1198 — the headline is rendered as its two parts so the price token
   // ("KD 0.47") is its own nowrap span: the sentence may wrap, the figure may
   // not split ("KD" / "0.47") at 375 AR on the disclosed-fallback path.
@@ -799,7 +838,14 @@ export default function ProductResultCard({
           {product.brand ? <RetailerChip>{product.brand}</RetailerChip> : null}
           {best && <StockDot state={best.inStock ? "in" : "out"} locale={locale} />}
           <FreshnessBadge scrapedAt={product.scrapedAt} renderStartMs={renderStartMs} locale={locale} />
-          <ShareSummaryButton product={product} query={query} country={viewCountry} locale={locale} />
+          <ShareWhatsAppButton
+            product={product}
+            query={query}
+            country={viewCountry}
+            locale={locale}
+            origin={shareOrigin}
+            variant="pdp"
+          />
         </div>
         <div className="mt-2 flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
           <div className="flex min-w-0 items-start gap-2">
@@ -923,7 +969,14 @@ export default function ProductResultCard({
         </span>
       </div>
 
-      <CardMedia product={product} locale={locale} query={query} country={viewCountry} />
+      <CardMedia
+        product={product}
+        locale={locale}
+        query={query}
+        country={viewCountry}
+        shareOrigin={shareOrigin}
+        shareLoading={shareLoading}
+      />
 
       <h2 className="rc-card-title" title={titleChanged ? product.title : undefined}>
         <Link href={buildProductHref(product.productId, query, viewCountry, clickSeed)} className="hover:underline">

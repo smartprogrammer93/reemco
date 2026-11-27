@@ -40,11 +40,9 @@ import PriceCompositionLine from "@/components/PriceCompositionLine";
 import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import CollectionPulse from "@/components/CollectionPulse";
 import OfferStatusToken, { StatusLegend } from "@/components/OfferStatus";
-import ShareSummaryButton from "@/components/ShareSummaryButton";
 // REEA-1255 — the SAME WhatsApp share component the results surface uses
 // (no parallel PDP implementation): the PDP is the other comparison surface.
 import ShareWhatsAppButton from "@/components/ShareWhatsAppButton";
-import { productShareUrl } from "@/lib/whatsapp-share";
 import { buildResultsHref } from "@/lib/country";
 import { cleanDisplayTitle, displayTitleChanged } from "@/lib/display-title";
 import { isProxiedImageSrc, proxiedImageSrc } from "@/lib/image-proxy";
@@ -67,7 +65,21 @@ function sortLiveOffers(offers: LiveOffer[], scope: CountryCode | null): LiveOff
   return sortOffersByMarket(offers, null, scope);
 }
 
-function ProductMedia({ product }: { product: NormalizedProduct }) {
+function ProductMedia({
+  product,
+  query,
+  country,
+  locale,
+  origin,
+  shareLoading,
+}: {
+  product: NormalizedProduct;
+  query?: string;
+  country?: CountryCode | null;
+  locale?: Locale;
+  origin?: string;
+  shareLoading?: boolean;
+}) {
   // REEA-1128 — same proxied-source policy as the results card: a Shopify
   // product photo is fetched through our own origin, so the hero cannot show
   // a broken thumbnail (or log a console 403) when the retailer CDN refuses
@@ -91,6 +103,18 @@ function ProductMedia({ product }: { product: NormalizedProduct }) {
           </svg>
         </span>
       )}
+      {/* REEA-1255 / REEA-1257 §2.2 — the share control lives inside the
+          media box at its top-inline-end, replacing the old absolute Copy
+          pill (0px layout height, so the h1/price/offer rows do not move). */}
+      <ShareWhatsAppButton
+        product={product}
+        query={query}
+        country={country}
+        locale={locale}
+        origin={origin}
+        variant="pdp"
+        loading={shareLoading}
+      />
     </div>
   );
 }
@@ -496,18 +520,15 @@ function ProductHeroBody({
         <Link href={buildResultsHref(query || product.title, 1, viewCountry)}>{t.allOffersLead}</Link>
       </nav>
       <div className="rc-product-hero">
-        <ProductMedia product={product} />
+        <ProductMedia
+          product={product}
+          query={query}
+          country={viewCountry}
+          locale={locale}
+          origin={shareOrigin}
+          shareLoading={collecting && !offers.some((o) => o.inStock)}
+        />
         <div>
-          <div className="rc-product-share flex flex-wrap items-center gap-2">
-            <ShareSummaryButton product={product} country={viewCountry} locale={locale} />
-            <ShareWhatsAppButton
-              products={[product]}
-              query={query || product.title}
-              pageUrl={productShareUrl(shareOrigin ?? "", product.productId)}
-              country={viewCountry}
-              locale={locale}
-            />
-          </div>
           <h1 style={{ marginBlockStart: "var(--rc-space-2)" }}>
             <bdi className="lat">{displayTitle}</bdi>
           </h1>

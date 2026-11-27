@@ -1683,19 +1683,120 @@ html[lang="ar"] .coupon-via {
   overflow-wrap: anywhere;
 }
 
-/* REEA-1255 — the WhatsApp share entry point sits under the h1, inline-end
-   aligned (flex-end is direction-aware, so AR/RTL puts it on the left). The
-   row reserves the 44px tap floor so the streamed share lands without moving
-   the shelf; the anchor itself carries the same 44px target. */
-.rc-results-share {
-  display: flex;
-  justify-content: flex-end;
-  margin-block-start: var(--rc-space-2);
-  min-block-size: var(--rc-tap);
+/* REEA-1255 — the WhatsApp share control (REEA-1257 spec §8 exact CSS).
+   It replaces the old copy affordance in the card media slot and the PDP
+   media: a 44x44 icon-only anchor on the card, icon-only <641 on the PDP and
+   a labelled pill >=641. Tokens flip with the theme; no new token. */
+.rc-share-wa {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  inline-size: 44px;
+  block-size: 44px;
+  min-inline-size: 44px;
+  min-block-size: 44px;
+  padding: 0;
+  border: 1px solid var(--rc-line);
+  border-radius: var(--rc-radius-control);
+  background: var(--rc-surface);
+  color: var(--rc-primary);
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background var(--rc-motion-fast) var(--rc-ease-out),
+    transform var(--rc-motion-fast) var(--rc-ease-out),
+    box-shadow var(--rc-motion-fast) var(--rc-ease-out);
 }
 
-.rc-results-share .query-pill {
-  min-block-size: var(--rc-tap);
+.rc-share-wa:hover {
+  background: var(--rc-surface-sunken);
+}
+
+.rc-share-wa:active {
+  transform: scale(0.98);
+  box-shadow: inset 0 0 0 1px var(--rc-line-strong);
+}
+
+.rc-share-wa:focus-visible {
+  outline: none;
+  box-shadow: var(--rc-focus-ring);
+}
+
+.rc-share-wa[aria-disabled="true"] {
+  background: var(--rc-surface-sunken);
+  color: var(--rc-muted);
+  pointer-events: none;
+  cursor: default;
+}
+
+.rc-share-wa.is-copied {
+  color: var(--rc-savings);
+}
+
+.rc-share-wa__label {
+  display: none;
+  color: var(--rc-ink);
+  font: var(--rc-text-label);
+  white-space: nowrap;
+}
+
+.rc-card-share,
+.rc-product-media > .rc-share-wa {
+  position: absolute;
+  inset-block-start: 6px;
+  inset-inline-end: 6px;
+  z-index: 2;
+}
+
+@media (min-width: 641px) {
+  .rc-share-wa--pdp {
+    inline-size: auto;
+    padding-inline: 14px;
+    border-radius: var(--rc-radius-pill);
+  }
+
+  .rc-share-wa--pdp .rc-share-wa__label {
+    display: inline;
+  }
+}
+
+@media (hover: none) {
+  .rc-share-wa:hover {
+    background: var(--rc-surface);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rc-share-wa {
+    transition: background var(--rc-motion-fast) var(--rc-ease-out);
+  }
+
+  .rc-share-wa:active {
+    transform: none;
+  }
+}
+
+/* Copy-failed fallback: the selectable message sits below the control, inside
+   the media frame (the card media clips at its rounded edge, so the block is
+   capped to the available height and scrolls). */
+.rc-share-wa__fallback {
+  position: absolute;
+  inset-block-start: calc(44px + 6px);
+  inset-inline-end: 0;
+  z-index: 3;
+  inline-size: max-content;
+  max-inline-size: min(240px, calc(100vw - 48px));
+  max-block-size: 40px;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--rc-line);
+  border-radius: var(--rc-radius-control);
+  background: var(--rc-surface);
+  color: var(--rc-ink);
+  font: var(--rc-text-small);
+  white-space: pre-wrap;
+  user-select: all;
 }
 
 .rc-results-meta {
