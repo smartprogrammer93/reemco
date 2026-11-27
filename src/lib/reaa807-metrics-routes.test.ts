@@ -151,6 +151,8 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
       "searches",
       "serves_full",
       "serves_pending",
+      "share_whatsapp",
+      "share_whatsapp_per_1k_serves",
       "shopper_serves",
       // REEA-1237 (PM scope extension) — the aggregate query-term Pareto
       "top_queries",

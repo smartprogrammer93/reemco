@@ -194,6 +194,7 @@ export default async function ProductPage({
         query={carriedQuery ?? ""}
         firstStage={firstStage}
         renderStartMs={renderStartMs}
+        shareOrigin={siteOrigin()}
       />
       {finalStage ? (
         <Suspense fallback={null}>

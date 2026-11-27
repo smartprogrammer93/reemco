@@ -1683,6 +1683,21 @@ html[lang="ar"] .coupon-via {
   overflow-wrap: anywhere;
 }
 
+/* REEA-1255 — the WhatsApp share entry point sits under the h1, inline-end
+   aligned (flex-end is direction-aware, so AR/RTL puts it on the left). The
+   row reserves the 44px tap floor so the streamed share lands without moving
+   the shelf; the anchor itself carries the same 44px target. */
+.rc-results-share {
+  display: flex;
+  justify-content: flex-end;
+  margin-block-start: var(--rc-space-2);
+  min-block-size: var(--rc-tap);
+}
+
+.rc-results-share .query-pill {
+  min-block-size: var(--rc-tap);
+}
+
 .rc-results-meta {
   margin-block-start: 6px;
   font: var(--rc-text-meta);

@@ -474,6 +474,7 @@ export default async function ResultsPage({
         renderStartMs={renderStartMs}
         queryId={queryId}
         unreachableLanes={unreachableLanes}
+        shareOrigin={siteOrigin()}
       />
     </div>
   );

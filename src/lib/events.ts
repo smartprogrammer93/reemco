@@ -28,6 +28,9 @@ export const FUNNEL_EVENT_TYPES = [
   "zero_results",
   // REEA-541 Bet B — the share-summary Copy button fired once per copy.
   "summary_copied",
+  // REEA-1255 — the WhatsApp share anchor fired once per click. Type only:
+  // the aggregate integer is the whole persisted fact (no query, no id).
+  "share_whatsapp",
 ] as const;
 
 /**
@@ -187,6 +190,10 @@ const eventSchema = z
       // No extra fields: query (+ optional item_id) is the whole event.
       need(ev.query !== undefined, "query required", "query");
       break;
+    case "share_whatsapp":
+      // REEA-1255 — aggregate-only click counter. No required property; the
+      // stored row is `{ type }` (id/ts assigned server-side).
+      break;
     // REEA-965 v1 types are discriminated in v1EventSchema below.
   }
 });
@@ -276,6 +283,9 @@ export function validateEvent(raw: unknown): EventValidation {
   const funnel = eventSchema.safeParse(raw);
   if (funnel.success) {
     const { type, query, result_count, rank, item_id, outbound_url } = funnel.data;
+    // REEA-1255 — share_whatsapp is an aggregate click counter: even if a
+    // client sends extra base properties, the stored row keeps only the type.
+    if (type === "share_whatsapp") return { ok: true, event: { type } };
     return { ok: true, event: { type, query, result_count, rank, item_id, outbound_url } };
   }
   const v1 = v1EventSchema.safeParse(raw);

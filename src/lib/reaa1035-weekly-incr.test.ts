@@ -348,6 +348,8 @@ describe("REEA-1035 stored schema + route byte-shape", () => {
       "searches",
       "serves_full",
       "serves_pending",
+      "share_whatsapp",
+      "share_whatsapp_per_1k_serves",
       "shopper_serves",
       // REEA-1237 (PM scope extension) — the aggregate query-term Pareto
       "top_queries",

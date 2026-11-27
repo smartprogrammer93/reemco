@@ -250,6 +250,16 @@ export function pageViewsByWeek(events: FunnelEvent[]): Record<string, number> {
   return countByWeek(events, "page_view");
 }
 
+/**
+ * REEA-1255 — WhatsApp share clicks per ISO week. The `share_whatsapp`
+ * funnel event is type-only (no query, no id), so this count is an aggregate
+ * integer with no per-user fact behind it. The derived per-1,000-serves rate
+ * divides it by the same week's `searches`; no new identifier is introduced.
+ */
+export function sharesByWeek(events: FunnelEvent[]): Record<string, number> {
+  return countByWeek(events, "share_whatsapp");
+}
+
 export async function GET(req: Request): Promise<Response> {
   // REEA-1134 F5 — gate ahead of the store reads: a spent caller answers 429
   // without touching the weekly counters or the funnel store.
@@ -278,6 +288,7 @@ export async function GET(req: Request): Promise<Response> {
     windowWeeks,
     pageViewsByWeek(events),
     terms.weeks,
+    sharesByWeek(events),
   );
   for (const [name, value] of Object.entries(gateHeaders)) res.headers.set(name, value);
   return res;
@@ -294,6 +305,10 @@ export async function GET(req: Request): Promise<Response> {
  * response shape apart from the three new CTR fields, which read 0/null.
  * `terms` is the per-week aggregate query-term map (PM scope extension):
  * defaults to {} so pre-change callers publish an empty `top_queries`.
+ *
+ * REEA-1255 — `shares` is the WhatsApp share click count per week (see
+ * sharesByWeek). Defaults to {} so every pre-change caller still answers the
+ * same shape; the new fields read 0/null.
  */
 export function weeklyResponse(
   read: WeeklyCountersRead,
@@ -301,6 +316,7 @@ export function weeklyResponse(
   windowWeeks: number,
   views: Record<string, number> = {},
   terms: QueryTermsMap = {},
+  shares: Record<string, number> = {},
 ): Response {
   const weeks: Record<string, unknown> = {};
   const keys = Object.keys(read.weeks).sort().slice(-windowWeeks);
@@ -390,6 +406,14 @@ export function weeklyResponse(
       ctr_denominator_clean: Math.max(0, w.searches - Math.min(w.bot_serves, w.searches)),
       bot_serves: w.bot_serves,
       offer_link_clicks: clicks[week] ?? 0,
+      // REEA-1255 — WhatsApp share clicks (aggregate integer, type-only
+      // event) and the leading-indicator rate per 1,000 results serves. The
+      // rate is derived, never stored; null when the week has no serve to
+      // divide by, so an absent basis cannot read as a 0% rate. Baseline is 0
+      // (the entry point did not exist before this build).
+      share_whatsapp: shares[week] ?? 0,
+      share_whatsapp_per_1k_serves:
+        w.searches > 0 ? ((shares[week] ?? 0) / w.searches) * 1000 : null,
       // REEA-1237 — the SHOPPER-basis CTR denominator: the client page-view
       // beacon count, i.e. serves a shopper's browser actually executed. It
       // is the same integer as `ctr_denominator_shopper` by construction (the
@@ -473,7 +497,11 @@ export function weeklyResponse(
         // its own normalization and population on the wire.
         top_queries:
           "top_queries = the week's aggregate query-term Pareto, highest count first, capped at 200 rows. Each row is {term, count, zero_offer, filtered_empty}: count = shopper serves for that term; zero_offer = of those, serves whose converged answer carried zero offers; filtered_empty = of those, false-empty serves behind an active filter (a filter hid ≥1 confident match). Zero-offer and filtered-empty terms are included and marked, never dropped. Terms are normalized only for noise — case-folded, internal whitespace collapsed, control characters stripped, capped at 80 characters — and are NOT stemmed, so Arabic and Latin terms stay comparable. Bot/health-check serves are not recorded (the shared UA predicate, lib/bot-ua.ts), so a QA/smoke probe's term cannot dominate the Pareto. Storage is aggregate-only: one {term → three integers} map per ISO week, no user id, no session id, no per-serve row. The store admits up to 1,000 terms per week (above the published 200) so a term that first trends later in the week can still compete; a new term at saturation displaces a count-1 tail term and then accumulates. It is a small per-week blob written read-modify-write, so a concurrent serve can lose an increment; these counts are a Pareto read, not a decision counter.",
-        source: "REEA-1148 bet #2 AC-6c/AC-8; REEA-1009 S1b; REEA-1200 bet 7C AC 7C-3/7C-4; REEA-1237 shopper CTR basis + top-query Pareto (v5 read); band definitions unchanged (REEA-871/REEA-884)",
+        // REEA-1255 — the WhatsApp share counter states its own population
+        // and arithmetic on the wire, so the leading indicator is auditable.
+        share_whatsapp:
+          "share_whatsapp = browser `share_whatsapp` click beacons on the results-surface WhatsApp share anchor (type-only funnel event: no query, no id, no session), counted per ISO week from the same anonymous event store and 90-day window as the other funnel counters. share_whatsapp_per_1k_serves = share_whatsapp ÷ searches × 1000, a derived leading indicator with no gate this cycle; it is null, never 0, when the week has no serve to divide by. Baseline before the entry point shipped is 0. No per-user identifier is created or persisted: the stored row is `{ type, id, ts }`.",
+        source: "REEA-1148 bet #2 AC-6c/AC-8; REEA-1009 S1b; REEA-1200 bet 7C AC 7C-3/7C-4; REEA-1237 shopper CTR basis + top-query Pareto (v5 read); REEA-1255 WhatsApp share counter; band definitions unchanged (REEA-871/REEA-884)",
       },
     },
     { headers: { "cache-control": "no-store" } },

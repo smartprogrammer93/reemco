@@ -41,6 +41,10 @@ import TrackedOutboundLink from "@/components/TrackedOutboundLink";
 import CollectionPulse from "@/components/CollectionPulse";
 import OfferStatusToken, { StatusLegend } from "@/components/OfferStatus";
 import ShareSummaryButton from "@/components/ShareSummaryButton";
+// REEA-1255 — the SAME WhatsApp share component the results surface uses
+// (no parallel PDP implementation): the PDP is the other comparison surface.
+import ShareWhatsAppButton from "@/components/ShareWhatsAppButton";
+import { productShareUrl } from "@/lib/whatsapp-share";
 import { buildResultsHref } from "@/lib/country";
 import { cleanDisplayTitle, displayTitleChanged } from "@/lib/display-title";
 import { isProxiedImageSrc, proxiedImageSrc } from "@/lib/image-proxy";
@@ -285,6 +289,8 @@ export default function ProductHero(props: {
    *  served HTML and the hydration pass agree (no Date.now() recompute → no
    *  React #418); the live ticker only starts after mount. */
   renderStartMs?: number;
+  /** REEA-1255 — server-resolved origin for the WhatsApp share URL. */
+  shareOrigin?: string;
 }) {
   return (
     <Suspense fallback={<PanelFallback locale={props.locale} />}>
@@ -300,6 +306,7 @@ function ProductHeroBody({
   query = "",
   firstStage,
   renderStartMs,
+  shareOrigin,
 }: {
   product: NormalizedProduct;
   country?: CountryCode | null;
@@ -307,6 +314,7 @@ function ProductHeroBody({
   query?: string;
   firstStage?: Promise<CollectJob | null>;
   renderStartMs?: number;
+  shareOrigin?: string;
 }) {
   const t = getStrings(locale ?? clientLocale());
   const snap = firstStage ? use(firstStage) : null;
@@ -492,6 +500,13 @@ function ProductHeroBody({
         <div>
           <div className="rc-product-share flex flex-wrap items-center gap-2">
             <ShareSummaryButton product={product} country={viewCountry} locale={locale} />
+            <ShareWhatsAppButton
+              products={[product]}
+              query={query || product.title}
+              pageUrl={productShareUrl(shareOrigin ?? "", product.productId)}
+              country={viewCountry}
+              locale={locale}
+            />
           </div>
           <h1 style={{ marginBlockStart: "var(--rc-space-2)" }}>
             <bdi className="lat">{displayTitle}</bdi>

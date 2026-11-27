@@ -52,6 +52,11 @@ import { collectedAgeLabel, clientLocale, fill, getStrings, type Locale } from "
 // results surface reads it only for the substitution line and the Arabic
 // empty-state suggestions, so the lexicon ships as one static asset (AC-7).
 import { ARABIC_EMPTY_SUGGESTIONS, arabicQueryAlias } from "@/lib/arabic-lexicon";
+// REEA-1255 — the WhatsApp text+link share entry point on the comparison
+// surface. It reuses the card's own visible-offer projection through
+// lib/whatsapp-share.ts, so the prefilled message quotes the rendered figures.
+import ShareWhatsAppButton from "@/components/ShareWhatsAppButton";
+import { resultsShareUrl } from "@/lib/whatsapp-share";
 // REEA-1247 — nearest in-market recovery for the zero-offer page: pure, live
 // from the run's own snapshot products, and never a fabricated offer.
 import { nearestMatches } from "@/lib/zero-recovery";
@@ -737,6 +742,9 @@ export default function ResultsClient(props: {
    *  from this egress. The coverage sentence names them as unreachable
    *  instead of letting a silent zero read as "we don't stock it". */
   unreachableLanes?: readonly string[];
+  /** REEA-1255 — server-resolved site origin for the WhatsApp share URL
+   *  (lib/site-origin.ts). Passed down, never read from the client env. */
+  shareOrigin?: string;
 }) {
   return (
     <Suspense fallback={<LoadingFallback locale={props.locale} />}>
@@ -978,11 +986,14 @@ function ResultsHead({
   query,
   country,
   locale,
+  share,
   children,
 }: {
   query: string;
   country: CountryCode | null;
   locale?: Locale;
+  /** REEA-1255 — the share entry point slot (under the h1, inline-end). */
+  share?: ReactNode;
   /** The hint slot sits DIRECTLY under the h1 (REEA-332 item 2). */
   children?: ReactNode;
 }) {
@@ -1005,8 +1016,83 @@ function ResultsHead({
           fill(t.resultsHeadingAll, { country: label })
         )}
       </h1>
+      {/* REEA-332 item 2 — the hint keeps its DIRECTLY-under-h1 slot; the
+          REEA-1255 share row follows it (and is directly under the h1 on a
+          normal page, where the hint renders nothing). */}
       {children}
+      {share}
     </div>
+  );
+}
+
+/**
+ * REEA-1255 — the results-surface WhatsApp share. It receives the SAME cards
+ * the page paints (page slice, selection-filtered) and builds the anchor from
+ * the card's own visible-offer projection. `origin` comes from the server
+ * render (lib/site-origin.ts), never from a client env read, so the href is
+ * identical in the served HTML and after hydration.
+ */
+function ResultsShare({
+  products,
+  query,
+  origin,
+  country,
+  locale,
+}: {
+  products: readonly NormalizedProduct[];
+  query: string;
+  origin?: string;
+  country: CountryCode | null;
+  locale?: Locale;
+}) {
+  if (!query) return null;
+  const pageUrl = resultsShareUrl(origin ?? "", query);
+  return (
+    <div className="rc-results-share">
+      <ShareWhatsAppButton
+        products={products}
+        query={query}
+        pageUrl={pageUrl}
+        country={country}
+        locale={locale}
+      />
+    </div>
+  );
+}
+
+/**
+ * REEA-1255 — the streamed/served-document share: it suspends on the final
+ * stage so the anchor lands in the server-rendered HTML with the same cards
+ * the shelf paints. The converged view renders ResultsShare directly from the
+ * folded snapshot instead, so a late follow-up updates the message.
+ */
+function ResultsShareFromStage({
+  stage,
+  query,
+  origin,
+  page,
+  country,
+  showOutOfStock,
+  locale,
+}: {
+  stage: Promise<LiveSearchResult>;
+  query: string;
+  origin?: string;
+  page: number;
+  country: CountryCode | null;
+  showOutOfStock: boolean;
+  locale?: Locale;
+}) {
+  const snap = use(stage);
+  const cards = stagedView(snap, query, page, country, showOutOfStock);
+  return (
+    <ResultsShare
+      products={cards}
+      query={query}
+      origin={origin}
+      country={country}
+      locale={locale}
+    />
   );
 }
 
@@ -1555,6 +1641,8 @@ function StagedResults(props: {
   queryId?: string;
   /** REEA-1078 AC9 — merchants the reachability record names as blocked. */
   unreachableLanes?: readonly string[];
+  /** REEA-1255 — server-resolved origin for the share URL. */
+  shareOrigin?: string;
   /** REEA-1114 AC4 — in-place reveal handlers from the results shell. */
   onRevealOutOfStock?: () => void;
   onRevealAllCountries?: () => void;
@@ -1700,7 +1788,19 @@ function StagedResults(props: {
       return (
         <ResultsErrorBoundary locale={locale}>
           <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} hiddenByStock={hiddenByStock} hiddenByCountry={hiddenByCountry} />
-          <ResultsHead query={query} country={country} locale={locale}>
+          <ResultsHead query={query} country={country} locale={locale} share={
+            <Suspense fallback={<div className="rc-results-share" aria-hidden />}>
+              <ResultsShareFromStage
+                stage={finalPromise}
+                query={query}
+                origin={props.shareOrigin}
+                page={page}
+                country={country}
+                showOutOfStock={showOutOfStock}
+                locale={locale}
+              />
+            </Suspense>
+          }>
             <Suspense fallback={null}>
               <ResultsHint stage={finalPromise} query={query} page={page} country={country} showOutOfStock={showOutOfStock} locale={locale} />
             </Suspense>
@@ -1754,7 +1854,15 @@ function StagedResults(props: {
     return (
       <ResultsErrorBoundary locale={locale}>
         <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} hiddenByStock={hiddenByStock} hiddenByCountry={hiddenByCountry} />
-        <ResultsHead query={query} country={country} locale={locale}>
+        <ResultsHead query={query} country={country} locale={locale} share={
+          <ResultsShare
+            products={products}
+            query={query}
+            origin={props.shareOrigin}
+            country={country}
+            locale={locale}
+          />
+        }>
           {products.length === 0 && query.length > 0 && emptyCase?.kind === "a" ? <HintLine locale={locale} /> : null}
         </ResultsHead>
         <StatusLegend locale={locale} />
@@ -1864,7 +1972,19 @@ function StagedResults(props: {
           count/offers/age subline streams with the final snapshot in the SAME
           lh-tier reserve the previous heading slot used, so nothing below
           moves when it lands. */}
-      <ResultsHead query={query} country={country} locale={locale}>
+      <ResultsHead query={query} country={country} locale={locale} share={
+        <Suspense fallback={<div className="rc-results-share" aria-hidden />}>
+          <ResultsShareFromStage
+            stage={finalPromise}
+            query={query}
+            origin={props.shareOrigin}
+            page={page}
+            country={country}
+            showOutOfStock={showOutOfStock}
+            locale={locale}
+          />
+        </Suspense>
+      }>
         <Suspense fallback={null}>
           <ResultsHint
             stage={finalPromise}
@@ -1962,6 +2082,7 @@ function ResultsInner(props: {
   locale?: Locale;
   queryId?: string;
   unreachableLanes?: readonly string[];
+  shareOrigin?: string;
 }) {
   const searchParams = useSearchParams();
   // REEA-279: one resolution per view — prop first (server-resolved), then
@@ -2140,6 +2261,7 @@ function ResultsInner(props: {
         renderStartMs={props.renderStartMs}
         queryId={props.queryId}
         unreachableLanes={props.unreachableLanes}
+        shareOrigin={props.shareOrigin}
         onRevealOutOfStock={onRevealOutOfStock}
         onRevealAllCountries={onRevealAllCountries}
       />
@@ -2149,7 +2271,15 @@ function ResultsInner(props: {
   return (
     <ResultsErrorBoundary locale={locale}>
       <SelectionRow country={country} showOutOfStock={showOutOfStock} locale={locale} onSelectCountry={onSelectCountry} onToggleStock={onToggleStock} onRefresh={onRefresh} hiddenByStock={plainHidden.stock} hiddenByCountry={plainHidden.country} />
-      <ResultsHead query={query} country={country} locale={locale}>
+      <ResultsHead query={query} country={country} locale={locale} share={
+        <ResultsShare
+          products={products}
+          query={query}
+          origin={props.shareOrigin}
+          country={country}
+          locale={locale}
+        />
+      }>
         {zero && plainEmptyCase.kind === "a" ? <HintLine locale={locale} /> : null}
       </ResultsHead>
       <StatusLegend locale={locale} />

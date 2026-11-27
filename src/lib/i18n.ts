@@ -196,6 +196,14 @@ const en = {
   shareSummaryAria: "Copy price comparison summary",
   shareBestNowLead: "best now",
   shareVerifiedWord: "verified",
+  // REEA-1255 — WhatsApp text+link share on the comparison surface. The
+  // visible label is short ("Share"); the accessible name names the channel.
+  // The prefilled message lead names the brand and the shopper's query; the
+  // offer list and page URL follow (see lib/whatsapp-share.ts).
+  whatsappShareAria: "Share on WhatsApp",
+  whatsappShareLabel: "Share",
+  whatsappShareBrand: "Reemco",
+  whatsappShareLead: "{brand} — “{q}”:",
   couponMoreSuffix: "more",
   couponNoneLabel: "No coupon available",
   errorTitle: "Something went wrong",
@@ -572,6 +580,11 @@ const ar: typeof en = {
   shareSummaryAria: "انسخ ملخص مقارنة الأسعار",
   shareBestNowLead: "أفضل سعر الآن",
   shareVerifiedWord: "تم التحقق",
+  // REEA-1255 — AR side of the WhatsApp share (same slots, RTL-safe).
+  whatsappShareAria: "شارك على واتساب",
+  whatsappShareLabel: "شارك",
+  whatsappShareBrand: "ريمكو",
+  whatsappShareLead: "{brand} — «{q}»:",
   couponMoreSuffix: "أخرى",
   couponNoneLabel: "لا توجد قسيمة متاحة",
   errorTitle: "حدث خطأ ما",
