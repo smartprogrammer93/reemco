@@ -92,7 +92,13 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
     // denominator stays for continuity.
     expect(week.shopper_serves).toBe(4);
     expect(week.ctr_denominator_shopper).toBe(4);
-    expect(week.offer_link_ctr_shopper).toBe(0.5);
+    // The ratio is computable only on a week that begins after the page-view
+    // beacon shipped (2026-11-27); this fixture uses the REAL clock, so while
+    // the live week is still the straddling W48 the payload correctly answers
+    // null, and from W49 on it is clicks ÷ serves. Both are accepted here; the
+    // exact value is pinned deterministically in reea1237-shopper-ctr.test.ts.
+    const shopperCtr = week.offer_link_ctr_shopper;
+    expect(shopperCtr === null || shopperCtr === 0.5).toBe(true);
     expect(week.ctr_denominator_clean).toBe(2);
     // REEA-871/REEA-1148 — the all-serve outcome split rides the same
     // payload under its honest names (AC-2: RENAMED), and the derived p90

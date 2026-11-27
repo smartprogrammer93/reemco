@@ -157,6 +157,45 @@ const MAX_WEEKS = RETENTION_WEEKS;
  */
 export const WEEKLY_METRICS_RATE_LIMIT = { limit: 30, windowMs: 60_000 };
 
+/**
+ * REEA-1237 — the UTC day the client page-view beacon first shipped
+ * (commit e298a9e, deployed 2026-11-27). The shopper CTR is a ratio of two
+ * counters that must cover the SAME period: a week whose Monday is before
+ * this day pairs a full-week click numerator with a partial-week view
+ * denominator, which would overstate the rate (W48 read 5 clicks ÷ 1
+ * post-ship view = 500%). So `offer_link_ctr_shopper` is null for such a
+ * week — never a number on a mismatched basis — and becomes computable from
+ * the first week that starts on/after this day. `shopper_serves` is still
+ * published for the partial week, because the count itself is real.
+ *
+ * This is a one-time build fact, not a setting: it must not move when the
+ * box redeploys the same commit.
+ */
+export const PAGE_VIEW_BEACON_SHIPPED_AT_MS = Date.UTC(2026, 10, 27);
+
+/** Monday 00:00 UTC of an ISO week key ("2026-W48"), or null if unparseable. */
+export function isoWeekStartMs(week: string): number | null {
+  const m = /^(\d{4})-W(\d{2})$/.exec(week);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const wk = Number(m[2]);
+  const jan4 = Date.UTC(year, 0, 4);
+  const jan4Day = new Date(jan4).getUTCDay(); // 0=Sun .. 6=Sat
+  const mondayShift = (jan4Day + 6) % 7; // Mon=0
+  const week1Mon = jan4 - mondayShift * 24 * 60 * 60 * 1000;
+  return week1Mon + (wk - 1) * 7 * 24 * 60 * 60 * 1000;
+}
+
+/**
+ * REEA-1237 — true only when every serve in the week could have fired the
+ * page-view beacon, i.e. the week began on/after the ship day. A partial
+ * basis must not be divided into a full-week numerator.
+ */
+export function shopperBasisCompleteForWeek(week: string): boolean {
+  const start = isoWeekStartMs(week);
+  return start !== null && start >= PAGE_VIEW_BEACON_SHIPPED_AT_MS;
+}
+
 // Same caller key as the sibling gated routes (first X-Forwarded-For hop).
 function clientKey(req: Request): string {
   const fwd = req.headers.get("x-forwarded-for");
@@ -339,10 +378,14 @@ export function weeklyResponse(
       shopper_serves: views[week] ?? 0,
       ctr_denominator_shopper: views[week] ?? 0,
       // Derived, never stored: a fraction (multiply by 100 for percent), or
-      // null when the week has no shopper serve to divide by (never 0, which
-      // would read as "0% CTR" when the basis is simply absent).
+      // null — never 0 — when the week has no shopper serve to divide by, OR
+      // when the week began before the page-view beacon shipped (a straddling
+      // week would divide a full-week click numerator by a partial-week view
+      // denominator and overstate the rate; see shopperBasisCompleteForWeek).
       offer_link_ctr_shopper:
-        (views[week] ?? 0) > 0 ? (clicks[week] ?? 0) / (views[week] as number) : null,
+        (views[week] ?? 0) > 0 && shopperBasisCompleteForWeek(week)
+          ? (clicks[week] ?? 0) / (views[week] as number)
+          : null,
       // REEA-935 — per-outcome counts plus the derived dead/challenge rates;
       // the annotation fields ride verbatim when stamped.
       link_smoke: { ...w.link_smoke, ...linkSmokeRates(w.link_smoke) },
@@ -396,7 +439,7 @@ export function weeklyResponse(
         // the arithmetic is reproducible from the payload alone (clicks ÷
         // shopper_serves). AC-5: the beacon stores no identifier.
         ctr_shopper:
-          "offer_link_ctr_shopper = offer_link_clicks ÷ ctr_denominator_shopper. NUMERATOR basis: browser `item_clicked` beacons on offer links (results shelf and product-detail CTAs) from the anonymous funnel store — the same store, 90-day raw retention and clock as the denominator. DENOMINATOR basis: browser `page_view` beacons, one per served results page (query present), i.e. serves a shopper's own browser actually executed; shopper_serves and ctr_denominator_shopper are the same integer by construction (the shopper basis is exactly this count, no further subtraction). Both sides are client beacons, so a crawler that never executes JS contributes to neither — that is the shared basis the server-side ctr_denominator_clean could not provide. The transport drops `page_view` for the shared bot/health-check User-Agent predicate (lib/bot-ua.ts), so headless QA/smoke probes (which DO execute JS) do not inflate the denominator; the click numerator stays the unfiltered funnel stream (REEA-973), so a bot that clicks without a counted view is the only asymmetry, and QA click volume is negligible beside shopper views. offer_link_ctr_shopper is a fraction (× 100 for percent) and is null when a week has no shopper serve, never 0, so an absent basis cannot read as a 0% rate. A `page_view` event persists only `type`, a random per-event id and the server ingestion timestamp — no session, user, query or fingerprint identifier (AC-5). The beacon ships with this build: a week recorded before it reads shopper_serves = 0 and offer_link_ctr_shopper = null, and a week that straddles the ship date pairs a full-week click numerator with a partial-week view denominator — read the shopper CTR only on weeks fully inside the beacon's lifetime. The 0.55% CTA success bar is judged on this field.",
+          "offer_link_ctr_shopper = offer_link_clicks ÷ ctr_denominator_shopper. NUMERATOR basis: browser `item_clicked` beacons on offer links (results shelf and product-detail CTAs) from the anonymous funnel store — the same store, 90-day raw retention and clock as the denominator. DENOMINATOR basis: browser `page_view` beacons, one per served results page (query present), i.e. serves a shopper's own browser actually executed; shopper_serves and ctr_denominator_shopper are the same integer by construction (the shopper basis is exactly this count, no further subtraction). Both sides are client beacons, so a crawler that never executes JS contributes to neither — that is the shared basis the server-side ctr_denominator_clean could not provide. The transport drops `page_view` for the shared bot/health-check User-Agent predicate (lib/bot-ua.ts), so headless QA/smoke probes (which DO execute JS) do not inflate the denominator; the click numerator stays the unfiltered funnel stream (REEA-973), so a bot that clicks without a counted view is the only asymmetry, and QA click volume is negligible beside shopper views. offer_link_ctr_shopper is a fraction (× 100 for percent) and is null when a week has no shopper serve, never 0, so an absent basis cannot read as a 0% rate. It is ALSO null for a week that began before the beacon shipped: such a week would pair a full-week click numerator with a partial-week view denominator and overstate the rate (the W48 read of 5 clicks ÷ 1 post-ship view would have shown 500%). The beacon shipped 2026-11-27, so shopper_serves is published from that day but the first week with a computable shopper CTR is the first full week after it (W49). A `page_view` event persists only `type`, a random per-event id and the server ingestion timestamp — no session, user, query or fingerprint identifier (AC-5). The 0.55% CTA success bar is judged on this field.",
         source: "REEA-1148 bet #2 AC-6c/AC-8; REEA-1009 S1b; REEA-1200 bet 7C AC 7C-3/7C-4; REEA-1237 shopper CTR basis; band definitions unchanged (REEA-871/REEA-884)",
       },
     },

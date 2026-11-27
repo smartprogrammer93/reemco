@@ -19,12 +19,21 @@
 import { describe, expect, it } from "vitest";
 import { CTR_EVENT_TYPES, EVENT_TYPES, FUNNEL_EVENT_TYPES, V1_EVENT_TYPES, validateEvent } from "@/lib/events";
 import type { FunnelEvent } from "@/lib/events";
-import { pageViewsByWeek, weeklyResponse } from "@/app/api/metrics/weekly/route";
+import {
+  isoWeekStartMs,
+  pageViewsByWeek,
+  shopperBasisCompleteForWeek,
+  weeklyResponse,
+} from "@/app/api/metrics/weekly/route";
 import { emptyWeek, isoWeekKey, type WeekCountersMap } from "@/lib/metrics";
 
-const WEEK_MS = Date.UTC(2026, 10, 25); // a UTC day inside the week under test
+// A week that starts AFTER the REEA-1237 page-view beacon ship day
+// (2026-11-27), so its shopper CTR basis is complete and the ratio is
+// computable. 2026-W49 starts Monday 2026-11-30.
+const WEEK_MS = Date.UTC(2026, 11, 2);
 const WEEK = isoWeekKey(WEEK_MS);
-const OTHER_WEEK_MS = WEEK_MS - 7 * 24 * 60 * 60 * 1000;
+const OTHER_WEEK_MS = WEEK_MS - 7 * 24 * 60 * 60 * 1000; // 2026-W48: straddles the ship
+const PRE_SHIP_WEEK = "2026-W48";
 
 function view(ts: string): FunnelEvent {
   return { id: `e-${ts}-${Math.random()}`, ts, type: "page_view" };
@@ -162,5 +171,35 @@ describe("REEA-1237 AC-1/AC-2/AC-4 — shopper-basis CTR on the payload", () => 
     expect(w.offer_link_ctr_shopper).toBe(0.004);
     // 0.4% on the shopper basis, not 0.04% against the server count.
     expect(w.offer_link_ctr_shopper).toBeLessThan(0.0055);
+  });
+});
+
+describe("REEA-1237 — a partial-week basis is never divided into a full-week numerator", () => {
+  it("knows which ISO weeks began before the page-view beacon shipped", () => {
+    // W48 starts Monday 2026-11-23; the beacon shipped 2026-11-27 → partial.
+    expect(isoWeekStartMs("2026-W48")).toBe(Date.UTC(2026, 10, 23));
+    expect(shopperBasisCompleteForWeek("2026-W48")).toBe(false);
+    // W49 starts Monday 2026-11-30 → the first complete shopper basis.
+    expect(isoWeekStartMs("2026-W49")).toBe(Date.UTC(2026, 10, 30));
+    expect(shopperBasisCompleteForWeek("2026-W49")).toBe(true);
+    // W47 predates the beacon entirely.
+    expect(shopperBasisCompleteForWeek("2026-W47")).toBe(false);
+    expect(isoWeekStartMs("not-a-week")).toBeNull();
+  });
+
+  it("publishes shopper_serves but a null CTR for the straddling week (no 500% artifact)", async () => {
+    const res = weeklyResponse(
+      { weeks: { [PRE_SHIP_WEEK]: emptyWeek() }, source: "local", kvReadFailed: false },
+      { [PRE_SHIP_WEEK]: 5 },
+      8,
+      { [PRE_SHIP_WEEK]: 1 },
+    );
+    const body = (await res.json()) as { weeks: Record<string, Record<string, unknown>> };
+    const w = body.weeks[PRE_SHIP_WEEK];
+    // The count itself is real and must stay visible…
+    expect(w.shopper_serves).toBe(1);
+    expect(w.ctr_denominator_shopper).toBe(1);
+    // …but 5 clicks over one post-ship view is not a rate.
+    expect(w.offer_link_ctr_shopper).toBeNull();
   });
 });
