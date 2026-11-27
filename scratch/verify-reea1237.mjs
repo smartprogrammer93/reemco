@@ -47,7 +47,11 @@ await page.waitForTimeout(12_000);
 await page.screenshot({ path: "/tmp/reea1237-results.png", fullPage: false });
 await browser.close();
 
-console.log("BEACONS", JSON.stringify(beacons));
+// NOTE: Chromium does not expose the body of a navigator.sendBeacon POST to
+// Playwright (request.postData() is null), so the beacon payload cannot be
+// read from the request list. The authoritative proof is the served payload:
+// one real browser page view must increment shopper_serves by exactly 1.
+console.log("BEACON_REQUESTS_SEEN", beacons.length);
 const after = await metrics();
 console.log("AFTER", after.week, {
   shopper_serves: after.w.shopper_serves,
@@ -56,12 +60,13 @@ console.log("AFTER", after.week, {
   offer_link_clicks: after.w.offer_link_clicks,
 });
 
-const pageViewBeacons = beacons.filter((b) => b && b.includes('"page_view"')).length;
 const delta = (after.w.shopper_serves ?? 0) - (before.w.shopper_serves ?? 0);
+const denominatorTracks = after.w.ctr_denominator_shopper === after.w.shopper_serves;
 console.log(
   JSON.stringify({
-    pageViewBeacons,
     shopper_servesDelta: delta,
-    pass: pageViewBeacons >= 1 && delta === pageViewBeacons,
+    denominator_tracks_count: denominatorTracks,
+    ctr_null_while_week_straddles_ship: after.w.offer_link_ctr_shopper === null,
+    pass: delta === 1 && denominatorTracks,
   }),
 );
