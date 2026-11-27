@@ -328,6 +328,7 @@ describe("REEA-1035 stored schema + route byte-shape", () => {
       "cross_market_offers",
       "ctr_denominator_clean",
       "ctr_denominator_raw",
+      "ctr_denominator_shopper",
       "filtered_empty_searches",
       "latency_band_1_3s",
       "latency_band_3_10s",
@@ -340,12 +341,14 @@ describe("REEA-1035 stored schema + route byte-shape", () => {
       "latency_warm_band_lt_1s",
       "link_smoke",
       "offer_link_clicks",
+      "offer_link_ctr_shopper",
       "offers_by_retailer",
       "retailer_adapter_attempts",
       "retailer_adapter_failures",
       "searches",
       "serves_full",
       "serves_pending",
+      "shopper_serves",
       "zero_offer_searches",
     ]);
     expect(Object.keys(week.link_smoke as object).sort()).toEqual([

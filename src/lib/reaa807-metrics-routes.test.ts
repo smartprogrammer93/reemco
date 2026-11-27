@@ -62,6 +62,12 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
       { type: "item_clicked", query: "sony", rank: 0, item_id: "p1", outbound_url: "https://xcite.example/x" },
       { type: "item_clicked", query: "sony", rank: 1, item_id: "p2", outbound_url: "https://jarir.example/x" },
       { type: "search_submitted", query: "sony", result_count: 5 },
+      // REEA-1237 — four shopper page-view beacons: the shopper-basis CTR
+      // denominator. Two clicks over four shopper serves = 0.5.
+      { type: "page_view" },
+      { type: "page_view" },
+      { type: "page_view" },
+      { type: "page_view" },
     ]);
 
     const res = await weeklyGET(jsonReq("http://localhost/api/metrics/weekly?weeks=4"));
@@ -80,6 +86,14 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
     expect(week.zero_offer_searches).toBe(1);
     expect(week.offers_by_retailer).toEqual({ Xcite: 3, Jarir: 2 });
     expect(week.offer_link_clicks).toBe(2);
+    // REEA-1237 — the shopper-basis CTR rides the same payload: the page-view
+    // beacon count is the denominator, both names carry the same integer, and
+    // the derived CTR is clicks ÷ shopper serves. The server-side clean
+    // denominator stays for continuity.
+    expect(week.shopper_serves).toBe(4);
+    expect(week.ctr_denominator_shopper).toBe(4);
+    expect(week.offer_link_ctr_shopper).toBe(0.5);
+    expect(week.ctr_denominator_clean).toBe(2);
     // REEA-871/REEA-1148 — the all-serve outcome split rides the same
     // payload under its honest names (AC-2: RENAMED), and the derived p90
     // can never claim a tail past the 8.5 s recording cap.
@@ -111,6 +125,7 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
       "cross_market_offers",
       "ctr_denominator_clean",
       "ctr_denominator_raw",
+      "ctr_denominator_shopper",
       "filtered_empty_searches",
       "latency_band_1_3s",
       "latency_band_3_10s",
@@ -123,17 +138,25 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
       "latency_warm_band_lt_1s",
       "link_smoke",
       "offer_link_clicks",
+      "offer_link_ctr_shopper",
       "offers_by_retailer",
       "retailer_adapter_attempts",
       "retailer_adapter_failures",
       "searches",
       "serves_full",
       "serves_pending",
+      "shopper_serves",
       "zero_offer_searches",
     ]);
     // REEA-1148 AC-1 — the methodology block is always on the payload.
     expect(body.methodology).toBeTruthy();
     expect(body.methodology!.counter_naming).toContain("RENAMED");
+    // REEA-1237 AC-2 — the shopper CTR's numerator and denominator bases are
+    // named on the wire, and the server-side clean denominator is marked as
+    // continuity-only, not the CTR basis.
+    expect(body.methodology!.ctr_shopper).toContain("offer_link_clicks");
+    expect(body.methodology!.ctr_shopper).toContain("page_view");
+    expect(body.methodology!.ctr_denominators).toContain("continuity");
     // REEA-1078 — comparison depth is one aggregate block, never per card.
     // REEA-1141 AC-4 — duplicate_cards + dedupe_ratio ride the same block.
     // REEA-1178 AC-5 — the block states its own definition and publishes the

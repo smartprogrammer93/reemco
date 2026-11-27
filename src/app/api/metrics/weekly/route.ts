@@ -22,11 +22,21 @@
  *   comparison_depth: { cards_total, cards_multi_retailer, ratio },
  *   filtered_empty_searches,
  *   offer_link_clicks,
+ *   shopper_serves, ctr_denominator_shopper, offer_link_ctr_shopper,
  *   link_smoke: { runs, checked, ok, dead, challenge, by_retailer,
  *                 dead_rate, challenge_rate,
  *                 checkerContaminated?, methodologyNote? } } },
  *   methodology: { latency_band_clock, p90, shopper_visible_targets,
- *                  counter_naming, source } }
+ *                  counter_naming, ctr_denominators, ctr_shopper, source } }
+ *
+ * REEA-1237 — the offer-link CTR is published on the SHOPPER basis:
+ * `shopper_serves` / `ctr_denominator_shopper` are the client page-view
+ * beacon count (serves a shopper's browser executed), and
+ * `offer_link_ctr_shopper` is `offer_link_clicks ÷ ctr_denominator_shopper`.
+ * Numerator and denominator now share one basis (client beacons), one store
+ * and one retention window; the server-side ctr_denominator_raw / _clean stay
+ * published for continuity. `methodology.ctr_shopper` names both bases and
+ * the null-when-no-basis rule. Aggregate integers only, no new identifier.
  *
  * REEA-871/REEA-1148 — the all-serve outcome split (published as
  * serves_full / serves_pending, see the REEA-1148 note below), the
@@ -159,17 +169,35 @@ function parseWeeksParam(raw: string | null): number {
   return Math.min(n, MAX_WEEKS);
 }
 
-/** Offer-link clicks per ISO week from the anonymous funnel events. */
-export function clicksByWeek(events: FunnelEvent[]): Record<string, number> {
+/** Count anonymous events of one type per ISO week. */
+export function countByWeek(events: FunnelEvent[], type: FunnelEvent["type"]): Record<string, number> {
   const out: Record<string, number> = {};
   for (const e of events) {
-    if (e.type !== "item_clicked") continue;
+    if (e.type !== type) continue;
     const t = Date.parse(e.ts);
     if (!Number.isFinite(t)) continue;
     const week = isoWeekKey(t);
     out[week] = (out[week] ?? 0) + 1;
   }
   return out;
+}
+
+/** Offer-link clicks per ISO week from the anonymous funnel events. */
+export function clicksByWeek(events: FunnelEvent[]): Record<string, number> {
+  return countByWeek(events, "item_clicked");
+}
+
+/**
+ * REEA-1237 — shopper page views per ISO week: the client page-view beacon
+ * count, i.e. serves the shopper's browser actually executed (one beacon per
+ * served results page). This is the CTR denominator on the SAME basis and in
+ * the SAME store/window as the click numerator above, so the two can be
+ * divided without mixing a browser beacon with a server serve count. It is
+ * an aggregate integer only — a `page_view` event carries no query, no
+ * session id and no user id (see lib/events.ts).
+ */
+export function pageViewsByWeek(events: FunnelEvent[]): Record<string, number> {
+  return countByWeek(events, "page_view");
 }
 
 export async function GET(req: Request): Promise<Response> {
@@ -188,7 +216,9 @@ export async function GET(req: Request): Promise<Response> {
 
   const windowWeeks = parseWeeksParam(new URL(req.url).searchParams.get("weeks"));
   const [read, events] = await Promise.all([readWeeklyCountersDetailed(), readEvents()]);
-  const res = weeklyResponse(read, clicksByWeek(events), windowWeeks);
+  // REEA-1237 — the shopper denominator rides the same read as the click
+  // numerator: one event store, one window, one basis.
+  const res = weeklyResponse(read, clicksByWeek(events), windowWeeks, pageViewsByWeek(events));
   for (const [name, value] of Object.entries(gateHeaders)) res.headers.set(name, value);
   return res;
 }
@@ -198,11 +228,16 @@ export async function GET(req: Request): Promise<Response> {
  * pinnable without a KV-bound runtime: a failed store read with no local
  * fallback data must fail loudly (503 + Retry-After), never silently
  * answer an empty map.
+ *
+ * REEA-1237 — `views` is the shopper page-view beacon count per week (see
+ * pageViewsByWeek). Defaults to {} so pre-change callers keep their exact
+ * response shape apart from the three new CTR fields, which read 0/null.
  */
 export function weeklyResponse(
   read: WeeklyCountersRead,
   clicks: Record<string, number>,
   windowWeeks: number,
+  views: Record<string, number> = {},
 ): Response {
   const weeks: Record<string, unknown> = {};
   const keys = Object.keys(read.weeks).sort().slice(-windowWeeks);
@@ -292,6 +327,22 @@ export function weeklyResponse(
       ctr_denominator_clean: Math.max(0, w.searches - Math.min(w.bot_serves, w.searches)),
       bot_serves: w.bot_serves,
       offer_link_clicks: clicks[week] ?? 0,
+      // REEA-1237 — the SHOPPER-basis CTR denominator: the client page-view
+      // beacon count, i.e. serves a shopper's browser actually executed. It
+      // is the same integer as `ctr_denominator_shopper` by construction (the
+      // shopper basis is exactly this count — there is no further
+      // subtraction), published under both names the brief names so a reader
+      // never has to infer which is which. Both sides of the CTR come from
+      // this ONE anonymous event store and its 90-day raw window, so the
+      // numerator and denominator share a basis instead of pairing a browser
+      // click beacon with a server serve count. Aggregate integers only.
+      shopper_serves: views[week] ?? 0,
+      ctr_denominator_shopper: views[week] ?? 0,
+      // Derived, never stored: a fraction (multiply by 100 for percent), or
+      // null when the week has no shopper serve to divide by (never 0, which
+      // would read as "0% CTR" when the basis is simply absent).
+      offer_link_ctr_shopper:
+        (views[week] ?? 0) > 0 ? (clicks[week] ?? 0) / (views[week] as number) : null,
       // REEA-935 — per-outcome counts plus the derived dead/challenge rates;
       // the annotation fields ride verbatim when stamped.
       link_smoke: { ...w.link_smoke, ...linkSmokeRates(w.link_smoke) },
@@ -339,8 +390,14 @@ export function weeklyResponse(
         // the named `bot_serves` counter, published beside both so the
         // subtraction is auditable and clean ≤ raw holds by construction.
         ctr_denominators:
-          "ctr_denominator_raw = every served live search counted by `searches` (one results-page fan-out serve = one search; bots included). ctr_denominator_clean = the SAME population minus `bot_serves`: serves whose User-Agent matched the shared bot/health-check predicate (lib/bot-ua.ts) — smoke probes, QA probes that identify as bots, uptime pingers, and missing-UA fetchers. clean = max(0, raw − min(bot_serves, raw)), so ctr_denominator_clean ≤ ctr_denominator_raw always, and the difference is attributable to exactly `bot_serves`. Both are aggregate integers; no per-user identifier, no per-query row.",
-        source: "REEA-1148 bet #2 AC-6c/AC-8; REEA-1009 S1b; REEA-1200 bet 7C AC 7C-3/7C-4; band definitions unchanged (REEA-871/REEA-884)",
+          "ctr_denominator_raw = every served live search counted by `searches` (one results-page fan-out serve = one search; bots included). ctr_denominator_clean = the SAME population minus `bot_serves`: serves whose User-Agent matched the shared bot/health-check predicate (lib/bot-ua.ts) — smoke probes, QA probes that identify as bots, uptime pingers, and missing-UA fetchers. clean = max(0, raw − min(bot_serves, raw)), so ctr_denominator_clean ≤ ctr_denominator_raw always, and the difference is attributable to exactly `bot_serves`. Both are aggregate integers; no per-user identifier, no per-query row. Neither is the CTR basis: they are server serve counts, published for continuity.",
+        // REEA-1237 — AC-2: the CTR is published on the SHOPPER basis and the
+        // numerator and denominator populations are named on the wire. AC-4:
+        // the arithmetic is reproducible from the payload alone (clicks ÷
+        // shopper_serves). AC-5: the beacon stores no identifier.
+        ctr_shopper:
+          "offer_link_ctr_shopper = offer_link_clicks ÷ ctr_denominator_shopper. NUMERATOR basis: browser `item_clicked` beacons on offer links (results shelf and product-detail CTAs) from the anonymous funnel store — the same store, 90-day raw retention and clock as the denominator. DENOMINATOR basis: browser `page_view` beacons, one per served results page (query present), i.e. serves a shopper's own browser actually executed; shopper_serves and ctr_denominator_shopper are the same integer by construction (the shopper basis is exactly this count, no further subtraction). Both sides are client beacons, so a crawler that never executes JS contributes to neither — that is the shared basis the server-side ctr_denominator_clean could not provide. The transport drops `page_view` for the shared bot/health-check User-Agent predicate (lib/bot-ua.ts), so headless QA/smoke probes (which DO execute JS) do not inflate the denominator; the click numerator stays the unfiltered funnel stream (REEA-973), so a bot that clicks without a counted view is the only asymmetry, and QA click volume is negligible beside shopper views. offer_link_ctr_shopper is a fraction (× 100 for percent) and is null when a week has no shopper serve, never 0, so an absent basis cannot read as a 0% rate. A `page_view` event persists only `type`, a random per-event id and the server ingestion timestamp — no session, user, query or fingerprint identifier (AC-5). The beacon ships with this build: a week recorded before it reads shopper_serves = 0 and offer_link_ctr_shopper = null, and a week that straddles the ship date pairs a full-week click numerator with a partial-week view denominator — read the shopper CTR only on weeks fully inside the beacon's lifetime. The 0.55% CTA success bar is judged on this field.",
+        source: "REEA-1148 bet #2 AC-6c/AC-8; REEA-1009 S1b; REEA-1200 bet 7C AC 7C-3/7C-4; REEA-1237 shopper CTR basis; band definitions unchanged (REEA-871/REEA-884)",
       },
     },
     { headers: { "cache-control": "no-store" } },
