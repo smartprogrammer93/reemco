@@ -2868,6 +2868,56 @@ export function groupHits(
   locale?: "en" | "ar",
   familyMerge = false,
 ): NormalizedProduct[] {
+  const products = mergedProducts(query, hits, includeAlternatives, locale, familyMerge, true);
+  // REEA-1207 AC 7B-1/7B-2 — a category shelf is a COMPARISON surface: the
+  // ranker now leads with cards that carry >=2 in-market retailers, and the
+  // shelf stops at the category budget so the shopper's first screen is not
+  // twenty single-store rows with the comparisons buried. Exact-model queries
+  // keep the wider page (they already compare one model across stores).
+  // REEA-1175 measured the gap as a CATEGORY problem: exact-model queries
+  // already compare one model across stores, so they keep the wider page. A
+  // category or brand-only query (no model identity token) is the surface that
+  // was a directory of single-store rows.
+  const exactModelQuery = modelIdentityTokens(query).length > 0;
+  // REEA-1207 rev-2 — a category shelf is a COMPARISON surface. When the lanes
+  // produced at least one comparison, the shelf is those comparison cards plus
+  // two single-retailer rows (so the page is never comparisons only), capped at
+  // the category budget. When the lanes produced none, the shelf keeps the
+  // ordinary category page — a thin comparison shelf must not become an empty
+  // one. Exact-model queries keep the wider page (REEA-1175).
+  return exactModelQuery ? products : comparisonLedShelf(products);
+}
+
+/**
+ * REEA-1269 — the FULL merged card set for a fetched cohort, before the
+ * results-page shelf trim. The sitemap needs every product the live run
+ * merged, not only the ~6 slots a category shelf spends: each merged card is
+ * one canonical SKU a shopper can reach, so each one is an indexable PDP.
+ *
+ * Same pipeline as `groupHits` (cohort sanity, merge map, family fold,
+ * ranking, one productId per card) — it only skips the shelf budget and the
+ * per-render sanity log, so the two surfaces cannot disagree about identity.
+ * `includeAlternatives` defaults to false: the sitemap reads ids and offer
+ * stamps only, and the alternatives rail is payload it would throw away.
+ */
+export function groupHitsAll(
+  query: string,
+  hits: SearchHit[],
+  includeAlternatives = false,
+  locale?: "en" | "ar",
+  familyMerge = false,
+): NormalizedProduct[] {
+  return mergedProducts(query, hits, includeAlternatives, locale, familyMerge, false);
+}
+
+function mergedProducts(
+  query: string,
+  hits: SearchHit[],
+  includeAlternatives: boolean,
+  locale: "en" | "ar" | undefined,
+  familyMerge: boolean,
+  logSummary: boolean,
+): NormalizedProduct[] {
   // REEA-963 R1 — the cohort pass runs FIRST, over every offer the adapters
   // returned for this query execution: one (retailer, SKU) survivor per
   // listing (freshest fetch wins, E5), the query-cohort median and the
@@ -2893,28 +2943,9 @@ export function groupHits(
   const familyMerged = familyMerge ? mergeModelFamilies(groups) : groups;
   const ranked = rankByRelevance(query, familyMerged);
   const products = finalizeGroups(ranked, includeAlternatives, query, locale, sanity);
-  // REEA-1207 AC 7B-1/7B-2 — a category shelf is a COMPARISON surface: the
-  // ranker now leads with cards that carry >=2 in-market retailers, and the
-  // shelf stops at the category budget so the shopper's first screen is not
-  // twenty single-store rows with the comparisons buried. Exact-model queries
-  // keep the wider page (they already compare one model across stores).
-  // REEA-1175 measured the gap as a CATEGORY problem: exact-model queries
-  // already compare one model across stores, so they keep the wider page. A
-  // category or brand-only query (no model identity token) is the surface that
-  // was a directory of single-store rows.
-  const exactModelQuery = modelIdentityTokens(query).length > 0;
-  // REEA-1207 rev-2 — a category shelf is a COMPARISON surface. When the lanes
-  // produced at least one comparison, the shelf is those comparison cards plus
-  // two single-retailer rows (so the page is never comparisons only), capped at
-  // the category budget. When the lanes produced none, the shelf keeps the
-  // ordinary category page — a thin comparison shelf must not become an empty
-  // one. Exact-model queries keep the wider page (REEA-1175).
-  const shelf = exactModelQuery
-    ? products
-    : comparisonLedShelf(products);
   // AC-7 — one structured summary line per render cohort evaluation.
-  logSanitySummary(sanity.summary);
-  return shelf;
+  if (logSummary) logSanitySummary(sanity.summary);
+  return products;
 }
 
 /**

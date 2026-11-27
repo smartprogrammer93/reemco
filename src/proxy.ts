@@ -142,6 +142,18 @@ export function checkPageRateLimit(
   return { allowed: true, remaining: opts.limit - hits.length };
 }
 
+/**
+ * REEA-1269 — /sitemap.xml is a crawler artifact, not a shopper page: the
+ * folded catalogue changes on the scale of minutes and the render is
+ * `force-dynamic` (REEA-1051), so Next's default `max-age=0, must-revalidate`
+ * made every crawl re-pay the fold. A bounded shared-cache window keeps the
+ * route cacheable (S-6) without serving an hour-stale inventory; the in-process
+ * fold memo (lib/sitemap-products) already bounds the origin cost inside it.
+ */
+export function sitemapCacheHeaders(): { "Cache-Control": string } {
+  return { "Cache-Control": "public, max-age=0, s-maxage=600, stale-while-revalidate=3600" };
+}
+
 export function sharedWindowHeaders(): { "Cache-Control": string; Vary: string } {
   return {
     "Cache-Control": "public, max-age=0, s-maxage=45, stale-while-revalidate=15",

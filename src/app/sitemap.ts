@@ -15,6 +15,11 @@ import {
 } from "@/lib/collect/last-observation";
 import { startProductCollectionStaged } from "@/lib/collect/runner";
 import { OVERALL_BUDGET_MS } from "@/lib/collect/types";
+import { canonicalProductIdForSlug } from "@/lib/product-canonical";
+import {
+  SITEMAP_PRODUCT_CAP,
+  sitemapProducts as liveCatalogProducts,
+} from "@/lib/sitemap-products";
 import type { NormalizedProduct } from "@/types/product";
 
 // REEA-1051 — sitemap handlers are cached/prerendered at build by default, so
@@ -49,9 +54,13 @@ async function indexableQuerySet(nowMs: number): Promise<Set<string> | null> {
  *    the homepage chip row reads (lib/trending-chips.ts). Only the
  *    `/results?q=` shape is listed — `/search?q=` renders the identical live
  *    path, so listing both would offer one page twice;
- *  - stable product URLs from the catalog/feed identity list. These are URL
- *    identities only: the /product page still collects its offers live per
- *    request (REEA-114), so the sitemap never freezes a price.
+ *  - product URLs: one canonical key per SKU. REEA-1269 replaced the ten
+ *    catalog seeds as the inventory source with the products the deployment
+ *    actually collects (lib/sitemap-products.ts folds the durable live
+ *    observation store at request time), and the catalog identities keep their
+ *    REEA-1192/1211 offer check. Every product URL is an identity only: the
+ *    /product page still collects its offers live per request (REEA-114), so
+ *    the sitemap never freezes a price.
  */
 
 /** Bounded concurrency for the sitemap's live product check. */
@@ -126,7 +135,11 @@ async function productWouldPaintOffer(product: NormalizedProduct): Promise<boole
   );
 }
 
-async function sitemapProducts(products: readonly NormalizedProduct[]): Promise<NormalizedProduct[]> {
+/** REEA-1192/1211 catalog-identity check (renamed in REEA-1269 so the live
+ *  inventory fold can own the `sitemapProducts` name in lib/sitemap-products). */
+async function catalogProductsWithOffers(
+  products: readonly NormalizedProduct[],
+): Promise<NormalizedProduct[]> {
   const out: NormalizedProduct[] = [];
   const nowMs = Date.now();
   for (let i = 0; i < products.length; i += SITEMAP_PRODUCT_CHECK_CONCURRENCY) {
@@ -189,13 +202,36 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   // (lib/collect/last-observation): a stored verified observation OR a live
   // re-check inside the PDP's first-paint budget. Bounded and cached so
   // crawlers do not re-pay it on every request.
-  const listed = await sitemapProducts(PRODUCTS);
-  const productPages: MetadataRoute.Sitemap = listed.map((product) => ({
-    url: `${origin}/product/${encodeURIComponent(product.productId)}`,
-    lastModified: now,
-    changeFrequency: "weekly",
-    priority: 0.8,
-  }));
+  const catalogListed = await catalogProductsWithOffers(PRODUCTS);
 
-  return [...corePages, ...queryPages, ...productPages];
+  // REEA-1269 (Bet 1b) — indexable inventory. The catalog seeds above are ten
+  // identities; the products this deployment actually collects live in the
+  // durable last-seen store. lib/sitemap-products.ts folds those stored rounds
+  // into canonical PDP keys (S-4: request-time, live-derived — no bundled
+  // catalogue presented as live), and each entry carries the moment its round
+  // was observed. Both sources are deduped onto ONE canonical key per SKU, so
+  // a live merge key (`apple-iphone17-pro-256gb`) and its catalog identity
+  // (`iphone-17-pro`) never both appear (S-2).
+  const liveProducts = await liveCatalogProducts(queries, now.getTime());
+  const productEntries: MetadataRoute.Sitemap = [];
+  const listedCanonicalIds = new Set<string>();
+  const addProduct = (canonicalId: string, lastModified: Date): void => {
+    if (listedCanonicalIds.has(canonicalId)) return;
+    if (productEntries.length >= SITEMAP_PRODUCT_CAP) return;
+    listedCanonicalIds.add(canonicalId);
+    productEntries.push({
+      url: `${origin}/product/${encodeURIComponent(canonicalId)}`,
+      lastModified,
+      changeFrequency: "weekly",
+      priority: 0.8,
+    });
+  };
+  for (const product of liveProducts) {
+    addProduct(product.canonicalId, new Date(product.observedAtMs));
+  }
+  for (const product of catalogListed) {
+    addProduct(canonicalProductIdForSlug(product.productId), now);
+  }
+
+  return [...corePages, ...queryPages, ...productEntries];
 }

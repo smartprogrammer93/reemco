@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import type { NextConfig } from "next";
-import { RESULTS_PATHS, sharedWindowHeaders } from "./src/proxy";
+import { RESULTS_PATHS, sharedWindowHeaders, sitemapCacheHeaders } from "./src/proxy";
 
 /**
  * REEA-439 — the bounded shared window for repeat identical searches is built
@@ -66,10 +66,19 @@ const nextConfig: NextConfig = {
   },
   headers: async () => {
     const windowHeaders = sharedWindowHeaders();
-    return RESULTS_PATHS.map((source) => ({
-      source,
-      headers: Object.entries(windowHeaders).map(([key, value]) => ({ key, value })),
-    }));
+    return [
+      ...RESULTS_PATHS.map((source) => ({
+        source,
+        headers: Object.entries(windowHeaders).map(([key, value]) => ({ key, value })),
+      })),
+      // REEA-1269 S-6 — the crawler artifact carries its own bounded shared
+      // window (the renderer rewrites dynamic-route cache headers, config
+      // headers survive; same mechanism as the results window above).
+      {
+        source: "/sitemap.xml",
+        headers: Object.entries(sitemapCacheHeaders()).map(([key, value]) => ({ key, value })),
+      },
+    ];
   },
   // STATIC_EXPORT=1 ships a static snapshot for offline checks. The default
   // is the production server build (the self-hosted box, or `next start`) so

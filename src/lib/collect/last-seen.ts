@@ -378,6 +378,115 @@ export async function readSeenObservations(
   return rows;
 }
 
+/**
+ * REEA-1269 — one merchant's stored LIVE round for a query, as written by
+ * `rememberRound`: the hits and the round's own collection stamp.
+ *
+ * The sitemap reads this instead of dispatching new fan-outs: these rows are
+ * the retailer answers the deployment already collected, each carrying the
+ * moment it was observed. A `days` slot's offer identities ride along so the
+ * fold can also name SKUs whose latest round has rolled out of `hits`.
+ */
+export interface SeenSnapshot {
+  query: string;
+  merchant: string;
+  /** ISO stamp of the LIVE round that wrote this snapshot (age basis). */
+  collectedAt: string;
+  hits: SearchHit[];
+  days: SeenDay[];
+}
+
+/**
+ * REEA-1269 — batch-read the latest stored rounds for a set of queries across
+ * every lane, in ONE shared-store round trip per chunk (MGET), so the sitemap
+ * can fold the collected catalogue without one GET per key.
+ *
+ * Best-effort by the same contract as the rest of this module: no binding
+ * degrades to the disk layer, a hiccup degrades to whatever answered, and the
+ * caller sees a shorter list rather than an error. Entries older than
+ * `maxAgeMs` are dropped on read (the store's own retention is longer), so a
+ * listed product always carries a recent live observation.
+ */
+export async function readLatestSeenSnapshots(
+  queries: ReadonlyArray<string>,
+  merchants: ReadonlyArray<string>,
+  opts: { now?: number; maxAgeMs?: number; dir?: string } = {},
+): Promise<SeenSnapshot[]> {
+  const now = opts.now ?? Date.now();
+  const maxAgeMs = opts.maxAgeMs ?? LAST_SEEN_MAX_AGE_MS;
+  const out: SeenSnapshot[] = [];
+  const pairs: { query: string; merchant: string; key: string }[] = [];
+  for (const query of queries) {
+    for (const merchant of merchants) pairs.push({ query, merchant, key: lastSeenKey(merchant, query) });
+  }
+  try {
+    const kv = getSharedKv();
+    const keys = pairs.map((p) => p.key);
+    let values: (string | null)[] | null = null;
+    if (kv?.mget) {
+      values = await kv.mget(keys);
+    } else if (kv) {
+      // Older/partial fakes expose only get/set: same answer, more round trips.
+      values = await Promise.all(keys.map((key) => kv.get(key).catch(() => null)));
+    }
+    // The disk layer is the fallback when no shared binding is configured (and
+    // a per-key miss still falls through to it, same posture as the reads
+    // above). Only paid for when some key did not answer.
+    const needsDisk = values === null || values.some((value) => value === null);
+    const table = needsDisk ? readTable(opts.dir) : null;
+    for (let i = 0; i < pairs.length; i++) {
+      const pair = pairs[i];
+      let entry: LastSeenEntry | null = null;
+      const raw = values ? values[i] : null;
+      if (raw) {
+        try {
+          entry = asEntry(JSON.parse(raw));
+        } catch {
+          entry = null;
+        }
+      }
+      if (!entry && table) entry = asEntry(table[pair.key]);
+      if (!entry) continue;
+      const t = Date.parse(entry.collectedAt);
+      if (Number.isNaN(t) || now - t > maxAgeMs || t > now) continue;
+      out.push({
+        query: pair.query,
+        merchant: pair.merchant,
+        collectedAt: entry.collectedAt,
+        hits: entry.hits.filter((hit) => hit && typeof hit.title === "string" && hit.title.trim() !== ""),
+        days: legacySlots(entry),
+      });
+    }
+  } catch {
+    /* best-effort — the caller lists whatever the store answered */
+  }
+  return out;
+}
+
+/**
+ * REEA-1269 — the query strings present in the degraded disk layer, i.e. the
+ * same set `rememberRound` writes when no shared binding is configured. The
+ * sitemap's inventory fold reads this alongside the `seen:*` keyspace so a
+ * no-KV deployment (local runs, a cold box) still discovers the queries it
+ * collected instead of only the curated seeds.
+ */
+export function diskCollectedQueries(dir?: string): string[] {
+  try {
+    const table = dir === undefined ? readTable() : readTable(dir);
+    const out: string[] = [];
+    for (const key of Object.keys(table)) {
+      const rest = key.slice("seen:".length);
+      const sep = rest.indexOf(":");
+      if (sep < 0) continue;
+      const query = rest.slice(sep + 1).trim();
+      if (query) out.push(query);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 /** Test/admin helper: clear the degraded disk layer. */
 export function resetLastSeenForTests(dir?: string): void {
   try {

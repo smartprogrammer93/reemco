@@ -10,6 +10,8 @@ import { readRetiredLanes } from "@/lib/collect/lane-health";
 // REEA-1246 AC5 — a live slug that folds onto a catalog identity is the same
 // SKU, so its bare visit must dispatch the same phrase the sitemap URL uses.
 import { canonicalProductIdForSlug } from "@/lib/product-canonical";
+// REEA-1269 — the sitemap's source-query hint for a live-only product key.
+import { readPdpSource } from "@/lib/pdp-source";
 import type { CountryCode } from "@/lib/country";
 import type { NormalizedProduct } from "@/types/product";
 
@@ -82,14 +84,27 @@ export async function resolveProductIdentity(
     STAGE_TAIL_HEADROOM_MS,
   } = await import("@/lib/collect/live-search");
   const retiredLanes = await readRetiredLanes();
+  // REEA-1269 — a bare-slug visit has no carried query, so the dispatch phrase
+  // was the slug itself, and that phrase is not always what the retailers
+  // answer for (measured: sitemap-advertised long-tail keys served
+  // `<div class="rc-offers-table" aria-busy="true">` with zero rows, while the
+  // same URL with the source query painted the shelf's offers). The sitemap's
+  // inventory fold persists the query that minted each live-only key
+  // (lib/pdp-source.ts); dispatching it reproduces the shelf's own run, so the
+  // advertised URL renders the offer set the sitemap promised (S-2).
+  const sourceQuery = carriedQuery ? null : await readPdpSource(productId);
+
   // REEA-1140 — a carried query must reproduce the results page's fan-out.
   // The results page collects the whole market set and applies the country
   // selection as a render-time filter; scoping the adapters here would drop
   // offers the card counted. Only a slug-only visit (no carried query) keeps
-  // the REEA-170 country scoping.
-  const scopeCountry = carriedQuery ? null : country ?? null;
+  // the REEA-170 country scoping. REEA-1269: a source-query hint IS a shelf
+  // query, so it keeps the unscoped fan-out too.
+  const scopeCountry = carriedQuery || sourceQuery ? null : country ?? null;
 
-  const attempts = [...new Set([carriedQuery, decodedQuery].filter((q) => q !== ""))];
+  const attempts = [
+    ...new Set([carriedQuery, sourceQuery ?? "", decodedQuery].filter((q) => q !== "")),
+  ];
   let fallbackPool: NormalizedProduct[] = [];
   for (const attempt of attempts) {
     // REEA-1192 — collection continuity: when the shelf just served this same
