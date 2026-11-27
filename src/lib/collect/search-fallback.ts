@@ -793,6 +793,57 @@ export function scanWooCards(html: string): WooCard[] {
  * other Woo card; the currency label is read from the symbol text and falls
  * back to the theme's `sar-currency-symbol` wrapper stamp.
  */
+/**
+ * Ounass (REEA-1221) — the listing-page card scanner.
+ *
+ * Measured 2026-11-27: the storefront's `?q=` search is CLIENT-side — its
+ * server-rendered island carries only an `OnlineStore` record, so the lane could
+ * never contribute an offer from it (12/12 panel queries settled an explicit
+ * no-match). The listing pages, however, are server-rendered with real cards:
+ * `StyleColorListItem-designer` (the brand), `StyleColorListItem-name` (the
+ * product), `StyleColorListItem-price` ("230 KWD") and a `/shop-…html` anchor.
+ *
+ * The listing does NOT filter on the query string (measured: `?q=dyson` and
+ * `?q=zzzznotathing` return the same curated set), so the scanner returns every
+ * card and the caller gates them — a card whose brand+name+slug does not answer
+ * the query is simply not a hit. That is honest: it lists the offers this page
+ * really carries, never a synthesized row.
+ */
+export interface OunassCard {
+  title: string;
+  brand: string;
+  price: number;
+  currency: string;
+  url: string;
+}
+
+export function scanOunassCards(html: string): OunassCard[] {
+  const out: OunassCard[] = [];
+  const seen = new Set<string>();
+  const blocks = html.split(/<li\b/).filter((b) => b.includes("StyleColorListItem"));
+  for (const block of blocks) {
+    const brand = block.match(/StyleColorListItem-designer">([^<]*)</)?.[1]?.trim() ?? "";
+    const name = block.match(/StyleColorListItem-name">([^<]*)</)?.[1]?.trim() ?? "";
+    const priceText = block.match(/StyleColorListItem-price">([^<]*)</)?.[1]?.trim() ?? "";
+    const href = block.match(/href="(\/shop-[^"]+\.html)"/)?.[1] ?? "";
+    if (!name || !href) continue;
+    // "230 KWD" / "2,735 KWD" — the label is always the local spelling.
+    const amount = Number(priceText.replace(/[^\d.]/g, "").replace(/,/g, ""));
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    if (seen.has(href)) continue;
+    seen.add(href);
+    const title = decodeEntities(`${brand ? brand + " " : ""}${name}`.trim());
+    out.push({
+      title,
+      brand,
+      price: amount,
+      currency: /KWD|KD/i.test(priceText) ? "KWD" : priceText.replace(/[\d.,\s]/g, "").toUpperCase() || "KWD",
+      url: `https://kuwait.ounass.com${href}`,
+    });
+  }
+  return out;
+}
+
 export function scanAlghanimStoreCards(html: string): WooCard[] {
   const out: WooCard[] = [];
   const needle = 'class="woocommerce-loop-product__title"';

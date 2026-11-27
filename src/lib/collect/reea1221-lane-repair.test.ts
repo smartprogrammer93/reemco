@@ -12,7 +12,7 @@ import {
 } from "@/lib/collect/live-search";
 import { browserTierEnabled, relayTierEnabled } from "@/lib/collect/browser-clearance";
 import { coverageParts, type LiveSearchResult } from "@/lib/collect/coverage";
-import { arabicQueryForms, queryGatePasses } from "@/lib/collect/search-fallback";
+import { arabicQueryForms, queryGatePasses, scanOunassCards } from "@/lib/collect/search-fallback";
 // The lane gate runs at the adapter threshold, not the ranking threshold.
 const MIN_SCORE = 0.25;
 
@@ -378,6 +378,33 @@ describe("REEA-1221 lane repair", () => {
     expect(queryGatePasses("باقة الجمال اتنظيف البشرة هيدرا فيشال جل", "خيار", MIN_SCORE)).toBe(false);
     // …while an exact answer still passes, so the rule cannot starve a lane.
     expect(queryGatePasses("غسالة", "غسالة", MIN_SCORE)).toBe(true);
+  });
+
+  it("Ounass answers real priced offers from its server-rendered listing", async () => {
+    // REEA-1221 — the `?q=` island is client-hydrated (no `"name"`+`"price"`
+    // records), so the lane answered an explicit no-match on every panel query
+    // and never contributed an offer. The listing page is server-rendered with
+    // real cards; the scanner reads brand+name+price+anchor from it.
+    const listing =
+      '<li id="219312823_242" class=" StyleColorListItem is-hoverable ">' +
+      '<img alt="Airwrap" class="StyleColorListItem-thumbnail" />' +
+      '<span class="StyleColorListItem-contentContainer">' +
+      '<span class="StyleColorListItem-designer">Dyson </span>' +
+      '<span class="StyleColorListItem-name">Airwrap Co-anda2x Multi-styler &amp; Dryer</span>' +
+      '<span class="StyleColorListItem-priceContainer"><span class="StyleColorListItem-price">230 KWD</span></span>' +
+      "</span>" +
+      '<a href="/shop-dyson-airwrap-co-anda2x-multi-styler-dryer-for-women-219312823_242.html"></a>' +
+      "</li>";
+    const cards = scanOunassCards(listing);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ brand: "Dyson", price: 230, currency: "KWD" });
+    expect(cards[0].url).toBe(
+      "https://kuwait.ounass.com/shop-dyson-airwrap-co-anda2x-multi-styler-dryer-for-women-219312823_242.html",
+    );
+    // The listing serves its curated set for any `?q=`, so the gate is what keeps
+    // the row on-scope.
+    expect(queryGatePasses(`${cards[0].title} ${cards[0].url}`, "dyson", MIN_SCORE)).toBe(true);
+    expect(queryGatePasses(`${cards[0].title} ${cards[0].url}`, "washing machine", MIN_SCORE)).toBe(false);
   });
 
   it("keeps both clearance tiers out of the hermetic test run", () => {

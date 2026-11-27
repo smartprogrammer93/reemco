@@ -29,6 +29,7 @@ import {
   scanAlghanimStoreCards,
   scanBinsinaCards,
   arabicQueryForms,
+  scanOunassCards,
   scanLuluListCards,
   scanNextStoreCards,
   scanNextStoreMarkdown,
@@ -2367,10 +2368,56 @@ export const COLLECTORS: RetailerCollector[] = [
       } catch {
         // The relay below still gets its own window.
       }
+      // REEA-1221 — the `?q=` island is a client-hydrated shell, so the lane has
+      // never contributed an offer from it (CEO directive: Ounass must return
+      // real priced offers where it has stock). Its LISTING pages are
+      // server-rendered with real cards, so the listing is the second hop: the
+      // cards carry brand, name, price and a `/shop-…html` anchor (measured
+      // 2026-11-27: 24 priced cards, `Dyson Airwrap … 230 KWD`). The listing does
+      // not filter on `?q=` — it serves its curated set either way — so every card
+      // is gated against the query and only genuine answers are kept. That is a
+      // real offer, never a synthesized row.
+      const listingHits = async (): Promise<SearchHit[]> => {
+        try {
+          const res = await fetchChecked(
+            fetchImpl,
+            `https://kuwait.ounass.com/curated-for-all?q=${encodeURIComponent(query)}`,
+            {
+              headers: {
+                accept: "text/html,application/xhtml+xml",
+                "accept-language": "en-US,en;q=0.9",
+                "user-agent": "Mozilla/5.0",
+              },
+            },
+            AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
+          );
+          const html = await res.text();
+          if (isShell(html)) return [];
+          return scanOunassCards(html)
+            .filter((card) => queryGatePasses(`${card.title} ${card.url}`, query, MIN_SCORE))
+            .map((card) => ({
+              title: card.title,
+              merchant: "Ounass",
+              country: "KW",
+              ...(card.brand ? { brand: card.brand } : {}),
+              price: card.price,
+              currency: card.currency,
+              url: card.url,
+              inStock: true,
+            }));
+        } catch {
+          return [];
+        }
+      };
       for (const body of bodies) {
         if (isShell(body)) continue;
-        return ounassHits(body, query);
+        const islandHits = ounassHits(body, query);
+        if (islandHits.length > 0) return islandHits;
+        const fromListing = await listingHits();
+        if (fromListing.length > 0) return fromListing;
+        return islandHits;
       }
+
       // REEA-1242 — durable hop: the box's Chromium runs the zone's challenge
       // JS and paints the hydrated page (measured 2026-11-26 on the production
       // egress: 185 KB, `<main>` + `OnlineStore` island) when the plain hop
