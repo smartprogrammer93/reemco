@@ -1773,6 +1773,40 @@ export function ounassListingLastDiag(): string {
   return ounassListingDiag;
 }
 
+/**
+ * REEA-1221 — Ounass answers HTTP 429 to the box's egress on its listing path
+ * (measured 2026-11-27: `/api/echo` reported `plain:err(HTTP 429)` while the
+ * same URL answered 24 priced cards from a second egress). A 429 is a rate-limit
+ * window, not a dead host, so one polite pause and one retry is the same budget
+ * the Shopify lanes use.
+ */
+const OUNASS_RETRY_BACKOFF_MS = 900;
+async function ounassHop(fetchImpl: FetchImpl, url: string, signal: AbortSignal): Promise<string> {
+  const once = async (): Promise<string> => {
+    const res = await fetchChecked(
+      fetchImpl,
+      url,
+      {
+        headers: {
+          accept: "text/html,application/xhtml+xml",
+          "accept-language": "en-US,en;q=0.9",
+          "user-agent": "Mozilla/5.0",
+        },
+      },
+      signal,
+    );
+    return await res.text();
+  };
+  try {
+    return await once();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!/HTTP (429|503)/.test(message) || signal.aborted) throw err;
+    await new Promise((r) => setTimeout(r, OUNASS_RETRY_BACKOFF_MS));
+    if (signal.aborted) throw err;
+    return await once();
+  }
+}
 export const COLLECTORS: RetailerCollector[] = [
   {
     merchant: "Xcite",
@@ -2333,6 +2367,7 @@ export const COLLECTORS: RetailerCollector[] = [
     },
   },
   {
+
     merchant: "Ounass",
     country: "KW",
     collect: async (query, fetchImpl) => {
@@ -2358,19 +2393,7 @@ export const COLLECTORS: RetailerCollector[] = [
         /cf-error-details|Just a moment|Attention Required|Sorry, you have been blocked/i.test(html);
       const bodies: string[] = [];
       try {
-        const res = await fetchChecked(
-          fetchImpl,
-          url,
-          {
-            headers: {
-              accept: "text/html,application/xhtml+xml",
-              "accept-language": "en-US,en;q=0.9",
-              "user-agent": "Mozilla/5.0",
-            },
-          },
-          AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
-        );
-        bodies.push(await res.text());
+        bodies.push(await ounassHop(fetchImpl, url, AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS)));
       } catch {
         // The relay below still gets its own window.
       }
@@ -2410,23 +2433,12 @@ export const COLLECTORS: RetailerCollector[] = [
           trace.push(`${label}:cards=${cards.length},hits=${hits.length}(${html.length})`);
           return hits;
         };
-        const plain = await fetchChecked(
-          fetchImpl,
-          listingUrl,
-          {
-            headers: {
-              accept: "text/html,application/xhtml+xml",
-              "accept-language": "en-US,en;q=0.9",
-              "user-agent": "Mozilla/5.0",
-            },
-          },
-          AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS),
-        )
-          .then((res) => res.text())
-          .catch((err) => {
+        const plain = await ounassHop(fetchImpl, listingUrl, AbortSignal.timeout(LIVE_SEARCH_TIMEOUT_MS)).catch(
+          (err) => {
             trace.push(`plain:err(${err instanceof Error ? err.message.slice(0, 40) : "?"})`);
             return "";
-          });
+          },
+        );
         const fromPlain = parse(plain, "plain");
         if (fromPlain.length > 0) {
           ounassListingDiag = trace.join(" ");
