@@ -296,6 +296,34 @@ jobs:
             exit "$code"
           fi
 
+      # REEA-1250 — memory headroom gate. The browser-clearance tier grows the
+      # app's Chromium/Node high-water mark under fan-out traffic, and the app
+      # cgroup is 6 GiB: an unbounded tier can ratchet into an OOM kill and a
+      # container restart (brief 502s for every shopper). This step drives a
+      # bounded burst of 40 distinct /results queries and asserts the runtime's
+      # anonymous memory stays under 70% of the cgroup, the image's explicit V8
+      # heap cap is in force, and the process did not restart. It runs after the
+      # funnel smoke so it measures the same deployed artifact, and a failure
+      # takes the ordinary rollback path below.
+      - name: Memory headroom gate (REEA-1250)
+        id: memory
+        # Skip on a rollback run: a rollback legitimately lands an older image
+        # that predates the heap cap, and a failed gate would invoke
+        # rollback.sh again — which flips image-tag.prev and undoes the very
+        # rollback that was asked for.
+        if: ${{ inputs.rollback_sha == '' }}
+        timeout-minutes: 12
+        env:
+          SMOKE_BASE_URL: ${{ env.SITE_ADDRESS }}
+        run: |
+          set -uo pipefail
+          code=0
+          npm run memory-gate || code=$?
+          if [ "$code" -ne 0 ]; then
+            echo "::error::memory headroom gate failed (exit $code)"
+            exit "$code"
+          fi
+
       # Rollback path when verification fails: the host's deploy.sh already
       # rolls back automatically on a failed on-box verify; this covers the
       # external checks only the runner can see (stamp/headers, and since

@@ -10,6 +10,7 @@
     "test": "vitest run",
     "build:static": "node scripts/static-export.mjs",
     "smoke": "node scripts/smoke-check.mjs",
+    "memory-gate": "node scripts/memory-gate.mjs",
     "report": "node --experimental-strip-types scripts/weekly-report.ts",
     "parity": "node scripts/parity-check.mjs"
   },

@@ -68,4 +68,14 @@ RUN mkdir -p /app/.local/share && chown -R reemco:reemco /app/.local
 
 USER reemco
 EXPOSE 3000
-CMD ["node", "server.js"]
+# REEA-1250 — explicit V8 heap cap. The container's cgroup is 6 GiB and the
+# browser-clearance tier holds a headless Chromium (~0.7 GiB of children) next
+# to this Node process. Without a cap V8 sizes its old space from the HOST's
+# memory (measured: heap_size_limit 4,144 MiB on the 32 GB box), so the Node
+# process alone could ratchet past 4.7 GiB VmRSS before the kernel's OOM kill.
+# 2048 MiB leaves room for Chromium, the RSC/streaming buffers and page cache
+# while keeping a single fan-out inside the cgroup. /api/echo reports the
+# effective limit (heapLimitBytes + heapCapOk) and the deploy gate asserts it;
+# do not change this value without updating NODE_HEAP_CAP_BYTES in
+# src/lib/runtime-memory.ts.
+CMD ["node", "--max-old-space-size=2048", "server.js"]

@@ -44,9 +44,9 @@ import { jarirHits, jsdClearedHtml } from "@/lib/collect/live-search";
 // REEA-1221 — the real-browser clearance tier is the Next Store lane's last
 // hop; this probe reports whether it launches and paints from THIS runtime, so
 // a failed lane is diagnosable from the served payload without another deploy.
-import { browserProbe } from "@/lib/collect/browser-clearance";
+import { browserProbe, browserTierStats } from "@/lib/collect/browser-clearance";
 import { ounassListingLastDiag } from "@/lib/collect/live-search";
-import { readFileSync } from "node:fs";
+import { readRuntimeMemory } from "@/lib/runtime-memory";
 // REEA-782 — GET /api/echo rides the shared rate limiter (REEA-37 bucket,
 // REEA-827 deployment-wide counter: the namespaced `echo:` budget counts
 // across instances on the shared KV when bound, degrading to the per-process
@@ -325,32 +325,11 @@ function clientKey(req: Request): string {
   return (fwd ? fwd.split(",")[0].trim() : "") || req.headers.get("x-real-ip") || "unknown";
 }
 
-/**
- * REEA-1221 — the runtime's memory ceiling as the kernel reports it: cgroup v2
- * limit (the container's own cap) and the host's available memory. Read-only,
- * no state, no new counters.
- */
-function readRuntimeMemory(): { limitBytes: number | null; availableBytes: number | null } {
-  const readNumber = (path: string): number | null => {
-    try {
-      const raw = readFileSync(path, "utf8").trim();
-      const n = Number(raw);
-      return Number.isFinite(n) ? n : null;
-    } catch {
-      return null;
-    }
-  };
-  const limit = readNumber("/sys/fs/cgroup/memory.max");
-  let availableBytes: number | null = null;
-  try {
-    const info = readFileSync("/proc/meminfo", "utf8");
-    const kb = /MemAvailable:\s+(\d+)/.exec(info)?.[1];
-    availableBytes = kb ? Number(kb) * 1024 : null;
-  } catch {
-    availableBytes = null;
-  }
-  return { limitBytes: limit && limit > 0 ? limit : null, availableBytes };
-}
+// REEA-1250 — the runtime memory picture (cgroup limit/current/anonymous,
+// Node RSS/heap, and whether the image's explicit heap cap is in force) comes
+// from the shared `runtime-memory` module, so the recycle policy and this
+// diagnostic read the same numbers. It replaces the old host-`/proc/meminfo`
+// reading, which could not see the container's own ceiling.
 
 export async function GET(req: Request): Promise<Response> {
   // REEA-782 — rate-limit gate BEFORE any probe fan-out. Past the bucket the
@@ -411,7 +390,25 @@ export async function GET(req: Request): Promise<Response> {
   // box cannot say WHY it contributed no offer.
   const ounassListing = ounassListingLastDiag();
   const browser = await browserProbe(NEXTSTORE_URL, ".product-item-link");
-  const memory = readRuntimeMemory();
+  // REEA-1250 — sampled AFTER the browser probe, so the recycle counters and
+  // the memory picture include the navigation this request just paid for.
+  const runtime = readRuntimeMemory();
+  const browserTier = browserTierStats();
+  const memory = {
+    limitBytes: runtime.cgroup.limitBytes,
+    usedBytes: runtime.cgroup.usedBytes,
+    anonBytes: runtime.cgroup.anonBytes,
+    availableBytes: runtime.cgroup.availableBytes,
+    hostAvailableBytes: runtime.hostAvailableBytes,
+    usedPercent: runtime.usedPercent,
+    anonPercent: runtime.anonPercent,
+    rssBytes: runtime.rssBytes,
+    heapUsedBytes: runtime.heapUsedBytes,
+    heapLimitBytes: runtime.heapLimitBytes,
+    heapCapBytes: runtime.heapCapBytes,
+    heapCapOk: runtime.heapCapOk,
+    uptimeSeconds: runtime.uptimeSeconds,
+  };
   const [lulu, pckuwait] = await Promise.all([
     withClearanceTier(fetch, luluRaw, LULU_URL),
     withClearanceTier(fetch, pckRaw, PCK_URL),
@@ -451,6 +448,10 @@ export async function GET(req: Request): Promise<Response> {
       jarir,
       // REEA-1221 — real-browser clearance tier status on this egress.
       browser,
+      // REEA-1250 — recycle counters + policy, so the deploy gate and the
+      // on-call can see whether the tier is bounded rather than pinned for the
+      // process lifetime.
+      browserRecycle: browserTier,
       // REEA-1221 — what the last Ounass listing attempt got, per hop.
       ounassListing,
       memory,
