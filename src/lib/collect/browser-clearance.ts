@@ -746,6 +746,17 @@ const RELAY_COOLDOWN_FLOOR_MS = 20_000;
 const RELAY_COOLDOWN_CAP_MS = 120_000;
 /** A lane will wait this long for a relay slot before it takes the degraded path. */
 const RELAY_MAX_WAIT_MS = 2_500;
+/**
+ * REEA-1242 — a reader relay answers 429 or hands back the challenge shell on a
+ * fraction of calls even inside its published quota (measured 2026-11-26: the
+ * same URL answered 200 on the next call, and `baby diapers` came back as an
+ * 877-byte "Just a moment..." page). One bounded retry is what turns those
+ * transient refusals into an answer instead of a blocked lane; it never retries
+ * a definitive answer, and the waits are capped so the lane stays inside its
+ * own window.
+ */
+const RELAY_RETRY_MAX_WAIT_MS = 8_000;
+const RELAY_RETRY_SHELL_WAIT_MS = 1_500;
 
 export type RelayLimits = { limit: number; windowMs: number };
 
@@ -828,6 +839,19 @@ async function acquireRelaySlot(id: string, limits: RelayLimits): Promise<boolea
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
   state.hits.push(Date.now());
   return true;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Account a retry that already paid its wait: the slot is consumed (it is a
+ * real provider call) but the budget's own wait is skipped, because the retry
+ * slept exactly the provider's `retry-after`.
+ */
+function takePaidRelaySlot(id: string): void {
+  relayState(id).hits.push(Date.now());
 }
 
 /**
@@ -953,32 +977,57 @@ export async function jinaClearedHtml(
   // per egress, not per mode, so counting each hop separately doubled the
   // allowed rate and the provider answered 429 (measured 2026-11-26 on the
   // 12-query panel).
-  if (!(await acquireRelaySlot("jina", jinaLimits()))) return "";
-  try {
-    const res = await fetch(`${JINA_ENDPOINT}${url}`, {
-      headers: jinaHeaders("html"),
-      signal: AbortSignal.timeout(JINA_TIMEOUT_MS),
-    });
-    if (!res.ok) {
-      lastFailure = `reader relay HTTP ${res.status}`;
-      if (res.status === 429 || res.status === 503) {
-        applyRelayCooldown("jina", retryAfterSeconds(res), jinaLimits().windowMs);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt === 0) {
+      if (!(await acquireRelaySlot("jina", jinaLimits()))) return "";
+    } else {
+      takePaidRelaySlot("jina");
+    }
+    try {
+      const res = await fetch(`${JINA_ENDPOINT}${url}`, {
+        headers: jinaHeaders("html"),
+        signal: AbortSignal.timeout(JINA_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        lastFailure = `reader relay HTTP ${res.status}`;
+        if (res.status === 429 || res.status === 503) {
+          const retryAfter = retryAfterSeconds(res);
+          applyRelayCooldown("jina", retryAfter, jinaLimits().windowMs);
+          if (attempt === 0) {
+            // Pay the provider's own pause once, then retry on this same call.
+            const waitMs = Math.min(RELAY_RETRY_MAX_WAIT_MS, Math.max(RELAY_RETRY_SHELL_WAIT_MS, retryAfter * 1000));
+            await sleep(waitMs);
+            relayState("jina").cooldownUntil = 0;
+            continue;
+          }
+        }
+        return "";
+      }
+      // REEA-1241 — bounded read: an oversized reader-relay answer degrades to
+      // "" at the cap instead of being buffered whole.
+      const html = await readCappedBody(res, RELAY_MAX_RESPONSE_BODY_BYTES, "reader relay");
+      if (carries(html)) {
+        await cacheClearedBody(kv, key, html, RELAY_TTL_S);
+        return html;
+      }
+      // The relay rendered the zone's challenge shell from its own egress; one
+      // short breath, then one retry.
+      lastFailure = "reader relay answered without the lane's content selector";
+      if (attempt === 0) {
+        await sleep(RELAY_RETRY_SHELL_WAIT_MS);
+        continue;
+      }
+      return "";
+    } catch (err) {
+      lastFailure = err instanceof Error ? err.message : String(err);
+      if (attempt === 0) {
+        await sleep(RELAY_RETRY_SHELL_WAIT_MS);
+        continue;
       }
       return "";
     }
-    // REEA-1241 — bounded read: an oversized reader-relay answer degrades to
-    // "" at the cap instead of being buffered whole.
-    const html = await readCappedBody(res, RELAY_MAX_RESPONSE_BODY_BYTES, "reader relay");
-    if (!carries(html)) {
-      lastFailure = "reader relay answered without the lane's content selector";
-      return "";
-    }
-    await cacheClearedBody(kv, key, html, RELAY_TTL_S);
-    return html;
-  } catch (err) {
-    lastFailure = err instanceof Error ? err.message : String(err);
-    return "";
   }
+  return "";
 }
 
 /**
@@ -998,29 +1047,51 @@ export async function relayMarkdown(url: string, marker: string): Promise<string
   const key = `relay-md:${url}`;
   const cached = await readClearedBody(kv, key, (body) => body.includes(marker));
   if (cached) return cached;
-  if (!(await acquireRelaySlot("jina", jinaLimits()))) return "";
-  try {
-    const res = await fetch(`${JINA_ENDPOINT}${url}`, {
-      headers: jinaHeaders("markdown"),
-      signal: AbortSignal.timeout(JINA_TIMEOUT_MS),
-    });
-    if (!res.ok) {
-      lastFailure = `markdown relay HTTP ${res.status}`;
-      if (res.status === 429 || res.status === 503) {
-        applyRelayCooldown("jina", retryAfterSeconds(res), jinaLimits().windowMs);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt === 0) {
+      if (!(await acquireRelaySlot("jina", jinaLimits()))) return "";
+    } else {
+      takePaidRelaySlot("jina");
+    }
+    try {
+      const res = await fetch(`${JINA_ENDPOINT}${url}`, {
+        headers: jinaHeaders("markdown"),
+        signal: AbortSignal.timeout(JINA_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        lastFailure = `markdown relay HTTP ${res.status}`;
+        if (res.status === 429 || res.status === 503) {
+          const retryAfter = retryAfterSeconds(res);
+          applyRelayCooldown("jina", retryAfter, jinaLimits().windowMs);
+          if (attempt === 0) {
+            const waitMs = Math.min(RELAY_RETRY_MAX_WAIT_MS, Math.max(RELAY_RETRY_SHELL_WAIT_MS, retryAfter * 1000));
+            await sleep(waitMs);
+            relayState("jina").cooldownUntil = 0;
+            continue;
+          }
+        }
+        return "";
+      }
+      // REEA-1241 — bounded read: an oversized markdown render degrades to "".
+      const md = await readCappedBody(res, RELAY_MAX_RESPONSE_BODY_BYTES, "markdown relay");
+      if (md.includes(marker)) {
+        await cacheClearedBody(kv, key, md, MARKDOWN_TTL_S);
+        return md;
+      }
+      lastFailure = "reader relay markdown carried no product rows";
+      if (attempt === 0) {
+        await sleep(RELAY_RETRY_SHELL_WAIT_MS);
+        continue;
+      }
+      return "";
+    } catch (err) {
+      lastFailure = err instanceof Error ? err.message : String(err);
+      if (attempt === 0) {
+        await sleep(RELAY_RETRY_SHELL_WAIT_MS);
+        continue;
       }
       return "";
     }
-    // REEA-1241 — bounded read: an oversized markdown render degrades to "".
-    const md = await readCappedBody(res, RELAY_MAX_RESPONSE_BODY_BYTES, "markdown relay");
-    if (!md.includes(marker)) {
-      lastFailure = "reader relay markdown carried no product rows";
-      return "";
-    }
-    await cacheClearedBody(kv, key, md, MARKDOWN_TTL_S);
-    return md;
-  } catch (err) {
-    lastFailure = err instanceof Error ? err.message : String(err);
-    return "";
   }
+  return "";
 }

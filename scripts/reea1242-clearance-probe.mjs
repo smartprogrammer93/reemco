@@ -249,16 +249,20 @@ async function runPanel() {
   const rows = [];
   const failures = [];
   for (const query of PANEL_QUERIES) {
+    let httpStatus = 0;
     const body = await fetch(`${base}/api/results-followup?q=${encodeURIComponent(query)}`, {
       signal: AbortSignal.timeout(180_000),
     })
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => {
+        httpStatus = r.status;
+        return r.ok ? r.json() : null;
+      })
       .catch(() => null);
     const answered = new Set(body?.responders?.answered ?? []);
     const empty = new Set(body?.responders?.answeredEmpty ?? []);
     const noResponse = new Set(body?.responders?.noResponse ?? []);
     const notes = Array.isArray(body?.notes) ? body.notes : [];
-    const row = { query, lanes: {} };
+    const row = { query, http: httpStatus, lanes: {} };
     for (const merchant of GATED) {
       const note = notes.find((n) => n.merchant === merchant);
       const blocked = typeof note?.error === "string" && note.error.startsWith("blocked:");
@@ -271,7 +275,9 @@ async function runPanel() {
             : "absent";
       row.lanes[merchant] = { state, hits: note?.hits ?? null, error: note?.error ?? null };
       if (state === "blocked" || state === "absent") {
-        failures.push(`${query} / ${merchant}: ${state}${note?.error ? ` — ${note.error.slice(0, 200)}` : ""}`);
+        failures.push(
+          `${query} / ${merchant}: ${state} (followup HTTP ${httpStatus})${note?.error ? ` — ${note.error.slice(0, 200)}` : ""}`,
+        );
       }
     }
     rows.push(row);
