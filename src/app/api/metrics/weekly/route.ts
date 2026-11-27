@@ -23,11 +23,18 @@
  *   filtered_empty_searches,
  *   offer_link_clicks,
  *   shopper_serves, ctr_denominator_shopper, offer_link_ctr_shopper,
+ *   top_queries: [{ term, count, zero_offer, filtered_empty }],
  *   link_smoke: { runs, checked, ok, dead, challenge, by_retailer,
  *                 dead_rate, challenge_rate,
  *                 checkerContaminated?, methodologyNote? } } },
  *   methodology: { latency_band_clock, p90, shopper_visible_targets,
- *                  counter_naming, ctr_denominators, ctr_shopper, source } }
+ *                  counter_naming, ctr_denominators, ctr_shopper,
+ *                  top_queries, source } }
+ *
+ * REEA-1237 (PM scope extension, v5 improvement read) — `top_queries` is the
+ * week's aggregate query-term Pareto (highest count first, capped at 200),
+ * with zero-offer and filtered-empty terms included and marked. Aggregate
+ * `{term, count}` rows only: no user id, no session id, no per-serve row.
  *
  * REEA-1237 — the offer-link CTR is published on the SHOPPER basis:
  * `shopper_serves` / `ctr_denominator_shopper` are the client page-view
@@ -132,6 +139,10 @@ import { RETENTION_WEEKS, coldBandP90Ms, isoWeekKey, linkSmokeRates, readWeeklyC
 import type { WeeklyCountersRead } from "@/lib/metrics";
 import { readEvents } from "@/lib/event-store";
 import type { FunnelEvent } from "@/lib/events";
+// REEA-1237 (PM scope extension, v5 read) — the per-week aggregate query-term
+// store: the zero-offer / filtered-empty Pareto, capped at 200 terms.
+import { readQueryTerms, topQueryTerms } from "@/lib/query-terms";
+import type { QueryTermsMap } from "@/lib/query-terms";
 // REEA-1134 F5 — this read is the last API route without a rate-limit gate;
 // it now rides the same REEA-827 shared fixed-window gate as its siblings.
 import { checkRateLimitShared } from "@/lib/rate-limit-kv";
@@ -254,10 +265,20 @@ export async function GET(req: Request): Promise<Response> {
   const gateHeaders = rateLimitHeaders(gate);
 
   const windowWeeks = parseWeeksParam(new URL(req.url).searchParams.get("weeks"));
-  const [read, events] = await Promise.all([readWeeklyCountersDetailed(), readEvents()]);
+  const [read, events, terms] = await Promise.all([
+    readWeeklyCountersDetailed(),
+    readEvents(),
+    readQueryTerms(),
+  ]);
   // REEA-1237 — the shopper denominator rides the same read as the click
   // numerator: one event store, one window, one basis.
-  const res = weeklyResponse(read, clicksByWeek(events), windowWeeks, pageViewsByWeek(events));
+  const res = weeklyResponse(
+    read,
+    clicksByWeek(events),
+    windowWeeks,
+    pageViewsByWeek(events),
+    terms.weeks,
+  );
   for (const [name, value] of Object.entries(gateHeaders)) res.headers.set(name, value);
   return res;
 }
@@ -271,12 +292,15 @@ export async function GET(req: Request): Promise<Response> {
  * REEA-1237 — `views` is the shopper page-view beacon count per week (see
  * pageViewsByWeek). Defaults to {} so pre-change callers keep their exact
  * response shape apart from the three new CTR fields, which read 0/null.
+ * `terms` is the per-week aggregate query-term map (PM scope extension):
+ * defaults to {} so pre-change callers publish an empty `top_queries`.
  */
 export function weeklyResponse(
   read: WeeklyCountersRead,
   clicks: Record<string, number>,
   windowWeeks: number,
   views: Record<string, number> = {},
+  terms: QueryTermsMap = {},
 ): Response {
   const weeks: Record<string, unknown> = {};
   const keys = Object.keys(read.weeks).sort().slice(-windowWeeks);
@@ -386,6 +410,11 @@ export function weeklyResponse(
         (views[week] ?? 0) > 0 && shopperBasisCompleteForWeek(week)
           ? (clicks[week] ?? 0) / (views[week] as number)
           : null,
+      // REEA-1237 (PM scope extension, v5 read) — the zero-offer /
+      // filtered-empty Pareto: aggregate {term, count} rows for this week,
+      // highest count first, capped at 200. Each row carries the two dead-end
+      // marks. No per-serve row, no user id, no session id.
+      top_queries: topQueryTerms(terms[week] ?? {}),
       // REEA-935 — per-outcome counts plus the derived dead/challenge rates;
       // the annotation fields ride verbatim when stamped.
       link_smoke: { ...w.link_smoke, ...linkSmokeRates(w.link_smoke) },
@@ -440,7 +469,11 @@ export function weeklyResponse(
         // shopper_serves). AC-5: the beacon stores no identifier.
         ctr_shopper:
           "offer_link_ctr_shopper = offer_link_clicks ÷ ctr_denominator_shopper. NUMERATOR basis: browser `item_clicked` beacons on offer links (results shelf and product-detail CTAs) from the anonymous funnel store — the same store, 90-day raw retention and clock as the denominator. DENOMINATOR basis: browser `page_view` beacons, one per served results page (query present), i.e. serves a shopper's own browser actually executed; shopper_serves and ctr_denominator_shopper are the same integer by construction (the shopper basis is exactly this count, no further subtraction). Both sides are client beacons, so a crawler that never executes JS contributes to neither — that is the shared basis the server-side ctr_denominator_clean could not provide. The transport drops `page_view` for the shared bot/health-check User-Agent predicate (lib/bot-ua.ts), so headless QA/smoke probes (which DO execute JS) do not inflate the denominator; the click numerator stays the unfiltered funnel stream (REEA-973), so a bot that clicks without a counted view is the only bot-side asymmetry, and QA click volume is negligible beside shopper views. The denominator counts results-page serves only; a product-detail offer CTA click (no shopper query, REEA-1078) is therefore a numerator-only increment, so it can only overstate the rate — read the ratio as an upper bound while such clicks exist. offer_link_ctr_shopper is a fraction (× 100 for percent) and is null when a week has no shopper serve, never 0, so an absent basis cannot read as a 0% rate. It is ALSO null for a week that began before the beacon shipped: such a week would pair a full-week click numerator with a partial-week view denominator and overstate the rate (the W48 read of 5 clicks ÷ 1 post-ship view would have shown 500%). The beacon shipped 2026-11-27, so shopper_serves is published from that day but the first week with a computable shopper CTR is the first full week after it (W49). A `page_view` event persists only `type`, a random per-event id and the server ingestion timestamp — no session, user, query or fingerprint identifier (AC-5). The 0.55% CTA success bar is judged on this field.",
-        source: "REEA-1148 bet #2 AC-6c/AC-8; REEA-1009 S1b; REEA-1200 bet 7C AC 7C-3/7C-4; REEA-1237 shopper CTR basis; band definitions unchanged (REEA-871/REEA-884)",
+        // REEA-1237 (PM scope extension, v5 read) — the term Pareto states
+        // its own normalization and population on the wire.
+        top_queries:
+          "top_queries = the week's aggregate query-term Pareto, highest count first, capped at 200 rows. Each row is {term, count, zero_offer, filtered_empty}: count = shopper serves for that term; zero_offer = of those, serves whose converged answer carried zero offers; filtered_empty = of those, false-empty serves behind an active filter (a filter hid ≥1 confident match). Zero-offer and filtered-empty terms are included and marked, never dropped. Terms are normalized only for noise — case-folded, internal whitespace collapsed, control characters stripped, capped at 80 characters — and are NOT stemmed, so Arabic and Latin terms stay comparable. Bot/health-check serves are not recorded (the shared UA predicate, lib/bot-ua.ts), so a QA/smoke probe's term cannot dominate the Pareto. Storage is aggregate-only: one {term → three integers} map per ISO week, no user id, no session id, no per-serve row. The store admits up to 1,000 terms per week (above the published 200) so a term that first trends later in the week can still compete; a new term at saturation displaces a count-1 tail term and then accumulates. It is a small per-week blob written read-modify-write, so a concurrent serve can lose an increment; these counts are a Pareto read, not a decision counter.",
+        source: "REEA-1148 bet #2 AC-6c/AC-8; REEA-1009 S1b; REEA-1200 bet 7C AC 7C-3/7C-4; REEA-1237 shopper CTR basis + top-query Pareto (v5 read); band definitions unchanged (REEA-871/REEA-884)",
       },
     },
     { headers: { "cache-control": "no-store" } },

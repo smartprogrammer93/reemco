@@ -152,6 +152,8 @@ describe("REEA-807 GET /api/metrics/weekly", () => {
       "serves_full",
       "serves_pending",
       "shopper_serves",
+      // REEA-1237 (PM scope extension) — the aggregate query-term Pareto
+      "top_queries",
       "zero_offer_searches",
     ]);
     // REEA-1148 AC-1 — the methodology block is always on the payload.

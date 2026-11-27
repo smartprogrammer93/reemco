@@ -349,6 +349,8 @@ describe("REEA-1035 stored schema + route byte-shape", () => {
       "serves_full",
       "serves_pending",
       "shopper_serves",
+      // REEA-1237 (PM scope extension) — the aggregate query-term Pareto
+      "top_queries",
       "zero_offer_searches",
     ]);
     expect(Object.keys(week.link_smoke as object).sort()).toEqual([
