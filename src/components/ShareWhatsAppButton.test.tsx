@@ -7,6 +7,10 @@
  * spec-pinned accessible name and the server-rendered message in
  * `data-share-message`; the click increments the aggregate counter, and the
  * blocked-window fallback copies that exact message (never DOM-scraped text).
+ *
+ * REEA-1264 — on a clipboard rejection the fallback must render the §5
+ * `Copy this message` / `انسخ هذه الرسالة` prompt and pre-select the message
+ * so the shopper's next action is a paste.
  */
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +22,7 @@ vi.mock("@/lib/telemetry", () => ({ trackEvent: vi.fn(), trackEvents: vi.fn() })
 
 afterEach(() => {
   cleanup();
+  window.getSelection()?.removeAllRanges();
   vi.restoreAllMocks();
 });
 
@@ -121,7 +126,7 @@ describe("REEA-1257 §4 — copied / copy-failed fallback", () => {
     );
   });
 
-  it("reveals a selectable output with the message when the clipboard rejects", async () => {
+  it("REEA-1264 — copy failure renders the §5 prompt above the message and pre-selects it (EN)", async () => {
     vi.spyOn(window, "open").mockReturnValue(null);
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
@@ -130,7 +135,47 @@ describe("REEA-1257 §4 — copied / copy-failed fallback", () => {
     const { getByRole, container } = render(
       <ShareWhatsAppButton product={product()} query="iphone 15" origin={ORIGIN} locale="en" variant="card" />,
     );
-    fireEvent.click(getByRole("link", { name: "Share on WhatsApp" }));
-    await waitFor(() => expect(container.querySelector("output")?.textContent).toContain("Kuwait price check"));
+    const link = getByRole("link", { name: "Share on WhatsApp" });
+    const message = link.getAttribute("data-share-message") ?? "";
+    fireEvent.click(link);
+    const output = await waitFor(() => {
+      const el = container.querySelector("output");
+      expect(el).toBeTruthy();
+      return el as HTMLOutputElement;
+    });
+    expect(output.textContent).toContain("Copy this message");
+    expect(output.textContent).toContain(message);
+    expect(output.textContent?.indexOf("Copy this message")).toBeLessThan(
+      output.textContent?.indexOf(message) ?? -1,
+    );
+    expect(output.querySelector(".rc-share-wa__fallback-prompt")?.textContent).toBe(
+      "Copy this message",
+    );
+    await waitFor(() => expect(window.getSelection()?.toString()).toBe(message));
+  });
+
+  it("REEA-1264 — the AR prompt is the spec string and the AR message is pre-selected", async () => {
+    vi.spyOn(window, "open").mockReturnValue(null);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+      configurable: true,
+    });
+    const { getByRole, container } = render(
+      <ShareWhatsAppButton product={product()} query="iphone 15" origin={ORIGIN} locale="ar" variant="pdp" />,
+    );
+    const link = getByRole("link", { name: "شارك هذه المقارنة عبر واتساب" });
+    const message = link.getAttribute("data-share-message") ?? "";
+    fireEvent.click(link);
+    const output = await waitFor(() => {
+      const el = container.querySelector("output");
+      expect(el).toBeTruthy();
+      return el as HTMLOutputElement;
+    });
+    expect(output.textContent).toContain("انسخ هذه الرسالة");
+    expect(output.textContent).toContain(message);
+    expect(output.querySelector(".rc-share-wa__fallback-prompt")?.textContent).toBe(
+      "انسخ هذه الرسالة",
+    );
+    await waitFor(() => expect(window.getSelection()?.toString()).toBe(message));
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import type { CountryCode } from "@/lib/country";
 import { clientLocale, getStrings, type Locale } from "@/lib/i18n";
 import { trackEvent } from "@/lib/telemetry";
@@ -23,8 +23,10 @@ import type { NormalizedProduct } from "@/types/product";
  *
  * States per spec §4: default (real anchor), pressed (CSS), copied fallback
  * (window blocked -> clipboard + check/`Copied` + aria-live), copy-failed
- * (selectable `<output>` with the message), loading (`aria-disabled` until
- * the first in-stock offer resolves), no-offer (not-stocked message).
+ * (selectable `<output>` with the §5 `Copy this message` / `انسخ هذه الرسالة`
+ * prompt above the message, and the message programmatically selected so the
+ * shopper's next action is a paste), loading (`aria-disabled` until the first
+ * in-stock offer resolves), no-offer (not-stocked message).
  */
 export default function ShareWhatsAppButton({
   product,
@@ -52,6 +54,24 @@ export default function ShareWhatsAppButton({
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const messageRef = useRef<HTMLSpanElement | null>(null);
+
+  // REEA-1264 (spec §4 "Failed / unsupported client") — when the clipboard
+  // rejects, reveal the §5 prompt and pre-select the message so a single
+  // paste completes the share. This runs only in the browser (after the
+  // failure state commits); SSR still renders the prompt + message text, so
+  // there is no hydration divergence.
+  useEffect(() => {
+    if (!copyFailed) return;
+    const node = messageRef.current;
+    if (!node || typeof window === "undefined") return;
+    const selection = window.getSelection();
+    if (!selection) return;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, [copyFailed]);
 
   const isPdp = variant === "pdp";
   const disabled = loading;
@@ -146,7 +166,12 @@ export default function ShareWhatsAppButton({
         {copied ? t.shareWaCopiedAnnounce : ""}
       </span>
       {copyFailed ? (
-        <output className="rc-share-wa__fallback">{share.message}</output>
+        <output className="rc-share-wa__fallback">
+          <span className="rc-share-wa__fallback-prompt">{t.shareWaCopyFailed}</span>
+          <span ref={messageRef} className="rc-share-wa__fallback-message">
+            {share.message}
+          </span>
+        </output>
       ) : null}
     </>
   );

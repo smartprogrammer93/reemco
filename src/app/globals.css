@@ -1779,7 +1779,9 @@ html[lang="ar"] .coupon-via {
 
 /* Copy-failed fallback: the selectable message sits below the control, inside
    the media frame (the card media clips at its rounded edge, so the block is
-   capped to the available height and scrolls). */
+   capped to the available height and scrolls). REEA-1264 adds the spec §5
+   `Copy this message` / `انسخ هذه الرسالة` prompt above the message; the
+   message itself is programmatically selected by the component. */
 .rc-share-wa__fallback {
   position: absolute;
   inset-block-start: calc(44px + 6px);
@@ -1797,6 +1799,20 @@ html[lang="ar"] .coupon-via {
   font: var(--rc-text-small);
   white-space: pre-wrap;
   user-select: all;
+}
+
+.rc-share-wa__fallback-prompt {
+  display: block;
+  margin-block-end: 2px;
+  font-weight: 600;
+  color: var(--rc-ink);
+  /* The prompt is a label, not payload: keep it out of a manual copy so the
+     pasted clipboard is the message alone. */
+  user-select: none;
+}
+
+.rc-share-wa__fallback-message {
+  display: block;
 }
 
 .rc-results-meta {
