@@ -7,6 +7,9 @@ import {
 } from "@/lib/collect/canonical-product";
 // REEA-1078 S2 — dead-lane retirement for the detail page's live resolution.
 import { readRetiredLanes } from "@/lib/collect/lane-health";
+// REEA-1246 AC5 — a live slug that folds onto a catalog identity is the same
+// SKU, so its bare visit must dispatch the same phrase the sitemap URL uses.
+import { canonicalProductIdForSlug } from "@/lib/product-canonical";
 import type { CountryCode } from "@/lib/country";
 import type { NormalizedProduct } from "@/types/product";
 
@@ -53,7 +56,23 @@ export async function resolveProductIdentity(
   }
 
   const carriedQuery = (query ?? "").trim();
-  const decodedQuery = productId.replace(/-/g, " ").trim();
+  // REEA-1246 AC5 — a live slug that folds onto a catalog identity is the SAME
+  // SKU as the sitemap URL, so a bare visit must resolve through the same
+  // phrase the catalog page uses. Without this, `/product/apple-iphone17-pro-
+  // 256gb` (no ?q=) dispatched "apple iphone17 pro 256gb", missed the shelf
+  // memo and painted 5 last-seen retailers while `/product/iphone-17-pro`
+  // served the shelf's 6. The exact productId lookup below still selects the
+  // live group; only the dispatch phrase is unified.
+  //
+  // The canonical-match fields stay on the SLUG's own phrase (REEA-1140): the
+  // catalog phrase may be less specific (e.g. no storage tier), so folding it
+  // into `want` would let a 256 GB slug accept a 512 GB group on a tie.
+  const slugPhrase = productId.replace(/[-_]+/g, " ").trim();
+  const catalogId = canonicalProductIdForSlug(productId);
+  const decodedQuery =
+    catalogId !== productId
+      ? catalogId.replace(/-/g, " ").trim()
+      : slugPhrase;
   if (!carriedQuery && !decodedQuery) return null;
 
   const {
@@ -147,7 +166,7 @@ export async function resolveProductIdentity(
   // the live groups, preferring the candidate that names the same storage tier
   // over a partial-field neighbour. This is what keeps an old
   // `…-512phone-black` link on the 512 GB group instead of the 256 GB one.
-  const want = canonicalFields(decodedQuery);
+  const want = canonicalFields(slugPhrase);
   const best = bestCanonicalMatch(fallbackPool, want);
   return best ?? fallbackPool[0] ?? null;
 }

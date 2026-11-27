@@ -14,6 +14,14 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+// Record the dispatch phrase so the bare-slug pin proves the catalog phrase
+// (not the live slug's own words) is what the fan-out receives, and let a pin
+// hand the fan-out a set with a storage sibling in it.
+const captured = vi.hoisted(() => ({
+  queries: [] as string[],
+  fanProducts: null as unknown[] | null,
+}));
+
 vi.mock("@/lib/collect/live-search", () => {
   const liveGroup = {
     productId: "apple-iphone17-pro-256gb",
@@ -42,11 +50,18 @@ vi.mock("@/lib/collect/live-search", () => {
     alternatives: [],
   };
   return {
-    readLiveQueryMemo: () => null,
-    collectLiveResultsStagedAdmitted: async () => ({
-      final: Promise.resolve({ products: [liveGroup] }),
-      converged: Promise.resolve({ products: [liveGroup] }),
-    }),
+    readLiveQueryMemo: (query: string) => {
+      captured.queries.push(`memo:${query}`);
+      return null;
+    },
+    collectLiveResultsStagedAdmitted: async (query: string) => {
+      captured.queries.push(`fan:${query}`);
+      const products = captured.fanProducts ?? [liveGroup];
+      return {
+        final: Promise.resolve({ products }),
+        converged: Promise.resolve({ products }),
+      };
+    },
     RESULTS_COMPLETION_BUDGET_MS: 1,
     STAGE_TAIL_HEADROOM_MS: 1,
   };
@@ -78,5 +93,67 @@ describe("REEA-1246 AC5 — one PDP per SKU", () => {
     const resolved = await resolveProductIdentity("apple-iphone17-pro-256gb", null, "iphone 17 pro");
     expect(resolved?.productId).toBe("apple-iphone17-pro-256gb");
     expect(resolved?.offers.map((o) => o.merchant)).toEqual(["Wibi", "Eureka"]);
+  });
+
+  it("a bare visit to a live slug that folds onto a catalog id dispatches the catalog phrase", async () => {
+    captured.queries.length = 0;
+    const resolved = await resolveProductIdentity("apple-iphone17-pro-256gb");
+    expect(resolved?.productId).toBe("apple-iphone17-pro-256gb");
+    // "apple iphone17 pro 256gb" missed the shelf memo and painted last-seen
+    // rows; the catalog page's own phrase is what the shelf actually served.
+    expect(captured.queries).toContain("fan:iphone 17 pro");
+    expect(captured.queries).not.toContain("fan:apple iphone17 pro 256gb");
+  });
+
+  it("the phrase fold does not drop the slug's storage tier from the canonical match", async () => {
+    // REEA-1140 — the catalog phrase ("iphone 17 pro") names no storage, so a
+    // fold must not weaken `want`: the slug still asks for 256 GB. The 512 GB
+    // sibling sorts FIRST by id here, so only a retained storage constraint
+    // (not the productId tie-break) can pick the right group.
+    captured.fanProducts = [
+      {
+        productId: "apple-iphone17-pro-512gb",
+        title: "Apple iPhone 17 Pro 512Gb Silver",
+        brand: "Apple",
+        offers: [
+          {
+            merchant: "Xcite",
+            price: 414.9,
+            currency: "KWD",
+            url: "https://www.xcite.com/apple-iphone-17-pro-512gb",
+            inStock: true,
+            collectedAt: "2026-11-27T12:00:00.000Z",
+          },
+        ],
+        coupons: [],
+        variations: [],
+        alternatives: [],
+      },
+      {
+        productId: "iphone-17-pro-256gb-titanium",
+        title: "Apple iPhone 17 Pro 256Gb Titanium",
+        brand: "Apple",
+        offers: [
+          {
+            merchant: "Wibi",
+            price: 314.9,
+            currency: "KWD",
+            url: "https://wibi.com.kw/products/apple-iphone-17-pro-256gb",
+            inStock: true,
+            collectedAt: "2026-11-27T12:00:00.000Z",
+          },
+        ],
+        coupons: [],
+        variations: [],
+        alternatives: [],
+      },
+    ];
+    try {
+      const resolved = await resolveProductIdentity("apple-iphone17-pro-256gb");
+      expect(resolved?.productId).toBe("iphone-17-pro-256gb-titanium");
+      expect(resolved?.offers.map((o) => o.price)).toEqual([314.9]);
+    } finally {
+      captured.fanProducts = null;
+    }
   });
 });
