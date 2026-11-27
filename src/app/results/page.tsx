@@ -4,6 +4,9 @@ import ResultsStructuredData from "@/components/ResultsStructuredData";
 import { Suspense } from "react";
 import { collectLiveResultsStagedAdmitted } from "@/lib/collect/live-search";
 import { COLD_RECORDING_CAP_MS, recordSearchOutcome, searchOutcomeFromSnapshot, serveOutcomeOf } from "@/lib/metrics";
+// REEA-1237 (PM scope extension) — per-week aggregate {term, count} rows for
+// the zero-offer / filtered-empty Pareto. Aggregate-only, shopper serves only.
+import { recordQueryTerm } from "@/lib/query-terms";
 // REEA-1099 — the ONE results-page shelf card definition the renderer uses;
 // the comparison-depth counter folds over this same set.
 import { resultsShelfCards } from "@/lib/results-shelf";
@@ -327,23 +330,23 @@ export default async function ResultsPage({
       // REEA-1078/REEA-1148 — the recording clock was read on the bounded
       // allSettled resolution above: warm serves use the entry clock, cold
       // serves the capped collection clock. Never re-read here.
+      // REEA-1237 (PM scope extension, v5 read) — the per-term aggregate is
+      // recorded from the SAME serve facts as the counters, but only for
+      // shopper serves: a QA/smoke probe's term must not dominate the Pareto.
+      const botServe = isBotUserAgent(hint.userAgent);
+      // REEA-1178 AC3/AC5 — the depth fold reads the SAME market view the
+      // shelf speaks for (REEA-1177's marketViewScope: null on the "All"
+      // selection), so a foreign accessory row can never become a comparison
+      // lane on a Kuwait card.
+      // REEA-1207 (Bet 7B Addition 2) — the DEFAULT surface is the Kuwait
+      // market even when the viewer has not picked one ("All"): a Saudi-only
+      // card is a cross-market card, not a comparison lane, and the counter
+      // must record it that way. An explicit market selection still wins.
+      const snapshotOutcome = pageSnap
+        ? searchOutcomeFromSnapshot(pageSnap, shelfCards, marketViewScope(country) ?? HOME_MARKET)
+        : { zeroOffers: false, offersByRetailer: {} };
       await recordSearchOutcome({
-        ...(pageSnap
-          ? // REEA-1178 AC3/AC5 — the depth fold reads the SAME market view the
-            // shelf speaks for (REEA-1177's marketViewScope: null on the "All"
-            // selection), so a foreign accessory row can never become a
-            // comparison lane on a Kuwait card.
-            // REEA-1207 (Bet 7B Addition 2) — the DEFAULT surface is the
-            // Kuwait market even when the viewer has not picked one ("All"):
-            // a Saudi-only card is a cross-market card, not a comparison lane,
-            // and the counter must record it that way. An explicit market
-            // selection still wins.
-            searchOutcomeFromSnapshot(
-              pageSnap,
-              shelfCards,
-              marketViewScope(country) ?? HOME_MARKET,
-            )
-          : { zeroOffers: false, offersByRetailer: {} }),
+        ...snapshotOutcome,
         serveOutcome: serveOutcomeOf(served, convSnap),
         // REEA-1078 — serve kind from the collection layer (only it knows
         // whether a fresh memo answered with no fan-out).
@@ -362,8 +365,17 @@ export default async function ResultsPage({
         // It folds into the aggregate `bot_serves` counter, the ONE named
         // subtraction behind the clean CTR denominator (AC 7C-3/7C-4). The
         // UA string itself is never stored.
-        botServe: isBotUserAgent(hint.userAgent),
+        botServe,
       });
+      if (!botServe) {
+        // REEA-1237 — one aggregate {term, count} row per week (no user id,
+        // no session id, no per-serve row), marked with the same zero-offer
+        // and filtered-empty facts so the Pareto fix can be targeted.
+        await recordQueryTerm(query, {
+          zeroOffer: snapshotOutcome.zeroOffers === true,
+          filteredEmpty,
+        });
+      }
       // REEA-1078 S2 — the same telemetry feeds the per-lane daily evidence
       // the 7-day auto-retire rule reads. Behind the response (deferred
       // after() tail), aggregate-only, best-effort: a store failure leaves the
