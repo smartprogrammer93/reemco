@@ -266,8 +266,12 @@ let argSetIndex = 1;
  */
 const BROWSER_NO_PAINT_LIMIT = 2;
 const BROWSER_NO_PAINT_COOLDOWN_MS = 10 * 60 * 1000;
-let browserNoPaintStreak = 0;
-let browserCooldownUntil = 0;
+// REEA-1221 — the breaker is PER HOST. A global one meant a zone that never
+// paints (Next Store's managed challenge) disabled the browser tier for every
+// other lane too, so Ounass could never get a browser attempt even though its
+// page might paint.
+const noPaintStreakByHost = new Map<string, number>();
+const cooldownByHost = new Map<string, number>();
 
 /**
  * The launch ladder. Set 0 is the package's serverless shape (right on Lambda,
@@ -469,7 +473,7 @@ export async function readPageContent(page: PageLike): Promise<string> {
  */
 async function getSharedBrowser(): Promise<{ browser: BrowserLike; context: ContextLike } | null> {
   if (disabled()) return null;
-  if (Date.now() < browserCooldownUntil) return null;
+
   if (!launch) {
     launch = (async () => {
       try {
@@ -640,12 +644,13 @@ async function navigate(
       // reached the lean shell and crashed it with SIGTRAP).
       const token = contentSelector.replace(/^[.#]/, "");
       if (html.includes(token)) {
-        browserNoPaintStreak = 0;
-      } else {
-        browserNoPaintStreak += 1;
-        if (browserNoPaintStreak >= BROWSER_NO_PAINT_LIMIT) {
-          browserCooldownUntil = Date.now() + BROWSER_NO_PAINT_COOLDOWN_MS;
-          lastFailure = "browser painted nothing twice — relays take over for ten minutes";
+        if (host) noPaintStreakByHost.delete(host);
+      } else if (host) {
+        const streak = (noPaintStreakByHost.get(host) ?? 0) + 1;
+        noPaintStreakByHost.set(host, streak);
+        if (streak >= BROWSER_NO_PAINT_LIMIT) {
+          cooldownByHost.set(host, Date.now() + BROWSER_NO_PAINT_COOLDOWN_MS);
+          lastFailure = "browser painted nothing twice for this host — relays take over for ten minutes";
         }
       }
       return { html };
@@ -692,6 +697,8 @@ function cacheKey(url: string): string {
  */
 export async function browserClearedHtml(url: string, contentSelector: string): Promise<string> {
   if (disabled()) return "";
+  const host = safeHost(url);
+  if (host && (cooldownByHost.get(host) ?? 0) > Date.now()) return "";
   const kv = getSharedKv();
   const key = cacheKey(url);
   const token = contentSelector.replace(/^[.#]/, "");
