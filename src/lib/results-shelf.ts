@@ -330,18 +330,21 @@ export function freshCardsForFlush(
   // reports the Kuwait-only basis the depth gate reads.
   const isComparison = (p: NormalizedProduct): boolean =>
     comparisonMerchantCount(p.offers, null) >= 2;
+  const comparisonCards = comparisonFirst ? visible.filter(isComparison) : [];
   const ordered = comparisonFirst
-    ? [
-        ...visible.filter(isComparison),
-        ...visible.filter((p) => !isComparison(p)),
-      ]
+    ? [...comparisonCards, ...visible.filter((p) => !isComparison(p))]
     : visible;
+  // The bounded single tail only exists to stop a comparison-rich page being
+  // drowned by filler. A page with no comparison at all keeps its ordinary
+  // wider shelf (six category cards, or the exact-model page) — capping it to
+  // one/two singles would turn a thin comparison shelf into a near-empty one.
+  const hasComparison = comparisonCards.length > 0;
   let singlesPainted = 0;
   for (const p of ordered) {
     if (paintedIds.has(p.productId)) continue;
     const comparison = isComparison(p);
     if (comparisonOnly && !comparison) continue;
-    if (comparisonFirst && !comparisonOnly && !comparison) {
+    if (comparisonFirst && !comparisonOnly && !comparison && hasComparison) {
       if (singlesPainted >= singleTail) continue;
       singlesPainted += 1;
     }
