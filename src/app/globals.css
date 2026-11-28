@@ -3269,7 +3269,10 @@ html[lang="ar"] .coupon-via {
    with the one-tap reveal as its tail. It wraps as words at 375 (never
    horizontally overflows) and reads RTL-correct in Arabic because the row is
    logical-property layout. The action keeps a 44px tap target and the primary
-   role; it is the ONLY new UI this ticket adds. */
+   role; it is the ONLY new UI this ticket adds.
+   REEA-1276 — the separator + action are one atomic tail (below), so a wrap
+   never strands the em-dash at the end of a line; at 375 EN the tail fits on
+   the same line as the sentence. */
 .rc-hidden-escape {
   background: var(--rc-primary-tint);
   border: 1px solid var(--rc-line);
@@ -3283,9 +3286,22 @@ html[lang="ar"] .coupon-via {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--rc-space-1);
+  /* REEA-1276 — no flex gap: the separator carries its own " — " spacing, so
+     the painted sentence reads with exactly one space around the dash. */
+  gap: 0;
   min-inline-size: 0;
   overflow-wrap: anywhere;
+}
+
+/* REEA-1276 — separator + action as ONE non-breaking unit. The old markup made
+   them sibling flex items, so at 375 EN the row wrapped between them and line 1
+   ended on a dangling "—". A wrap now moves the whole "— Show all" tail. */
+.rc-hidden-escape-tail {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  flex: none;
+  max-inline-size: 100%;
 }
 
 .rc-hidden-escape-sep {
@@ -3295,7 +3311,9 @@ html[lang="ar"] .coupon-via {
 .rc-hidden-escape-action {
   min-block-size: 44px;
   min-inline-size: 44px;
-  padding-inline: var(--rc-space-2);
+  /* REEA-1276 — tightened from space-2 so the tail fits the 375 EN case-b
+     column; the 44px min tap target is unchanged. */
+  padding-inline: var(--rc-space-1);
   border: 0;
   background: none;
   color: var(--rc-primary-deep);

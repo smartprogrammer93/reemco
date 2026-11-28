@@ -181,7 +181,11 @@ export function LoadingFallback({ locale }: { locale?: Locale }) {
    one sentence; the control is the "— Show all" tail, so at 375 the line wraps
    as words, never overflows. Rendered by the empty state (zero visible cards)
    and above a partially-hidden shelf, so a shopper who sees some results still
-   learns the filter is hiding more. */
+   learns the filter is hiding more.
+   REEA-1276 — the separator and the action live in ONE non-wrapping tail unit.
+   Before this the 375 EN case-b panel split them (line 1 ended on a dangling
+   "—", line 2 held "Show all") because the flex row wrapped item-by-item. The
+   tail is atomic now, so it either fits beside the sentence or moves whole. */
 function HiddenMatchesLine({
   count,
   filter,
@@ -213,18 +217,20 @@ function HiddenMatchesLine({
           unit: count === 1 ? t.matchOne : t.matchMany,
           filter: filterLabel,
         })}
-        <span aria-hidden className="rc-hidden-escape-sep">
-          {" — "}
+        <span className="rc-hidden-escape-tail" data-hidden-escape-tail="true">
+          <span aria-hidden className="rc-hidden-escape-sep">
+            {" — "}
+          </span>
+          <button
+            type="button"
+            className="rc-hidden-escape-action focusable"
+            data-hidden-reveal={filter}
+            data-empty-reveal={filter}
+            onClick={onReveal}
+          >
+            {t.hiddenEscapeAction}
+          </button>
         </span>
-        <button
-          type="button"
-          className="rc-hidden-escape-action focusable"
-          data-hidden-reveal={filter}
-          data-empty-reveal={filter}
-          onClick={onReveal}
-        >
-          {t.hiddenEscapeAction}
-        </button>
       </p>
     </div>
   );
