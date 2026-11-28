@@ -172,6 +172,7 @@ describe("REEA-1275 — the seed lead paints the exact-model card in the first f
     const full = [
       Promise.resolve({ products: [categoryComparison, categoryOosSingle], notes: [] }),
       Promise.resolve({ products: [categoryComparison, categoryOosSingle], notes: [] }),
+      Promise.resolve({ products: [categoryComparison, categoryOosSingle], notes: [] }),
     ];
     const trimmed = trimStagesToPaintedDiff(full, "headphones", 1, null, false);
     const first = await trimmed[0];
@@ -179,6 +180,10 @@ describe("REEA-1275 — the seed lead paints the exact-model card in the first f
       categoryComparison.productId,
       categoryOosSingle.productId,
     ]);
+    // The hidden row is carried ONCE; the middle flush re-sends nothing, and
+    // the client can still reveal it from the first flush's snapshot.
+    const middle = await trimmed[1];
+    expect(middle.products).toEqual([]);
   });
 
   it("a replay stage is trimmed to no products (it paints nothing)", async () => {
