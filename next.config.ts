@@ -89,6 +89,18 @@ const nextConfig: NextConfig = {
   // instead of shipping the whole node_modules tree. Unset on Vercel, so the
   // existing deployment output mode is unchanged.
   ...(process.env.NEXT_OUTPUT === "standalone" ? { output: "standalone" } : {}),
+  experimental: {
+    // REEA-1275 — the first-card budget is gated on the render-blocking route
+    // stylesheet: measured on the served head, the browser's FCP landed only
+    // after that ~0.9 s request (the production host answers every request
+    // with that floor), and the first card cannot paint before FCP. Inlining
+    // the route CSS into the served document removes one render-blocking
+    // round-trip from the critical path; the CSP already allows inline styles
+    // (`style-src 'self' 'unsafe-inline'`). The stylesheet content is
+    // unchanged — only its delivery does — so the design tokens and layout
+    // are byte-identical.
+    inlineCss: true,
+  },
 };
 
 export default nextConfig;

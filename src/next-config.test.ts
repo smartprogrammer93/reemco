@@ -49,3 +49,15 @@ describe("REEA-1084 X-Powered-By suppression", () => {
     expect(step).toContain("exit 1");
   });
 });
+
+// REEA-1275 — first-card paint is gated on the route stylesheet: measured on
+// the served head, the browser's FCP landed only after the ~0.9 s
+// render-blocking CSS request (the host answers every request with that
+// floor). Inlining the route CSS removes that round-trip from the critical
+// path; the stylesheet content is unchanged, only its delivery is. Pin it so a
+// future config rewrite cannot silently restore the blocking request.
+describe("REEA-1275 inlineCss", () => {
+  it("inlines the route CSS in the production build", () => {
+    expect(nextConfig.experimental?.inlineCss).toBe(true);
+  });
+});
