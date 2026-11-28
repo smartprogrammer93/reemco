@@ -7,10 +7,12 @@ import { cookies, headers } from "next/headers";
 import CategoryShelf from "@/components/CategoryShelf";
 import CategoryShelfSkeleton from "@/components/CategoryShelfSkeleton";
 import {
+  CATEGORY_SLUGS,
   CATEGORY_SURFACES,
   categoryBySlug,
   categoryHref,
   categoryPageCopy,
+  categoryShelfDef,
 } from "@/lib/categories";
 import { mergeCategoryStage, type CategoryStage } from "@/lib/category-shelf";
 import {
@@ -81,6 +83,15 @@ export const dynamic = "force-dynamic";
 // (REEA-391): the category fan-out keeps its late hops alive behind the
 // response, so the ceiling must cover the staged walk.
 export const maxDuration = 45;
+
+// REEA-1268 — the browse taxonomy is closed: the eight approved slugs are the
+// whole surface, so an unknown slug must 404 instead of rendering a soft-404
+// category page. The page body still runs per request (`force-dynamic`); these
+// params only tell the router which segments exist.
+export const dynamicParams = false;
+export function generateStaticParams() {
+  return CATEGORY_SLUGS.map((slug) => ({ slug }));
+}
 
 /** Request-time market preference; same chain as the results page. */
 async function readCategoryPrefs(): Promise<{
@@ -230,7 +241,7 @@ export default async function CategoryPage({
         <Suspense fallback={<CategoryShelfSkeleton locale={locale} />}>
           <CategoryShelf
             stages={stages}
-            def={def}
+            def={categoryShelfDef(def)}
             country={country}
             locale={locale}
             renderStartMs={renderStartMs}

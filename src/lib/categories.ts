@@ -155,6 +155,22 @@ export const CATEGORY_SURFACES: readonly CategorySurface[] = [
 /** Every approved slug, in browse order. */
 export const CATEGORY_SLUGS: readonly string[] = CATEGORY_SURFACES.map((c) => c.slug);
 
+/**
+ * REEA-1268 — the serializable slice of a category that a Client Component
+ * may receive. `CategorySurface.match` is a function and cannot cross the
+ * server→client boundary; the shelf only needs the labels and seed terms,
+ * so the page hands this shape down instead of the whole registry entry.
+ */
+export interface CategoryShelfDef {
+  slug: string;
+  label: CategoryLabel;
+  queries: readonly string[];
+}
+
+export function categoryShelfDef(def: CategorySurface): CategoryShelfDef {
+  return { slug: def.slug, label: def.label, queries: def.queries };
+}
+
 /** Resolve a route slug to its surface; unknown slugs 404 (never a fake page). */
 export function categoryBySlug(slug: string): CategorySurface | null {
   const normalized = String(slug ?? "").trim().toLowerCase();

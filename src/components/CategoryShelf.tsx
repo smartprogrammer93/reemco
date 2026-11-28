@@ -23,7 +23,11 @@
 import { Suspense, use, type ReactNode } from "react";
 import ProductResultCard from "@/components/ProductResultCard";
 import { coverageParts, type CoveragePart } from "@/lib/collect/coverage";
-import { categoryPageCopy, liveCardsLabel, type CategorySurface } from "@/lib/categories";
+import {
+  categoryPageCopy,
+  liveCardsLabel,
+  type CategoryShelfDef,
+} from "@/lib/categories";
 import { CATEGORY_SHELF_CARDS, freshCardsForFlush, paintedIdsAfter } from "@/lib/results-shelf";
 import { fill, getStrings, type Locale } from "@/lib/i18n";
 import { localizedAgeFor } from "@/lib/relative-time";
@@ -37,7 +41,7 @@ const EMPTY_PAINTED_CARDS: readonly NormalizedProduct[] = [];
 export interface CategoryShelfProps {
   /** One merged category flush per stage; the server builds these promises. */
   stages: Promise<CategoryStage>[];
-  def: CategorySurface;
+  def: CategoryShelfDef;
   country: CountryCode | null;
   locale: Locale;
   /** One baked server clock for every humanised timestamp on this page. */
@@ -90,7 +94,7 @@ function CategorySummary({
 }: {
   stage: CategoryStage;
   paintedCards: readonly NormalizedProduct[];
-  def: CategorySurface;
+  def: CategoryShelfDef;
   locale: Locale;
   renderStartMs: number;
   unreachableLanes?: readonly string[];
@@ -161,7 +165,7 @@ function ShelfGhost({ slots }: { slots: number }) {
 function CategoryStageAppend(props: {
   stages: Promise<CategoryStage>[];
   index: number;
-  def: CategorySurface;
+  def: CategoryShelfDef;
   country: CountryCode | null;
   locale: Locale;
   renderStartMs: number;

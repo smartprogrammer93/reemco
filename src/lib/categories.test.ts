@@ -16,6 +16,7 @@ import {
   categoryHref,
   categoryMatchesTitle,
   categoryPageCopy,
+  categoryShelfDef,
   isCategoryMember,
   liveCardsLabel,
 } from "@/lib/categories";
@@ -113,5 +114,18 @@ describe("REEA-1268 D-4 — EN/AR copy parity", () => {
     expect(liveCardsLabel("ar", 2)).toBe("بطاقتان مباشرتان");
     expect(liveCardsLabel("ar", 6)).toBe("6 بطاقات مباشرة");
     expect(liveCardsLabel("ar", 12)).toBe("12 بطاقة مباشرة");
+  });
+});
+
+describe("REEA-1268 — the Client Component boundary", () => {
+  it("hands the shelf only serializable fields (no match function)", () => {
+    const def = categoryBySlug("laptops")!;
+    const shelfDef = categoryShelfDef(def);
+    expect(Object.keys(shelfDef).sort()).toEqual(["label", "queries", "slug"]);
+    expect(typeof (shelfDef as { match?: unknown }).match).toBe("undefined");
+    expect(shelfDef.slug).toBe("laptops");
+    expect(shelfDef.queries).toEqual(def.queries);
+    // The serialized shape round-trips through JSON unchanged.
+    expect(JSON.parse(JSON.stringify(shelfDef))).toEqual(shelfDef);
   });
 });

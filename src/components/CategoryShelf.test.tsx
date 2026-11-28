@@ -29,7 +29,7 @@ vi.mock("next/link", () => ({
 }));
 
 import CategoryShelf from "@/components/CategoryShelf";
-import { categoryBySlug } from "@/lib/categories";
+import { categoryBySlug, categoryShelfDef } from "@/lib/categories";
 import type { CategoryStage } from "@/lib/category-shelf";
 import type { NormalizedProduct } from "@/types/product";
 
@@ -72,7 +72,7 @@ function stage(over: Partial<CategoryStage> = {}): CategoryStage {
 }
 
 async function renderShelf(value: CategoryStage, locale: "en" | "ar" = "en") {
-  const def = categoryBySlug("laptops")!;
+  const def = categoryShelfDef(categoryBySlug("laptops")!);
   await act(async () => {
     render(
       <Suspense fallback={<p>loading</p>}>
