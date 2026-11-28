@@ -56,13 +56,17 @@ const liveSeed = product("keychron-v3-max", "Keychron V3 Max Wireless Mechanical
 ]);
 const other = product("keychron-v3-max-iso", "Keychron V3 Max ISO Keyboard", [offer("Blink", 45)]);
 // A row the shelf chain classifies OUT of the primary shelf (unrelated title):
-// it is not painted, but the stream must keep it so an in-place reveal can
-// still paint it later.
-const hidden = product("hidden-cable", "Anker USB-C Cable", [offer("Blink", 5)]);
+// it is rendered from the LAST stage only, so an intermediate flush drops it.
+const related = product("related-cable", "Anker USB-C Cable", [offer("Blink", 5)]);
 const categorySingle = product("headphones-single", "Sony Headphones", [offer("Xcite", 20)]);
 const categoryComparison = product("headphones-pair", "Sony Headphones", [
   offer("Xcite", 20),
   offer("Blink", 21),
+]);
+// A primary card the DEFAULT stock selection hides. It must ride the stream so
+// the in-place "show all stock" reveal can paint it without a refetch.
+const categoryOosSingle = product("headphones-oos", "Sony Headphones", [
+  { ...offer("Eureka", 19), inStock: false },
 ]);
 
 describe("REEA-1275 — the seed lead paints the exact-model card in the first flush", () => {
@@ -139,26 +143,42 @@ describe("REEA-1275 — the seed lead paints the exact-model card in the first f
   it("trimming the streamed stages preserves the painted shelf and the last stage", async () => {
     const full = [
       Promise.resolve({ products: [seed], notes: [], seedLead: true }),
-      Promise.resolve({ products: [seed, other, hidden], notes: [] }),
-      Promise.resolve({ products: [liveSeed, other, hidden], notes: [] }),
+      Promise.resolve({ products: [seed, other, related], notes: [] }),
+      Promise.resolve({ products: [liveSeed, other, related], notes: [] }),
     ];
     const trimmed = trimStagesToPaintedDiff(full, "keychron v3 max", 1, null, false);
     // Intermediate stages drop the rows an EARLIER flush already painted (the
-    // lead owns the seed id) but keep the unpainted rows the current selection
-    // hides, so the in-place reveal can still paint them; notes are dropped.
+    // lead owns the seed id) AND the related/accessory rows (rendered from the
+    // last stage only). The last stage stays full for the converged view and
+    // the coverage/stamp boundaries.
     const mid = await trimmed[1];
-    expect(mid.products.map((p) => p.productId)).toEqual([other.productId, hidden.productId]);
+    expect(mid.products.map((p) => p.productId)).toEqual([other.productId]);
     expect(mid.notes).toEqual([]);
     const last = await trimmed[2];
     expect(last.products.map((p) => p.productId)).toEqual([
       liveSeed.productId,
       other.productId,
-      hidden.productId,
+      related.productId,
     ]);
 
     const paintedFull = await paintedShelfCardsAcrossStages(full, "keychron v3 max", 1, null, false);
     const paintedTrimmed = await paintedShelfCardsAcrossStages(trimmed, "keychron v3 max", 1, null, false);
     expect(paintedTrimmed.map((p) => p.productId)).toEqual(paintedFull.map((p) => p.productId));
+  });
+
+  it("an intermediate stage keeps the primary rows the stock filter hides", async () => {
+    // The in-place "show all stock" reveal must be able to paint the hidden
+    // primary row from the loaded stream, so the trim retains it.
+    const full = [
+      Promise.resolve({ products: [categoryComparison, categoryOosSingle], notes: [] }),
+      Promise.resolve({ products: [categoryComparison, categoryOosSingle], notes: [] }),
+    ];
+    const trimmed = trimStagesToPaintedDiff(full, "headphones", 1, null, false);
+    const first = await trimmed[0];
+    expect(first.products.map((p) => p.productId)).toEqual([
+      categoryComparison.productId,
+      categoryOosSingle.productId,
+    ]);
   });
 
   it("a replay stage is trimmed to no products (it paints nothing)", async () => {

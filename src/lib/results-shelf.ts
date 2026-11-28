@@ -28,6 +28,11 @@ import {
 } from "@/lib/confidence";
 import type { NormalizedProduct } from "@/types/product";
 import type { LiveSearchResult } from "@/lib/collect/coverage";
+// REEA-1275 — the trim keeps the revealable (filter-hidden) rows. hidden-matches
+// reuses this module's `paintedShelfFromProducts`, so the two modules form a
+// benign ESM cycle: both imports are function declarations resolved at call
+// time, never at module-init time.
+import { hiddenShelfMatches } from "@/lib/hidden-matches";
 
 /** Cards per results page. Same slice the renderer applies (REEA-114/291). */
 export const RESULTS_PAGE_SIZE = 20;
@@ -601,23 +606,29 @@ export async function paintedShelfCardsAcrossStages(
 }
 
 /**
- * REEA-1275 — trim the streamed stage snapshots to the cards each flush
- * ACTUALLY paints.
+ * REEA-1275 — trim the streamed stage snapshots to what an intermediate flush
+ * can still paint.
  *
  * Why: the served document serializes every stage's full cumulative snapshot
  * for hydration, and each cumulative snapshot repeats the products earlier
- * flushes already painted. Measured on the served head, a cold `iphone 17
- * pro` document carried ~600 KB of RSC payload for a 7-card shelf, and the
- * browser had to download/parse it before the first card could paint — the
- * client half of the miss this ticket fixes.
+ * flushes already painted plus every related/accessory row (which only the
+ * last stage renders). Measured on the served head, a cold `iphone 17 pro`
+ * document carried ~600 KB of RSC payload for a 7-card shelf, and the browser
+ * had to download/parse it before the first card could paint — the client half
+ * of the miss this ticket fixes.
  *
  * The paint chain is deterministic and server-side (the same
  * `freshCardsForFlush` the renderer and the metrics fold use), so an
- * intermediate stage can carry ONLY the cards it paints. The LAST stage stays
- * full: the converged view, the coverage/stamp boundaries and the structured
- * data all read it. A replay paints nothing, so its products are dropped
- * entirely. A rejected stage passes through untouched (the honest "nothing
- * landed" state), exactly as before.
+ * intermediate stage carries ONLY:
+ *  - the cards this flush paints, and
+ *  - the primary rows the ACTIVE stock selection hides (`hiddenShelfMatches`),
+ *    because the in-place "show all stock" reveal (REEA-291 AC4, REEA-1114)
+ *    paints them later without a refetch.
+ * The LAST stage stays full: the converged view, the coverage/stamp
+ * boundaries, the related/accessory bands and the structured data read it. A
+ * replay paints nothing, so its products are dropped entirely. A rejected
+ * stage passes through untouched (the honest "nothing landed" state), exactly
+ * as before.
  *
  * The payload shape is unchanged otherwise (`replay`/`seedLead`/`settled`/
  * `kuwaitPendingStatus` ride along), so hydration, the paint chain and the
@@ -666,16 +677,28 @@ export function trimStagesToPaintedDiff(
           },
         );
         paintedIds = paintedIdsAfter(earlierPainted, fresh);
-        // Keep every product an EARLIER flush has not already painted: the
-        // fresh cards this flush paints PLUS the rows the current
-        // country/stock selection hides. The hidden rows must ride the stream
-        // so the in-place "show all stock / all markets" reveal (REEA-291
-        // AC4, REEA-1114) can still paint them without a refetch.
+        // Keep ONLY what an intermediate flush can still paint: the fresh
+        // cards this flush paints PLUS the primary rows the active stock
+        // selection hides, which the in-place "show all stock" reveal
+        // (REEA-291 AC4, REEA-1114) may paint later without a refetch. The
+        // related/accessory bands are rendered from the LAST stage only, so
+        // they are pure payload on every intermediate flush.
         // An intermediate flush never reads its own notes (the coverage line
         // reads the last stage), so dropping them is pure payload saving.
+        const hidden = hiddenShelfMatches(
+          snap.products,
+          query,
+          page,
+          country,
+          showOutOfStock,
+        );
+        const revealable = new Set<string>(fresh.map((p) => p.productId));
+        for (const p of hidden.cards) revealable.add(p.productId);
         return {
           ...snap,
-          products: snap.products.filter((p) => !earlierPainted.has(p.productId)),
+          products: snap.products.filter(
+            (p) => revealable.has(p.productId) && !earlierPainted.has(p.productId),
+          ),
           notes: [],
         };
       },
