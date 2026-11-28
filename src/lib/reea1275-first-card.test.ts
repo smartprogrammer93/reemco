@@ -55,6 +55,10 @@ const liveSeed = product("keychron-v3-max", "Keychron V3 Max Wireless Mechanical
   offer("Jarir", 41.5),
 ]);
 const other = product("keychron-v3-max-iso", "Keychron V3 Max ISO Keyboard", [offer("Blink", 45)]);
+// A row the shelf chain classifies OUT of the primary shelf (unrelated title):
+// it is not painted, but the stream must keep it so an in-place reveal can
+// still paint it later.
+const hidden = product("hidden-cable", "Anker USB-C Cable", [offer("Blink", 5)]);
 const categorySingle = product("headphones-single", "Sony Headphones", [offer("Xcite", 20)]);
 const categoryComparison = product("headphones-pair", "Sony Headphones", [
   offer("Xcite", 20),
@@ -135,18 +139,22 @@ describe("REEA-1275 — the seed lead paints the exact-model card in the first f
   it("trimming the streamed stages preserves the painted shelf and the last stage", async () => {
     const full = [
       Promise.resolve({ products: [seed], notes: [], seedLead: true }),
-      Promise.resolve({ products: [seed, other], notes: [] }),
-      Promise.resolve({ products: [liveSeed, other], notes: [] }),
+      Promise.resolve({ products: [seed, other, hidden], notes: [] }),
+      Promise.resolve({ products: [liveSeed, other, hidden], notes: [] }),
     ];
     const trimmed = trimStagesToPaintedDiff(full, "keychron v3 max", 1, null, false);
-    // Intermediate stages carry only their fresh cards (the lead already owns
-    // the seed id) and no notes; the last stage stays full for the converged
-    // view and the coverage/stamp boundaries.
+    // Intermediate stages drop the rows an EARLIER flush already painted (the
+    // lead owns the seed id) but keep the unpainted rows the current selection
+    // hides, so the in-place reveal can still paint them; notes are dropped.
     const mid = await trimmed[1];
-    expect(mid.products.map((p) => p.productId)).toEqual([other.productId]);
+    expect(mid.products.map((p) => p.productId)).toEqual([other.productId, hidden.productId]);
     expect(mid.notes).toEqual([]);
     const last = await trimmed[2];
-    expect(last.products.map((p) => p.productId)).toEqual([liveSeed.productId, other.productId]);
+    expect(last.products.map((p) => p.productId)).toEqual([
+      liveSeed.productId,
+      other.productId,
+      hidden.productId,
+    ]);
 
     const paintedFull = await paintedShelfCardsAcrossStages(full, "keychron v3 max", 1, null, false);
     const paintedTrimmed = await paintedShelfCardsAcrossStages(trimmed, "keychron v3 max", 1, null, false);

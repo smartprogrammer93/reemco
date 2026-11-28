@@ -648,10 +648,14 @@ export function trimStagesToPaintedDiff(
     const trimmed = gate.then(() => stage).then(
       (snap) => {
         if (isLast) return snap;
+        // A replay paints nothing; its products are superseded by the live
+        // stages, so the payload carries none of them.
+        if (snap.replay === true) return { ...snap, products: [], notes: [] };
+        const earlierPainted = paintedIds;
         const fresh = freshCardsForFlush(
           resultsShelfCards(snap, query, page, country, showOutOfStock),
-          paintedIds,
-          snap.replay === true,
+          earlierPainted,
+          false,
           budget,
           {
             comparisonFirst: true,
@@ -661,10 +665,19 @@ export function trimStagesToPaintedDiff(
             earlySingles,
           },
         );
-        paintedIds = paintedIdsAfter(paintedIds, fresh);
+        paintedIds = paintedIdsAfter(earlierPainted, fresh);
+        // Keep every product an EARLIER flush has not already painted: the
+        // fresh cards this flush paints PLUS the rows the current
+        // country/stock selection hides. The hidden rows must ride the stream
+        // so the in-place "show all stock / all markets" reveal (REEA-291
+        // AC4, REEA-1114) can still paint them without a refetch.
         // An intermediate flush never reads its own notes (the coverage line
         // reads the last stage), so dropping them is pure payload saving.
-        return { ...snap, products: fresh, notes: [] };
+        return {
+          ...snap,
+          products: snap.products.filter((p) => !earlierPainted.has(p.productId)),
+          notes: [],
+        };
       },
       () => stage,
     );
