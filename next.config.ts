@@ -89,6 +89,19 @@ const nextConfig: NextConfig = {
   // instead of shipping the whole node_modules tree. Unset on Vercel, so the
   // existing deployment output mode is unchanged.
   ...(process.env.NEXT_OUTPUT === "standalone" ? { output: "standalone" } : {}),
+  experimental: {
+    // REEA-1275 — first-card paint is gated on the route stylesheet. Measured
+    // on the served head: the production host answers every request with a
+    // ~0.5–1 s floor, and with the stylesheet external the browser's FCP
+    // landed only after that request, so no card could paint earlier. Inlining
+    // it removes the round-trip from the critical path. Next duplicates the
+    // inlined stylesheet once in `<style>` and once in the RSC payload (the
+    // documented trade-off); that ~200 KB duplication was a regression while
+    // the streamed snapshots were untrimmed, but with the REEA-1275 trimmed
+    // flush payload the document is small enough that removing the
+    // render-blocking request wins. The stylesheet content is unchanged.
+    inlineCss: true,
+  },
 };
 
 export default nextConfig;
