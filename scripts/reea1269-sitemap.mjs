@@ -31,11 +31,17 @@ const BASE = (process.env.BASE_URL || "https://ns539626.ip-144-217-72.net").repl
 const PRODUCT_TARGET = 200;
 const CONCURRENCY = 4;
 const DISPATCH_GAP_MS = 1000;
-const REQUEST_TIMEOUT_MS = 45000;
+// A cold PDP walks the live retailer funnel behind its own completion budget
+// (maxDuration 45 s); on a busy box a crawl-paced probe can see one land at
+// 60-80 s. A 45 s client timeout turned that into a false failure on the first
+// run of this probe (63/295 "aborted", every one of which answered on retry).
+const REQUEST_TIMEOUT_MS = 90000;
+const NETWORK_RETRIES = 1;
 const STRICT_OFFERS = process.argv.includes("--strict-offers");
 
 const failures = [];
 const throttled = [];
+const networkRetries = [];
 
 function fail(criterion, detail) {
   failures.push(`${criterion}: ${detail}`);
@@ -59,6 +65,16 @@ async function fetchText(url, attempt = 0) {
       return fetchText(url, attempt + 1);
     }
     return { status: res.status, headers: res.headers, body };
+  } catch (err) {
+    // A transport abort is not a verdict on the URL: one bounded retry, then
+    // the failure is reported. Rate-limit and 5xx answers are NOT retried here
+    // (they are the app's honest answer at crawl time).
+    if (attempt < NETWORK_RETRIES) {
+      networkRetries.push(url);
+      await sleep(5000);
+      return fetchText(url, attempt + 1);
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }
@@ -164,11 +180,15 @@ const selfCount = checked.filter((c) => {
     return false;
   }
 }).length;
+const painted = checked.filter((c) => c.offerRows > 0).length;
 console.log(`S-2 measured — GET 200: ${okCount}/${checked.length}, canonical self-aligned: ${selfCount}/${checked.length}`);
-console.log(`S-2 offer rows — pages painting >=1 row: ${checked.length - zeroOffer.length}/${checked.length}; zero-row: ${zeroOffer.length}`);
+console.log(`S-2 offer rows — pages painting >=1 row: ${painted}/${checked.length}; zero-row: ${zeroOffer.length}`);
 if (zeroOffer.length > 0) {
   console.log(`S-2 zero-row URLs: ${zeroOffer.slice(0, 10).join(", ")}${zeroOffer.length > 10 ? " …" : ""}`);
   if (STRICT_OFFERS) fail("S-2", `${zeroOffer.length} listed PDPs render 0 offer rows (strict)`);
+}
+if (networkRetries.length > 0) {
+  console.log(`transport: ${networkRetries.length} request(s) aborted at ${REQUEST_TIMEOUT_MS} ms and answered on the bounded retry`);
 }
 
 console.log(`S-6 — sitemap payload ${sitemapBytes} bytes, cache-control "${sitemapCache}"`);
