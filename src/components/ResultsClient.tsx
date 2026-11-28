@@ -1071,14 +1071,17 @@ function StageAppend(props: {
   // add one single on a category shelf and two on the wider exact-model page.
   // REEA-1275 — the seed LEAD flush paints the exact-model card immediately
   // (the shopper asked for THIS model; the merge may never land inside the
-  // budget). The metrics fold (paintedShelfCardsAcrossStages) applies the
-  // identical policy.
+  // budget), and a wider exact-model shelf may also paint ONE early single in
+  // an intermediate flush. The category shelf keeps the comparison-only rule.
+  // The metrics fold (paintedShelfCardsAcrossStages) applies the identical
+  // policy.
   const seedLead = snap.seedLead === true;
   const fresh = freshCardsForFlush(visible, paintedIds, replay, budget, {
     comparisonFirst: true,
     finalFlush: index === stages.length - 1,
     singleTail: budget === CATEGORY_SHELF_CARDS ? 1 : 2,
     leadFlush: seedLead,
+    earlySingles: budget === CATEGORY_SHELF_CARDS ? 0 : 1,
   });
   const nextPaintedIds = paintedIdsAfter(paintedIds, fresh);
   // REEA-222: badge ownership follows the first flush that actually RENDERS

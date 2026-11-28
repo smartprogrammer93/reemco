@@ -368,6 +368,17 @@ export interface FlushPaintOptions {
    * the same seed idempotently, so a live answer supersedes the lead.
    */
   leadFlush?: boolean;
+  /**
+   * REEA-1275 — how many single-retailer cards a WIDER exact-model shelf may
+   * paint in an intermediate flush (0 on the category shelf, which keeps the
+   * REEA-1238 comparison-only rule). Without this, an exact-model query whose
+   * first adapter answers with a single had to wait for a second merchant to
+   * merge before ANY card could paint; measured on the served head, that wait
+   * is most of the first-card budget. The remaining slots stay reserved for
+   * comparisons, and the converged view supersedes the early single with the
+   * merged card once the live answer lands.
+   */
+  earlySingles?: number;
 }
 
 export function freshCardsForFlush(
@@ -398,8 +409,14 @@ export function freshCardsForFlush(
   // REEA-1275 — the seed LEAD flush is the one deliberate exception: its
   // single exact-model card paints immediately, because waiting for a merge
   // that may never come is exactly the first-card latency this ticket fixes.
+  // A wider exact-model shelf also gets a bounded early-singles window
+  // (`earlySingles`) for the same reason; the category shelf keeps the
+  // comparison-only rule.
   const comparisonFirst = opts.comparisonFirst === true;
-  const comparisonOnly = comparisonFirst && opts.finalFlush !== true && opts.leadFlush !== true;
+  const finalFlush = opts.finalFlush === true;
+  const leadFlush = opts.leadFlush === true;
+  const earlySingles = Math.max(0, opts.earlySingles ?? 0);
+  const comparisonOnly = comparisonFirst && !finalFlush && !leadFlush && earlySingles === 0;
   const singleTail = opts.singleTail ?? Number.POSITIVE_INFINITY;
   // REEA-1238 — a card carrying two distinct retailers across the fetched set
   // (including a cross-market pair such as Danube Home + BinSina) is a
@@ -421,9 +438,17 @@ export function freshCardsForFlush(
     if (paintedIds.has(p.productId)) continue;
     const comparison = isComparison(p);
     if (comparisonOnly && !comparison) continue;
-    if (comparisonFirst && !comparisonOnly && !comparison && hasComparison) {
-      if (singlesPainted >= singleTail) continue;
-      singlesPainted += 1;
+    if (comparisonFirst && !comparisonOnly && !comparison) {
+      if (!finalFlush && !leadFlush) {
+        // REEA-1275 — the bounded early-singles window of a wider exact-model
+        // shelf: enough for the first card to paint, while the rest of the
+        // budget stays reserved for the cross-retailer merge.
+        if (singlesPainted >= earlySingles) continue;
+        singlesPainted += 1;
+      } else if (hasComparison) {
+        if (singlesPainted >= singleTail) continue;
+        singlesPainted += 1;
+      }
     }
     fresh.push(p);
     if (fresh.length >= remaining) break;
@@ -565,6 +590,7 @@ export async function paintedShelfCardsAcrossStages(
         finalFlush: index === stages.length - 1,
         singleTail,
         leadFlush: snap.seedLead === true,
+        earlySingles: budget === CATEGORY_SHELF_CARDS ? 0 : 1,
       },
     );
     painted.push(...fresh);

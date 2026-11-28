@@ -125,10 +125,12 @@ describe("REEA-1238 — the category paint chain reserves slots for comparisons"
     ]);
   });
 
-  it("an exact-model shelf is comparison-first with a two-single tail", async () => {
-    // REEA-1238 — the wider exact-model page keeps its comparison cards, but
-    // the intermediate flush paints comparisons only and the final flush adds
-    // at most two non-comparison cards.
+  it("an exact-model shelf paints one early single, then the comparison-led tail", async () => {
+    // REEA-1238 — the wider exact-model page keeps its comparison cards and
+    // its two-single tail. REEA-1275 — it also paints ONE early single in an
+    // intermediate flush, so the first card does not wait for a second
+    // merchant to merge (the measured first-card budget); the rest of the
+    // budget stays reserved for the comparison-led shelf.
     const stages = [
       Promise.resolve({ products: [singleA, singleB], replay: false }),
       Promise.resolve({ products: [comparison, singleA, singleB], replay: false }),
@@ -141,8 +143,8 @@ describe("REEA-1238 — the category paint chain reserves slots for comparisons"
       false,
     );
     expect(painted.map((p) => p.productId)).toEqual([
-      comparison.productId,
       singleA.productId,
+      comparison.productId,
       singleB.productId,
     ]);
   });

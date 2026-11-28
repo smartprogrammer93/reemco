@@ -110,4 +110,24 @@ describe("REEA-1275 — the seed lead paints the exact-model card in the first f
     });
     expect(fresh).toEqual([]);
   });
+
+  it("an exact-model intermediate flush may paint ONE early single, no more", () => {
+    const fresh = freshCardsForFlush([seed, other], new Set(), false, 12, {
+      comparisonFirst: true,
+      finalFlush: false,
+      singleTail: 2,
+      earlySingles: 1,
+    });
+    expect(fresh.map((p) => p.productId)).toEqual([seed.productId]);
+  });
+
+  it("the category shelf still withholds singles from an intermediate flush", () => {
+    const fresh = freshCardsForFlush([categorySingle], new Set(), false, CATEGORY_SHELF_CARDS, {
+      comparisonFirst: true,
+      finalFlush: false,
+      singleTail: 1,
+      earlySingles: 0,
+    });
+    expect(fresh).toEqual([]);
+  });
 });
