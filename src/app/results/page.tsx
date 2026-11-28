@@ -47,6 +47,7 @@ import { buildRenderEvents } from "@/lib/metrics-events";
 import { partitionByConfidence } from "@/lib/confidence";
 import { exactSkuKeep } from "@/lib/relevance";
 import { randomUUID } from "node:crypto";
+import type { NormalizedProduct } from "@/types/product";
 import type { Metadata } from "next";
 import { after } from "next/server";
 import { cookies, headers } from "next/headers";
@@ -153,6 +154,52 @@ async function readPreferenceHint(): Promise<{
   }
 }
 
+/**
+ * REEA-1275 — the serve-path store reads are latency guardrails, not
+ * merchandise. Lane retirement (REEA-1078) and zone reachability (REEA-1078
+ * AC9) are awaited BEFORE the fan-out and the shell, so a slow shared store
+ * used to add its whole latency to both. The exact-model seed read (REEA-1261)
+ * is the third: it only paints one card, so it must not hold the shell or an
+ * adapter flush. All three are bounded here and fail OPEN: the static
+ * retirement still applies inside the collector, a missing reachability record
+ * simply withholds its label, and a slow seed degrades to "no seed this serve".
+ * A store blip can cost one serve's labels or seed; it must never delay the
+ * first card.
+ */
+const LANE_READ_BUDGET_MS = 250;
+const SEED_READ_BUDGET_MS = 400;
+
+async function boundedRead<T>(read: Promise<T>, fallback: T, budgetMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), budgetMs);
+  });
+  try {
+    return await Promise.race([read.catch(() => fallback), deadline]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * REEA-1275 — the LEAD flush: the exact-model seed card (REEA-1261's last
+ * verified observation) as its own snapshot, resolved as soon as the seed read
+ * does. It is painted before any retailer answers, so the shopper's exact
+ * model does not wait on the 1.8 s completion budget for a cross-retailer
+ * merge that may never arrive. It is flagged `seedLead` so the paint chain
+ * lets its single card take a slot and withholds the Best-price badge (no
+ * retailer has answered yet). The same seed is folded idempotently into every
+ * live stage, so a live answer supersedes it as soon as one exists.
+ */
+function seedLeadSnapshot(seed: NormalizedProduct | null): LiveSearchResult {
+  return {
+    products: seed ? [seed] : [],
+    notes: [],
+    settled: false,
+    seedLead: true,
+  };
+}
+
 export default async function ResultsPage({
   searchParams,
 }: {
@@ -215,9 +262,12 @@ export default async function ResultsPage({
   // they cannot serialize extra latency onto the fan-out (AC-8); either one
   // fails OPEN (nothing extra retired / no label) so instrumentation can never
   // blank a search.
+  // REEA-1275 — and they are BOUNDED: a slow store used to delay both the
+  // shell and the fan-out by its whole latency, which is exactly the
+  // first-card budget this ticket spends. Fail-open as before.
   const [retirement, unreachableLanes] = await Promise.all([
-    readLaneRetirement(),
-    readUnreachableLanes(),
+    boundedRead(readLaneRetirement(), { retired: [], readmitted: [] }, LANE_READ_BUDGET_MS),
+    boundedRead(readUnreachableLanes(), [] as string[], LANE_READ_BUDGET_MS),
   ]);
   const { retired: retiredLanes, readmitted: readmittedLanes } = retirement;
   // REEA-1261 AC-1/AC-2 — the exact-model card, read CONCURRENTLY with the
@@ -238,26 +288,61 @@ export default async function ResultsPage({
   // shell and the same run is deferred behind the response: the follow-up feed
   // (REEA-398) still folds its live answer into the open page.
   const staged = await collectLiveResultsStagedAdmitted(query, { refresh: hint.refresh, locale, retiredLanes, readmittedLanes });
-  const exactSeed = await exactSeedPromise.catch(() => null);
-  // REEA-1261 — fold the exact-model card into EVERY snapshot this serve can
-  // paint (the streamed stages, the finalized document and the run's converged
-  // answer). The helper is idempotent: a snapshot that already carries the
+  // REEA-1275 — the seed read is NOT awaited on the shell path any more. It
+  // becomes the LEAD flush (resolves as soon as the read does) and is folded
+  // into the snapshots that outlive the paint (the final document and the
+  // converged answer) through the same bounded promise, so neither the shell
+  // nor an adapter flush is ever held behind a store read that only paints one
+  // card. The read is bounded too: a slow store degrades to "no seed this
+  // serve" (fail-open), never to a delayed first card.
+  // REEA-1261 — fold the exact-model card into the snapshots this serve can
+  // paint. The helper is idempotent: a snapshot that already carries the
   // identity (the live fan-out answered with it) is returned unchanged, so
   // this can never duplicate a card or override a fresher live row. The
   // after() fold reads the SAME wrapped promises, so `comparison_depth` counts
   // exactly the shelf the shopper's page painted (REEA-1099).
-  const withExactModel = (snap: LiveSearchResult): LiveSearchResult =>
-    exactSeed === null
-      ? snap
-      : {
-          ...snap,
-          products: withExactModelCard(snap.products, exactSeed, query),
-        };
+  const boundedSeed = boundedRead(exactSeedPromise, null, SEED_READ_BUDGET_MS);
+  const withExactModel = (snap: LiveSearchResult): Promise<LiveSearchResult> =>
+    boundedSeed
+      .then((seed) =>
+        seed === null
+          ? snap
+          : {
+              ...snap,
+              products: withExactModelCard(snap.products, seed, query),
+            },
+      )
+      .catch(() => snap);
+  // REEA-1275 — a FRESH memo hit is the one serve that already has a live
+  // answer to paint immediately: painting the lead there would claim the
+  // productId before the fresher memo row could paint. The lead is therefore
+  // reserved for every serve that runs a live fan-out (cold, refresh
+  // re-collection, stale-while-revalidate) and for the fail-closed pending
+  // shell. A stale/replay serve is NOT a fresh memo hit: its stages carry the
+  // flagged replay plus the live chain.
+  const freshMemoHit =
+    staged.serveKind === "warm" && staged.stages.length === 1;
+  const seedLeadStage: Promise<LiveSearchResult> = freshMemoHit
+    ? Promise.resolve(seedLeadSnapshot(null))
+    : boundedSeed
+        .then((seed) => seedLeadSnapshot(seed))
+        .catch(() => seedLeadSnapshot(null));
+  const liveStages = staged.stages;
   const seededStaged: LiveSearchStages = {
     ...staged,
-    stages: staged.stages.map((stage) => stage.then(withExactModel)),
-    final: staged.final.then(withExactModel),
-    converged: staged.converged.then(withExactModel),
+    // REEA-1275 — the seed lead rides index 0 so the exact-model card paints
+    // in the first flush; the live stages keep their arrival order behind it.
+    // Only the LAST live stage is folded: the lead already paints the seed for
+    // the intermediate flushes, and the last stage is the one the converged
+    // view and the structured-data fallback read.
+    stages: [
+      seedLeadStage,
+      ...liveStages.map((stage, index) =>
+        index === liveStages.length - 1 ? stage.then((snap) => withExactModel(snap)) : stage,
+      ),
+    ],
+    final: staged.final.then((snap) => withExactModel(snap)),
+    converged: staged.converged.then((snap) => withExactModel(snap)),
     allSettled: staged.allSettled.then((snap) => (snap ? withExactModel(snap) : snap)),
   };
   // REEA-398 — keep the hops still in flight alive BEHIND the finalized

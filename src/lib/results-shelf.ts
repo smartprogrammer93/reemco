@@ -359,6 +359,15 @@ export interface FlushPaintOptions {
    *  The category snapshot already caps its own single tail; this keeps the
    *  wider exact-model page from drowning its comparison cards in filler. */
   singleTail?: number;
+  /**
+   * REEA-1275 — a LEAD flush (the exact-model seed card) may paint its
+   * single-retailer card even though it is not the final stage: the shopper
+   * asked for THIS model, and the cross-retailer merge it would otherwise wait
+   * for may never land inside the completion budget. It never claims the
+   * Best-price badge (the renderer decides that), and later live stages fold
+   * the same seed idempotently, so a live answer supersedes the lead.
+   */
+  leadFlush?: boolean;
 }
 
 export function freshCardsForFlush(
@@ -386,8 +395,11 @@ export function freshCardsForFlush(
   // paint before the singles in BOTH cases: the price-ranked `visible` order
   // (REEA-1177 AC 6a-4) would otherwise put a cheap single ahead of the
   // comparison card the category surface exists to show.
+  // REEA-1275 — the seed LEAD flush is the one deliberate exception: its
+  // single exact-model card paints immediately, because waiting for a merge
+  // that may never come is exactly the first-card latency this ticket fixes.
   const comparisonFirst = opts.comparisonFirst === true;
-  const comparisonOnly = comparisonFirst && opts.finalFlush !== true;
+  const comparisonOnly = comparisonFirst && opts.finalFlush !== true && opts.leadFlush !== true;
   const singleTail = opts.singleTail ?? Number.POSITIVE_INFINITY;
   // REEA-1238 — a card carrying two distinct retailers across the fetched set
   // (including a cross-market pair such as Danube Home + BinSina) is a
@@ -508,7 +520,7 @@ export function preferRicherSnapshot<T extends { products: readonly NormalizedPr
  * contributes nothing — the honest state of a flush that never landed.
  */
 export async function paintedShelfCardsAcrossStages(
-  stages: readonly Promise<{ products: readonly NormalizedProduct[]; replay?: boolean }>[],
+  stages: readonly Promise<{ products: readonly NormalizedProduct[]; replay?: boolean; seedLead?: boolean }>[],
   query: string,
   page: number,
   country: CountryCode | null,
@@ -523,11 +535,14 @@ export async function paintedShelfCardsAcrossStages(
   // merge lands). The final flush paints the comparison-led page plus a
   // bounded single tail (one on a category shelf, two on the wider
   // exact-model page) so the comparisons cannot be drowned by filler.
+  // REEA-1275 — the seed LEAD flush is the one documented exception; this
+  // fold MUST apply the same policy the renderer does or the counters
+  // describe a different population than the page painted.
   const comparisonFirst = true;
   const singleTail = budget === CATEGORY_SHELF_CARDS ? 1 : 2;
   for (let index = 0; index < stages.length; index += 1) {
     const stage = stages[index];
-    let snap: { products: readonly NormalizedProduct[]; replay?: boolean } | null;
+    let snap: { products: readonly NormalizedProduct[]; replay?: boolean; seedLead?: boolean } | null;
     try {
       // REEA-1068 D1 — adopt through Promise.resolve so React thenables (SSR
       // prop shape) and plain promises both work here, exactly like the
@@ -545,7 +560,12 @@ export async function paintedShelfCardsAcrossStages(
       paintedIds,
       snap.replay === true,
       budget,
-      { comparisonFirst, finalFlush: index === stages.length - 1, singleTail },
+      {
+        comparisonFirst,
+        finalFlush: index === stages.length - 1,
+        singleTail,
+        leadFlush: snap.seedLead === true,
+      },
     );
     painted.push(...fresh);
     paintedIds = paintedIdsAfter(paintedIds, fresh);

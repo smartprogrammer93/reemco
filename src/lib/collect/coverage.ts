@@ -121,6 +121,19 @@ export interface LiveSearchResult {
    * a live stage, painted normally.
    */
   replay?: boolean;
+  /**
+   * REEA-1275 — the LEAD flush carrying the exact-model seed card (REEA-1261's
+   * last verified observation). It is not an adapter answer: it resolves as
+   * soon as the seed read does, so the shopper's exact-model card paints
+   * before the first retailer answers. The paint chain treats it as a LEAD:
+   * its single-retailer card may take a slot an intermediate live flush would
+   * reserve for comparisons (the shopper asked for THIS model, and the merge
+   * may never land inside the completion budget). It never claims the
+   * Best-price badge; the first LIVE flush owns that. The final/converged
+   * snapshots fold the seed idempotently, so a live answer supersedes the
+   * lead as soon as one exists.
+   */
+  seedLead?: boolean;
 }
 
 /* Fixed presentation order for the coverage sentence — mirrors the COLLECTORS

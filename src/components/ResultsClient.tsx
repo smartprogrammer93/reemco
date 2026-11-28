@@ -1069,17 +1069,26 @@ function StageAppend(props: {
   const budget = shelfCardBudget(props.query);
   // REEA-1238 — comparison-first for every query class; the final flush may
   // add one single on a category shelf and two on the wider exact-model page.
+  // REEA-1275 — the seed LEAD flush paints the exact-model card immediately
+  // (the shopper asked for THIS model; the merge may never land inside the
+  // budget). The metrics fold (paintedShelfCardsAcrossStages) applies the
+  // identical policy.
+  const seedLead = snap.seedLead === true;
   const fresh = freshCardsForFlush(visible, paintedIds, replay, budget, {
     comparisonFirst: true,
     finalFlush: index === stages.length - 1,
     singleTail: budget === CATEGORY_SHELF_CARDS ? 1 : 2,
+    leadFlush: seedLead,
   });
   const nextPaintedIds = paintedIdsAfter(paintedIds, fresh);
   // REEA-222: badge ownership follows the first flush that actually RENDERS
   // cards, not index 0 blindly. When the earliest snapshots are empty under
   // the country/stock selections (or a replay that paints nothing), the whole
   // page used to render without any Best-price badge.
-  const badgeOwner = fresh.length > 0 && paintedIds.size === 0;
+  // REEA-1275 — the seed LEAD is a cached single, so it must not claim the
+  // Best-price badge before any retailer has answered: the first LIVE flush
+  // that paints cards owns it.
+  const badgeOwner = !seedLead && fresh.length > 0 && paintedIds.size === 0;
   // REEA-835/847 — the Kuwait batch is still pending for THIS render when
   // more answers may still land: any intermediate flush (later stages are
   // still streaming), or a finalized-at-budget snapshot (`settled === false`,
