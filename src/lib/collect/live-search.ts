@@ -74,6 +74,7 @@ import {
 } from "@/lib/collect/price-sanity";
 import {
   canonicalFields,
+  canonicalKey,
   capacityLabelOf,
   familyDisplayTitle,
   listingLabel,
@@ -4991,6 +4992,79 @@ function replaySnap(q: string, snap: LiveSearchResult): LiveSearchResult {
   return { ...skuLeadSnap(q, snap), replay: true };
 }
 
+/**
+ * REEA-1279 — how long a live flush may wait for the stored answer it folds in
+ * (the stale memo / shared-layer sibling this serve already replays). The read
+ * is issued with the fan-out at run start, so on the deployed box it has landed
+ * long before the first adapter answers; the bound only stops a KV hiccup from
+ * holding the first paint. It never moves the document-close clock, because the
+ * finalize timer already owns that.
+ */
+export const STORED_MERGE_WAIT_MS = 250;
+
+/**
+ * REEA-1279 — fold a STORED live answer's offer rows into this run's own
+ * snapshot, per card.
+ *
+ * Why: the serve path already replays the previous/sibling run's answer from
+ * the memo or the shared layer (REEA-291 AC-2 / REEA-602), but the paint chain
+ * deliberately paints NOTHING for a replay (REEA-1141: the live stage paints
+ * the newest version of the same products). The stored answer's offer rows were
+ * therefore discarded, and the served document's cards carried only the lanes
+ * that answered inside the completion budget — measured on the served head
+ * `d9e411c9`: a cold `panadol` card carried BinSina + Danube Home while the
+ * stored answer already held Lulu, and a cold `ps5` DualSense card carried one
+ * in-market lane while the converged answer held six.
+ *
+ * The merge is per product card: identity first, with a canonical-key fallback
+ * for a stored card written under a different representative title. A stored
+ * offer joins the SAME card, deduped by merchant+price+listing URL against the
+ * live rows (a live answer always wins its own listing), and carries
+ * `fromSnapshot` so the row renders with its own collection clock instead of
+ * claiming this run's freshness. No product is ADDED that this run did not
+ * rank — the live shelf stays the answer; only its offer evidence is
+ * supplemented, exactly like the REEA-510 last-seen fill. Pure and idempotent,
+ * so re-applying it to an already-merged snapshot cannot drift.
+ */
+export function mergeStoredOffers(
+  snap: LiveSearchResult,
+  stored: LiveSearchResult | null | undefined,
+): LiveSearchResult {
+  if (!stored || !Array.isArray(stored.products) || stored.products.length === 0) return snap;
+  const byId = new Map<string, NormalizedProduct>();
+  const byKey = new Map<string, NormalizedProduct>();
+  for (const p of stored.products) {
+    if (!p || typeof p.productId !== "string") continue;
+    byId.set(p.productId, p);
+    const key = canonicalKey(p.title ?? "");
+    if (key !== "" && !byKey.has(key)) byKey.set(key, p);
+  }
+  let added = 0;
+  const products = snap.products.map((p) => {
+    const source =
+      byId.get(p.productId) ?? byKey.get(canonicalKey(p.title ?? ""));
+    if (!source || !Array.isArray(source.offers) || source.offers.length === 0) return p;
+    const seen = new Set(
+      (p.offers ?? []).map(
+        (o) => `${o.merchant.toLowerCase()}|${o.price}|${normalizedListingUrlOf(o.url)}`,
+      ),
+    );
+    const extra = source.offers.filter((o) => {
+      const key = `${o.merchant.toLowerCase()}|${o.price}|${normalizedListingUrlOf(o.url)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (extra.length === 0) return p;
+    added += extra.length;
+    return {
+      ...p,
+      offers: [...(p.offers ?? []), ...extra.map((o) => ({ ...o, fromSnapshot: true as const }))],
+    };
+  });
+  return added === 0 ? snap : { ...snap, products };
+}
+
 /** REEA-1133 — the identity, lane set and memo probe of one staged run.
  *  Extracted from collectLiveResultsStaged so the page-path admission gate
  *  reads the memo with EXACTLY the run's own inputs: a warm hit must be
@@ -5318,15 +5392,49 @@ export function collectLiveResultsStaged(
   // An empty layer resolves immediately, leaving the hop race untouched;
   // diagnostic chains with an injected fetchImpl stay isolated (the REEA-510
   // rule), and the converged FINAL still mirrors itself back into the layer.
-  const sharedWarm: Promise<LiveSearchResult> | null =
-    snapshotsEnabled && !cached
-      ? replaySharedQuerySnapshot<LiveSearchResult>(cacheKey).then(
-          // REEA-743 — same serve-time head guard on the replayed snapshot.
-          // REEA-1141 — flagged as a replay: the renderer paints the live
-          // stage's newest version instead of appending a stale shelf.
-          (snap) => (snap ? replaySnap(servedQuery, snap) : new Promise<LiveSearchResult>(() => {})),
-        )
-      : null;
+  // REEA-1279 — the RAW replay promise is kept so every live flush can fold
+  // its offer rows into the cards this run paints (see mergeStoredOffers);
+  // the narrowed `sharedWarm` above is still the paint-suppressed lead.
+  const sharedReplayP: Promise<LiveSearchResult | null> | null =
+    snapshotsEnabled && !cached ? replaySharedQuerySnapshot<LiveSearchResult>(cacheKey) : null;
+  const sharedWarm: Promise<LiveSearchResult> | null = sharedReplayP
+    ? sharedReplayP.then(
+        // REEA-743 — same serve-time head guard on the replayed snapshot.
+        // REEA-1141 — flagged as a replay: the renderer paints the live
+        // stage's newest version instead of appending a stale shelf.
+        (snap) => (snap ? replaySnap(servedQuery, snap) : new Promise<LiveSearchResult>(() => {})),
+      )
+    : null;
+
+  // REEA-1279 — the stored live answer this serve already replays (stale memo
+  // or shared-layer sibling). Its rows are offer evidence the paint chain
+  // otherwise discards; keep the raw answer here so each live flush can fold
+  // them into the cards it paints. The read is issued with the fan-out, so the
+  // bounded wait below only covers a store hiccup and never delays first paint
+  // in the measured path.
+  const storedAnswerP: Promise<LiveSearchResult | null> = cached
+    ? Promise.resolve(cached.value)
+    : sharedReplayP ?? Promise.resolve(null);
+  // Bounded, timer-clearing wait: the read rides the fan-out, so the merge
+  // normally lands with the first adapter answer and this never spends the
+  // bound. A store hiccup costs at most STORED_MERGE_WAIT_MS, not a blank card.
+  const storedWithin = async (ms: number): Promise<LiveSearchResult | null> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        storedAnswerP.catch(() => null),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), ms);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+  const withStored = async (snap: LiveSearchResult): Promise<LiveSearchResult> =>
+    mergeStoredOffers(snap, await storedWithin(STORED_MERGE_WAIT_MS));
+
+
 
   // REEA-540 Bet A — load this query's STORED last-seen observations once per
   // run, in parallel with the hop fan-out: same keys REEA-510 already writes,
@@ -5470,21 +5578,31 @@ export function collectLiveResultsStaged(
   // second arrival threshold on the hop race answers alone. With a single
   // collector the sole stage is the final one and the warm replay still only
   // shortens its first paint — the converged chain behind it is unchanged.
+  // REEA-1279 — every live flush folds the stored answer's rows in before it
+  // resolves (bounded, see withStored), so the first flush that paints a card
+  // already carries its cross-retailer evidence instead of only the lanes that
+  // happened to answer first. The lead replay stage stays paint-suppressed
+  // (REEA-1141), so this cannot duplicate a card.
   const stages: Promise<LiveSearchResult>[] = collectors.map(async (_c, k) => {
     if (k < collectors.length - 1) {
-      return await Promise.race([
-        untilArrivals(k + 1).then(() =>
-          stagedSnapshot(servedQuery, country, settled.slice(), locale, seenRows, [], correction),
-        ),
-        finalizeAtDeadline,
-        ...(k === 0 && sharedWarm ? [sharedWarm] : []),
-      ]);
+      return withStored(
+        await Promise.race([
+          untilArrivals(k + 1).then(() =>
+            stagedSnapshot(servedQuery, country, settled.slice(), locale, seenRows, [], correction),
+          ),
+          finalizeAtDeadline,
+          ...(k === 0 && sharedWarm ? [sharedWarm] : []),
+        ]),
+      );
     }
-    return await Promise.race([converged, finalizeAtDeadline, ...(sharedWarm && collectors.length === 1 ? [sharedWarm] : [])]);
+    return withStored(
+      await Promise.race([converged, finalizeAtDeadline, ...(sharedWarm && collectors.length === 1 ? [sharedWarm] : [])]),
+    );
   });
   const final: Promise<LiveSearchResult> = stages[stages.length - 1] ?? Promise.resolve(
     stagedSnapshot(servedQuery, country, settled, locale, seenRows, [], correction),
-  );
+  ).then(withStored);
+
 
   // Write-through carries the LIVE answer only (products with their scrapedAt
   // stamps included). REA-674 fix 4 — the memo stores WHAT THE COMPLETED
