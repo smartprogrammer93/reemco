@@ -20,6 +20,8 @@ import { randomUUID } from "node:crypto";
 const BASE = (process.argv[2] ?? "https://ns539626.ip-144-217-72.net").replace(/\/$/, "");
 const QUERIES = process.argv.slice(3).length > 0 ? process.argv.slice(3) : ["keychron v3 max", "iphone 17 pro"];
 const SAMPLES = Number(process.env.SAMPLES ?? 8);
+/** Pause between loads; 0 = back-to-back (the ticket's raw methodology). */
+const SETTLE_MS = Number(process.env.SETTLE_MS ?? 0);
 const CHROME = process.env.CHROME_PATH ?? "/opt/ms-playwright/chromium-1194/chrome-linux/chrome";
 const POLL_MS = 50;
 const CARD_TIMEOUT_MS = 20_000;
@@ -119,6 +121,10 @@ for (const query of QUERIES) {
       `  ${query} #${i + 1} firstCard=${s.firstCardMs} frame=${s.frameAt} ` +
         `responseStart=${s.nav?.responseStart ?? "?"} domContentLoaded=${s.nav?.domContentLoadedEventEnd ?? "?"} fcp=${s.nav?.fcp ?? "?"}`,
     );
+    // SETTLE_MS models the shopper's read time between searches: an unpaused
+    // run starts the next cold fan-out while the previous run's behind-the-
+    // response tail is still active, which is an artificial worst case.
+    if (SETTLE_MS > 0 && i < SAMPLES - 1) await new Promise((r) => setTimeout(r, SETTLE_MS));
   }
   const paints = samples.map((s) => s.firstCardMs).filter((v) => typeof v === "number").sort((a, b) => a - b);
   const frames = samples.map((s) => s.frameAt).filter((v) => typeof v === "number").sort((a, b) => a - b);
