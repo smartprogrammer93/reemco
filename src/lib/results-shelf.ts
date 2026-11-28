@@ -633,7 +633,30 @@ export async function paintedShelfCardsAcrossStages(
  * The payload shape is unchanged otherwise (`replay`/`seedLead`/`settled`/
  * `kuwaitPendingStatus` ride along), so hydration, the paint chain and the
  * counters describe the same population they did before.
+ *
+ * REEA-1280 — the same trim also drops the two fields the RESULTS surface
+ * never reads from a stage snapshot: `suggestions` (the collector fills it
+ * with up to three full product objects per stage, offers and all) and
+ * `responders` (server-side home-discovery only). Neither is rendered by
+ * ResultsClient: the empty-state pills come from the static lexicon/strings
+ * (REEA-1218) and the coverage line reads `notes`. On the served head a cold
+ * `iphone 17 pro` document carried ~165 KB of repeated `suggestions` rows
+ * across its stages — pure download/parse ahead of the first card. They are
+ * stripped from every served stage (the LAST one too), so the streamed
+ * document carries them zero times; the collector's own `final`/`converged`
+ * promises (memo writes, counters) are untouched.
  */
+function stripServedOnlyPayload(snap: LiveSearchResult): LiveSearchResult {
+  const hasSuggestions = Array.isArray(snap.suggestions) && snap.suggestions.length > 0;
+  if (!hasSuggestions && snap.responders === undefined) return snap;
+  return {
+    ...snap,
+    suggestions: [],
+    // Server-side home-discovery reads `responders`; the results client does not.
+    responders: undefined,
+  };
+}
+
 export function trimStagesToPaintedDiff(
   stages: readonly Promise<LiveSearchResult>[],
   query: string,
@@ -643,8 +666,9 @@ export function trimStagesToPaintedDiff(
 ): Promise<LiveSearchResult>[] {
   // The page slice is applied by the renderer over a snapshot's PRIMARY set;
   // a trimmed snapshot no longer carries the earlier pages, so page 2+ keeps
-  // the full snapshots (the measured first-card surface is page 1).
-  if (page !== 1) return [...stages];
+  // the full snapshots (the measured first-card surface is page 1). The unused
+  // suggestion/responder payload is stripped there too (REEA-1280).
+  if (page !== 1) return stages.map((stage) => stage.then(stripServedOnlyPayload));
   const budget = shelfCardBudget(query);
   const singleTail = budget === CATEGORY_SHELF_CARDS ? 1 : 2;
   const earlySingles = budget === CATEGORY_SHELF_CARDS ? 0 : 1;
@@ -661,10 +685,10 @@ export function trimStagesToPaintedDiff(
     const isLast = index === stages.length - 1;
     const trimmed = gate.then(() => stage).then(
       (snap) => {
-        if (isLast) return snap;
+        if (isLast) return stripServedOnlyPayload(snap);
         // A replay paints nothing; its products are superseded by the live
         // stages, so the payload carries none of them.
-        if (snap.replay === true) return { ...snap, products: [], notes: [] };
+        if (snap.replay === true) return stripServedOnlyPayload({ ...snap, products: [], notes: [] });
         const earlierPainted = paintedIds;
         const fresh = freshCardsForFlush(
           resultsShelfCards(snap, query, page, country, showOutOfStock),
@@ -704,15 +728,15 @@ export function trimStagesToPaintedDiff(
           revealable.add(p.productId);
           carriedHidden.add(p.productId);
         }
-        return {
+        return stripServedOnlyPayload({
           ...snap,
           products: snap.products.filter(
             (p) => revealable.has(p.productId) && !earlierPainted.has(p.productId),
           ),
           notes: [],
-        };
+        });
       },
-      () => stage,
+      () => stage.then(stripServedOnlyPayload, () => stage),
     );
     gate = trimmed.then(
       () => undefined,
