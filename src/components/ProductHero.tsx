@@ -513,7 +513,16 @@ function ProductHeroBody({
   const provisional = collecting && best != null;
 
   return (
-    <div className="mx-auto w-full rc-product-wrap" style={{ maxWidth: "var(--rc-layout-max-w)", paddingInline: "var(--rc-gutter)", paddingBlock: "var(--rc-space-4)" }}>
+    // REEA-1277 — the identity this page actually resolved, machine-readable.
+    // The sitemap probe asserts it equals the listed URL's own key, so a PDP
+    // that paints another product's offer set can no longer pass on the
+    // canonical tag alone. Nested result cards carry their own ids; this one
+    // is the page identity (first in document order).
+    <div
+      className="mx-auto w-full rc-product-wrap"
+      data-product-id={product.productId}
+      style={{ maxWidth: "var(--rc-layout-max-w)", paddingInline: "var(--rc-gutter)", paddingBlock: "var(--rc-space-4)" }}
+    >
       <nav className="rc-results-meta" aria-label={t.allOffersLead}>
         {/* REEA-1140 — the back link returns to the query the shopper came
             from when it is carried; a shared-link visit keeps the title. */}

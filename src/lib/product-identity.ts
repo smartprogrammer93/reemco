@@ -9,7 +9,7 @@ import {
 import { readRetiredLanes } from "@/lib/collect/lane-health";
 // REEA-1246 AC5 — a live slug that folds onto a catalog identity is the same
 // SKU, so its bare visit must dispatch the same phrase the sitemap URL uses.
-import { canonicalProductIdForSlug } from "@/lib/product-canonical";
+import { canonicalProductIdForSlug, humanizeProductSlug } from "@/lib/product-canonical";
 // REEA-1269 — the sitemap's source-query hint for a live-only product key.
 import { readPdpSource } from "@/lib/pdp-source";
 import type { CountryCode } from "@/lib/country";
@@ -176,6 +176,19 @@ export async function resolveProductIdentity(
     }
   }
 
+  // REEA-1277 — a listed live-only key must render its OWN product, never a
+  // neighbour. The sitemap mints its inventory from the durable last-seen
+  // store (lib/sitemap-products.ts) and records the query that minted each
+  // key (lib/pdp-source.ts); when today's live run no longer carries the exact
+  // id (a retailer shelf changed since the stored round), the resolver used to
+  // fall through to a canonical neighbour or `fallbackPool[0]` and painted a
+  // DIFFERENT product's offer set on a sitemap URL. Re-derive the exact
+  // identity from the same stored evidence the sitemap fold used — no extra
+  // retailer hop, every row keeps its own observation stamp.
+  const { resolveStoredProductIdentity } = await import("@/lib/pdp-stored-identity");
+  const stored = await resolveStoredProductIdentity(productId, attempts, Date.now());
+  if (stored) return stored;
+
   // REEA-1140 — legacy / alias slugs (and a collection whose fetched set moved
   // the canonical slug): match the requested slug's canonical fields against
   // the live groups, preferring the candidate that names the same storage tier
@@ -183,7 +196,31 @@ export async function resolveProductIdentity(
   // `…-512phone-black` link on the 512 GB group instead of the 256 GB one.
   const want = canonicalFields(slugPhrase);
   const best = bestCanonicalMatch(fallbackPool, want);
-  return best ?? fallbackPool[0] ?? null;
+  // REEA-1277 — a bare sitemap visit carries a recorded source query, so its
+  // URL must keep its own identity even when the live run and the stored
+  // evidence both lost the key: a compatible group's offer set under the
+  // requested id, or an honest empty identity, never another product's id.
+  if (best) return sourceQuery ? { ...best, productId } : best;
+  if (sourceQuery) return minimalProductIdentity(productId);
+  return fallbackPool[0] ?? null;
+}
+
+/**
+ * REEA-1277 — the requested identity with no offers. Used only when a listed
+ * sitemap key has no live group and no stored evidence left; the page then
+ * renders its own title (and its own live re-check) instead of another
+ * product's offer set.
+ */
+function minimalProductIdentity(productId: string): NormalizedProduct {
+  return {
+    productId,
+    title: humanizeProductSlug(productId) || productId,
+    brand: "",
+    offers: [],
+    coupons: [],
+    variations: [],
+    alternatives: [],
+  };
 }
 
 /** How long a catalog identity waits for a slow lane to converge before it
