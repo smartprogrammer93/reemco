@@ -4,9 +4,13 @@
 // Acceptance criteria this script measures, against the SERVED head:
 //   S-1  /sitemap.xml lists >=200 product URLs, all absolute HTTPS on the
 //        production host only.
-//   S-2  every listed product URL answers 200 and its <link rel="canonical">
-//        equals its own path (one canonical key per product — no thin
-//        duplicate key).
+//   S-2  every listed product URL answers 200, its <link rel="canonical">
+//        equals its own path AND the product the page actually renders
+//        (`data-product-id`, cross-checked against the JSON-LD sku) equals its
+//        own key — one canonical key per product, no two listed URLs rendering
+//        the same product. REEA-1277 added the rendered-identity assertion: a
+//        self-canonical tag over a PDP body that painted another product's
+//        offer set was the measured S-2 failure.
 //   S-3  no /results?q= URL is counted toward the product target (the script
 //        reports the results/static counts separately).
 //   S-6  the sitemap stays a bounded, cacheable payload (byte size + the
@@ -14,6 +18,7 @@
 //
 // No args, no browser. Usage:
 //   node scripts/reea1269-sitemap.mjs
+//   node scripts/reea1269-sitemap.mjs --sample=24   # deterministic spread
 //   BASE_URL=http://127.0.0.1:3100 node scripts/reea1269-sitemap.mjs
 //
 // It prints the served /__commit.txt stamp BEFORE running (QA parity rule: a
@@ -140,16 +145,65 @@ if (products.length < PRODUCT_TARGET) {
   console.log(`S-1 PASS — ${products.length} product URLs (>= ${PRODUCT_TARGET})`);
 }
 
-/* S-2 — 200 + self-canonical on every listed product URL. */
+/* S-2 — 200 + self-canonical + the rendered product identity on every listed
+ * product URL. REEA-1277 — the canonical tag alone is not enough: the PDP body
+ * resolves the slug through the live fan-out and used to fall back to another
+ * product when the exact id was absent from the run. The page now carries its
+ * resolved identity as `data-product-id` (ProductHero root, server-rendered)
+ * and the JSON-LD `sku`; both must equal the URL's own key. */
 const canonicalRe = /<link[^>]*rel="canonical"[^>]*href="([^"]+)"[^>]*>/i;
 const offerRowRe = /class="rc-offer-row/g;
+const renderedIdRe = /data-product-id="([^"]+)"/;
+const jsonLdScriptRe = /<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/g;
+
+/** The product id the page itself renders (hero identity + JSON-LD sku). */
+function renderedIdentity(body) {
+  const attr = body.match(renderedIdRe)?.[1] || "";
+  let sku = "";
+  for (const match of body.matchAll(jsonLdScriptRe)) {
+    try {
+      const parsed = JSON.parse(match[1].replace(/\\u003c/g, "<"));
+      const nodes = Array.isArray(parsed) ? parsed : [parsed];
+      for (const node of nodes) {
+        if (node && node["@type"] === "Product" && typeof node.sku === "string") {
+          sku = node.sku;
+          break;
+        }
+      }
+    } catch {
+      /* a malformed block is not a verdict on the page identity */
+    }
+    if (sku) break;
+  }
+  return { attr, sku };
+}
+
+/* --sample=N crawls a deterministic spread instead of the whole set; the full
+ * run is the release gate. */
+const sampleSize = (() => {
+  const arg = process.argv.find((value) => value.startsWith("--sample="));
+  const n = arg ? Number(arg.slice("--sample=".length)) : 0;
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+})();
+function sampled(urls, n) {
+  if (!n || n >= urls.length) return urls;
+  const out = [];
+  const step = urls.length / n;
+  for (let i = 0; i < n; i++) out.push(urls[Math.min(urls.length - 1, Math.floor(i * step))]);
+  return [...new Set(out)];
+}
+const targets = sampled(products, sampleSize);
+if (sampleSize) console.log(`S-2 sample — ${targets.length} of ${products.length} listed product URLs (deterministic spread)`);
+
 const checked = [];
 const zeroOffer = [];
+const wrongProduct = [];
+const missingIdentity = [];
 let dispatchAt = 0;
 let cursor = 0;
 async function worker() {
-  while (cursor < products.length) {
-    const url = products[cursor++];
+  while (cursor < targets.length) {
+    const url = targets[cursor++];
     const now = Date.now();
     const wait = Math.max(0, dispatchAt + DISPATCH_GAP_MS - now);
     dispatchAt = Math.max(now, dispatchAt + DISPATCH_GAP_MS);
@@ -158,14 +212,26 @@ async function worker() {
       const res = await fetchText(url);
       const canonical = (res.body.match(canonicalRe)?.[1] || "").replace(/&amp;/g, "&");
       const offerRows = (res.body.match(offerRowRe) || []).length;
-      const wantPath = new URL(url).pathname;
+      const { attr, sku } = renderedIdentity(res.body);
+      const wantPathRaw = new URL(url).pathname;
+      const wantKey = decodeURIComponent(wantPathRaw.replace(/^\/product\//, ""));
       const gotPath = canonical ? new URL(canonical).pathname : "";
-      checked.push({ url, status: res.status, canonical, offerRows });
+      checked.push({ url, status: res.status, canonical, offerRows, rendered: attr, sku });
       if (res.status !== 200) fail("S-2", `${url} answered ${res.status}`);
-      if (gotPath !== wantPath) fail("S-2", `${url} canonical is ${gotPath || "<missing>"}, not itself`);
+      if (gotPath !== wantPathRaw) fail("S-2", `${url} canonical is ${gotPath || "<missing>"}, not itself`);
+      if (!attr) {
+        missingIdentity.push(url);
+        fail("S-2", `${url} renders no data-product-id`);
+      } else if (attr !== wantKey) {
+        wrongProduct.push(`${url} → ${attr}`);
+        fail("S-2", `${url} renders ${attr}, not its own key`);
+      }
+      if (sku && sku !== wantKey) {
+        fail("S-2", `${url} JSON-LD sku is ${sku}, not its own key`);
+      }
       if (offerRows === 0) zeroOffer.push(url);
     } catch (err) {
-      checked.push({ url, status: 0, canonical: "", offerRows: 0 });
+      checked.push({ url, status: 0, canonical: "", offerRows: 0, rendered: "", sku: "" });
       fail("S-2", `${url} fetch failed: ${err.message}`);
     }
   }
@@ -180,8 +246,30 @@ const selfCount = checked.filter((c) => {
     return false;
   }
 }).length;
+const identityCount = checked.filter((c) => c.rendered && c.rendered === decodeURIComponent(new URL(c.url).pathname.replace(/^\/product\//, ""))).length;
+const skuCount = checked.filter((c) => c.sku && c.sku === decodeURIComponent(new URL(c.url).pathname.replace(/^\/product\//, ""))).length;
 const painted = checked.filter((c) => c.offerRows > 0).length;
+
+/* S-2 duplicate rendered ids: two listed URLs painting one product is the thin
+ * duplicate key the criterion forbids. */
+const byRendered = new Map();
+for (const c of checked) {
+  if (!c.rendered) continue;
+  const list = byRendered.get(c.rendered) ?? [];
+  list.push(c.url);
+  byRendered.set(c.rendered, list);
+}
+const duplicates = [...byRendered.entries()].filter(([, urls]) => urls.length > 1);
+for (const [id, urls] of duplicates.slice(0, 10)) {
+  fail("S-2", `${urls.length} listed URLs render the same product ${id}: ${urls.join(", ")}`);
+}
+
 console.log(`S-2 measured — GET 200: ${okCount}/${checked.length}, canonical self-aligned: ${selfCount}/${checked.length}`);
+console.log(`S-2 rendered identity — equals own path: ${identityCount}/${checked.length}; JSON-LD sku agrees: ${skuCount}/${checked.length}; wrong product: ${wrongProduct.length}; missing marker: ${missingIdentity.length}`);
+console.log(`S-2 duplicate rendered ids across the checked set: ${duplicates.length}`);
+if (wrongProduct.length > 0) {
+  console.log(`S-2 wrong-product URLs: ${wrongProduct.slice(0, 10).join("; ")}${wrongProduct.length > 10 ? " …" : ""}`);
+}
 console.log(`S-2 offer rows — pages painting >=1 row: ${painted}/${checked.length}; zero-row: ${zeroOffer.length}`);
 if (zeroOffer.length > 0) {
   console.log(`S-2 zero-row URLs: ${zeroOffer.slice(0, 10).join(", ")}${zeroOffer.length > 10 ? " …" : ""}`);
