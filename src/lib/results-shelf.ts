@@ -649,6 +649,9 @@ export function trimStagesToPaintedDiff(
   const singleTail = budget === CATEGORY_SHELF_CARDS ? 1 : 2;
   const earlySingles = budget === CATEGORY_SHELF_CARDS ? 0 : 1;
   let paintedIds: ReadonlySet<string> = new Set<string>();
+  // Hidden (revealable) rows already carried by an earlier flush, so they ride
+  // the stream once instead of once per adapter flush.
+  const carriedHidden = new Set<string>();
   // The renderer paints the boundaries in ARRAY order (each boundary renders
   // inside the previous one), so the cumulative painted set must be computed
   // in that same order even when a later adapter promise happens to settle
@@ -693,7 +696,14 @@ export function trimStagesToPaintedDiff(
           showOutOfStock,
         );
         const revealable = new Set<string>(fresh.map((p) => p.productId));
-        for (const p of hidden.cards) revealable.add(p.productId);
+        for (const p of hidden.cards) {
+          // A hidden row is carried ONCE, in the first flush that knows about
+          // it: the client keeps every stage's snapshot, so the reveal can
+          // still paint it from there without re-sending it on every flush.
+          if (carriedHidden.has(p.productId)) continue;
+          revealable.add(p.productId);
+          carriedHidden.add(p.productId);
+        }
         return {
           ...snap,
           products: snap.products.filter(
