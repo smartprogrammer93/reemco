@@ -27,6 +27,7 @@ import {
   partitionByConfidence,
 } from "@/lib/confidence";
 import type { NormalizedProduct } from "@/types/product";
+import type { LiveSearchResult } from "@/lib/collect/coverage";
 
 /** Cards per results page. Same slice the renderer applies (REEA-114/291). */
 export const RESULTS_PAGE_SIZE = 20;
@@ -597,4 +598,80 @@ export async function paintedShelfCardsAcrossStages(
     paintedIds = paintedIdsAfter(paintedIds, fresh);
   }
   return painted;
+}
+
+/**
+ * REEA-1275 — trim the streamed stage snapshots to the cards each flush
+ * ACTUALLY paints.
+ *
+ * Why: the served document serializes every stage's full cumulative snapshot
+ * for hydration, and each cumulative snapshot repeats the products earlier
+ * flushes already painted. Measured on the served head, a cold `iphone 17
+ * pro` document carried ~600 KB of RSC payload for a 7-card shelf, and the
+ * browser had to download/parse it before the first card could paint — the
+ * client half of the miss this ticket fixes.
+ *
+ * The paint chain is deterministic and server-side (the same
+ * `freshCardsForFlush` the renderer and the metrics fold use), so an
+ * intermediate stage can carry ONLY the cards it paints. The LAST stage stays
+ * full: the converged view, the coverage/stamp boundaries and the structured
+ * data all read it. A replay paints nothing, so its products are dropped
+ * entirely. A rejected stage passes through untouched (the honest "nothing
+ * landed" state), exactly as before.
+ *
+ * The payload shape is unchanged otherwise (`replay`/`seedLead`/`settled`/
+ * `kuwaitPendingStatus` ride along), so hydration, the paint chain and the
+ * counters describe the same population they did before.
+ */
+export function trimStagesToPaintedDiff(
+  stages: readonly Promise<LiveSearchResult>[],
+  query: string,
+  page: number,
+  country: CountryCode | null,
+  showOutOfStock: boolean,
+): Promise<LiveSearchResult>[] {
+  // The page slice is applied by the renderer over a snapshot's PRIMARY set;
+  // a trimmed snapshot no longer carries the earlier pages, so page 2+ keeps
+  // the full snapshots (the measured first-card surface is page 1).
+  if (page !== 1) return [...stages];
+  const budget = shelfCardBudget(query);
+  const singleTail = budget === CATEGORY_SHELF_CARDS ? 1 : 2;
+  const earlySingles = budget === CATEGORY_SHELF_CARDS ? 0 : 1;
+  let paintedIds: ReadonlySet<string> = new Set<string>();
+  // The renderer paints the boundaries in ARRAY order (each boundary renders
+  // inside the previous one), so the cumulative painted set must be computed
+  // in that same order even when a later adapter promise happens to settle
+  // first. Chain the stages instead of relying on settlement order.
+  let gate: Promise<void> = Promise.resolve();
+  return stages.map((stage, index) => {
+    const isLast = index === stages.length - 1;
+    const trimmed = gate.then(() => stage).then(
+      (snap) => {
+        if (isLast) return snap;
+        const fresh = freshCardsForFlush(
+          resultsShelfCards(snap, query, page, country, showOutOfStock),
+          paintedIds,
+          snap.replay === true,
+          budget,
+          {
+            comparisonFirst: true,
+            finalFlush: false,
+            singleTail,
+            leadFlush: snap.seedLead === true,
+            earlySingles,
+          },
+        );
+        paintedIds = paintedIdsAfter(paintedIds, fresh);
+        // An intermediate flush never reads its own notes (the coverage line
+        // reads the last stage), so dropping them is pure payload saving.
+        return { ...snap, products: fresh, notes: [] };
+      },
+      () => stage,
+    );
+    gate = trimmed.then(
+      () => undefined,
+      () => undefined,
+    );
+    return trimmed;
+  });
 }

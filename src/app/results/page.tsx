@@ -20,6 +20,9 @@ import { resultsShelfCards } from "@/lib/results-shelf";
 // fold: the SAME helpers the StageAppend boundaries run, so the counter can
 // never describe a different population than the page painted.
 import { paintedShelfCardsAcrossStages, duplicateCardsOf } from "@/lib/results-shelf";
+// REEA-1275 — the served stream carries ONLY the cards each flush paints, not
+// every cumulative snapshot; the last stage stays full for the converged view.
+import { trimStagesToPaintedDiff } from "@/lib/results-shelf";
 // REEA-1114 AC6 — the false-empty numerator: the SAME filter-aware
 // classification the empty state renders, folded into one aggregate counter.
 import { hiddenShelfMatches } from "@/lib/hidden-matches";
@@ -328,19 +331,24 @@ export default async function ResultsPage({
         .then((seed) => seedLeadSnapshot(seed))
         .catch(() => seedLeadSnapshot(null));
   const liveStages = staged.stages;
+  // REEA-1275 — the seed lead rides index 0 so the exact-model card paints in
+  // the first flush; the live stages keep their arrival order behind it. Only
+  // the LAST live stage is folded: the lead already paints the seed for the
+  // intermediate flushes, and the last stage is the one the converged view and
+  // the structured-data fallback read.
+  const servedStages = [
+    seedLeadStage,
+    ...liveStages.map((stage, index) =>
+      index === liveStages.length - 1 ? stage.then((snap) => withExactModel(snap)) : stage,
+    ),
+  ];
+  // REEA-1275 — trim every intermediate stage to the cards it actually paints
+  // (the last stage stays full). This is the client-side half of the
+  // first-card budget: the served document no longer re-serializes the whole
+  // cumulative shelf once per adapter flush.
   const seededStaged: LiveSearchStages = {
     ...staged,
-    // REEA-1275 — the seed lead rides index 0 so the exact-model card paints
-    // in the first flush; the live stages keep their arrival order behind it.
-    // Only the LAST live stage is folded: the lead already paints the seed for
-    // the intermediate flushes, and the last stage is the one the converged
-    // view and the structured-data fallback read.
-    stages: [
-      seedLeadStage,
-      ...liveStages.map((stage, index) =>
-        index === liveStages.length - 1 ? stage.then((snap) => withExactModel(snap)) : stage,
-      ),
-    ],
+    stages: trimStagesToPaintedDiff(servedStages, query, page, country, showOutOfStock),
     final: staged.final.then((snap) => withExactModel(snap)),
     converged: staged.converged.then((snap) => withExactModel(snap)),
     allSettled: staged.allSettled.then((snap) => (snap ? withExactModel(snap) : snap)),

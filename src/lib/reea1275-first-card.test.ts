@@ -18,6 +18,7 @@ import {
   freshCardsForFlush,
   paintedIdsAfter,
   paintedShelfCardsAcrossStages,
+  trimStagesToPaintedDiff,
 } from "@/lib/results-shelf";
 
 type P = NormalizedProduct;
@@ -91,8 +92,8 @@ describe("REEA-1275 — the seed lead paints the exact-model card in the first f
 
   it("the metrics fold paints the lead seed, then the live stages supersede it", async () => {
     const stages = [
-      Promise.resolve({ products: [seed], seedLead: true }),
-      Promise.resolve({ products: [liveSeed, other] }),
+      Promise.resolve({ products: [seed], notes: [], seedLead: true }),
+      Promise.resolve({ products: [liveSeed, other], notes: [] }),
     ];
     const painted = await paintedShelfCardsAcrossStages(stages, "keychron v3 max", 1, null, false);
     // The lead owns the slot; the live stage's merged version of the same
@@ -129,5 +130,43 @@ describe("REEA-1275 — the seed lead paints the exact-model card in the first f
       earlySingles: 0,
     });
     expect(fresh).toEqual([]);
+  });
+
+  it("trimming the streamed stages preserves the painted shelf and the last stage", async () => {
+    const full = [
+      Promise.resolve({ products: [seed], notes: [], seedLead: true }),
+      Promise.resolve({ products: [seed, other], notes: [] }),
+      Promise.resolve({ products: [liveSeed, other], notes: [] }),
+    ];
+    const trimmed = trimStagesToPaintedDiff(full, "keychron v3 max", 1, null, false);
+    // Intermediate stages carry only their fresh cards (the lead already owns
+    // the seed id) and no notes; the last stage stays full for the converged
+    // view and the coverage/stamp boundaries.
+    const mid = await trimmed[1];
+    expect(mid.products.map((p) => p.productId)).toEqual([other.productId]);
+    expect(mid.notes).toEqual([]);
+    const last = await trimmed[2];
+    expect(last.products.map((p) => p.productId)).toEqual([liveSeed.productId, other.productId]);
+
+    const paintedFull = await paintedShelfCardsAcrossStages(full, "keychron v3 max", 1, null, false);
+    const paintedTrimmed = await paintedShelfCardsAcrossStages(trimmed, "keychron v3 max", 1, null, false);
+    expect(paintedTrimmed.map((p) => p.productId)).toEqual(paintedFull.map((p) => p.productId));
+  });
+
+  it("a replay stage is trimmed to no products (it paints nothing)", async () => {
+    const trimmed = trimStagesToPaintedDiff(
+      [Promise.resolve({ products: [seed], notes: [], replay: true }), Promise.resolve({ products: [other], notes: [] })],
+      "keychron v3 max",
+      1,
+      null,
+      false,
+    );
+    expect((await trimmed[0]).products).toEqual([]);
+  });
+
+  it("page 2+ keeps the full snapshots (the renderer's page slice needs them)", async () => {
+    const full = [Promise.resolve({ products: [seed, other], notes: [] }), Promise.resolve({ products: [other], notes: [] })];
+    const trimmed = trimStagesToPaintedDiff(full, "keychron v3 max", 2, null, false);
+    expect((await trimmed[0]).products.map((p) => p.productId)).toEqual([seed.productId, other.productId]);
   });
 });
